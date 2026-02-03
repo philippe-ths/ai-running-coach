@@ -1,0 +1,55 @@
+{
+  "activity": {
+    "id": "a1b2c3d4",
+    "start_time": "2026-02-05T07:30:00Z",
+    "type": "Run",
+    "name": "Morning jog",
+    "distance_m": 5012.0,
+    "moving_time_s": 1800,
+    "elapsed_time_s": 1860,
+    "avg_pace_s_per_km": 359.0,
+    "avg_hr": 142.0,
+    "max_hr": 158.0,
+    "avg_cadence": 172.0,
+    "elevation_gain_m": 35.0
+  },
+  "athlete": {
+    "goal": "10k",
+    "experience_level": "intermediate",
+    "injury_notes": null,
+    "age": null,
+    "sex": null
+  },
+  "derived_metrics": [
+    {
+      "key": "effort_score",
+      "value": 62.5,
+      "unit": "TRIMP",
+      "confidence": 0.8,
+      "evidence": "HR-based TRIMP with 30 min at avg 142 bpm"
+    }
+  ],
+  "flags": [
+    {
+      "code": "intensity_too_high_for_easy",
+      "severity": "warn",
+      "message": "Average HR above easy threshold for an easy run",
+      "evidence": "avg HR 142 > 138 (easy ceiling)"
+    }
+  ],
+  "last_7_days": {
+    "total_distance_m": 32000.0,
+    "total_time_s": 11400,
+    "intensity_summary": "",
+    "load_trend": ""
+  },
+  "check_in": {
+    "rpe_0_10": 5,
+    "pain_0_10": null,
+    "sleep_0_10": null,
+    "notes": null
+  },
+  "available_signals": ["heart_rate", "cadence", "elevation", "splits"],
+  "missing_signals": ["power", "hrv"],
+  "generated_at_iso": "2026-02-05T08:00:00Z"
+}
