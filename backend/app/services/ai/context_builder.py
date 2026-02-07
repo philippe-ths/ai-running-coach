@@ -12,6 +12,7 @@ from app.services.ai.context_pack import (
     CPFlag, CPCheckIn, CPLast7Days
 )
 from app.services.ai.signals import infer_signals
+from app.services.units.cadence import normalize_cadence_spm
 
 
 def build_context_pack(activity_id: UUID, db: Session) -> Optional[ContextPack]:
@@ -37,6 +38,9 @@ def build_context_pack(activity_id: UUID, db: Session) -> Optional[ContextPack]:
     # Prefer user_intent if set (manual override), otherwise default Strava type
     effective_type = activity.user_intent if activity.user_intent else activity.type
 
+    # Normalize cadence (Strava API may return strides/min, we want steps/min)
+    normalized_cadence = normalize_cadence_spm(effective_type, activity.avg_cadence)
+
     cp_activity = CPActivity(
         id=str(activity.id),
         start_time=activity.start_date.isoformat(),
@@ -48,7 +52,7 @@ def build_context_pack(activity_id: UUID, db: Session) -> Optional[ContextPack]:
         elevation_gain_m=activity.elev_gain_m,
         avg_hr=activity.avg_hr,
         max_hr=activity.max_hr,
-        avg_cadence=activity.avg_cadence,
+        avg_cadence=normalized_cadence,
         # Calculated fields if not present
         avg_pace_s_per_km=(
             (activity.moving_time_s / (activity.distance_m / 1000.0))

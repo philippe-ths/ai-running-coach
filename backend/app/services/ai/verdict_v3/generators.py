@@ -9,21 +9,24 @@ from app.schemas import (
     LeverResponse,
     NextStepsResponse,
     QuestionResponse,
-    CoachVerdictV3
+    CoachVerdictV3,
+    SummaryResponse
 )
 from app.services.coaching.v3.slicers import (
     slice_for_scorecard,
     slice_for_story,
     slice_for_lever,
     slice_for_next_steps,
-    slice_for_question
+    slice_for_question,
+    slice_for_summary
 )
 from app.services.ai.verdict_v3.prompts import (
     build_scorecard_prompt,
     build_story_prompt,
     build_lever_prompt,
     build_next_steps_prompt,
-    build_question_prompt
+    build_question_prompt,
+    build_summary_prompt
 )
 from app.services.ai.verdict_v3.safety import enforce_scorecard_safety, enforce_next_steps_safety
 from app.services.ai.verdict_v3.cache import get_cached_section, set_cached_section
@@ -89,26 +92,43 @@ def _generate_section(
         )
 
 def generate_scorecard(context_pack: Dict[str, Any], client: ClientInterface = ai_client) -> VerdictScorecardResponse:
-    # 0. Check Usage of Cache
-    cached = get_cached_section("scorecard", context_pack, VerdictScorecardResponse)
-    if cached: return cached
-
+    # Always build prompt for debug visibility (cheap operation)
     slice_data = slice_for_scorecard(context_pack)
     prompt = build_scorecard_prompt(slice_data)
+
+    # 0. Check Usage of Cache
+    cached = get_cached_section("scorecard", context_pack, VerdictScorecardResponse)
+    if cached: 
+        cached.debug_context = context_pack
+        cached.debug_prompt = {"scorecard": prompt}
+        return cached
+
     result = _generate_section("scorecard", prompt, VerdictScorecardResponse, client)
     
+    # Enrich with Debug Info
+    result.debug_context = context_pack
+    result.debug_prompt = {"scorecard": prompt}
+
     # Cache Result
     set_cached_section("scorecard", context_pack, result)
     return result
 
 def generate_story(context_pack: Dict[str, Any], client: ClientInterface = ai_client) -> StoryResponse:
-    cached = get_cached_section("story", context_pack, StoryResponse)
-    if cached: return cached
-
     slice_data = slice_for_story(context_pack)
     prompt = build_story_prompt(slice_data)
+
+    cached = get_cached_section("story", context_pack, StoryResponse)
+    if cached: 
+        cached.debug_context = context_pack
+        cached.debug_prompt = {"story": prompt}
+        return cached
+
     result = _generate_section("story", prompt, StoryResponse, client)
     
+    # Enrich with Debug Info
+    result.debug_context = context_pack
+    result.debug_prompt = {"story": prompt}
+
     set_cached_section("story", context_pack, result)
     return result
 
@@ -117,15 +137,23 @@ def generate_lever(
     scorecard: VerdictScorecardResponse, 
     client: ClientInterface = ai_client
 ) -> LeverResponse:
+    slice_data = slice_for_lever(context_pack, scorecard)
+    prompt = build_lever_prompt(slice_data)
+
     # Composite key for dependency
     cache_input = {"cp": context_pack, "sc": scorecard.model_dump()}
     cached = get_cached_section("lever", cache_input, LeverResponse)
-    if cached: return cached
+    if cached: 
+        cached.debug_context = context_pack
+        cached.debug_prompt = {"lever": prompt}
+        return cached
 
-    slice_data = slice_for_lever(context_pack, scorecard)
-    prompt = build_lever_prompt(slice_data)
     result = _generate_section("lever", prompt, LeverResponse, client)
     
+    # Enrich with Debug Info
+    result.debug_context = context_pack
+    result.debug_prompt = {"lever": prompt}
+
     set_cached_section("lever", cache_input, result)
     return result
 
@@ -135,13 +163,21 @@ def generate_next_steps(
     lever: LeverResponse, 
     client: ClientInterface = ai_client
 ) -> NextStepsResponse:
-    cache_input = {"cp": context_pack, "sc": scorecard.model_dump(), "lv": lever.model_dump()}
-    cached = get_cached_section("next_steps", cache_input, NextStepsResponse)
-    if cached: return cached
-
     slice_data = slice_for_next_steps(context_pack, scorecard, lever)
     prompt = build_next_steps_prompt(slice_data)
+
+    cache_input = {"cp": context_pack, "sc": scorecard.model_dump(), "lv": lever.model_dump()}
+    cached = get_cached_section("next_steps", cache_input, NextStepsResponse)
+    if cached: 
+        cached.debug_context = context_pack
+        cached.debug_prompt = {"next_steps": prompt}
+        return cached
+
     result = _generate_section("next_steps", prompt, NextStepsResponse, client)
+
+    # Enrich with Debug Info
+    result.debug_context = context_pack
+    result.debug_prompt = {"next_steps": prompt}
 
     set_cached_section("next_steps", cache_input, result)
     return result
@@ -151,15 +187,59 @@ def generate_question(
     scorecard: VerdictScorecardResponse, 
     client: ClientInterface = ai_client
 ) -> QuestionResponse:
-    cache_input = {"cp": context_pack, "sc": scorecard.model_dump()}
-    cached = get_cached_section("question", cache_input, QuestionResponse)
-    if cached: return cached
-
     slice_data = slice_for_question(context_pack, scorecard)
     prompt = build_question_prompt(slice_data)
+
+    cache_input = {"cp": context_pack, "sc": scorecard.model_dump()}
+    cached = get_cached_section("question", cache_input, QuestionResponse)
+    if cached: 
+        cached.debug_context = context_pack
+        cached.debug_prompt = {"question": prompt}
+        return cached
+
     result = _generate_section("question", prompt, QuestionResponse, client)
 
+    # Enrich with Debug Info
+    result.debug_context = context_pack
+    result.debug_prompt = {"question": prompt}
+
     set_cached_section("question", cache_input, result)
+    return result
+
+def generate_executive_summary(
+    context_pack: Dict[str, Any],
+    scorecard: VerdictScorecardResponse,
+    lever: LeverResponse,
+    story: StoryResponse,
+    next_steps: NextStepsResponse,
+    client: ClientInterface = ai_client
+) -> SummaryResponse:
+    slice_data = slice_for_summary(context_pack, scorecard, lever, story, next_steps)
+    prompt = build_summary_prompt(slice_data)
+
+    # Cache key includes everything? Might be too large.
+    # Just hash the generated components + CP.
+    # Pydantic model_dump can function as unique input.
+    cache_input = {
+        "cp": context_pack,
+        "sc": scorecard.model_dump(),
+        "lv": lever.model_dump(),
+        "st": story.model_dump(),
+        "ns": next_steps.model_dump()
+    }
+    cached = get_cached_section("summary", cache_input, SummaryResponse)
+    if cached: 
+        cached.debug_context = context_pack
+        cached.debug_prompt = {"summary": prompt}
+        return cached
+
+    result = _generate_section("summary", prompt, SummaryResponse, client)
+    
+    # Enrich with Debug Info
+    result.debug_context = context_pack
+    result.debug_prompt = {"summary": prompt}
+
+    set_cached_section("summary", cache_input, result)
     return result
 
 def generate_full_verdict_orchestrator(
@@ -185,16 +265,33 @@ def generate_full_verdict_orchestrator(
 
     # Step 5: Question
     question = generate_question(context_pack, scorecard, client)
+    
+    # Step 6: Summary / Verdict
+    summary = generate_executive_summary(context_pack, scorecard, lever, story, next_steps, client)
 
-    # Step 6: Merge
+    # Step 7: Debug Info Construction
+    # We reconstruct prompts for developer visibility (safe to re-run deterministic builders)
+    debug_prompts = {
+        "scorecard": build_scorecard_prompt(slice_for_scorecard(context_pack)),
+        "story": build_story_prompt(slice_for_story(context_pack)),
+        "lever": build_lever_prompt(slice_for_lever(context_pack, scorecard)),
+        "next_steps": build_next_steps_prompt(slice_for_next_steps(context_pack, scorecard, lever)),
+        "question": build_question_prompt(slice_for_question(context_pack, scorecard)),
+        "summary": build_summary_prompt(slice_for_summary(context_pack, scorecard, lever, story, next_steps))
+    }
+
+    # Step 8: Merge
     return CoachVerdictV3(
         inputs_used_line=scorecard.inputs_used_line,
-        headline=scorecard.headline,
+        executive_summary=summary.executive_summary,
+        headline=None, # Deprecated
         why_it_matters=scorecard.why_it_matters,
         scorecard=scorecard.scorecard,
         run_story=story.run_story,
         lever=lever.lever,
         next_steps=next_steps.next_steps,
-        question_for_you=question.question_for_you
+        question_for_you=question.question_for_you,
+        debug_context=context_pack,
+        debug_prompt=debug_prompts
     )
 

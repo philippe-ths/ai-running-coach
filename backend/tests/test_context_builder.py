@@ -2,6 +2,7 @@
 
 import pytest
 from datetime import datetime, timedelta
+import random
 from app.models import User, Activity, DerivedMetric, CheckIn, UserProfile
 from app.services.ai.context_builder import build_context_pack
 from app.db.session import SessionLocal
@@ -16,11 +17,13 @@ def db_session():
         session.rollback()
         session.close()
 
+from uuid import uuid4
+
 def test_build_context_pack_integration(db_session):
     """Test building a full ContextPack from inserted DB data."""
     
     # 1. Setup Data
-    user = User(email="test_builder@example.com")
+    user = User(email=f"test_builder_{uuid4()}@example.com")
     db_session.add(user)
     db_session.flush()
 
@@ -34,7 +37,7 @@ def test_build_context_pack_integration(db_session):
 
     activity = Activity(
         user_id=user.id,
-        strava_activity_id=123456789,
+        strava_activity_id=random.randint(1000000, 999999999),
         start_date=datetime.utcnow(),
         type="Run",
         name="Test Long Run",
@@ -101,3 +104,41 @@ def test_build_context_pack_integration(db_session):
     
     # Metadata
     assert pack.generated_at_iso is not None
+
+
+def test_context_pack_cadence_normalization(db_session):
+    """Test that cadence is normalized in the ContextPack without changing DB."""
+    
+    # 1. Setup Activity with low cadence (strides/min like Strava)
+    user = User(email=f"cadence_test_{uuid4()}@example.com")
+    db_session.add(user)
+    db_session.flush()
+
+    activity = Activity(
+        user_id=user.id,
+        strava_activity_id=random.randint(1000000, 999999999),
+        start_date=datetime.utcnow(),
+        type="Run",
+        name="Low Cadence Run",
+        distance_m=5000,
+        moving_time_s=1800,
+        elapsed_time_s=1800,
+        avg_cadence=79.1  # Strides per min
+    )
+    db_session.add(activity)
+    db_session.commit()
+
+    # 2. Execute Builder
+    pack_low = build_context_pack(activity.id, db_session)
+    assert pack_low.activity.avg_cadence == 158.2  # Should be doubled
+
+    # 3. Setup Activity with normal cadence (SPM)
+    activity.avg_cadence = 168.0
+    db_session.commit()
+
+    pack_normal = build_context_pack(activity.id, db_session)
+    assert pack_normal.activity.avg_cadence == 168.0  # Should stay same
+
+    # 4. Verify DB value remains unchanged
+    db_session.refresh(activity)
+    assert activity.avg_cadence == 168.0

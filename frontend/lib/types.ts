@@ -104,6 +104,12 @@ export interface V3Headline {
     status: "green" | "amber" | "red";
 }
 
+export interface V3ExecutiveSummary {
+    title: string;
+    status: "green" | "amber" | "red";
+    opinion: string;
+}
+
 export interface V3ScorecardItem {
     item: "Purpose match" | "Control (smoothness)" | "Aerobic value" | "Mechanical quality" | "Risk / recoverability";
     rating: "ok" | "warn" | "fail" | "unknown";
@@ -131,13 +137,16 @@ export interface V3NextSteps {
 
 export interface CoachVerdictV3 {
     inputs_used_line: string;
-    headline: V3Headline;
+    headline?: V3Headline;
+    executive_summary?: V3ExecutiveSummary;
     why_it_matters: string[];
     scorecard: V3ScorecardItem[];
     run_story: V3RunStory;
     lever: V3Lever;
     next_steps: V3NextSteps;
     question_for_you?: string;
+    debug_context?: ContextPack | Record<string, any>;
+    debug_prompt?: Record<string, string>;
 }
 
 export interface Advice {
@@ -165,6 +174,7 @@ export interface Activity {
   avg_hr?: number;
   max_hr?: number;
   elev_gain_m: number;
+  avg_cadence?: number;
   user_intent?: string;
   metrics?: DerivedMetric;
   raw_summary?: any;

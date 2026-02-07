@@ -29,7 +29,7 @@ export default function VerdictV3Fetcher({ activityId, inputsKey, existingVerdic
     // Consider verdict complete only when all sections required by CoachVerdictV3 exist
     const isComplete = Boolean(
         verdict &&
-        verdict.headline &&
+        verdict.executive_summary && // New requirement
         verdict.scorecard &&
         verdict.run_story &&
         verdict.lever &&
@@ -70,8 +70,22 @@ export default function VerdictV3Fetcher({ activityId, inputsKey, existingVerdic
         }
     }, [activityId, inputsKey, existingVerdict, storageKey]);
 
+    // Helper to deeply merge debug info
+    const mergeDebug = (prev: PartialVerdict, newData: any) => {
+        return {
+            ...prev,
+            ...newData,
+            debug_context: newData.debug_context || prev.debug_context, // Take latest or keep existing
+            debug_prompt: {
+                ...(prev.debug_prompt || {}),
+                ...(newData.debug_prompt || {})
+            }
+        };
+    };
+
     useEffect(() => {
         if (!shouldFetch || hasStartedRef.current) return;
+        // ... (rest of effect logic)
 
         // Mark as started immediately to avoid duplicate orchestration
         hasStartedRef.current = true;
@@ -81,11 +95,10 @@ export default function VerdictV3Fetcher({ activityId, inputsKey, existingVerdic
         const controller = new AbortController();
 
         const apiBase = '/api/verdict/v3'; 
-        // Note: next.config.js now proxies /api -> http://localhost:8000/api
         
         async function orchestrateGeneration() {
-            // Setup timeout (45s total to be safe)
-            const timeoutId = setTimeout(() => controller.abort(), 45000);
+            // Setup timeout (60s total to be safe)
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
 
             try {
                 const body = { activity_id: activityId };
@@ -101,36 +114,30 @@ export default function VerdictV3Fetcher({ activityId, inputsKey, existingVerdic
 
                 // 1. Scorecard (Critical)
                 console.log("[V3] Fetching Scorecard...");
-                setStatusMessage("Analyzing run data (Step 1/5)...");
+                setStatusMessage("Analyzing run data (Step 1/6)...");
                 const scorecardRes = await fetch(`${apiBase}/scorecard`, fetchOpts);
-                console.log(`[V3] Scorecard Status: ${scorecardRes.status}`);
                 
                 if (!scorecardRes.ok) {
                     const txt = await scorecardRes.text();
-                    console.error("[V3] Scorecard Failed:", txt);
                     throw new Error(`Scorecard failed (${scorecardRes.status}): ${txt}`);
                 }
                 const scorecardData = await scorecardRes.json();
-                console.log("[V3] Scorecard Data received:", scorecardData);
                 if (!isMounted) return;
                 
-                // Update Step 1
-                setVerdict(prev => ({ 
-                    ...prev, 
-                    ...scorecardData 
-                }));
+                // Update Step 1 merging debug
+                setVerdict(prev => mergeDebug(prev || {}, scorecardData));
 
-                // 2. Story (Parallel-ish or Sequential)
-                setStatusMessage("Drafting narrative (Step 2/5)...");
+                // 2. Story
+                setStatusMessage("Drafting narrative (Step 2/6)...");
                 const storyRes = await fetch(`${apiBase}/story`, fetchOpts);
+                let storyData = {};
                 if (storyRes.ok) {
-                    const storyData = await storyRes.json();
-                    if (isMounted) setVerdict(prev => ({ ...prev, ...storyData }));
+                    storyData = await storyRes.json();
+                    if (isMounted) setVerdict(prev => mergeDebug(prev || {}, storyData));
                 }
 
                 // 3. Lever (Requires Scorecard)
-                setStatusMessage("Identifying key levers (Step 3/5)...");
-                // Ensure we pass the EXACT structure expected by Pydantic
+                setStatusMessage("Identifying key levers (Step 3/6)...");
                 const leverReq = { 
                     activity_id: activityId, 
                     scorecard: scorecardData 
@@ -144,29 +151,26 @@ export default function VerdictV3Fetcher({ activityId, inputsKey, existingVerdic
                 if (!leverRes.ok) throw new Error("Lever generation failed");
                 const leverData = await leverRes.json();
                 if (!isMounted) return;
-                setVerdict(prev => ({ ...prev, ...leverData }));
+                setVerdict(prev => mergeDebug(prev || {}, leverData));
 
                 // 4. Question (Requires Scorecard)
-                setStatusMessage("Finalizing report (Step 4/5)...");
+                setStatusMessage("Refining report (Step 4/6)...");
                 const questionRes = await fetch(`${apiBase}/question`, {
                     ...fetchOpts,
                     body: JSON.stringify(leverReq)
                 });
+                let questionData = {};
                 if (questionRes.ok) {
-                    const qData = await questionRes.json();
-                    if (isMounted) setVerdict(prev => ({ ...prev, ...qData }));
+                    questionData = await questionRes.json();
+                    if (isMounted) setVerdict(prev => mergeDebug(prev || {}, questionData));
                 }
 
                 // 5. Next Steps (Requires Scorecard + Lever)
-                setStatusMessage("Planning schedule (Step 5/5)...");
-                // Ensure we pass the EXACT structure expected by Pydantic
-                // The leverData likely contains { lever: { ... } } 
-                // schema expects "lever": LeverResponse (which wraps .lever)
-                // So we pass leverData directly as "lever"
+                setStatusMessage("Planning schedule (Step 5/6)...");
                 const nextStepsReq = { 
                     activity_id: activityId, 
                     scorecard: scorecardData, 
-                    lever: leverData // The response IS the LeverResponse object
+                    lever: leverData 
                 };
 
                 const nextStepsRes = await fetch(`${apiBase}/next-steps`, { 
@@ -176,10 +180,32 @@ export default function VerdictV3Fetcher({ activityId, inputsKey, existingVerdic
 
                 if (!nextStepsRes.ok) throw new Error("Next steps generation failed");
                 const nextStepsData = await nextStepsRes.json();
+                if (isMounted) setVerdict(prev => mergeDebug(prev || {}, nextStepsData));
+
+                // 6. Executive Summary (Step 6 - Requires Everything)
+                setStatusMessage("Finalizing Coach Verdict (Step 6/6)...");
+                const summaryReq = {
+                    activity_id: activityId,
+                    scorecard: scorecardData,
+                    lever: leverData,
+                    story: storyData,
+                    next_steps: nextStepsData
+                };
+                
+                const summaryRes = await fetch(`${apiBase}/summary`, {
+                    ...fetchOpts,
+                    body: JSON.stringify(summaryReq)
+                });
+
+                if (!summaryRes.ok) throw new Error("Summary generation failed");
+                const summaryData = await summaryRes.json();
 
                 if (!isMounted) return;
-                setVerdict(prev => {
-                    const merged = { ...(prev ?? {}), ...nextStepsData };
+                setVerdict((prev) => {
+                    const merged = mergeDebug(prev || {}, summaryData);
+                    // Ensure executive_summary is set from summaryData
+                    merged.executive_summary = summaryData.executive_summary;
+
                     try {
                         localStorage.setItem(storageKey, JSON.stringify(merged));
                     } catch {
@@ -202,7 +228,7 @@ export default function VerdictV3Fetcher({ activityId, inputsKey, existingVerdic
 
         return () => { 
             isMounted = false; 
-            controller.abort(); // Cancel in-flight request on unmount/re-run
+            controller.abort(); 
         };
     }, [activityId, shouldFetch, storageKey]);
 

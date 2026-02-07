@@ -16,14 +16,11 @@ INPUT CONTEXT:
 
 REQUIREMENTS:
 1. Use ONLY the provided JSON context. Do not hallucinate external conditions (weather/terrain) unless strictly present in notes.
-2. "headline":
-   - A short, punchy summary sentence of the session outcome.
-   - Status: "green" (good/clean), "amber" (minor issues/adjustments needed), "red" (major failure/risk).
-3. "why_it_matters":
+2. "why_it_matters":
    - MUST contain exactly 2 strings.
    - Bullet 1: "Fitness System" - explicitly name the system trained (e.g., "Aerobic Base", "Lactate Threshold", "Neuromuscular Speed").
    - Bullet 2: "Fatigue Cost" - state the recovery implications for the next 24-72 hours (e.g., "Requires 48h to replenish glycogen").
-4. "scorecard":
+3. "scorecard":
    - Must evaluate exactly these 5 items unless signals are missing (if missing, rate "unknown"):
      - "Purpose match": Did they execute the intent (e.g. Easy vs Tempo)?
      - "Control (smoothness)": Pace/HR stability, non-stochastic behavior.
@@ -37,7 +34,6 @@ OUTPUT FORMAT:
 Strict JSON matching VerdictScorecardResponse schema:
 {{
   "inputs_used_line": "str",
-  "headline": {{ "sentence": "str", "status": "green"|"amber"|"red" }},
   "why_it_matters": ["str", "str"],
   "scorecard": [ {{ "item": "str", "rating": "str", "reason": "str" }}, ... ]
 }}
@@ -147,5 +143,39 @@ OUTPUT FORMAT:
 Strict JSON matching QuestionResponse schema:
 {{
   "question_for_you": "str"
+}}
+"""
+
+def build_summary_prompt(slice_json: Dict[str, Any]) -> str:
+    context_str = _fmt_json(slice_json)
+    return f"""
+You are the Head Coach of an elite running program.
+Your goal: Write the Executive Summary for this session report. You are reviewing the detailed analysis data provided below.
+
+INPUT CONTEXT:
+{context_str}
+
+REQUIREMENTS:
+1. "title": 
+   - A short, punchy summary sentence of the session outcome (e.g., "Solid aerobic effort with good hill control").
+2. "status":
+   - "green" (Executed well, no major risks).
+   - "amber" (Minor deviations, excessive fatigue, or small warnings).
+   - "red" (Major failure, injury risk, or blown intent).
+   - Base this on the 'analysis_flags', 'scorecard', and 'check_in'.
+3. "opinion":
+   - A paragraph (3-5 sentences) delivering your expert verdict.
+   - Synthesize the "why it matters", the "story", and the "lever".
+   - Explain *how* the session went and *why* it fits (or doesn't fit) the plan.
+   - Tone: Authoritative, supportive, insightful.
+
+OUTPUT FORMAT:
+Strict JSON matching SummaryResponse schema:
+{{
+  "executive_summary": {{
+    "title": "str",
+    "status": "green"|"amber"|"red",
+    "opinion": "str"
+  }}
 }}
 """
