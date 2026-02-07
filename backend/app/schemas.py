@@ -1,7 +1,9 @@
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, ConfigDict, Field, field_validator
+from pydantic import BaseModel, EmailStr, ConfigDict, Field, field_validator, model_validator
+
+from app.services.units.cadence import normalize_cadence_spm
 
 # --- User ---
 class UserCreate(BaseModel):
@@ -35,8 +37,32 @@ class ActivityRead(ActivityBase):
     user_id: UUID
     is_deleted: bool
     user_intent: Optional[str] = None
+    avg_cadence: Optional[float] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator('avg_cadence', mode='before')
+    @classmethod
+    def read_cadence(cls, v: Optional[float]) -> Optional[float]:
+        # Allow standard reading
+        return v
+
+    @field_validator('avg_cadence', mode='after')
+    @classmethod
+    def normalize_cadence(cls, v: Optional[float], info) -> Optional[float]:
+        # We need access to 'type' or 'user_intent' from the model to determine if it's a run.
+        # In Pydantic V2 field validators, we can access values if using a model_validator,
+        # or via ValidationInfo if using field validator but ordering matters.
+        # However, relying on ordering is fragile.
+        # Better to use a computed_field or property, but simple solution:
+        # Use model_validator.
+        return v
+
+    @model_validator(mode='after')
+    def normalize_run_cadence(self) -> 'ActivityRead':
+        effective_type = self.user_intent if self.user_intent else self.type
+        self.avg_cadence = normalize_cadence_spm(effective_type, self.avg_cadence)
+        return self
 
 class ActivityIntentUpdate(BaseModel):
     user_intent: str
@@ -142,12 +168,82 @@ class ActivityStreamRead(BaseModel):
     stream_type: str
     data: List[Any] # Can be list of floats, latlng pairs, etc.
     model_config = ConfigDict(from_attributes=True)
+    
+    # We can't access parent Activity context easily here to know the Type/Intent.
+    # However, if stream_type is 'cadence', we might want to normalize.
+    # But normalization requires knowing if it's a RUN. 
+    # ActivityDetailRead contains streams. We could normalize in ActivityDetailRead validator?
+    # Or strict assumption: if it's ~80 and looks like cadence, double it? 
+    # Dangerous for cycling (80 rpm is normal). 
+    # WE MUST normalize at the ActivityDetailRead level where we have context.
 
 class ActivityDetailRead(ActivityRead):
     metrics: Optional[DerivedMetricRead] = None
     advice: Optional[AdviceRead] = None
     check_in: Optional[CheckInRead] = None
     streams: List[ActivityStreamRead] = []
+
+    @model_validator(mode='after')
+    def normalize_stream_cadence(self) -> 'ActivityDetailRead':
+        # Apply SPM normalization to the cadence stream if it exists
+        effective_type = self.user_intent if self.user_intent else self.type
+        
+        # We invoke the logic from services to check if it's a RUN
+        # Reuse logic? We can't call normalize_cadence_spm on a list directly.
+        # But we can check if we SHOULD normalize.
+        # Let's check if the scalar avg_cadence was normalized. 
+        # If scalar was < 130 and is now > 130 (or logic dictates), apply to stream.
+        
+        # Better: Reuse the exact same condition as the scalar normalizer.
+        # But we don't expose "is_run" boolean.
+        
+        # Let's verify if the scalar normalization logic considers this a run.
+        # Since avg_cadence is *already* normalized by the parent (ActivityRead) validator running first,
+        # we can't easily compare old vs new.
+        
+        # We will re-implement a safe check calling the util.
+        # Import inside method or at top? Top is cleaner.
+        # from app.services.units.cadence import normalize_cadence_spm
+        
+        if not self.streams:
+            return self
+
+        # Find cadence stream
+        cadence_stream = next((s for s in self.streams if s.stream_type == 'cadence'), None)
+        if not cadence_stream:
+            return self
+
+        # Heuristic: Check a sample of the stream
+        # Or better, just ask the normalizer "is this a run?" 
+        # But normalizer takes (type, val). 
+        # We can pass a dummy value (e.g. 80) and see if it changes.
+        
+        test_val = 80.0
+        norm_val = normalize_cadence_spm(effective_type, test_val)
+        should_normalize = (norm_val == 160.0)
+        
+        if should_normalize:
+            # Modify data in place
+            # data can be numbers or nulls? Usually numbers.
+            # Avoid floating point accumulation if already floats.
+            
+            # Check if stream average is low (~80).
+            # If the user graph showed 80, the stream data IS low.
+            # Strava might return [79, 80, 81...] for strides.
+            
+            # Safety check: compute stream average
+            nums = [x for x in cadence_stream.data if isinstance(x, (int, float))]
+            if not nums:
+                return self
+                
+            stream_avg = sum(nums) / len(nums)
+            
+            if stream_avg < 130:
+                # Double it
+                cadence_stream.data = [x * 2 if isinstance(x, (int, float)) else x for x in cadence_stream.data]
+
+        return self
+
 
 # --- Chat ---
 class ChatRequest(BaseModel):
@@ -163,6 +259,11 @@ from typing import Literal
 class V3Headline(BaseModel):
     sentence: str
     status: Literal["green", "amber", "red"]
+
+class V3ExecutiveSummary(BaseModel):
+    title: str
+    status: Literal["green", "amber", "red"]
+    opinion: str
 
 class V3ScorecardItem(BaseModel):
     item: Literal[
@@ -219,10 +320,14 @@ class V3NextSteps(BaseModel):
 
 # --- Split Response Schemas (Focused Generation) ---
 
-class VerdictScorecardResponse(BaseModel):
+class BaseDebugResponse(BaseModel):
+    debug_context: Optional[Dict[str, Any]] = None
+    debug_prompt: Optional[Dict[str, str]] = None
+
+class VerdictScorecardResponse(BaseDebugResponse):
     """Schema for the initial analysis pass (verdict + scorecard)."""
     inputs_used_line: str
-    headline: V3Headline
+    headline: Optional[V3Headline] = None # Deprecated, moving to Executive Summary
     why_it_matters: List[str] = Field(min_length=2, max_length=2, description="Must have exactly 2 points: Fitness and Fatigue")
     scorecard: List[V3ScorecardItem]
 
@@ -236,19 +341,23 @@ class VerdictScorecardResponse(BaseModel):
             seen.add(item.item)
         return v
 
-class StoryResponse(BaseModel):
+class StoryResponse(BaseDebugResponse):
     """Schema for the narrative arc pass."""
     run_story: V3RunStory
 
-class LeverResponse(BaseModel):
+class LeverResponse(BaseDebugResponse):
     """Schema for the single prescriptive change pass."""
     lever: V3Lever
 
-class NextStepsResponse(BaseModel):
+class SummaryResponse(BaseDebugResponse):
+    """Schema for the final executive summary / verdict."""
+    executive_summary: V3ExecutiveSummary
+
+class NextStepsResponse(BaseDebugResponse):
     """Schema for the forward-looking plan pass."""
     next_steps: V3NextSteps
 
-class QuestionResponse(BaseModel):
+class QuestionResponse(BaseDebugResponse):
     """Schema for the final coaching question."""
     question_for_you: str
 
@@ -280,6 +389,13 @@ class NextStepsRequest(BaseRequest):
     scorecard: VerdictScorecardResponse
     lever: LeverResponse
 
+class SummaryRequest(BaseRequest):
+    scorecard: VerdictScorecardResponse
+    lever: LeverResponse
+    story: StoryResponse
+    next_steps: NextStepsResponse
+    # Question? Optional, maybe not needed for summary.
+
 class QuestionRequest(BaseRequest):
     scorecard: VerdictScorecardResponse
 
@@ -287,11 +403,14 @@ class QuestionRequest(BaseRequest):
 
 class CoachVerdictV3(BaseModel):
     inputs_used_line: str
-    headline: V3Headline
+    headline: Optional[V3Headline] = None # Deprecated
+    executive_summary: Optional[V3ExecutiveSummary] = None # New Main Heading
     why_it_matters: List[str] # min_length=2, max_length=2
     scorecard: List[V3ScorecardItem]
     run_story: V3RunStory
     lever: V3Lever
     next_steps: V3NextSteps
     question_for_you: Optional[str] = None
+    debug_context: Optional[Dict[str, Any]] = None
+    debug_prompt: Optional[Dict[str, str]] = None
 

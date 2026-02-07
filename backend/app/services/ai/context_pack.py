@@ -28,7 +28,7 @@ class CPActivity(BaseModel):
     avg_pace_s_per_km: Optional[float] = None
     avg_hr: Optional[float] = None
     max_hr: Optional[float] = None
-    avg_cadence: Optional[float] = None
+    avg_cadence: Optional[float] = None  # Normalized to Steps Per Minute (SPM) for runs
     elevation_gain_m: Optional[float] = None
 
 

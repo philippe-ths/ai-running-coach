@@ -47,3 +47,4 @@
 -- **No "full_text" fallbacks**: The frontend should not have logic that falls back to rendering unstructured text if the structured V3 verdict is unavailable. Always require the backend to provide a valid `CoachVerdictV3` response, and handle errors gracefully on the frontend without degrading the experience.
 -- **No test data**: Do not hardcode test data or mock responses. 
 -- **No Demo mode**: Do not implement a "demo mode" that bypasses real Strava data or LLM calls. All development and testing should be done with real data and interactions to ensure fidelity to the user experience.
+-- **"Never create test or fake data"** is a strict rule to prevent the introduction of non-representative data that could skew development and testing. Always use real Strava data and actual LLM responses to ensure that the coaching logic is robust and effective in real-world scenarios.

@@ -79,30 +79,32 @@ export default async function ActivityDetail({ params }: { params: { id: string 
         
         {/* Main Content: Advice */}
         <div className="md:col-span-2 space-y-6">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div>
             <h2 className="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
               Coach Verdict {FEATURE_FLAGS.VERDICT_V3 && <span className="text-xs text-blue-500 font-normal uppercase border px-1 rounded">V3 Beta</span>}
             </h2>
             
               <VerdictV3Fetcher activityId={activity.id} inputsKey={verdictInputsKey} existingVerdict={existingV3}>
-                {/* Fallback Legacy Content */}
-                {activity.advice ? (
-                     activity.advice.structured_report && !isCoachVerdictV3(activity.advice.structured_report) ? (
-                          <CoachReport advice={activity.advice} /> 
-                     ) : (
-                          // Fallback removed: No full_text rendering
-                          <div className="p-4 bg-yellow-50 text-yellow-800 rounded border border-yellow-200">
-                              Analysis format not supported or pending upgrade.
-                          </div>
-                     )
-                ) : (
-                    <div className="prose prose-blue max-w-none text-gray-700">
-                        <p className="italic text-gray-500">
-                            Analysis pending or not included in current response schema.
-                        </p>
-                        <p>Sync your Strava activities and re-open this run to generate coaching.</p>
-                    </div>
-                )}
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                    {/* Fallback Legacy Content */}
+                    {activity.advice ? (
+                        activity.advice.structured_report && !isCoachVerdictV3(activity.advice.structured_report) ? (
+                            <CoachReport advice={activity.advice} /> 
+                        ) : (
+                            // Fallback removed: No full_text rendering
+                            <div className="p-4 bg-yellow-50 text-yellow-800 rounded border border-yellow-200">
+                                Analysis format not supported or pending upgrade.
+                            </div>
+                        )
+                    ) : (
+                        <div className="prose prose-blue max-w-none text-gray-700">
+                            <p className="italic text-gray-500">
+                                Analysis pending or not included in current response schema.
+                            </p>
+                            <p>Sync your Strava activities and re-open this run to generate coaching.</p>
+                        </div>
+                    )}
+                </div>
             </VerdictV3Fetcher>
             
           </div>
@@ -158,6 +160,15 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                     </div>
                 )}
                 <div className="border-t border-gray-100 my-2 pt-2"></div>
+                {activity.avg_cadence && (
+                    <>
+                        <div className="flex justify-between">
+                            <dt className="text-gray-500">Avg Cadence</dt>
+                            <dd className="font-medium">{Math.round(activity.avg_cadence)} spm</dd>
+                        </div>
+                        <div className="border-t border-gray-100 my-2 pt-2"></div>
+                    </>
+                )}
                 <div className="flex justify-between">
                     <dt className="text-gray-500">Elevation</dt>
                     <dd className="font-medium">{Math.round(activity.elev_gain_m)} m</dd>

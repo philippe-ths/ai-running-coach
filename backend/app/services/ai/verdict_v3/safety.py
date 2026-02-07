@@ -8,15 +8,13 @@ def enforce_scorecard_safety(
     """
     Applies strict safety overrides to the scorecard.
     Rule: High pain or risk flags prevent "green" status.
+    Strategies:
+    - If risk detected, force the "Risk / recoverability" item to warn/fail.
     """
     
     # 1. Check Pain
     check_in = context_pack.get("check_in") or {}
-    pain_score = check_in.get("pain_score") # API schema uses pain_score, slicer might differ slightly if raw vs schema, assume schema aligned
-    # note: schema uses pain_score, but context_pack usually matches raw json. 
-    # looking at context_pack_minimal.json, check_in has "pain_0_10". 
-    # Let's handle both just in case, but prefer the context pack structure.
-    
+    pain_score = check_in.get("pain_score") 
     if pain_score is None:
         pain_score = check_in.get("pain_0_10")
 
@@ -31,11 +29,22 @@ def enforce_scorecard_safety(
 
     should_downgrade = is_high_pain or has_risk_flag
 
-    if should_downgrade and scorecard.headline.status == "green":
-        # Force downgrade to amber at minimum, perhaps red if high pain
-        new_status = "red" if is_high_pain else "amber"
-        scorecard.headline.status = new_status
-        scorecard.headline.sentence = f"[Safety Override] {scorecard.headline.sentence}"
+    if should_downgrade:
+        # Find the Risk item
+        risk_item = next(
+            (item for item in scorecard.scorecard if item.item == "Risk / recoverability"), 
+            None
+        )
+        
+        if risk_item:
+            # Downgrade logic
+            target_rating = "fail" if is_high_pain else "warn"
+            
+            # Only downgrade if currently better (e.g. don't change 'fail' to 'warn')
+            current_severity = {"fail": 3, "warn": 2, "unknown": 1, "ok": 0}
+            if current_severity.get(risk_item.rating, 0) < current_severity.get(target_rating, 0):
+                risk_item.rating = target_rating
+                risk_item.reason = f"[Safety Override] High pain/risk detected. {risk_item.reason}"
 
     return scorecard
 
@@ -49,7 +58,16 @@ def enforce_next_steps_safety(
     Applies strict safety overrides to the schedule.
     Rule: Red/Amber status constrains tomorrow's intensity.
     """
-    status = scorecard.headline.status.lower()
+    # Derive provisional status from scorecard items
+    failures = [i for i in scorecard.scorecard if i.rating == "fail"]
+    warnings = [i for i in scorecard.scorecard if i.rating == "warn"]
+    
+    status = "green"
+    if failures:
+        status = "red"
+    elif warnings:
+        status = "amber"
+
     tomorrow_text = next_steps.next_steps.tomorrow.lower()
 
     # Red Status -> Must be Rest or Very Easy

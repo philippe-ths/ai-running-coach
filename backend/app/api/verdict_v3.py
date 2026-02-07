@@ -9,11 +9,13 @@ from app.schemas import (
     LeverResponse,
     NextStepsResponse,
     QuestionResponse,
+    SummaryResponse,
     CoachVerdictV3,
     BaseRequest,
     LeverRequest,
     NextStepsRequest,
-    QuestionRequest
+    QuestionRequest,
+    SummaryRequest
 )
 from app.services.ai.context_builder import build_context_pack
 from app.services.ai.verdict_v3.generators import (
@@ -22,6 +24,8 @@ from app.services.ai.verdict_v3.generators import (
     generate_lever, 
     generate_next_steps, 
     generate_question,
+    generate_executive_summary,
+    generate_full_verdict_orchestrator,
     VerdictV3GenerationError
 )
 from app.services.ai.verdict_v3.safety import enforce_scorecard_safety, enforce_next_steps_safety
@@ -39,48 +43,13 @@ def get_context_or_404(activity_id: UUID, db: Session):
 @router.post("/verdict/v3/generate", response_model=CoachVerdictV3)
 def generate_full_verdict(request: BaseRequest, db: Session = Depends(get_db)):
     """
-    Orchestrates the full generation pipeline:
-    1. Scorecard (Safety checked)
-    2. Story
-    3. Lever (Dependencies: Scorecard)
-    4. Next Steps (Dependencies: Scorecard, Lever -> Safety checked)
-    5. Question
-    6. Merge
+    Orchestrates the full generation pipeline using the unified orchestrator
+    which handles all dependencies and debug context assembly.
     """
-    context_pack = get_context_or_404(request.activity_id, db)
-
     try:
-        # Step 1: Scorecard & Safety
-        scorecard = generate_scorecard(context_pack)
-        scorecard = enforce_scorecard_safety(scorecard, context_pack)
-
-        # Step 2: Story
-        story = generate_story(context_pack)
-
-        # Step 3: Lever
-        lever = generate_lever(context_pack, scorecard)
-
-        # Step 4: Next Steps & Safety
-        next_steps = generate_next_steps(context_pack, scorecard, lever)
-        next_steps = enforce_next_steps_safety(next_steps, scorecard, context_pack)
-
-        # Step 5: Question
-        question = generate_question(context_pack, scorecard)
-
-        # Step 6: Merge into CoachVerdictV3
-        return CoachVerdictV3(
-            inputs_used_line=scorecard.inputs_used_line,
-            headline=scorecard.headline,
-            why_it_matters=scorecard.why_it_matters,
-            scorecard=scorecard.scorecard,
-            run_story=story.run_story,
-            lever=lever.lever,
-            next_steps=next_steps.next_steps,
-            question_for_you=question.question_for_you
-        )
-
+        context_pack = get_context_or_404(request.activity_id, db)
+        return generate_full_verdict_orchestrator(context_pack)
     except VerdictV3GenerationError as e:
-        # If any section fails hard, return 502
         raise HTTPException(status_code=502, detail=str(e))
 
 @router.post("/verdict/v3/scorecard", response_model=VerdictScorecardResponse)
@@ -157,6 +126,25 @@ def get_question(request: QuestionRequest, db: Session = Depends(get_db)):
     
     try:
         response = generate_question(context_pack, request.scorecard)
+        return response
+    except VerdictV3GenerationError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+@router.post("/verdict/v3/summary", response_model=SummaryResponse)
+def get_executive_summary(request: SummaryRequest, db: Session = Depends(get_db)):
+    """
+    Step 6: Generate Executive Summary (requires EVERYTHING).
+    """
+    context_pack = get_context_or_404(request.activity_id, db)
+    
+    try:
+        response = generate_executive_summary(
+            context_pack, 
+            request.scorecard, 
+            request.lever, 
+            request.story, 
+            request.next_steps
+        )
         return response
     except VerdictV3GenerationError as e:
         raise HTTPException(status_code=502, detail=str(e))
