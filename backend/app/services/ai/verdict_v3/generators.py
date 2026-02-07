@@ -3,6 +3,7 @@ from typing import Type, TypeVar, Dict, Any, Optional, Protocol
 
 from pydantic import BaseModel, ValidationError
 
+from app.core.config import settings
 from app.schemas import (
     VerdictScorecardResponse,
     StoryResponse,
@@ -33,6 +34,16 @@ from app.services.ai.verdict_v3.cache import get_cached_section, set_cached_sect
 from app.services.ai.client import ai_client
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def _attach_debug(result: BaseModel, context: Any, prompt: Dict[str, str]) -> None:
+    """Set debug_context/debug_prompt only when DEBUG_AI is enabled."""
+    if settings.DEBUG_AI:
+        result.debug_context = context
+        result.debug_prompt = prompt
+    else:
+        result.debug_context = None
+        result.debug_prompt = None
 
 class ClientInterface(Protocol):
     def get_raw_json_response(self, prompt: str) -> str: ...
@@ -99,15 +110,13 @@ def generate_scorecard(context_pack: Dict[str, Any], client: ClientInterface = a
     # 0. Check Usage of Cache
     cached = get_cached_section("scorecard", context_pack, VerdictScorecardResponse)
     if cached: 
-        cached.debug_context = context_pack
-        cached.debug_prompt = {"scorecard": prompt}
+        _attach_debug(cached, slice_data, {"scorecard": prompt, "why_it_matters": prompt})
         return cached
 
     result = _generate_section("scorecard", prompt, VerdictScorecardResponse, client)
     
     # Enrich with Debug Info
-    result.debug_context = context_pack
-    result.debug_prompt = {"scorecard": prompt}
+    _attach_debug(result, slice_data, {"scorecard": prompt, "why_it_matters": prompt})
 
     # Cache Result
     set_cached_section("scorecard", context_pack, result)
@@ -119,15 +128,13 @@ def generate_story(context_pack: Dict[str, Any], client: ClientInterface = ai_cl
 
     cached = get_cached_section("story", context_pack, StoryResponse)
     if cached: 
-        cached.debug_context = context_pack
-        cached.debug_prompt = {"story": prompt}
+        _attach_debug(cached, slice_data, {"story": prompt})
         return cached
 
     result = _generate_section("story", prompt, StoryResponse, client)
     
     # Enrich with Debug Info
-    result.debug_context = context_pack
-    result.debug_prompt = {"story": prompt}
+    _attach_debug(result, slice_data, {"story": prompt})
 
     set_cached_section("story", context_pack, result)
     return result
@@ -144,15 +151,13 @@ def generate_lever(
     cache_input = {"cp": context_pack, "sc": scorecard.model_dump()}
     cached = get_cached_section("lever", cache_input, LeverResponse)
     if cached: 
-        cached.debug_context = context_pack
-        cached.debug_prompt = {"lever": prompt}
+        _attach_debug(cached, slice_data, {"lever": prompt})
         return cached
 
     result = _generate_section("lever", prompt, LeverResponse, client)
     
     # Enrich with Debug Info
-    result.debug_context = context_pack
-    result.debug_prompt = {"lever": prompt}
+    _attach_debug(result, slice_data, {"lever": prompt})
 
     set_cached_section("lever", cache_input, result)
     return result
@@ -169,15 +174,13 @@ def generate_next_steps(
     cache_input = {"cp": context_pack, "sc": scorecard.model_dump(), "lv": lever.model_dump()}
     cached = get_cached_section("next_steps", cache_input, NextStepsResponse)
     if cached: 
-        cached.debug_context = context_pack
-        cached.debug_prompt = {"next_steps": prompt}
+        _attach_debug(cached, slice_data, {"next_steps": prompt})
         return cached
 
     result = _generate_section("next_steps", prompt, NextStepsResponse, client)
 
     # Enrich with Debug Info
-    result.debug_context = context_pack
-    result.debug_prompt = {"next_steps": prompt}
+    _attach_debug(result, slice_data, {"next_steps": prompt})
 
     set_cached_section("next_steps", cache_input, result)
     return result
@@ -193,15 +196,13 @@ def generate_question(
     cache_input = {"cp": context_pack, "sc": scorecard.model_dump()}
     cached = get_cached_section("question", cache_input, QuestionResponse)
     if cached: 
-        cached.debug_context = context_pack
-        cached.debug_prompt = {"question": prompt}
+        _attach_debug(cached, slice_data, {"question": prompt})
         return cached
 
     result = _generate_section("question", prompt, QuestionResponse, client)
 
     # Enrich with Debug Info
-    result.debug_context = context_pack
-    result.debug_prompt = {"question": prompt}
+    _attach_debug(result, slice_data, {"question": prompt})
 
     set_cached_section("question", cache_input, result)
     return result
@@ -229,15 +230,13 @@ def generate_executive_summary(
     }
     cached = get_cached_section("summary", cache_input, SummaryResponse)
     if cached: 
-        cached.debug_context = context_pack
-        cached.debug_prompt = {"summary": prompt}
+        _attach_debug(cached, slice_data, {"summary": prompt})
         return cached
 
     result = _generate_section("summary", prompt, SummaryResponse, client)
     
     # Enrich with Debug Info
-    result.debug_context = context_pack
-    result.debug_prompt = {"summary": prompt}
+    _attach_debug(result, slice_data, {"summary": prompt})
 
     set_cached_section("summary", cache_input, result)
     return result
@@ -271,8 +270,10 @@ def generate_full_verdict_orchestrator(
 
     # Step 7: Debug Info Construction
     # We reconstruct prompts for developer visibility (safe to re-run deterministic builders)
+    scorecard_prompt = build_scorecard_prompt(slice_for_scorecard(context_pack))
     debug_prompts = {
-        "scorecard": build_scorecard_prompt(slice_for_scorecard(context_pack)),
+        "scorecard": scorecard_prompt,
+        "why_it_matters": scorecard_prompt,
         "story": build_story_prompt(slice_for_story(context_pack)),
         "lever": build_lever_prompt(slice_for_lever(context_pack, scorecard)),
         "next_steps": build_next_steps_prompt(slice_for_next_steps(context_pack, scorecard, lever)),
@@ -291,7 +292,7 @@ def generate_full_verdict_orchestrator(
         lever=lever.lever,
         next_steps=next_steps.next_steps,
         question_for_you=question.question_for_you,
-        debug_context=context_pack,
-        debug_prompt=debug_prompts
+        debug_context=context_pack if settings.DEBUG_AI else None,
+        debug_prompt=debug_prompts if settings.DEBUG_AI else None
     )
 

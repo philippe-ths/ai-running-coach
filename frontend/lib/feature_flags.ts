@@ -11,4 +11,5 @@ export function isCoachVerdictV3(obj: any): obj is CoachVerdictV3 {
 
 export const FEATURE_FLAGS = {
     VERDICT_V3: process.env.NEXT_PUBLIC_VERDICT_V3 === "1",
+    DEBUG_AI: process.env.NEXT_PUBLIC_DEBUG_AI === "1",
 };

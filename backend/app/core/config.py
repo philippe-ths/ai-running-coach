@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     AI_ENABLED: bool = False
     AI_PROVIDER: str = "openai" # 'openai'
     OPENAI_API_KEY: str | None = None
+    DEBUG_AI: bool = True  # Gate debug_context/debug_prompt in API responses
 
     model_config = SettingsConfigDict(
         env_file=".env",

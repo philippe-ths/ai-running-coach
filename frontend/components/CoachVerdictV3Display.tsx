@@ -1,5 +1,6 @@
 import React from 'react';
 import { CoachVerdictV3 } from '../lib/types';
+import { FEATURE_FLAGS } from '../lib/feature_flags';
 
 // Simple inline styles to avoid prop drilling complex tailwind if UI lib missing
 const StatusColors = {
@@ -45,10 +46,10 @@ function Panel({
                  <div className="mt-6 pt-3 border-t border-black/5 text-[10px] text-slate-400 uppercase tracking-widest font-mono">
                     <div className="mb-2">Context: {contextSource}</div>
                     
-                    {debugValues && (debugValues.context || debugValues.prompt) && (
+                    {FEATURE_FLAGS.DEBUG_AI && debugValues && (debugValues.context || debugValues.prompt) && (
                         <details className="group">
                             <summary className="cursor-pointer list-none hover:text-slate-600 transition-colors inline-flex items-center gap-1 select-none">
-                                <span className="opacity-50 group-hover:opacity-100">▶</span>
+                                <span className="opacity-50 group-hover:opacity-100 inline-block transition-transform duration-200 group-open:rotate-90">▶</span>
                                 <span className="underline decoration-dotted underline-offset-2">Raw Data & Prompt</span>
                             </summary>
                             <div className="mt-3 bg-slate-950 text-slate-300 p-4 rounded overflow-auto max-h-[400px] text-[10px] leading-tight font-mono whitespace-pre normal-case tracking-normal">
@@ -82,8 +83,6 @@ export default function CoachVerdictV3Display({ verdict }: { verdict: CoachVerdi
         prompt: verdict.debug_prompt?.[promptKey]
     });
 
-    const summaryDebug = getDebug('summary');
-
     // Use Executive Summary if available, fallback to headline (legacy)
     const summary = verdict.executive_summary;
     const headline = verdict.headline;
@@ -98,7 +97,11 @@ export default function CoachVerdictV3Display({ verdict }: { verdict: CoachVerdi
     return (
         <div className="space-y-8">
             {/* Headline / Summary Panel */}
-            <div className={`p-6 rounded-xl border-l-4 shadow-sm ${statusClass}`}>
+            <Panel
+                className={`p-6 rounded-xl border-l-4 shadow-sm ${statusClass}`}
+                contextSource="Full Report"
+                debugValues={getDebug('summary')}
+            >
                 <h2 className="text-2xl font-bold tracking-tight">
                     {title}
                 </h2>
@@ -110,47 +113,18 @@ export default function CoachVerdictV3Display({ verdict }: { verdict: CoachVerdi
                     </div>
                 )}
 
-                <div className="mt-4 flex gap-4 text-sm opacity-90 items-center justify-between">
+                <div className="mt-4 flex gap-4 text-sm opacity-90 items-center">
                     <span className="uppercase font-bold tracking-wider text-xs border px-2 py-0.5 rounded border-current opacity-80">
                         {status}
                     </span>
-                    <span className="text-[10px] uppercase font-mono opacity-60">
-                         Context: Full Report
-                    </span>
                 </div>
-
-                {/* Debug for Summary */}
-                {(summaryDebug.context || summaryDebug.prompt) && (
-                    <div className="mt-6 pt-3 border-t border-black/5 text-[10px] text-slate-500 uppercase tracking-widest font-mono opacity-90">
-                        <details className="group">
-                            <summary className="cursor-pointer list-none hover:text-slate-800 transition-colors inline-flex items-center gap-1 select-none">
-                                <span className="opacity-50 group-hover:opacity-100">▶</span>
-                                <span className="underline decoration-dotted underline-offset-2">Raw Data & Prompt</span>
-                            </summary>
-                            <div className="mt-3 bg-slate-950 text-slate-300 p-4 rounded overflow-auto max-h-[400px] text-[10px] leading-tight font-mono whitespace-pre normal-case tracking-normal">
-                                {summaryDebug.prompt && (
-                                    <div className="mb-6 border-b border-slate-800 pb-4">
-                                        <div className="text-emerald-400 font-bold mb-2 uppercase text-[9px] tracking-wider">Generated Prompt</div>
-                                        {summaryDebug.prompt}
-                                    </div>
-                                )}
-                                {summaryDebug.context && (
-                                    <div>
-                                        <div className="text-blue-400 font-bold mb-2 uppercase text-[9px] tracking-wider">Context Pack</div>
-                                        {JSON.stringify(summaryDebug.context, null, 2)}
-                                    </div>
-                                )}
-                            </div>
-                        </details>
-                    </div>
-                )}
-            </div>
+            </Panel>
 
             {/* Why It Matters */}
             <Panel 
                 title="Why It Matters"
                 contextSource="Activity Metrics, Athlete Profile, Analysis Flags, Check-in"
-                debugValues={getDebug('scorecard')}
+                debugValues={getDebug('why_it_matters')}
             >
                 <ul className="space-y-2">
                     {verdict.why_it_matters.map((point, idx) => (
@@ -245,35 +219,14 @@ export default function CoachVerdictV3Display({ verdict }: { verdict: CoachVerdi
 
              {/* Question */}
              {verdict.question_for_you && (
-                <div className="bg-slate-900 text-slate-200 p-6 rounded-xl text-center shadow-lg">
+                <Panel
+                    className="bg-slate-900 text-slate-200 p-6 rounded-xl text-center shadow-lg"
+                    contextSource="User Notes, Verdict Theme, Pain Points"
+                    debugValues={getDebug('question')}
+                >
                     <span className="block text-xs uppercase tracking-widest text-slate-400 mb-3">Coach asks</span>
-                    <p className="text-xl font-light italic mb-6">"{verdict.question_for_you}"</p>
-                    <div className="pt-3 border-t border-slate-700 text-[10px] text-slate-500 uppercase tracking-widest font-mono">
-                        <div className="mb-2">Context: User Notes, Verdict Theme, Pain Points</div>
-                        {getDebug('question') && (
-                            <details className="group text-left">
-                                <summary className="cursor-pointer list-none hover:text-slate-300 transition-colors inline-flex items-center gap-1 select-none justify-center w-full">
-                                    <span className="opacity-50 group-hover:opacity-100">▶</span>
-                                    <span className="underline decoration-dotted underline-offset-2">Raw Data & Prompt</span>
-                                </summary>
-                                <div className="mt-3 bg-black/50 text-slate-300 p-4 rounded overflow-auto max-h-[400px] text-[10px] leading-tight font-mono whitespace-pre normal-case tracking-normal">
-                                    {getDebug('question').prompt && (
-                                        <div className="mb-6 border-b border-slate-800 pb-4">
-                                            <div className="text-emerald-400 font-bold mb-2 uppercase text-[9px] tracking-wider">Generated Prompt</div>
-                                            {getDebug('question').prompt}
-                                        </div>
-                                    )}
-                                    {getDebug('question').context && (
-                                        <div>
-                                            <div className="text-blue-400 font-bold mb-2 uppercase text-[9px] tracking-wider">Context Pack</div>
-                                            {JSON.stringify(getDebug('question').context, null, 2)}
-                                        </div>
-                                    )}
-                                </div>
-                            </details>
-                        )}
-                    </div>
-                </div>
+                    <p className="text-xl font-light italic">"{verdict.question_for_you}"</p>
+                </Panel>
              )}
         </div>
     );
