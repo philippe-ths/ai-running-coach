@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
-from app.api import health, auth, activities, webhooks, demo, profile, chat, verdict_v3
+from app.api import health, auth, activities, webhooks, profile, chat, verdict_v3
 
 app = FastAPI(
     title="AI Running Coach",
@@ -31,10 +30,6 @@ app.include_router(chat.router, prefix="/api", tags=["Chat"])
 app.include_router(activities.router, prefix="/api", tags=["Activities"])
 app.include_router(webhooks.router, prefix="/api", tags=["Webhooks"])
 app.include_router(verdict_v3.router, prefix="/api", tags=["Coach Verdict V3"])
-
-# Conditionally include demo router to keep swagger clean in 'prod'
-if settings.DEMO_MODE:
-    app.include_router(demo.router, prefix="/api", tags=["Demo"])
 
 if __name__ == "__main__":
     import uvicorn

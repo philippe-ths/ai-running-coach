@@ -43,6 +43,7 @@
 - **Stream Processing**: Activity streams (HR, Watts) are stored in `ActivityStream` (Postgres) but fetched selectively to optimize performance.
 
 # No fallbacks 
--- **Never* implement fallback logic that bypasses the AI coaching. If the LLM fails, return an error to the user instead of degrading to a non-AI experience. This ensures we maintain a consistent product vision and avoid technical debt from supporting legacy code paths. 
+-- **Never** implement fallback logic that bypasses the AI coaching. If the LLM fails, return an error to the user instead of degrading to a non-AI experience. This ensures we maintain a consistent product vision and avoid technical debt from supporting legacy code paths. 
 -- **No "full_text" fallbacks**: The frontend should not have logic that falls back to rendering unstructured text if the structured V3 verdict is unavailable. Always require the backend to provide a valid `CoachVerdictV3` response, and handle errors gracefully on the frontend without degrading the experience.
 -- **No test data**: Do not hardcode test data or mock responses. 
+-- **No Demo mode**: Do not implement a "demo mode" that bypasses real Strava data or LLM calls. All development and testing should be done with real data and interactions to ensure fidelity to the user experience.

@@ -62,11 +62,11 @@ Store structured fields + full_text render.
 Use NEXT_PUBLIC_API_BASE_URL.
 
 ## 10) End-to-end test run
-@workspace Implement TODO Step 10. Add a “dev simulator” endpoint or script:
-- inserts a fake user + profile
-- loads sample activities JSON
-- runs analysis + advice
-So the app can be demoed without Strava.
+@workspace Implement TODO Step 10. Validate the end-to-end flow using real Strava data:
+- connect Strava
+- sync activities
+- run analysis
+- generate coaching
 
 
 ## 12) Profile v1 (persistent athlete context)

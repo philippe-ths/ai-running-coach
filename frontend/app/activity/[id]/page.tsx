@@ -90,8 +90,9 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                      activity.advice.structured_report && !isCoachVerdictV3(activity.advice.structured_report) ? (
                           <CoachReport advice={activity.advice} /> 
                      ) : (
-                          <div className="prose prose-blue max-w-none text-gray-700">
-                              <Markdown>{activity.advice.full_text}</Markdown>
+                          // Fallback removed: No full_text rendering
+                          <div className="p-4 bg-yellow-50 text-yellow-800 rounded border border-yellow-200">
+                              Analysis format not supported or pending upgrade.
                           </div>
                      )
                 ) : (
@@ -99,7 +100,7 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                         <p className="italic text-gray-500">
                             Analysis pending or not included in current response schema.
                         </p>
-                        <p>Run <strong>Step 10 (Demo Mode) with AI On</strong> to populate advice data.</p>
+                        <p>Sync your Strava activities and re-open this run to generate coaching.</p>
                     </div>
                 )}
             </VerdictV3Fetcher>

@@ -147,7 +147,7 @@ export interface Advice {
     week_adjustment: string;
     warnings: string[];
     question?: string;
-    full_text: string;
+    // full_text removed
     structured_report?: CoachReportData | CoachVerdictV3; // Can theoretically allow V3 here in specific implementation
 }
 

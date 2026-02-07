@@ -3,14 +3,6 @@ import json
 from typing import Optional, Dict, Any
 from pydantic import ValidationError
 from app.core.config import settings
-from app.services.ai.verdict_v3.mocks import (
-    MOCK_SCORECARD_JSON,
-    MOCK_STORY_JSON,
-    MOCK_LEVER_JSON,
-    MOCK_NEXT_STEPS_JSON,
-    MOCK_QUESTION_JSON
-)
-
 
 # Try to import OpenAI v1.x client
 try:
@@ -40,24 +32,9 @@ class AIClient:
         Returns raw JSON string from LLM provider without parsing.
         Used by callers who want to handle their own Pydantic validation/retries.
         """
-        # If disabled OR mock provider, return intelligent mocks to ensure app works (Demo Mode)
-        use_mock = (not self.enabled) or (self.provider == "mock")
-        
-        if use_mock:
-            # Heuristic to detect which section is being requested
-            # This allows the "Full Generation" flow to work end-to-end in Demo Mode
-            if "VerdictScorecardResponse" in prompt:
-                return MOCK_SCORECARD_JSON
-            if "StoryResponse" in prompt:
-                return MOCK_STORY_JSON
-            if "LeverResponse" in prompt:
-                return MOCK_LEVER_JSON
-            if "NextStepsResponse" in prompt:
-                return MOCK_NEXT_STEPS_JSON
-            if "QuestionResponse" in prompt:
-                return MOCK_QUESTION_JSON
-            return "{}"
-
+        if not self.enabled:
+             raise RuntimeError("AI service is disabled.")
+             
         if self.provider == "openai":
             if not self.client:
                  print("Error: OpenAI client not ready.")
@@ -79,8 +56,8 @@ class AIClient:
                 print(f"OpenAI Raw API Error: {e}")
                 raise e
         
-        # Fallthrough
-        return "{}"
+        raise RuntimeError(f"Unsupported AI provider: {self.provider}")
+
 
 # Singleton
 ai_client = AIClient()

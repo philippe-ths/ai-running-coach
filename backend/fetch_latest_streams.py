@@ -34,27 +34,8 @@ async def main():
             else:
                 print("Failed to fetch streams (maybe API error).")
         else:
-            print("No linked Strava account found. Generating MOCK streams for demo...")
-            from app.models import ActivityStream
-            import math
-            import random
-            
-            # Generate 60 minutes of mock data
-            points = 3600 
-            
-            # Velocity: 3.0 m/s with some noise
-            velocity_data = [3.0 + (math.sin(i/100) * 0.2) + random.uniform(-0.1, 0.1) for i in range(points)]
-            
-            # HR: 140 bpm with drift
-            nr_data = [140 + (i/points * 10) + random.uniform(-2, 2) for i in range(points)]
-            
-            s1 = ActivityStream(activity_id=activity.id, stream_type="velocity_smooth", data=velocity_data)
-            s2 = ActivityStream(activity_id=activity.id, stream_type="heartrate", data=nr_data)
-            
-            db.add(s1)
-            db.add(s2)
-            db.commit()
-            print("Mock streams created successfully!")
+            print("No linked Strava account found. Cannot fetch streams.")
+            return
 
             
     except Exception as e:

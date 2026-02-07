@@ -58,7 +58,7 @@ From `frontend/`:
 Open:
 - http://localhost:3000
 
-## Strava setup (optional for MVP demo)
+## Strava setup
 1) Create a Strava API application and copy:
    - Client ID
    - Client Secret
@@ -67,16 +67,6 @@ Open:
    - STRAVA_CLIENT_SECRET
    - STRAVA_REDIRECT_URI
 3) Start the backend and click “Connect Strava” in the UI.
-
-## Demo mode (no Strava required)
-For Step 10, you’ll load sample Strava-like activity JSON and run analysis + advice end-to-end.
-
-Sample files live here:
-- `backend/sample_data/strava/activities/*.json`
-
-Notes:
-- These JSON files are intentionally small and stable.
-- Your Step 10 script/endpoint should read these, insert activities, compute metrics, and generate advice.
 
 ## Common ports
 - Postgres: 5433 (mapped from container 5432 to avoid local conflicts)

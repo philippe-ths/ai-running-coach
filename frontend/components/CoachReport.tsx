@@ -19,11 +19,11 @@ interface CoachReportProps {
 export default function CoachReport({ advice }: CoachReportProps) {
   const report = advice.structured_report;
 
-  // Fallback to legacy Markdown if no structured report is available
+  // Fallback if no structured report is available
   if (!report) {
     return (
-      <div className="prose prose-blue max-w-none text-gray-700">
-        <Markdown>{advice.full_text}</Markdown>
+      <div className="p-4 bg-red-50 text-red-700 rounded border border-red-200">
+         Error: Structured advice data is missing.
       </div>
     );
   }

@@ -133,7 +133,7 @@ class AdviceRead(BaseModel):
     week_adjustment: str
     warnings: List[str] = []
     question: Optional[str] = None
-    full_text: str
+    # full_text field removed to prevent fallback to unstructured text
     ai_commentary: Optional[str] = None
     structured_report: Optional[Dict[str, Any]] = None # New Field
     model_config = ConfigDict(from_attributes=True)
