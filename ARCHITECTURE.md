@@ -1,35 +1,58 @@
 # ARCHITECTURE.md — Local-first FastAPI + SQLAlchemy + Next.js
 
 ## 1) Repo layout
+```
 /
   backend/
     app/
       api/                # FastAPI routers
-      core/               # config, logging, security
-      db/                 # session, base, migrations
-      models/             # SQLAlchemy ORM models
-      schemas/            # Pydantic models
+      core/               # config, logging
+      db/                 # session, base
+      models/             # SQLAlchemy ORM models (one file per model)
+        __init__.py       # barrel re-exports
+        base.py           # generate_uuid helper
+        user.py
+        strava_account.py
+        activity.py
+        activity_stream.py
+        derived_metric.py
+        user_profile.py
+        checkin.py
+      schemas/            # Pydantic models (one file per domain)
+        __init__.py       # barrel re-exports
+        user.py
+        activity.py
+        profile.py
+        checkin.py
+        sync.py
+        detail.py         # DerivedMetricRead, ActivityStreamRead, ActivityDetailRead
       services/
-        strava/           # Strava client, OAuth, webhook handlers
-        analysis/         # metrics + classifier
-        coaching/         # advice policy + generator
-      workers/            # job definitions (RQ/Celery)
+        strava/           # Strava client, OAuth, token refresh
+        analysis/         # classifier, metrics, flags, engine
+        units/            # cadence normalisation
+        activity_service.py
+      jobs/               # RQ job definitions (strava_sync)
       main.py
+      worker.py
     alembic/
     tests/
     pyproject.toml
-    .env.example
   frontend/
-    app/                  # Next.js App Router
+    app/                  # Next.js App Router pages
     lib/
-    components/
-    .env.example
+      api.ts              # fetchFromAPI wrapper
+      format.ts           # formatPace, formatDuration, formatDistanceKm
+      types.ts            # barrel re-exports
+      types/              # per-domain TS interfaces
+        activity.ts
+        metrics.ts
+        profile.ts
+    components/           # React components
   docker-compose.yml
   SPEC.md
   ARCHITECTURE.md
-  PROMPTS.md
-  TODO.md
   README.md
+```
 
 ## 2) Tech stack (MVP)
 Backend:
@@ -62,191 +85,71 @@ Frontend (.env):
 
 ## 4) Strava integration design
 ### 4.1 OAuth
-- Endpoint: GET /api/auth/strava/login
-  - redirects to Strava authorize URL with scopes and redirect_uri
-- Endpoint: GET /api/auth/strava/callback
-  - exchanges code for access/refresh tokens
-  - stores tokens in strava_accounts
-  - triggers initial sync job
+- Endpoint: GET /api/auth/strava/login — redirects to Strava authorize URL
+- Endpoint: GET /api/auth/strava/callback — exchanges code for tokens, stores in strava_accounts, triggers initial sync
 
-Token refresh:
-- Before any Strava API call, if expires_at < now+60s => refresh token.
+Token refresh: before any Strava call, if expires_at < now+60s => refresh token.
 
 ### 4.2 Webhooks
-Endpoints:
 - GET /api/webhooks/strava (verification challenge)
 - POST /api/webhooks/strava (event receiver)
 
-On activity create/update:
-- enqueue job: sync_activity(strava_activity_id)
-On activity delete:
-- mark as deleted (soft delete) and remove advice/metrics.
+On activity create/update: enqueue sync_activity job.
+On activity delete: soft-delete and remove metrics.
 
-Rate limits:
-- Prefer webhook-driven sync.
-- Fetch streams selectively (only for key run types or on-demand).
-- Cache Strava activity payloads in DB; avoid re-fetching.
+Rate limits: prefer webhook-driven sync; fetch streams selectively; cache payloads in DB.
 
-## 5) Database schema (MVP tables)
+## 5) Database schema
 ### 5.1 users
-- id (uuid)
-- email (nullable for MVP if no auth)
-- created_at
+id (uuid), email (nullable), created_at
 
 ### 5.2 strava_accounts
-- id (uuid)
-- user_id (fk)
-- strava_athlete_id (unique)
-- access_token (encrypted-at-rest if possible; for MVP plain ok)
-- refresh_token
-- expires_at (int timestamp)
-- scope (text)
-- created_at, updated_at
+id (uuid), user_id (fk), strava_athlete_id (unique), access_token, refresh_token, expires_at, scope, created_at, updated_at
 
 ### 5.3 activities
-- id (uuid)
-- user_id (fk)
-- strava_activity_id (unique)
-- start_date (datetime)
-- type (text)
-- name (text)
-- distance_m (int)
-- moving_time_s (int)
-- elapsed_time_s (int)
-- elev_gain_m (float)
-- avg_hr (float nullable)
-- max_hr (float nullable)
-- avg_cadence (float nullable)
-- average_speed_mps (float nullable)
-- raw_summary (jsonb)  # store full Strava response for audit
-- is_deleted (bool default false)
-- created_at, updated_at
+id (uuid), user_id (fk), strava_activity_id (unique), start_date, type, name, distance_m, moving_time_s, elapsed_time_s, elev_gain_m, avg_hr?, max_hr?, avg_cadence?, average_speed_mps?, user_intent?, raw_summary (jsonb), is_deleted, created_at, updated_at
 
-### 5.4 activity_streams (optional in MVP; ok to stub)
-- id (uuid)
-- activity_id (fk)
-- stream_type (text) # time, distance, heartrate, velocity_smooth...
-- data (jsonb)
+### 5.4 activity_streams
+id (uuid), activity_id (fk), stream_type, data (jsonb)
 
 ### 5.5 derived_metrics
-- id (uuid)
-- activity_id (fk unique)
-- activity_class (text)
-- effort_score (float)
-- pace_variability (float nullable)
-- hr_drift (float nullable)
-- time_in_zones (jsonb nullable)
-- flags (jsonb)  # list[str]
-- confidence (text)
-- confidence_reasons (jsonb)
-- created_at, updated_at
+id (uuid), activity_id (fk unique), activity_class, effort_score, pace_variability?, hr_drift?, time_in_zones (jsonb?), flags (jsonb), confidence, confidence_reasons (jsonb), created_at, updated_at
 
-### 5.6 advice
-- id (uuid)
-- activity_id (fk unique)
-- verdict (text)
-- evidence (jsonb)        # list[str]
-- next_run (jsonb)        # structured prescription
-- week_adjustment (text)
-- warnings (jsonb)        # list[str]
-- question (text nullable)
-- full_text (text)        # rendered advice block
-- created_at, updated_at
+### 5.6 user_profiles
+user_id (pk fk), goal_type, target_date?, experience_level, weekly_days_available, current_weekly_km?, max_hr?, upcoming_races (jsonb), injury_notes?, created_at, updated_at
 
-### 5.7 user_profile
-- user_id (pk fk)
-- goal_type (text)
-- target_date (date nullable)
-- experience_level (text)
-- weekly_days_available (int)
-- injury_notes (text)
-- created_at, updated_at
-
-### 5.8 check_ins
-- id (uuid)
-- activity_id (fk)
-- rpe (int 1-10 nullable)
-- pain_score (int 0-10 nullable)
-- pain_location (text nullable)
-- sleep_quality (int 1-5 nullable)
-- notes (text nullable)
-- created_at
+### 5.7 check_ins
+id (uuid), activity_id (fk), rpe?, pain_score?, pain_location?, sleep_quality?, notes?, created_at
 
 ## 6) Analysis engine (services/analysis)
-### 6.1 Classifier (rule-based MVP)
-Inputs: activity summary (+ streams when available)
-Outputs: activity_class, confidence, reasons
+### 6.1 Classifier (rule-based)
+Inputs: activity summary + optional streams.
+Outputs: activity_class, confidence, reasons.
 
-Heuristics (MVP):
-- intervals: repeated hard segments inferred by split/stream variability + pauses/recoveries
-- tempo: sustained moderate-hard effort for >= 20 min with relatively stable pace/HR
-- long: duration in top 20% of user’s last 4 weeks OR > 75 min if no history
-- easy/recovery: low variability + low HR zone time (if HR) or user-reported RPE low
-- hills: high elev_gain per km + variable grade
+Heuristics: intervals (variability + recoveries), tempo (sustained effort >= 20 min), long (top 20% duration or > 75 min), easy/recovery (low variability + low HR), hills (high elev/km).
 
 ### 6.2 Metrics
-- effort_score:
-  - if HR: TRIMP-like (simple zone weighting)
-  - else: moving_time_s × intensity_proxy (based on class)
-- pace_variability:
-  - stddev of per-km splits / average pace
-- hr_drift:
-  - if HR and steady segment: compare first half HR/pace vs second half
+- effort_score: TRIMP-like if HR, else time x intensity proxy
+- pace_variability: stddev of per-km splits / avg pace
+- hr_drift: first-half vs second-half HR/pace comparison
 
 ### 6.3 Flags
-Generate per SPEC.md and store in derived_metrics.flags.
+Stored in derived_metrics.flags. See SPEC.md section 6 for the full list.
 
-## 7) Coaching engine (services/coaching)
-Advice is derived from:
-- derived_metrics
-- recent 7–14 day activity summary stats
-- check-ins if present
-- user_profile
+## 7) API endpoints
+Auth: GET /api/auth/strava/login, GET /api/auth/strava/callback
+Webhooks: GET + POST /api/webhooks/strava
+Profile: GET /api/profile, POST /api/profile
+Activities: GET /api/activities, GET /api/activities/{id}, POST /api/activities/{id}/checkin, PATCH /api/activities/{id}/intent, POST /api/sync
+Health: GET /api/health
 
-Advice policy (MVP):
-- If pain_severe: stop intensity recommendation; suggest easy/rest + seek pro.
-- If fatigue_possible or load_spike: next run easy/recovery; reduce hard sessions.
-- If intensity_too_high_for_easy: prescribe easier next run + explain.
-- Else: propose next run based on missing stimulus:
-  - if no strides in 10 days and mostly easy: add strides
-  - if goal race exists and enough base: propose one quality session per week
+## 8) Frontend pages
+- `/` — dashboard: connect button, recent activities, sync
+- `/activity/[id]` — stats, metrics, flags, stream charts, intent selector, check-in
+- `/profile` — profile editor (goal, experience, races, injuries)
 
-## 8) Backend API endpoints (MVP)
-Auth/Strava:
-- GET  /api/auth/strava/login
-- GET  /api/auth/strava/callback
-
-Webhooks:
-- GET  /api/webhooks/strava
-- POST /api/webhooks/strava
-
-User/profile:
-- GET  /api/profile
-- POST /api/profile
-
-Activities:
-- GET  /api/activities?limit=&offset=
-- GET  /api/activities/{id}
-- POST /api/activities/{id}/checkin
-- POST /api/sync (manual sync)
-
-Weekly:
-- GET /api/week?start=YYYY-MM-DD
-
-## 9) Frontend pages (MVP)
-- / (dashboard)
-  - connect button if not connected
-  - current week summary
-  - recent activities list
-- /activity/[id]
-  - activity stats
-  - derived metrics + flags
-  - advice block
-  - check-in form
-
-## 10) Local-first dev (docker-compose)
-Services:
-- postgres
-- redis
-- backend (uvicorn --reload)
-- frontend (next dev)
+## 9) Local-first dev (docker-compose)
+- postgres (5433 -> 5432)
+- redis (6379)
+- backend (uvicorn --reload, 8000)
+- frontend (next dev, 3000)

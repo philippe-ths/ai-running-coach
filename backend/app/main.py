@@ -1,11 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import health, auth, activities, webhooks, profile, chat, verdict_v3
+from app.api import health, auth, activities, webhooks, profile
 
 app = FastAPI(
-    title="AI Running Coach",
+    title="Running Coach",
     description="Local-first Strava Coach MVP",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 # CORS Configuration
@@ -26,10 +26,8 @@ app.add_middleware(
 app.include_router(health.router, prefix="/api", tags=["System"])
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
 app.include_router(profile.router, prefix="/api", tags=["Profile"])
-app.include_router(chat.router, prefix="/api", tags=["Chat"])
 app.include_router(activities.router, prefix="/api", tags=["Activities"])
 app.include_router(webhooks.router, prefix="/api", tags=["Webhooks"])
-app.include_router(verdict_v3.router, prefix="/api", tags=["Coach Verdict V3"])
 
 if __name__ == "__main__":
     import uvicorn

@@ -32,7 +32,7 @@ export default function IntentSelector({ activityId, currentType, assignedClass 
       });
 
       if (!res.ok) throw new Error("Failed to update intent");
-      router.refresh(); // Refresh page to see new advice/metrics
+      router.refresh(); // Refresh page to see new metrics
     } catch (err) {
       console.error(err);
       alert("Failed to update activity type");

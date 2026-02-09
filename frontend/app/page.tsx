@@ -1,6 +1,5 @@
 import { fetchFromAPI } from '@/lib/api';
 import ActivityList from '@/components/ActivityList';
-import ConnectStravaButton from '@/components/ConnectStravaButton';
 import SyncButton from '@/components/SyncButton';
 import Link from 'next/link';
 
@@ -40,7 +39,6 @@ export default async function Dashboard() {
             <Link href="/profile" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
                 Edit Profile
             </Link>
-            <ConnectStravaButton />
         </div>
       </header>
 
