@@ -4,15 +4,31 @@ from app.models import Activity
 def classify_activity(activity: Activity, history: List[Activity]) -> str:
     """
     Determines Activity Class: Easy, Long, Tempo, Interval, Race, Hills, Recovery.
+    Also handles non-run types like Indoor Ride/Treadmill.
     """
     # 0. User Intent Override
     if activity.user_intent:
         return activity.user_intent
 
+    # 1. Indoor / Trainer Detection
+    raw = activity.raw_summary or {}
+    is_trainer = raw.get("trainer", False)
+    sport_type = raw.get("sport_type") or activity.type or "Run"
+
+    if is_trainer:
+        if sport_type == "Ride":
+            return "Indoor Ride"
+        if sport_type == "Run":
+            return "Treadmill"
+            
+    # Heuristic: Ride with 0 distance but time elapsed => Indoor
+    if sport_type == "Ride" and activity.distance_m == 0 and activity.moving_time_s > 60:
+         return "Indoor Ride"
+
     if not activity.name:
         return "Easy Run"
 
-    # 1. Parsing name/type override
+    # 2. Parsing name/type override
     name_lower = activity.name.lower()
     if "race" in name_lower:
         return "Race"
@@ -48,6 +64,15 @@ def classify_activity(activity: Activity, history: List[Activity]) -> str:
              if activity.avg_hr and activity.avg_hr > 150: 
                  return "Hills"
 
-    # 4. Intensity heuristics (Tempo vs Easy)
-    # Default
+    # 4. Intensity heuristics (Tempo vs Easy) and Default Handling
+    if sport_type == "Ride":
+        return "Easy Ride"
+    if sport_type == "Walk":
+        return "Leisure Walk"
+    if sport_type == "Swim":
+        return "Endurance"
+    if sport_type == "Workout" or sport_type == "WeightTraining":
+        return "Strength"
+
+    # Default for "Run" and unknown types
     return "Easy Run"

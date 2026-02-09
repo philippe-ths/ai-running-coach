@@ -8,22 +8,22 @@ from app.db.session import get_db
 from app.models import Activity, StravaAccount, CheckIn
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead
 from app.services import activity_service
-from app.services.analysis import engine as analysis_engine
+from app.services.processing import engine as processing_engine
 
 router = APIRouter()
 
-@router.post("/activities/{activity_id}/analyze_deep", response_model=DerivedMetricRead)
-async def analyze_activity_deep(
+@router.post("/activities/{activity_id}/process_deep", response_model=DerivedMetricRead)
+async def process_activity_deep(
     activity_id: UUID,
     db: Session = Depends(get_db)
 ):
     """
-    Fetches full streams from Strava (if Rate Limits allow) and re-runs analysis.
+    Fetches full streams from Strava (if Rate Limits allow) and re-runs processing.
     Useful for detailed breakdown of 'Complex' runs.
     """
-    metrics = await analysis_engine.run_deep_analysis(db, str(activity_id))
+    metrics = await processing_engine.process_deep(db, str(activity_id))
     if not metrics:
-        raise HTTPException(status_code=400, detail="Analysis failed or activity not found.")
+        raise HTTPException(status_code=400, detail="Processing failed or activity not found.")
     
     return metrics
 
@@ -47,8 +47,8 @@ def update_activity_intent(
     db.commit()
     db.refresh(activity)
     
-    # Re-run analysis pipeline with new intent
-    analysis_engine.run_analysis(db, str(activity_id))
+    # Re-run processing pipeline with new intent
+    processing_engine.process_activity(db, str(activity_id))
     
     return activity
 
@@ -95,6 +95,21 @@ def read_activity(
     activity = activity_service.get_activity(db, str(activity_id))
     if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
+        
+    # Lazy Data Repair: If activity_class is "Easy Run" but it's clearly an Indoor Ride/Walk etc, repair it on read.
+    # This fixes stale data from earlier classifier versions without requiring full re-sync.
+    if activity.metrics and activity.metrics.activity_class == "Easy Run":
+       from app.services.processing.classifier import classify_activity
+       
+       # Pass an empty history for now (fast check)
+       current_class = classify_activity(activity, []) 
+       
+       if current_class != "Easy Run":
+           activity.metrics.activity_class = current_class
+           db.add(activity.metrics)
+           db.commit()
+           db.refresh(activity)
+
     return activity
 
 @router.post("/activities/{activity_id}/checkin", response_model=CheckInRead)
@@ -116,7 +131,7 @@ def create_checkin(
     db.commit()
     db.refresh(db_obj)
 
-    # 2. Trigger Re-Analysis to incorporate user feedback
-    analysis_engine.run_analysis(db, str(activity_id))
+    # 2. Trigger Re-Processing to incorporate user feedback
+    processing_engine.process_activity(db, str(activity_id))
 
     return db_obj

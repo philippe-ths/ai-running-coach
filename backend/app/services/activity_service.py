@@ -109,18 +109,10 @@ async def sync_recent_activities(db: Session, strava_account: StravaAccount) -> 
                 # 1.5 Fetch Streams
                 await fetch_and_store_streams(db, strava_account, activity)
 
-                # 2. Trigger Analysis (Idempotent-ish: re-running updates flags/metrics)
-                # Optimization: Skip analysis if already done to prevent hanging on sync
-                # Dynamic import to avoid circular dependency
-                from app.services.analysis import engine as analysis_engine
-                
-                # Check for existing
-                existing_metrics = db.query(DerivedMetric).filter(DerivedMetric.activity_id == activity.id).first()
-                
-                metrics = existing_metrics
-                if not existing_metrics:
-                    metrics = analysis_engine.run_analysis(db, activity.id)
-                    stats.analyzed += 1
+                # 2. Run processing
+                from app.services.processing import engine
+                engine.process_activity(db, str(activity.id))
+                stats.analyzed += 1
                 
                 # Commit per activity to allow partial success
                 db.commit()

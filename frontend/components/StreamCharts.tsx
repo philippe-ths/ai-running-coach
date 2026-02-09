@@ -11,13 +11,24 @@ interface StreamChartsProps {
 const CHART_HEIGHT = 100;
 const CHART_WIDTH = 600; // SVG internal coordinate space
 
-const PRESETS: Record<string, { label: string, color: string, icon: any }> = {
-  heartrate: { label: 'Heart Rate', color: 'text-rose-500', icon: Heart },
-  velocity_smooth: { label: 'Pace (Velocity)', color: 'text-blue-500', icon: Gauge },
-  cadence: { label: 'Cadence', color: 'text-purple-500', icon: Activity },
-  watts: { label: 'Power', color: 'text-amber-500', icon: Zap },
-  altitude: { label: 'Elevation', color: 'text-emerald-600', icon: Mountain },
-  grade_smooth: { label: 'Grade', color: 'text-gray-500', icon: Mountain },
+const PRESETS: Record<string, { label: string, color: string, icon: any, format?: (v: number) => string }> = {
+  heartrate: { label: 'Heart Rate', color: 'text-rose-500', icon: Heart, format: (v) => `${Math.round(v)} bpm` },
+  velocity_smooth: { 
+    label: 'Pace', 
+    color: 'text-blue-500', 
+    icon: Gauge, 
+    format: (mps) => {
+      if (mps <= 0.1) return '0:00 /km';
+      const secPerKm = 1000 / mps;
+      const min = Math.floor(secPerKm / 60);
+      const sec = Math.round(secPerKm % 60);
+      return `${min}:${sec.toString().padStart(2, '0')} /km`;
+    }
+  },
+  cadence: { label: 'Cadence', color: 'text-purple-500', icon: Activity, format: (v) => `${Math.round(v)} spm` },
+  watts: { label: 'Power', color: 'text-amber-500', icon: Zap, format: (v) => `${Math.round(v)} W` },
+  altitude: { label: 'Elevation', color: 'text-emerald-600', icon: Mountain, format: (v) => `${Math.round(v)} m` },
+  grade_smooth: { label: 'Grade', color: 'text-gray-500', icon: Mountain, format: (v) => `${v.toFixed(1)}%` },
 };
 
 function SimpleChart({ type, data }: { type: string, data: number[] }) {
@@ -37,7 +48,7 @@ function SimpleChart({ type, data }: { type: string, data: number[] }) {
       if (v > max) max = v;
       sum += v;
     }
-    const avg = Math.round(sum / data.length);
+    const avg = sum / data.length; // Keep precision
     const range = max - min || 1;
 
     // Generate Path
@@ -51,13 +62,19 @@ function SimpleChart({ type, data }: { type: string, data: number[] }) {
 
     return { 
       pathD: `M ${points.join(' L ')}`,
-      min: Math.floor(min),
-      max: Math.ceil(max), 
+      min,
+      max, 
       avg 
     };
   }, [data]);
 
   if (data.length === 0) return null;
+  
+  // Hide charts with no meaningful data (flat zeros)
+  // This prevents showing empty graphs for indoor activities with no GPS/Speed sensors
+  if (Math.abs(max) < 0.0001 && Math.abs(min) < 0.0001) return null;
+
+  const formatValue = preset.format || ((v: number) => Math.round(v).toString());
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
@@ -67,8 +84,8 @@ function SimpleChart({ type, data }: { type: string, data: number[] }) {
           {preset.label}
         </h4>
         <div className="flex gap-3 text-xs text-gray-400 font-mono">
-           <span>Max: {max}</span>
-           <span>Avg: {avg}</span>
+           <span>Max: {formatValue(max)}</span>
+           <span>Avg: {formatValue(avg)}</span>
         </div>
       </div>
       

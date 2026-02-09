@@ -12,11 +12,15 @@ def test_normalize_cadence_spm_run_unchanged():
     assert normalize_cadence_spm("Run", 130.0) == 130.0
     assert normalize_cadence_spm("Run", 190.0) == 190.0
 
-def test_normalize_cadence_spm_non_run_unchanged():
-    """Test that non-run activities are unchanged regardless of value."""
-    assert normalize_cadence_spm("Walk", 100.0) == 100.0
-    assert normalize_cadence_spm("Ride", 80.0) == 80.0
-    assert normalize_cadence_spm("Hike", 50.0) == 50.0
+def test_normalize_cadence_spm_non_run_doubling():
+    """Test that non-run activities are doubled if low, per user request."""
+    # Assuming the logic is simply "if < 130, double it" for everyone.
+    # Examples:
+    # Walk: 50 spm reported -> 100 spm real.
+    # Ride: 80 rpm reported -> 160 units? (User said 'always be doubled')
+    assert normalize_cadence_spm("Walk", 50.0) == 100.0
+    assert normalize_cadence_spm("Ride", 80.0) == 160.0
+    assert normalize_cadence_spm("Hike", 50.0) == 100.0
 
 def test_normalize_cadence_spm_none():
     """Test that None input returns None."""

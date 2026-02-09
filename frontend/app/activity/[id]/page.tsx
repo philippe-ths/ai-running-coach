@@ -2,7 +2,6 @@ import { fetchFromAPI } from '@/lib/api';
 import { format } from 'date-fns';
 import { formatPace, formatDuration, formatDistanceKm } from '@/lib/format';
 import CheckInForm from '@/components/CheckInForm';
-import IntentSelector from '@/components/IntentSelector';
 import Link from 'next/link';
 import { Activity } from '@/lib/types';
 import AdvancedMetrics from '@/components/AdvancedMetrics';
@@ -31,16 +30,7 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                     <span>{formatDistanceKm(activity.distance_m)}</span>
                 </div>
             </div>
-            <div className="flex flex-col items-end gap-1">
-                 <IntentSelector 
-                    activityId={activity.id} 
-                    currentType={activity.user_intent ?? null}
-                    assignedClass={activity.metrics?.activity_class} 
-                 />
-                 <span className="text-xs text-gray-500">
-                    {activity.user_intent ? '(Manual override)' : '(Auto-detected)'}
-                 </span>
-            </div>
+            {/* IntentSelector moved to main content */}
         </div>
       </header>
 
@@ -48,6 +38,15 @@ export default async function ActivityDetail({ params }: { params: { id: string 
         
         {/* Main Content */}
         <div className="md:col-span-2 space-y-6">
+
+          {/* Activity Context Panel: Check-In & Type */}
+          <CheckInForm 
+              activityId={activity.id} 
+              existingCheckIn={activity.check_in} 
+              currentType={activity.user_intent ?? null}
+              assignedClass={activity.metrics?.activity_class}
+              sportType={activity.raw_summary?.sport_type || activity.raw_summary?.type || 'Run'}
+          />
           
           {/* Detailed Stream Charts */}
           {activity.streams && activity.streams.length > 0 && (
@@ -70,6 +69,12 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                     <dt className="text-gray-500">Duration</dt>
                     <dd className="font-medium">{formatDuration(activity.moving_time_s)}</dd>
                 </div>
+                {activity.raw_summary?.elapsed_time && (
+                    <div className="flex justify-between">
+                        <dt className="text-gray-500">Elapsed Time</dt>
+                        <dd className="font-medium">{formatDuration(activity.raw_summary.elapsed_time)}</dd>
+                    </div>
+                )}
                 <div className="flex justify-between">
                    <dt className="text-gray-500">Avg Pace</dt>
                    <dd className="font-medium">
@@ -80,7 +85,9 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                     <dt className="text-gray-500">Distance</dt>
                     <dd className="font-medium">{formatDistanceKm(activity.distance_m)}</dd>
                 </div>
+                
                 <div className="border-t border-gray-100 my-2 pt-2"></div>
+                
                 <div className="flex justify-between">
                     <dt className="text-gray-500">Avg HR</dt>
                     <dd className="font-medium">{activity.avg_hr ? `${Math.round(activity.avg_hr)} bpm` : '-'}</dd>
@@ -91,7 +98,38 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                         <dd className="font-medium">{Math.round(activity.raw_summary.max_heartrate)} bpm</dd>
                     </div>
                 )}
+                {activity.raw_summary?.suffer_score && (
+                    <div className="flex justify-between">
+                        <dt className="text-gray-500">Suffer Score</dt>
+                        <dd className="font-medium">{activity.raw_summary.suffer_score}</dd>
+                    </div>
+                )}
+
+                {(activity.raw_summary?.average_watts || activity.raw_summary?.kilojoules) && (
+                    <div className="border-t border-gray-100 my-2 pt-2"></div>
+                )}
+
+                {activity.raw_summary?.average_watts && (
+                    <div className="flex justify-between">
+                        <dt className="text-gray-500">Avg Power</dt>
+                        <dd className="font-medium">{Math.round(activity.raw_summary.average_watts)} W</dd>
+                    </div>
+                )}
+                {activity.raw_summary?.weighted_average_watts && (
+                    <div className="flex justify-between">
+                        <dt className="text-gray-500">Norm. Power</dt>
+                        <dd className="font-medium">{Math.round(activity.raw_summary.weighted_average_watts)} W</dd>
+                    </div>
+                )}
+                {activity.raw_summary?.kilojoules && (
+                    <div className="flex justify-between">
+                        <dt className="text-gray-500">Energy</dt>
+                        <dd className="font-medium">{Math.round(activity.raw_summary.kilojoules)} kJ</dd>
+                    </div>
+                )}
+
                 <div className="border-t border-gray-100 my-2 pt-2"></div>
+                
                 {activity.avg_cadence && (
                     <>
                         <div className="flex justify-between">
@@ -105,14 +143,16 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                     <dt className="text-gray-500">Elevation</dt>
                     <dd className="font-medium">{Math.round(activity.elev_gain_m)} m</dd>
                 </div>
+                {activity.raw_summary?.device_name && (
+                    <div className="flex justify-between">
+                        <dt className="text-gray-500">Device</dt>
+                        <dd className="font-medium text-right max-w-[150px] truncate" title={activity.raw_summary.device_name}>
+                            {activity.raw_summary.device_name}
+                        </dd>
+                    </div>
+                )}
               </dl>
            </div>
-            
-           {/* Check-in Widget */}
-           <CheckInForm 
-              activityId={activity.id} 
-              existingCheckIn={activity.check_in} 
-           />
         </div>
       </div>
 

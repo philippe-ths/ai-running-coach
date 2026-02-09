@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import ConnectStravaButton from '@/components/ConnectStravaButton';
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -78,7 +79,10 @@ export default function ProfilePage() {
     <div className="max-w-2xl mx-auto p-4 md:p-8">
       <header className="mb-6 flex justify-between items-center">
         <h1 className="text-2xl font-bold">Athlete Profile</h1>
-        <Link href="/" className="text-blue-600 hover:underline">Cancel</Link>
+        <div className="flex items-center gap-4">
+            <ConnectStravaButton />
+            <Link href="/" className="text-blue-600 hover:underline">Cancel</Link>
+        </div>
       </header>
       
       <form onSubmit={handleSubmit} className="space-y-6 bg-white p-6 border rounded-xl shadow-sm">

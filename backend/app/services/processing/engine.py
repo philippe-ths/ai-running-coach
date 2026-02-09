@@ -3,17 +3,17 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.models import Activity, DerivedMetric, CheckIn, ActivityStream, StravaAccount, UserProfile
-from app.services.analysis.metrics import compute_derived_metrics_data
-from app.services.analysis.classifier import classify_activity
-from app.services.analysis.flags import generate_flags
+from app.services.processing.metrics import compute_derived_metrics_data
+from app.services.processing.classifier import classify_activity
+from app.services.processing.flags import generate_flags
 from app.services.activity_service import fetch_and_store_streams
 
-# Classes that warrant detailed stream analysis
-DEEP_ANALYSIS_CLASSES = ["Tempo", "Intervals", "Long Run", "Race", "Hills"]
+# Classes that warrant detailed stream processing
+DEEP_PROCESSING_CLASSES = ["Tempo", "Intervals", "Long Run", "Race", "Hills"]
 
-async def run_deep_analysis(db: Session, activity_id: str) -> Optional[DerivedMetric]:
+async def process_deep(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     """
-    Explicitly fetches streams and re-runs analysis.
+    Explicitly fetches streams and re-runs processing.
     """
     activity = db.query(Activity).filter(Activity.id == activity_id).first()
     if not activity: return None
@@ -23,8 +23,8 @@ async def run_deep_analysis(db: Session, activity_id: str) -> Optional[DerivedMe
     if account:
         await fetch_and_store_streams(db, account, activity)
     
-    # Run normal analysis (which now picks up streams)
-    return run_analysis(db, activity_id)
+    # Run normal processing (which now picks up streams)
+    return process_activity(db, activity_id)
 
 def generate_flags_with_drift(metrics_data, check_in):
     flags = []
@@ -47,7 +47,7 @@ def generate_flags_with_drift(metrics_data, check_in):
     # For now, simplistic
     return flags
 
-def run_analysis(db: Session, activity_id: str) -> Optional[DerivedMetric]:
+def process_activity(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     """
     Main entry point. 
     Loads activity, history, computes all metrics, saves DerivedMetric.
