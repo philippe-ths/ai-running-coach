@@ -250,4 +250,3 @@ Services:
 - redis
 - backend (uvicorn --reload)
 - frontend (next dev)
-

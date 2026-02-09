@@ -14,3 +14,4 @@ Requires-Dist: httpx>=0.26.0
 Requires-Dist: redis>=5.0.0
 Requires-Dist: rq>=1.16.0
 Requires-Dist: python-multipart>=0.0.9
+Requires-Dist: numpy>=1.24.0
