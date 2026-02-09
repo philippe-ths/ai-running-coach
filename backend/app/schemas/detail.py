@@ -17,6 +17,7 @@ class DerivedMetricRead(BaseModel):
     confidence: str
     confidence_reasons: List[str] = []
     time_in_zones: Optional[Dict] = None
+    stops_analysis: Optional[Dict] = None
     model_config = ConfigDict(from_attributes=True)
 
 
