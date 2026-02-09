@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Optional, List, Dict, Any
 from app.models import Activity
+from app.services.processing.stops import analyze_stops
 
 def calculate_time_in_zones(streams: Dict[str, List[any]], max_hr: int = 190) -> Optional[Dict[str, int]]:
     """
@@ -135,11 +136,13 @@ def compute_derived_metrics_data(activity: Activity, streams_dict: Dict[str, Lis
     drift = None
     pace_var = None
     zones = None
+    stops = None
     
     if streams_dict:
         drift = calculate_hr_drift(streams_dict)
         pace_var = calculate_pace_variability(streams_dict)
-        
+        stops = analyze_stops(streams_dict)
+
         # Use provided max_hr if reasonable, else default
         effective_max = max_hr if max_hr and max_hr > 150 else 190 
         
@@ -149,5 +152,6 @@ def compute_derived_metrics_data(activity: Activity, streams_dict: Dict[str, Lis
         "effort_score": effort,
         "pace_variability": pace_var,
         "hr_drift": drift,
-        "time_in_zones": zones
+        "time_in_zones": zones,
+        "stops_analysis": stops
     }
