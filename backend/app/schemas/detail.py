@@ -26,10 +26,23 @@ class ActivityStreamRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class SplitRead(BaseModel):
+    split: int
+    distance: float
+    elapsed_time: float
+    pace: float
+    speed: float
+    avg_hr: Optional[float] = None
+    avg_grade: Optional[float] = None
+    avg_cadence: Optional[float] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ActivityDetailRead(ActivityRead):
     metrics: Optional[DerivedMetricRead] = None
     check_in: Optional[CheckInRead] = None
     streams: List[ActivityStreamRead] = []
+    splits: List[SplitRead] = []
 
     @model_validator(mode="after")
     def normalize_stream_cadence(self) -> "ActivityDetailRead":

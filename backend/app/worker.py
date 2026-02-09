@@ -1,11 +1,11 @@
 import sys
-from rq import Worker, Queue, Connection
+from rq import Worker, Queue
 from app.core.queue import redis_conn
 
 listen = ['default']
 
 if __name__ == '__main__':
-    with Connection(redis_conn):
-        print("Worker initiating...")
-        worker = Worker(map(Queue, listen))
-        worker.work()
+    print("Worker initiating...")
+    queues = [Queue(name, connection=redis_conn) for name in listen]
+    worker = Worker(queues, connection=redis_conn)
+    worker.work()

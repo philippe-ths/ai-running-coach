@@ -9,6 +9,7 @@ from app.models import Activity, StravaAccount, CheckIn
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead
 from app.services import activity_service
 from app.services.processing import engine as processing_engine
+from app.services.processing.splits import calculate_splits
 
 router = APIRouter()
 
@@ -110,7 +111,17 @@ def read_activity(
            db.commit()
            db.refresh(activity)
 
-    return activity
+    # Calculate Splits
+    splits_data = []
+    if activity.streams:
+        effective_type = activity.user_intent if activity.user_intent else activity.type
+        splits_data = calculate_splits(activity.streams, activity_type=effective_type)
+        
+    # Convert to Pydantic model manually to inject transient splits data
+    response = ActivityDetailRead.model_validate(activity)
+    response.splits = splits_data
+    
+    return response
 
 @router.post("/activities/{activity_id}/checkin", response_model=CheckInRead)
 def create_checkin(
