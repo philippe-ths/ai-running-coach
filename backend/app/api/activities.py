@@ -9,7 +9,6 @@ from app.models import Activity, StravaAccount, CheckIn
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead
 from app.services import activity_service
 from app.services.analysis import engine as analysis_engine
-from app.services.coaching import engine as coaching_engine
 
 router = APIRouter()
 
@@ -25,9 +24,6 @@ async def analyze_activity_deep(
     metrics = await analysis_engine.run_deep_analysis(db, str(activity_id))
     if not metrics:
         raise HTTPException(status_code=400, detail="Analysis failed or activity not found.")
-    
-    # Re-run coaching advice with new metrics
-    coaching_engine.generate_and_save_advice(db, str(activity_id))
     
     return metrics
 
@@ -51,9 +47,8 @@ def update_activity_intent(
     db.commit()
     db.refresh(activity)
     
-    # Re-run pipeline to update metrics/advice with new class
+    # Re-run analysis pipeline with new intent
     analysis_engine.run_analysis(db, str(activity_id))
-    coaching_engine.generate_and_save_advice(db, str(activity_id))
     
     return activity
 
@@ -121,9 +116,7 @@ def create_checkin(
     db.commit()
     db.refresh(db_obj)
 
-    # 2. Trigger Re-Analysis & Advice to incorporate user feedback
-    # (Synchronous for MVP simplicity)
+    # 2. Trigger Re-Analysis to incorporate user feedback
     analysis_engine.run_analysis(db, str(activity_id))
-    coaching_engine.generate_and_save_advice(db, str(activity_id))
 
     return db_obj

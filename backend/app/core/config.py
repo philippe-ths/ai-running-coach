@@ -22,12 +22,6 @@ class Settings(BaseSettings):
     STRAVA_WEBHOOK_VERIFY_TOKEN: str = ""
     STRAVA_WEBHOOK_CALLBACK_URL: str = "http://localhost:8000/api/webhooks/strava"
 
-    # AI Config
-    AI_ENABLED: bool = False
-    AI_PROVIDER: str = "openai" # 'openai'
-    OPENAI_API_KEY: str | None = None
-    DEBUG_AI: bool = True  # Gate debug_context/debug_prompt in API responses
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_ignore_empty=True,

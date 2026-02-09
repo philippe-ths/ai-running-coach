@@ -153,7 +153,7 @@ export default function CheckInForm({ activityId, existingCheckIn }: Props) {
           disabled={submitting}
           className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex-1 transition-colors"
         >
-          {submitting ? 'Saving...' : 'Save & Update Advice'}
+          {submitting ? 'Saving...' : 'Save Check-In'}
         </button>
         
         {existingCheckIn && (

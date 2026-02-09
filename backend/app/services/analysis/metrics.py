@@ -121,8 +121,7 @@ def calculate_effort_score(activity: Activity) -> float:
         minutes = activity.moving_time_s / 60.0
         return round(minutes * (hr_ratio ** 3) * 10, 1) # Scaling factor for readable numbers
     
-    # Fallback to duration only (assume 'moderate' effort if unknown)
-    # Just a placeholder heuristic
+    # No HR data — use duration as effort proxy
     return round((activity.moving_time_s / 60.0), 1)
 
 def compute_derived_metrics_data(activity: Activity, streams_dict: Dict[str, List[any]] = {}, max_hr: int = 190) -> Dict[str, Any]:

@@ -37,7 +37,7 @@ def normalize_cadence_spm(activity_type: str, avg_cadence: float | None) -> floa
     is_bike = "bike" in t or "ride" in t or "cycle" in t or "swim" in t or "walk" in t or "hike" in t
     
     if not is_run_intent or is_bike:
-        if "run" not in t: # Fallback: if strictly "Run" but missed above (unlikely)
+        if "run" not in t: # Not a run type — return raw cadence
             return avg_cadence
         if is_bike: # Explicit bike override
              return avg_cadence

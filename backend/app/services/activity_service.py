@@ -4,12 +4,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select
 from fastapi import HTTPException
 
-from app.models import Activity, StravaAccount, User, ActivityStream, DerivedMetric, Advice
+from app.models import Activity, StravaAccount, User, ActivityStream, DerivedMetric
 from app.services.strava.client import strava_client
-# Removed circular import: from app.services.analysis import engine as analysis_engine
-# The engine logic is used later inside sync_recent_activities via dynamic import
-# to break the cycle if `analysis_engine` depends on `activity_service`.
-from app.services.coaching import engine as coaching_engine
 from app.schemas import SyncResponse
 
 logger = logging.getLogger(__name__)
@@ -82,7 +78,7 @@ def upsert_activity(db: Session, raw: dict, user_id: str) -> Activity:
 
 async def sync_recent_activities(db: Session, strava_account: StravaAccount) -> SyncResponse:
     """
-    Fetches last 30 days of activities, upserts them, runs analysis/advice, 
+    Fetches last 30 days of activities, upserts them, runs analysis,
     and returns detailed stats.
     """
     stats = SyncResponse()
@@ -110,25 +106,20 @@ async def sync_recent_activities(db: Session, strava_account: StravaAccount) -> 
                 db.flush() # Ensure ID is populated
                 stats.upserted += 1
                 
-                # 1.5 Fetch Streams (Essential for V3)
+                # 1.5 Fetch Streams
                 await fetch_and_store_streams(db, strava_account, activity)
 
                 # 2. Trigger Analysis (Idempotent-ish: re-running updates flags/metrics)
-                # Optimization: Skip deep analysis/advice if already done to prevent hanging on sync
+                # Optimization: Skip analysis if already done to prevent hanging on sync
                 # Dynamic import to avoid circular dependency
                 from app.services.analysis import engine as analysis_engine
                 
                 # Check for existing
                 existing_metrics = db.query(DerivedMetric).filter(DerivedMetric.activity_id == activity.id).first()
-                existing_advice = db.query(Advice).filter(Advice.activity_id == activity.id).first()
                 
                 metrics = existing_metrics
                 if not existing_metrics:
                     metrics = analysis_engine.run_analysis(db, activity.id)
-                
-                # 3. Trigger Advice
-                if metrics and not existing_advice:
-                    coaching_engine.generate_and_save_advice(db, activity.id)
                     stats.analyzed += 1
                 
                 # Commit per activity to allow partial success
@@ -165,7 +156,6 @@ def get_activities(db: Session, skip: int = 0, limit: int = 20):
 def get_activity(db: Session, activity_id: str):
     return db.query(Activity).options(
         joinedload(Activity.metrics),
-        joinedload(Activity.advice),
         joinedload(Activity.check_in),
         joinedload(Activity.streams)
     ).filter(Activity.id == activity_id).first()

@@ -11,7 +11,10 @@ from alembic import context
 from app.core.config import settings
 from app.db.base import Base
 # Import models to ensure they are attached to Base.metadata
-from app.models import User, Activity  # noqa
+from app.models import (  # noqa
+    User, StravaAccount, Activity, ActivityStream,
+    DerivedMetric, UserProfile, CheckIn,
+)
 
 config = context.config
 
