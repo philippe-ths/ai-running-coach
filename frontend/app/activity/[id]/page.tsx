@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Activity } from '@/lib/types';
 import AdvancedMetrics from '@/components/AdvancedMetrics';
 import StreamCharts from '@/components/StreamCharts';
+import { SplitsPanel } from '@/components/SplitsPanel';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,6 +52,11 @@ export default async function ActivityDetail({ params }: { params: { id: string 
           {/* Detailed Stream Charts */}
           {activity.streams && activity.streams.length > 0 && (
              <StreamCharts streams={activity.streams} />
+          )}
+
+          {/* Splits Panel */}
+          {activity.splits && activity.splits.length > 0 && (
+              <SplitsPanel splits={activity.splits} />
           )}
 
           {/* Advanced Metrics Visualization */}

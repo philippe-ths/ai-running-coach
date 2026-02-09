@@ -1,5 +1,16 @@
 import { DerivedMetric, ActivityStream, CheckIn } from "./metrics";
 
+export interface Split {
+  split: number;
+  distance: number;
+  elapsed_time: number;
+  pace: number;
+  speed: number;
+  avg_hr?: number;
+  avg_grade?: number;
+  avg_cadence?: number;
+}
+
 export interface Activity {
   id: string;
   name: string;
@@ -15,4 +26,5 @@ export interface Activity {
   raw_summary?: any;
   streams?: ActivityStream[];
   check_in?: CheckIn;
+  splits?: Split[];
 }
