@@ -107,12 +107,12 @@ export default function TrendsPage() {
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <WeeklyDistanceChart
-              data={range === "7D" ? data.daily_distance : data.weekly_distance}
-              granularity={range === "7D" ? "daily" : "weekly"}
+              data={range === "7D" || range === "30D" ? data.daily_distance : data.weekly_distance}
+              granularity={range === "7D" || range === "30D" ? "daily" : "weekly"}
             />
             <WeeklyTimeChart
-              data={range === "7D" ? data.daily_time : data.weekly_time}
-              granularity={range === "7D" ? "daily" : "weekly"}
+              data={range === "7D" || range === "30D" ? data.daily_time : data.weekly_time}
+              granularity={range === "7D" || range === "30D" ? "daily" : "weekly"}
             />
           </div>
           <PaceTrendChart data={data.pace_trend} />
