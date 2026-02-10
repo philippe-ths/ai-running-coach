@@ -49,8 +49,8 @@ def get_trends(
     # 2. Daily facts (sum per local date)
     daily_facts = build_daily_facts(activity_facts)
 
-    # 3. Weekly buckets
-    weekly = build_weekly_buckets(daily_facts)
+    # 3. Weekly buckets (continuous — includes empty weeks)
+    weekly = build_weekly_buckets(daily_facts, range_key=range_upper)
 
     weekly_distance = [
         WeeklyDistancePoint(

@@ -185,17 +185,41 @@ def build_daily_facts(activity_facts: List[ActivityFact]) -> List[DailyFact]:
     return sorted(buckets.values(), key=lambda d: d.local_date)
 
 
-def build_weekly_buckets(daily_facts: List[DailyFact]) -> List[WeekBucket]:
+def build_weekly_buckets(
+    daily_facts: List[DailyFact],
+    range_key: str = "30D",
+) -> List[WeekBucket]:
     """
     Roll daily facts into ISO-week buckets (Monday start).
+    Fills every week in the range so charts have continuous x-axes.
     """
+    # Build buckets from actual data first
     buckets: dict[date, WeekBucket] = {}
     for df in daily_facts:
-        # Monday of the ISO week
         monday = df.local_date - timedelta(days=df.local_date.weekday())
         if monday not in buckets:
             buckets[monday] = WeekBucket(monday)
         buckets[monday].add(df)
+
+    # Determine the full span of weeks to show
+    today = date.today()
+    end_monday = today - timedelta(days=today.weekday())  # current week
+
+    since = _resolve_since(range_key)
+    if since is not None:
+        start_monday = since - timedelta(days=since.weekday())
+    elif daily_facts:
+        earliest = daily_facts[0].local_date
+        start_monday = earliest - timedelta(days=earliest.weekday())
+    else:
+        start_monday = end_monday
+
+    # Walk from start_monday to end_monday, inserting empty buckets
+    cursor = start_monday
+    while cursor <= end_monday:
+        if cursor not in buckets:
+            buckets[cursor] = WeekBucket(cursor)
+        cursor += timedelta(weeks=1)
 
     return sorted(buckets.values(), key=lambda w: w.week_start)
 
