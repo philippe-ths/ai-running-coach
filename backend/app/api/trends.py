@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.schemas.trends import (
     TrendsResponse,
+    TrendsSummary,
     WeeklyDistancePoint,
     WeeklyTimePoint,
     DailyDistancePoint,
@@ -51,6 +52,13 @@ def get_trends(
 
     # 2. Daily facts (sum per local date)
     daily_facts = build_daily_facts(activity_facts)
+
+    # Summary totals across the entire range
+    summary = TrendsSummary(
+        total_distance_m=sum(d.total_distance_m for d in daily_facts),
+        total_moving_time_s=sum(d.total_moving_time_s for d in daily_facts),
+        activity_count=sum(d.activity_count for d in daily_facts),
+    )
 
     # 3. Continuous daily facts (every day filled)
     continuous_daily = build_continuous_daily_facts(daily_facts, range_key=range_upper)
@@ -101,6 +109,7 @@ def get_trends(
 
     return TrendsResponse(
         range=range_upper,
+        summary=summary,
         weekly_distance=weekly_distance,
         weekly_time=weekly_time,
         daily_distance=daily_distance,

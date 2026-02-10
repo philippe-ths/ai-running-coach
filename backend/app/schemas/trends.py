@@ -38,8 +38,15 @@ class PaceTrendPoint(BaseModel):
     type: str
 
 
+class TrendsSummary(BaseModel):
+    total_distance_m: int
+    total_moving_time_s: int
+    activity_count: int
+
+
 class TrendsResponse(BaseModel):
     range: str
+    summary: TrendsSummary
     weekly_distance: List[WeeklyDistancePoint]
     weekly_time: List[WeeklyTimePoint]
     daily_distance: List[DailyDistancePoint]

@@ -28,8 +28,15 @@ export interface PaceTrendPoint {
   type: string;
 }
 
+export interface TrendsSummary {
+  total_distance_m: number;
+  total_moving_time_s: number;
+  activity_count: number;
+}
+
 export interface TrendsData {
   range: string;
+  summary: TrendsSummary;
   weekly_distance: WeeklyDistancePoint[];
   weekly_time: WeeklyTimePoint[];
   daily_distance: DailyDistancePoint[];

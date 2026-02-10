@@ -13,6 +13,7 @@ export type {
   DailyDistancePoint,
   DailyTimePoint,
   PaceTrendPoint,
+  TrendsSummary,
   TrendsData,
   TrendsRange,
 } from "./types/trends";

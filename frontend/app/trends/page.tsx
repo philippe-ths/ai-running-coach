@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { TrendsData, TrendsRange } from "@/lib/types";
+import { formatDistanceKm, formatDuration } from "@/lib/format";
 import RangeSelector from "@/components/trends/RangeSelector";
 import ActivityTypeFilter from "@/components/trends/ActivityTypeFilter";
 import WeeklyDistanceChart from "@/components/trends/WeeklyDistanceChart";
@@ -89,6 +90,20 @@ export default function TrendsPage() {
 
       {data && (
         <div className="space-y-6">
+          <div className="grid grid-cols-3 gap-4">
+            <div className="bg-white p-4 rounded-lg border shadow-sm">
+              <div className="text-sm text-gray-500">Total Distance</div>
+              <div className="text-2xl font-bold">{formatDistanceKm(data.summary.total_distance_m)}</div>
+            </div>
+            <div className="bg-white p-4 rounded-lg border shadow-sm">
+              <div className="text-sm text-gray-500">Total Time</div>
+              <div className="text-2xl font-bold">{formatDuration(data.summary.total_moving_time_s)}</div>
+            </div>
+            <div className="bg-white p-4 rounded-lg border shadow-sm">
+              <div className="text-sm text-gray-500">Activities</div>
+              <div className="text-2xl font-bold">{data.summary.activity_count}</div>
+            </div>
+          </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <WeeklyDistanceChart
               data={range === "7D" ? data.daily_distance : data.weekly_distance}
