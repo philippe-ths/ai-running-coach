@@ -18,8 +18,12 @@ interface Props {
 }
 
 function formatPace(secPerKm: number): string {
-  const min = Math.floor(secPerKm / 60);
-  const sec = Math.round(secPerKm % 60);
+  let min = Math.floor(secPerKm / 60);
+  let sec = Math.round(secPerKm % 60);
+  if (sec === 60) {
+    min += 1;
+    sec = 0;
+  }
   return `${min}:${sec.toString().padStart(2, "0")}`;
 }
 
@@ -90,7 +94,7 @@ export default function PaceTrendChart({ data }: Props) {
             <Tooltip
               formatter={(value: number | undefined, name: string | undefined) => [
                 `${formatPace(value ?? 0)} /km`,
-                name === "run" ? "Run" : "Walk",
+                name === "Run" ? "Run" : "Walk",
               ]}
               labelFormatter={(label) => label}
             />
