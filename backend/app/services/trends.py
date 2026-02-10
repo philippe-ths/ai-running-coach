@@ -164,10 +164,11 @@ def build_activity_facts(
     activities = db.execute(stmt).scalars().all()
     facts = [ActivityFact(a) for a in activities]
 
-    # Post-filter by effective_type so user_intent overrides are respected
+    # Post-filter by base activity_type (Strava type: Run, Walk, Ride, etc.)
+    # so the dropdown values match correctly regardless of user_intent
     if types:
         type_set = {t.lower() for t in types}
-        facts = [f for f in facts if f.effective_type.lower() in type_set]
+        facts = [f for f in facts if f.activity_type.lower() in type_set]
 
     return facts
 
@@ -231,7 +232,9 @@ def build_pace_trend(
     """
     Return a list of {date, pace_sec_per_km, type} for pace-trend charting.
 
-    One entry per activity (not averaged). Filters to run/walk by default.
+    One entry per activity (not averaged).
+    Filters on the base Strava activity_type (Run, Walk, etc.) — not
+    user_intent — so that a Run classified as "Long Run" still appears.
     Activities with zero distance are skipped.
     """
     if types is None:
@@ -241,8 +244,7 @@ def build_pace_trend(
     points: List[dict] = []
 
     for af in activity_facts:
-        etype = af.effective_type
-        if etype.lower() not in type_set:
+        if af.activity_type.lower() not in type_set:
             continue
         if af.distance_m <= 0:
             continue
@@ -252,7 +254,7 @@ def build_pace_trend(
         points.append({
             "date": af.local_date.isoformat(),
             "pace_sec_per_km": round(pace, 1),
-            "type": etype,
+            "type": af.activity_type,
         })
 
     return points
