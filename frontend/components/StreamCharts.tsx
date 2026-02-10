@@ -26,52 +26,82 @@ const PRESETS: Record<string, { label: string, color: string, icon: any, format?
     }
   },
   cadence: { label: 'Cadence', color: 'text-purple-500', icon: Activity, format: (v) => `${Math.round(v)} spm` },
+  smoothed_cadence: { label: 'Cadence', color: 'text-purple-500', icon: Activity, format: (v) => `${Math.round(v)} spm` },
   watts: { label: 'Power', color: 'text-amber-500', icon: Zap, format: (v) => `${Math.round(v)} W` },
   altitude: { label: 'Elevation', color: 'text-emerald-600', icon: Mountain, format: (v) => `${Math.round(v)} m` },
   grade_smooth: { label: 'Grade', color: 'text-gray-500', icon: Mountain, format: (v) => `${v.toFixed(1)}%` },
 };
 
-function SimpleChart({ type, data }: { type: string, data: number[] }) {
+function SimpleChart({ type, data, secondaryData }: { type: string, data: (number | null)[], secondaryData?: (number | null)[] }) {
   const preset = PRESETS[type] || { label: type, color: 'text-gray-500', icon: Activity };
   const Icon = preset.icon;
 
-  // Compute stats for scaling
-  const { pathD, min, max, avg } = useMemo(() => {
-    if (!data.length) return { pathD: '', min: 0, max: 0, avg: 0 };
+  // Compute stats for scaling using only valid data
+  const { pathD, secondaryPathD, min, max, avg } = useMemo(() => {
+    // Filter out nulls for stats
+    const validData = data.filter((v): v is number => v !== null);
+    if (!validData.length) return { pathD: '', secondaryPathD: '', min: 0, max: 0, avg: 0 };
+    
+    // Include secondary data in min/max calc so it fits in the chart
+    const allValues = [...validData];
+    if (secondaryData) {
+        allValues.push(...secondaryData.filter((v): v is number => v !== null));
+    }
     
     let min = Infinity;
     let max = -Infinity;
     let sum = 0;
 
-    for (const v of data) {
+    for (const v of allValues) {
       if (v < min) min = v;
       if (v > max) max = v;
-      sum += v;
     }
-    const avg = sum / data.length; // Keep precision
+    
+    // Avg only from main data
+    for (const v of validData) {
+        sum += v;
+    }
+
+    const avg = sum / validData.length; 
     const range = max - min || 1;
 
-    // Generate Path
-    // x = (index / length) * WIDTH
-    // y = HEIGHT - ((value - min) / range) * HEIGHT
-    const points = data.map((val, i) => {
-      const x = (i / (data.length - 1)) * CHART_WIDTH;
-      const y = CHART_HEIGHT - ((val - min) / range) * CHART_HEIGHT;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    });
+    // Helper to generate path with gaps
+    const generatePath = (arr: (number | null)[]) => {
+        let commands: string[] = [];
+        for (let i = 0; i < arr.length; i++) {
+            const val = arr[i];
+            if (val === null) continue;
+            
+            const x = (i / (arr.length - 1)) * CHART_WIDTH;
+            const y = CHART_HEIGHT - ((val - min) / range) * CHART_HEIGHT;
+            
+            // If previous point was null or this is first point, Move to. Else Line to.
+            const prevVal = i > 0 ? arr[i-1] : null;
+            if (prevVal === null || i === 0) {
+                commands.push(`M ${x.toFixed(1)},${y.toFixed(1)}`);
+            } else {
+                commands.push(`L ${x.toFixed(1)},${y.toFixed(1)}`);
+            }
+        }
+        return commands.join(' ');
+    };
+
+    const pathD = generatePath(data);
+    const secondaryPathD = secondaryData ? generatePath(secondaryData) : '';
 
     return { 
-      pathD: `M ${points.join(' L ')}`,
+      pathD,
+      secondaryPathD,
       min,
       max, 
       avg 
     };
-  }, [data]);
+  }, [data, secondaryData]);
 
-  if (data.length === 0) return null;
+  const validCount = data.filter(x => x !== null).length;
+  if (validCount === 0) return null;
   
   // Hide charts with no meaningful data (flat zeros)
-  // This prevents showing empty graphs for indoor activities with no GPS/Speed sensors
   if (Math.abs(max) < 0.0001 && Math.abs(min) < 0.0001) return null;
 
   const formatValue = preset.format || ((v: number) => Math.round(v).toString());
@@ -95,14 +125,21 @@ function SimpleChart({ type, data }: { type: string, data: number[] }) {
           className="w-full h-full overflow-visible"
           preserveAspectRatio="none"
         >
-          {/* Background Area (Optional, implies fill) */}
-          <path 
-            d={`${pathD} L ${CHART_WIDTH},${CHART_HEIGHT} L 0,${CHART_HEIGHT} Z`} 
-            fill="currentColor" 
-            className={`${preset.color} opacity-10`} 
-            stroke="none"
-          />
-          {/* Line */}
+          {/* Secondary Line (Raw) */}
+          {secondaryPathD && (
+            <path 
+              d={secondaryPathD} 
+              fill="none" 
+              stroke="currentColor" 
+              className={`${preset.color} opacity-20`} 
+              strokeWidth="1" 
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+
+          {/* Background Area (Optional, implies fill - complex with gaps so skipping fill for now, user asked for line breaks) */}
+          
+          {/* Main Line */}
           <path 
             d={pathD} 
             fill="none" 
@@ -121,22 +158,44 @@ export default function StreamCharts({ streams }: StreamChartsProps) {
   if (!streams || streams.length === 0) return null;
 
   // Order of display
-  const order = ['heartrate', 'velocity_smooth', 'altitude', 'cadence', 'watts'];
+  const order = ['heartrate', 'velocity_smooth', 'altitude', 'cadence', 'smoothed_cadence', 'watts'];
   
-  // Sort streams by preferred order
-  const sortedStreams = [...streams]
-    .filter(s => PRESETS[s.stream_type]) // Only show known graphical types
-    .sort((a, b) => {
+  // Deduplicate streams by type to prevent rendering issues if backend sends duplicates
+  const uniqueStreams = Array.from(new Map(streams.map(s => [s.stream_type, s])).values());
+
+  const hasSmoothed = uniqueStreams.some(s => s.stream_type === 'smoothed_cadence');
+  
+  const processedStreams: ActivityStream[] = [];
+  const secondaryMap: Record<string, (number | null)[]> = {};
+
+  for (const s of uniqueStreams) {
+      // If we have smoothed cadence, hide raw cadence but capture its data for secondary display
+      if (s.stream_type === 'cadence' && hasSmoothed) {
+          secondaryMap['smoothed_cadence'] = s.data;
+          continue; 
+      }
+      
+      // Filter unknown types
+      if (!PRESETS[s.stream_type]) continue;
+      
+      processedStreams.push(s);
+  }
+
+  const sortedStreams = processedStreams.sort((a, b) => {
         const idxA = order.indexOf(a.stream_type);
         const idxB = order.indexOf(b.stream_type);
-        // If not in preferred list, push to end
         return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
-    });
+  });
 
   return (
     <div className="grid grid-cols-1 gap-4">
        {sortedStreams.map((s) => (
-         <SimpleChart key={s.stream_type} type={s.stream_type} data={s.data} />
+         <SimpleChart 
+            key={s.stream_type} 
+            type={s.stream_type} 
+            data={s.data} 
+            secondaryData={secondaryMap[s.stream_type]}
+         />
        ))}
     </div>
   );
