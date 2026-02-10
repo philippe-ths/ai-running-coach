@@ -186,6 +186,33 @@ def build_daily_facts(activity_facts: List[ActivityFact]) -> List[DailyFact]:
     return sorted(buckets.values(), key=lambda d: d.local_date)
 
 
+def build_continuous_daily_facts(
+    daily_facts: List[DailyFact],
+    range_key: str = "30D",
+) -> List[DailyFact]:
+    """
+    Fill every day in the range so charts have continuous x-axes.
+    """
+    today = date.today()
+    since = _resolve_since(range_key)
+
+    if since is not None:
+        start = since
+    elif daily_facts:
+        start = daily_facts[0].local_date
+    else:
+        start = today
+
+    existing = {df.local_date: df for df in daily_facts}
+    result: List[DailyFact] = []
+    cursor = start
+    while cursor <= today:
+        result.append(existing.get(cursor, DailyFact(cursor)))
+        cursor += timedelta(days=1)
+
+    return result
+
+
 def build_weekly_buckets(
     daily_facts: List[DailyFact],
     range_key: str = "30D",

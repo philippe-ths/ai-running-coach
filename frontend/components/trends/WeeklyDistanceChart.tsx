@@ -9,24 +9,28 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import { WeeklyDistancePoint } from "@/lib/types";
+import { WeeklyDistancePoint, DailyDistancePoint } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
 
 interface Props {
-  data: WeeklyDistancePoint[];
+  data: WeeklyDistancePoint[] | DailyDistancePoint[];
+  granularity: "daily" | "weekly";
 }
 
-export default function WeeklyDistanceChart({ data }: Props) {
-  const chartData = data.map((d) => ({
+export default function WeeklyDistanceChart({ data, granularity }: Props) {
+  const chartData = data.map((d: any) => ({
     ...d,
     distance_km: +(d.total_distance_m / 1000).toFixed(1),
-    label: formatDateLabel(d.week_start),
+    label: formatDateLabel(d.week_start ?? d.date),
   }));
+
+  const title = granularity === "daily" ? "Distance per Day" : "Distance per Week";
+  const tooltipPrefix = granularity === "daily" ? "" : "Week of ";
 
   return (
     <div className="bg-white rounded-lg border shadow-sm p-5">
       <h3 className="text-sm font-semibold text-gray-700 mb-4">
-        Distance per Week
+        {title}
       </h3>
       {chartData.length === 0 ? (
         <p className="text-gray-400 text-sm py-8 text-center">
@@ -51,7 +55,7 @@ export default function WeeklyDistanceChart({ data }: Props) {
             />
             <Tooltip
               formatter={(value: number | undefined) => [`${value ?? 0} km`, "Distance"]}
-              labelFormatter={(label) => `Week of ${label}`}
+              labelFormatter={(label) => `${tooltipPrefix}${label}`}
             />
             <Bar
               dataKey="distance_km"

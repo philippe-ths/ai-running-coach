@@ -12,11 +12,14 @@ from app.schemas.trends import (
     TrendsResponse,
     WeeklyDistancePoint,
     WeeklyTimePoint,
+    DailyDistancePoint,
+    DailyTimePoint,
     PaceTrendPoint,
 )
 from app.services.trends import (
     build_activity_facts,
     build_daily_facts,
+    build_continuous_daily_facts,
     build_weekly_buckets,
     build_pace_trend,
     get_available_types,
@@ -49,7 +52,28 @@ def get_trends(
     # 2. Daily facts (sum per local date)
     daily_facts = build_daily_facts(activity_facts)
 
-    # 3. Weekly buckets (continuous — includes empty weeks)
+    # 3. Continuous daily facts (every day filled)
+    continuous_daily = build_continuous_daily_facts(daily_facts, range_key=range_upper)
+
+    daily_distance = [
+        DailyDistancePoint(
+            date=d.local_date,
+            total_distance_m=d.total_distance_m,
+            activity_count=d.activity_count,
+        )
+        for d in continuous_daily
+    ]
+
+    daily_time = [
+        DailyTimePoint(
+            date=d.local_date,
+            total_moving_time_s=d.total_moving_time_s,
+            activity_count=d.activity_count,
+        )
+        for d in continuous_daily
+    ]
+
+    # 4. Weekly buckets (continuous — includes empty weeks)
     weekly = build_weekly_buckets(daily_facts, range_key=range_upper)
 
     weekly_distance = [
@@ -79,5 +103,7 @@ def get_trends(
         range=range_upper,
         weekly_distance=weekly_distance,
         weekly_time=weekly_time,
+        daily_distance=daily_distance,
+        daily_time=daily_time,
         pace_trend=pace_trend,
     )

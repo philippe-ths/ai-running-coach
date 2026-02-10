@@ -10,6 +10,8 @@ export type { UserProfile } from "./types/profile";
 export type {
   WeeklyDistancePoint,
   WeeklyTimePoint,
+  DailyDistancePoint,
+  DailyTimePoint,
   PaceTrendPoint,
   TrendsData,
   TrendsRange,

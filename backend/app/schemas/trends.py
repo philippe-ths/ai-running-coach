@@ -20,6 +20,18 @@ class WeeklyTimePoint(BaseModel):
     activity_count: int
 
 
+class DailyDistancePoint(BaseModel):
+    date: date
+    total_distance_m: int
+    activity_count: int
+
+
+class DailyTimePoint(BaseModel):
+    date: date
+    total_moving_time_s: int
+    activity_count: int
+
+
 class PaceTrendPoint(BaseModel):
     date: date
     pace_sec_per_km: float
@@ -30,4 +42,6 @@ class TrendsResponse(BaseModel):
     range: str
     weekly_distance: List[WeeklyDistancePoint]
     weekly_time: List[WeeklyTimePoint]
+    daily_distance: List[DailyDistancePoint]
+    daily_time: List[DailyTimePoint]
     pace_trend: List[PaceTrendPoint]
