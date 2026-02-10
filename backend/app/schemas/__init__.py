@@ -25,6 +25,12 @@ from app.schemas.detail import (  # noqa: F401
     ActivityStreamRead,
     ActivityDetailRead,
 )
+from app.schemas.trends import (  # noqa: F401
+    WeeklyDistancePoint,
+    WeeklyTimePoint,
+    PaceTrendPoint,
+    TrendsResponse,
+)
 
 __all__ = [
     "UserCreate",
@@ -43,4 +49,8 @@ __all__ = [
     "DerivedMetricRead",
     "ActivityStreamRead",
     "ActivityDetailRead",
+    "WeeklyDistancePoint",
+    "WeeklyTimePoint",
+    "PaceTrendPoint",
+    "TrendsResponse",
 ]

@@ -36,6 +36,9 @@ export default async function Dashboard() {
         </div>
         <div className="flex gap-3">
             <SyncButton />
+            <Link href="/trends" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
+                Trends
+            </Link>
             <Link href="/profile" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
                 Edit Profile
             </Link>
