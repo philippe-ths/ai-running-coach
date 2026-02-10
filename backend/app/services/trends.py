@@ -25,6 +25,7 @@ class ActivityFact:
         "activity_id", "local_date", "activity_type", "user_intent",
         "distance_m", "moving_time_s", "elapsed_time_s",
         "elev_gain_m", "avg_hr", "avg_cadence", "average_speed_mps",
+        "effort_score",
     )
 
     def __init__(self, activity: Activity):
@@ -40,6 +41,9 @@ class ActivityFact:
         self.avg_hr = activity.avg_hr
         self.avg_cadence = activity.avg_cadence
         self.average_speed_mps = activity.average_speed_mps
+        self.effort_score: Optional[float] = (
+            activity.metrics.effort_score if activity.metrics else None
+        )
 
     @property
     def effective_type(self) -> str:
@@ -285,3 +289,62 @@ def build_pace_trend(
         })
 
     return points
+
+
+def build_suffer_score_trend(
+    activity_facts: List[ActivityFact],
+) -> List[dict]:
+    """
+    Return a list of {date, effort_score, type} for suffer-score charting.
+
+    One entry per activity that has an effort_score.
+    """
+    points: List[dict] = []
+    for af in activity_facts:
+        if af.effort_score is None:
+            continue
+        points.append({
+            "date": af.local_date.isoformat(),
+            "effort_score": round(af.effort_score, 1),
+            "type": af.activity_type,
+        })
+    return points
+
+
+def build_continuous_suffer_scores(
+    activity_facts: List[ActivityFact],
+    range_key: str = "30D",
+) -> List[dict]:
+    """
+    Return one {date, effort_score} per day in the range.
+
+    Days without activities get effort_score = 0.
+    Days with multiple activities sum their effort scores.
+    """
+    today = date.today()
+    since = _resolve_since(range_key)
+
+    if since is not None:
+        start = since
+    elif activity_facts:
+        start = activity_facts[0].local_date
+    else:
+        start = today
+
+    # Sum effort scores per day
+    daily: dict[date, float] = {}
+    for af in activity_facts:
+        if af.effort_score is None:
+            continue
+        daily[af.local_date] = daily.get(af.local_date, 0) + af.effort_score
+
+    result: List[dict] = []
+    cursor = start
+    while cursor <= today:
+        result.append({
+            "date": cursor.isoformat(),
+            "effort_score": round(daily.get(cursor, 0), 1),
+        })
+        cursor += timedelta(days=1)
+
+    return result

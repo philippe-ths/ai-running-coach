@@ -16,6 +16,8 @@ from app.schemas.trends import (
     DailyDistancePoint,
     DailyTimePoint,
     PaceTrendPoint,
+    SufferScorePoint,
+    DailySufferScorePoint,
 )
 from app.services.trends import (
     build_activity_facts,
@@ -23,6 +25,8 @@ from app.services.trends import (
     build_continuous_daily_facts,
     build_weekly_buckets,
     build_pace_trend,
+    build_suffer_score_trend,
+    build_continuous_suffer_scores,
     get_available_types,
 )
 
@@ -107,6 +111,17 @@ def get_trends(
         PaceTrendPoint(**p) for p in build_pace_trend(activity_facts)
     ]
 
+    # 5. Suffer score (per-activity)
+    suffer_score = [
+        SufferScorePoint(**p) for p in build_suffer_score_trend(activity_facts)
+    ]
+
+    # 6. Daily suffer score (continuous — every day filled)
+    daily_suffer_score = [
+        DailySufferScorePoint(**p)
+        for p in build_continuous_suffer_scores(activity_facts, range_key=range_upper)
+    ]
+
     return TrendsResponse(
         range=range_upper,
         summary=summary,
@@ -115,4 +130,6 @@ def get_trends(
         daily_distance=daily_distance,
         daily_time=daily_time,
         pace_trend=pace_trend,
+        suffer_score=suffer_score,
+        daily_suffer_score=daily_suffer_score,
     )

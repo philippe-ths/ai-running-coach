@@ -9,6 +9,7 @@ import ActivityTypeFilter from "@/components/trends/ActivityTypeFilter";
 import WeeklyDistanceChart from "@/components/trends/WeeklyDistanceChart";
 import WeeklyTimeChart from "@/components/trends/WeeklyTimeChart";
 import PaceTrendChart from "@/components/trends/PaceTrendChart";
+import SufferScoreChart from "@/components/trends/SufferScoreChart";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
@@ -106,15 +107,19 @@ export default function TrendsPage() {
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <WeeklyDistanceChart
-              data={range === "7D" ? data.daily_distance : data.weekly_distance}
-              granularity={range === "7D" ? "daily" : "weekly"}
+              data={range === "7D" || range === "30D" ? data.daily_distance : data.weekly_distance}
+              granularity={range === "7D" || range === "30D" ? "daily" : "weekly"}
             />
             <WeeklyTimeChart
-              data={range === "7D" ? data.daily_time : data.weekly_time}
-              granularity={range === "7D" ? "daily" : "weekly"}
+              data={range === "7D" || range === "30D" ? data.daily_time : data.weekly_time}
+              granularity={range === "7D" || range === "30D" ? "daily" : "weekly"}
             />
           </div>
           <PaceTrendChart data={data.pace_trend} />
+          <SufferScoreChart
+            data={range === "7D" || range === "30D" ? data.daily_suffer_score : data.suffer_score}
+            granularity={range === "7D" || range === "30D" ? "daily" : "per-activity"}
+          />
         </div>
       )}
     </div>
