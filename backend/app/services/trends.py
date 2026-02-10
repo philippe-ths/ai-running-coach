@@ -12,6 +12,20 @@ from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
 
 from app.models import Activity
+from app.schemas.trends import (
+    TrendsResponse,
+    TrendsSummary,
+    WeeklyDistancePoint,
+    WeeklyTimePoint,
+    WeeklySufferScorePoint,
+    DailyDistancePoint,
+    DailyTimePoint,
+    SufferScorePoint,
+    DailySufferScorePoint,
+    EfficiencyPoint,
+)
+
+ALLOWED_RANGES = {"7D", "30D", "3M", "6M", "1Y", "ALL"}
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +80,8 @@ class DailyFact:
 
     __slots__ = (
         "local_date", "total_distance_m", "total_moving_time_s",
-        "total_elapsed_time_s", "total_elev_gain_m", "activity_count",
+        "total_elapsed_time_s", "total_elev_gain_m", "total_effort_score",
+        "activity_count",
     )
 
     def __init__(self, local_date: date):
@@ -75,6 +90,7 @@ class DailyFact:
         self.total_moving_time_s = 0
         self.total_elapsed_time_s = 0
         self.total_elev_gain_m = 0.0
+        self.total_effort_score = 0.0
         self.activity_count = 0
 
     def add(self, fact: ActivityFact):
@@ -82,6 +98,8 @@ class DailyFact:
         self.total_moving_time_s += fact.moving_time_s
         self.total_elapsed_time_s += fact.elapsed_time_s
         self.total_elev_gain_m += fact.elev_gain_m
+        if fact.effort_score:
+            self.total_effort_score += fact.effort_score
         self.activity_count += 1
 
 
@@ -94,18 +112,20 @@ class WeekBucket:
 
     __slots__ = (
         "week_start", "total_distance_m", "total_moving_time_s",
-        "activity_count",
+        "total_effort_score", "activity_count",
     )
 
     def __init__(self, week_start: date):
         self.week_start = week_start  # Monday of the ISO week
         self.total_distance_m = 0
         self.total_moving_time_s = 0
+        self.total_effort_score = 0.0
         self.activity_count = 0
 
     def add(self, daily: DailyFact):
         self.total_distance_m += daily.total_distance_m
         self.total_moving_time_s += daily.total_moving_time_s
+        self.total_effort_score += daily.total_effort_score
         self.activity_count += daily.activity_count
 
 
@@ -146,6 +166,38 @@ def get_available_types(db: Session) -> List[str]:
     return [row for row in db.execute(stmt).scalars().all()]
 
 
+def _query_activity_facts(
+    db: Session,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    types: Optional[List[str]] = None,
+) -> List[ActivityFact]:
+    """
+    Internal helper to query activities by exact date range (start inclusive, end exclusive).
+    """
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(Activity)
+        .options(selectinload(Activity.metrics))
+        .where(Activity.is_deleted == False)  # noqa: E712
+        .order_by(Activity.start_date.asc())
+    )
+    if start_date:
+        stmt = stmt.where(Activity.start_date >= datetime.combine(start_date, datetime.min.time()))
+    if end_date:
+        stmt = stmt.where(Activity.start_date < datetime.combine(end_date, datetime.min.time()))
+
+    activities = db.execute(stmt).scalars().all()
+    facts = [ActivityFact(a) for a in activities]
+
+    if types:
+        type_set = {t.lower() for t in types}
+        facts = [f for f in facts if f.activity_type.lower() in type_set]
+
+    return facts
+
+
 def build_activity_facts(
     db: Session,
     range_key: str = "30D",
@@ -156,25 +208,7 @@ def build_activity_facts(
     Optionally filter by activity type (case-insensitive).
     """
     since = _resolve_since(range_key)
-
-    stmt = (
-        select(Activity)
-        .where(Activity.is_deleted == False)  # noqa: E712
-        .order_by(Activity.start_date.asc())
-    )
-    if since is not None:
-        stmt = stmt.where(Activity.start_date >= datetime.combine(since, datetime.min.time()))
-
-    activities = db.execute(stmt).scalars().all()
-    facts = [ActivityFact(a) for a in activities]
-
-    # Post-filter by base activity_type (Strava type: Run, Walk, Ride, etc.)
-    # so the dropdown values match correctly regardless of user_intent
-    if types:
-        type_set = {t.lower() for t in types}
-        facts = [f for f in facts if f.activity_type.lower() in type_set]
-
-    return facts
+    return _query_activity_facts(db, since, None, types)
 
 
 def build_daily_facts(activity_facts: List[ActivityFact]) -> List[DailyFact]:
@@ -256,39 +290,6 @@ def build_weekly_buckets(
     return sorted(buckets.values(), key=lambda w: w.week_start)
 
 
-def build_pace_trend(
-    activity_facts: List[ActivityFact],
-    types: Optional[List[str]] = None,
-) -> List[dict]:
-    """
-    Return a list of {date, pace_sec_per_km, type} for pace-trend charting.
-
-    One entry per activity (not averaged).
-    Filters on the base Strava activity_type (Run, Walk, etc.) — not
-    user_intent — so that a Run classified as "Long Run" still appears.
-    Activities with zero distance are skipped.
-    """
-    if types is None:
-        types = ["run", "walk"]
-
-    type_set = {t.lower() for t in types}
-    points: List[dict] = []
-
-    for af in activity_facts:
-        if af.activity_type.lower() not in type_set:
-            continue
-        if af.distance_m <= 0:
-            continue
-        pace = af.pace_sec_per_km
-        if pace is None:
-            continue
-        points.append({
-            "date": af.local_date.isoformat(),
-            "pace_sec_per_km": round(pace, 1),
-            "type": af.activity_type,
-        })
-
-    return points
 
 
 def build_suffer_score_trend(
@@ -361,10 +362,16 @@ def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
             continue
         if not f.avg_hr or f.avg_hr < 1:
             continue
-        if not f.average_speed_mps or f.average_speed_mps <= 0:
+        
+        # Use DB speed, or calc from distance/time if missing
+        speed = f.average_speed_mps
+        if (speed is None or speed <= 0) and f.moving_time_s > 0:
+            speed = f.distance_m / f.moving_time_s
+            
+        if not speed or speed <= 0:
             continue
 
-        efficiency = f.average_speed_mps / f.avg_hr
+        efficiency = speed / f.avg_hr
         
         points.append({
             "date": f.local_date.isoformat(),
@@ -373,3 +380,128 @@ def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
         })
     
     return sorted(points, key=lambda p: p["date"])
+
+
+def get_trends_report(
+    db: Session,
+    range_key: str = "30D",
+    types: Optional[List[str]] = None,
+) -> TrendsResponse:
+    """
+    Main entry point for generating the complete trends report.
+    Orchestrates data fetching and aggregation.
+    """
+    range_upper = range_key.upper()
+    if range_upper not in ALLOWED_RANGES:
+        range_upper = "30D"
+
+    # 1. Activity-level facts (filtered by types if provided)
+    activity_facts = build_activity_facts(db, range_upper, types=types)
+
+    # 2. Daily facts (sum per local date)
+    daily_facts = build_daily_facts(activity_facts)
+
+    # Summary totals across the entire range
+    summary = TrendsSummary(
+        total_distance_m=sum(d.total_distance_m for d in daily_facts),
+        total_moving_time_s=sum(d.total_moving_time_s for d in daily_facts),
+        activity_count=sum(d.activity_count for d in daily_facts),
+        total_suffer_score=sum(d.total_effort_score for d in daily_facts),
+    )
+
+    # Previous period summary
+    previous_summary = None
+    days = _RANGE_DAYS.get(range_upper)
+    if days is not None:
+        today = date.today()
+        current_start = today - timedelta(days=days)
+        prev_start = current_start - timedelta(days=days)
+
+        prev_facts = _query_activity_facts(db, prev_start, current_start, types=types)
+        previous_summary = TrendsSummary(
+            total_distance_m=sum(f.distance_m for f in prev_facts),
+            total_moving_time_s=sum(f.moving_time_s for f in prev_facts),
+            activity_count=len(prev_facts),
+            total_suffer_score=sum(f.effort_score or 0.0 for f in prev_facts),
+        )
+
+    # 3. Continuous daily facts (every day filled)
+    continuous_daily = build_continuous_daily_facts(daily_facts, range_key=range_upper)
+
+    daily_distance = [
+        DailyDistancePoint(
+            date=d.local_date,
+            total_distance_m=d.total_distance_m,
+            activity_count=d.activity_count,
+        )
+        for d in continuous_daily
+    ]
+
+    daily_time = [
+        DailyTimePoint(
+            date=d.local_date,
+            total_moving_time_s=d.total_moving_time_s,
+            activity_count=d.activity_count,
+        )
+        for d in continuous_daily
+    ]
+
+    # 4. Weekly buckets (continuous — includes empty weeks)
+    weekly = build_weekly_buckets(daily_facts, range_key=range_upper)
+
+    weekly_distance = [
+        WeeklyDistancePoint(
+            week_start=w.week_start,
+            total_distance_m=w.total_distance_m,
+            activity_count=w.activity_count,
+        )
+        for w in weekly
+    ]
+
+    weekly_time = [
+        WeeklyTimePoint(
+            week_start=w.week_start,
+            total_moving_time_s=w.total_moving_time_s,
+            activity_count=w.activity_count,
+        )
+        for w in weekly
+    ]
+
+    weekly_suffer_score = [
+        WeeklySufferScorePoint(
+            week_start=w.week_start,
+            effort_score=round(w.total_effort_score, 1),
+        )
+        for w in weekly
+    ]
+
+    # 6. Suffer score (per-activity)
+    suffer_score = [
+        SufferScorePoint(**p) for p in build_suffer_score_trend(activity_facts)
+    ]
+
+    # 7. Daily suffer score (continuous — every day filled)
+    daily_suffer_score = [
+        DailySufferScorePoint(**p)
+        for p in build_continuous_suffer_scores(activity_facts, range_key=range_upper)
+    ]
+
+    # 8. Efficiency trend
+    efficiency_trend = [
+        EfficiencyPoint(**p)
+        for p in build_efficiency_trend(activity_facts)
+    ]
+
+    return TrendsResponse(
+        range=range_upper,
+        summary=summary,
+        previous_summary=previous_summary,
+        weekly_distance=weekly_distance,
+        weekly_time=weekly_time,
+        weekly_suffer_score=weekly_suffer_score,
+        daily_distance=daily_distance,
+        daily_time=daily_time,
+        suffer_score=suffer_score,
+        daily_suffer_score=daily_suffer_score,
+        efficiency_trend=efficiency_trend,
+    )
