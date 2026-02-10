@@ -9,6 +9,7 @@ import ActivityTypeFilter from "@/components/trends/ActivityTypeFilter";
 import WeeklyDistanceChart from "@/components/trends/WeeklyDistanceChart";
 import WeeklyTimeChart from "@/components/trends/WeeklyTimeChart";
 import PaceTrendChart from "@/components/trends/PaceTrendChart";
+import SufferScoreChart from "@/components/trends/SufferScoreChart";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
@@ -115,6 +116,7 @@ export default function TrendsPage() {
             />
           </div>
           <PaceTrendChart data={data.pace_trend} />
+          <SufferScoreChart data={data.suffer_score} />
         </div>
       )}
     </div>

@@ -25,6 +25,7 @@ class ActivityFact:
         "activity_id", "local_date", "activity_type", "user_intent",
         "distance_m", "moving_time_s", "elapsed_time_s",
         "elev_gain_m", "avg_hr", "avg_cadence", "average_speed_mps",
+        "effort_score",
     )
 
     def __init__(self, activity: Activity):
@@ -40,6 +41,9 @@ class ActivityFact:
         self.avg_hr = activity.avg_hr
         self.avg_cadence = activity.avg_cadence
         self.average_speed_mps = activity.average_speed_mps
+        self.effort_score: Optional[float] = (
+            activity.metrics.effort_score if activity.metrics else None
+        )
 
     @property
     def effective_type(self) -> str:
@@ -284,4 +288,24 @@ def build_pace_trend(
             "type": af.activity_type,
         })
 
+    return points
+
+
+def build_suffer_score_trend(
+    activity_facts: List[ActivityFact],
+) -> List[dict]:
+    """
+    Return a list of {date, effort_score, type} for suffer-score charting.
+
+    One entry per activity that has an effort_score.
+    """
+    points: List[dict] = []
+    for af in activity_facts:
+        if af.effort_score is None:
+            continue
+        points.append({
+            "date": af.local_date.isoformat(),
+            "effort_score": round(af.effort_score, 1),
+            "type": af.activity_type,
+        })
     return points

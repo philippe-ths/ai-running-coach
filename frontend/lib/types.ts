@@ -13,6 +13,7 @@ export type {
   DailyDistancePoint,
   DailyTimePoint,
   PaceTrendPoint,
+  SufferScorePoint,
   TrendsSummary,
   TrendsData,
   TrendsRange,

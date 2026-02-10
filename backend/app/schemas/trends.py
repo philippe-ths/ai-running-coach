@@ -38,6 +38,12 @@ class PaceTrendPoint(BaseModel):
     type: str
 
 
+class SufferScorePoint(BaseModel):
+    date: date
+    effort_score: float
+    type: str
+
+
 class TrendsSummary(BaseModel):
     total_distance_m: int
     total_moving_time_s: int
@@ -52,3 +58,4 @@ class TrendsResponse(BaseModel):
     daily_distance: List[DailyDistancePoint]
     daily_time: List[DailyTimePoint]
     pace_trend: List[PaceTrendPoint]
+    suffer_score: List[SufferScorePoint]
