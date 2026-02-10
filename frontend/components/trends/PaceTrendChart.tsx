@@ -11,7 +11,7 @@ import {
   Legend,
 } from "recharts";
 import { PaceTrendPoint } from "@/lib/types";
-import { format, parseISO } from "date-fns";
+import { formatDateLabel } from "@/lib/format";
 
 interface Props {
   data: PaceTrendPoint[];
@@ -28,40 +28,18 @@ function formatPace(secPerKm: number): string {
 }
 
 export default function PaceTrendChart({ data }: Props) {
-  // Separate run vs walk, then merge by date for multi-line chart.
-  // For simplicity, plot all points on a single timeline per type.
-  const runPoints = data
-    .filter((p) => p.type.toLowerCase() === "run")
-    .map((p) => ({
-      date: p.date,
-      label: format(parseISO(p.date), "MMM d"),
-      run: p.pace_sec_per_km,
-    }));
+  // Each activity becomes its own data point, plotted sequentially.
+  // A point has either `run` or `walk` set (not both), and connectNulls
+  // draws lines through the gaps for each series.
+  const chartData = data.map((p, idx) => ({
+    idx,
+    label: formatDateLabel(p.date),
+    run: p.type.toLowerCase() === "run" ? p.pace_sec_per_km : undefined,
+    walk: p.type.toLowerCase() === "walk" ? p.pace_sec_per_km : undefined,
+  }));
 
-  const walkPoints = data
-    .filter((p) => p.type.toLowerCase() === "walk")
-    .map((p) => ({
-      date: p.date,
-      label: format(parseISO(p.date), "MMM d"),
-      walk: p.pace_sec_per_km,
-    }));
-
-  // Merge into a single dataset keyed by date
-  const merged = new Map<string, { date: string; label: string; run?: number; walk?: number }>();
-
-  for (const p of runPoints) {
-    merged.set(p.date, { ...merged.get(p.date), ...p });
-  }
-  for (const p of walkPoints) {
-    merged.set(p.date, { ...merged.get(p.date), ...p });
-  }
-
-  const chartData = Array.from(merged.values()).sort(
-    (a, b) => a.date.localeCompare(b.date)
-  );
-
-  const hasRun = runPoints.length > 0;
-  const hasWalk = walkPoints.length > 0;
+  const hasRun = data.some((p) => p.type.toLowerCase() === "run");
+  const hasWalk = data.some((p) => p.type.toLowerCase() === "walk");
 
   return (
     <div className="bg-white rounded-lg border shadow-sm p-5">

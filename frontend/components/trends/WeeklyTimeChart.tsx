@@ -10,7 +10,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { WeeklyTimePoint } from "@/lib/types";
-import { format, parseISO } from "date-fns";
+import { formatDateLabel } from "@/lib/format";
 
 interface Props {
   data: WeeklyTimePoint[];
@@ -27,7 +27,7 @@ export default function WeeklyTimeChart({ data }: Props) {
   const chartData = data.map((d) => ({
     ...d,
     time_min: +(d.total_moving_time_s / 60).toFixed(0),
-    label: format(parseISO(d.week_start), "MMM d"),
+    label: formatDateLabel(d.week_start),
   }));
 
   return (

@@ -10,7 +10,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { WeeklyDistancePoint } from "@/lib/types";
-import { format, parseISO } from "date-fns";
+import { formatDateLabel } from "@/lib/format";
 
 interface Props {
   data: WeeklyDistancePoint[];
@@ -20,7 +20,7 @@ export default function WeeklyDistanceChart({ data }: Props) {
   const chartData = data.map((d) => ({
     ...d,
     distance_km: +(d.total_distance_m / 1000).toFixed(1),
-    label: format(parseISO(d.week_start), "MMM d"),
+    label: formatDateLabel(d.week_start),
   }));
 
   return (

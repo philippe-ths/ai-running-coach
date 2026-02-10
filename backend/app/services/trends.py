@@ -231,19 +231,14 @@ def build_pace_trend(
     """
     Return a list of {date, pace_sec_per_km, type} for pace-trend charting.
 
-    Filters to run/walk by default (case-insensitive effective_type match).
-    If an activity has zero distance, it is skipped.
-
-    When multiple activities of the same type fall on the same day,
-    their paces are distance-weighted averaged into a single point.
+    One entry per activity (not averaged). Filters to run/walk by default.
+    Activities with zero distance are skipped.
     """
     if types is None:
         types = ["run", "walk"]
 
     type_set = {t.lower() for t in types}
-
-    # Accumulate (total_distance, total_time) per (date, type) for weighted avg
-    buckets: dict[tuple[str, str], tuple[int, int]] = {}
+    points: List[dict] = []
 
     for af in activity_facts:
         etype = af.effective_type
@@ -251,16 +246,11 @@ def build_pace_trend(
             continue
         if af.distance_m <= 0:
             continue
-
-        key = (af.local_date.isoformat(), etype)
-        dist, time = buckets.get(key, (0, 0))
-        buckets[key] = (dist + af.distance_m, time + af.moving_time_s)
-
-    points: List[dict] = []
-    for (iso_date, etype), (total_dist, total_time) in sorted(buckets.items()):
-        pace = (total_time / total_dist) * 1000
+        pace = af.pace_sec_per_km
+        if pace is None:
+            continue
         points.append({
-            "date": iso_date,
+            "date": af.local_date.isoformat(),
             "pace_sec_per_km": round(pace, 1),
             "type": etype,
         })
