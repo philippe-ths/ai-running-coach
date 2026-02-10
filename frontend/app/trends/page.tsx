@@ -10,6 +10,7 @@ import WeeklyDistanceChart from "@/components/trends/WeeklyDistanceChart";
 import WeeklyTimeChart from "@/components/trends/WeeklyTimeChart";
 import PaceTrendChart from "@/components/trends/PaceTrendChart";
 import SufferScoreChart from "@/components/trends/SufferScoreChart";
+import EfficiencyTrendChart from "@/components/trends/EfficiencyTrendChart";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
@@ -118,6 +119,7 @@ export default function TrendsPage() {
             data={range === "7D" || range === "30D" ? data.daily_suffer_score : data.suffer_score}
             granularity={range === "7D" || range === "30D" ? "daily" : "per-activity"}
           />
+          {data.efficiency_trend && <EfficiencyTrendChart data={data.efficiency_trend} />}
         </div>
       )}
     </div>

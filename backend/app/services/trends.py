@@ -348,3 +348,28 @@ def build_continuous_suffer_scores(
         cursor += timedelta(days=1)
 
     return result
+
+def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
+    """
+    Build data points for Efficiency = Speed (m/s) / HR (bpm).
+    Only includes activities with distance > 1km and valid HR.
+    """
+    points = []
+    for f in facts:
+        # Filter for meaningful runs/walks
+        if f.distance_m < 1000:
+            continue
+        if not f.avg_hr or f.avg_hr < 1:
+            continue
+        if not f.average_speed_mps or f.average_speed_mps <= 0:
+            continue
+
+        efficiency = f.average_speed_mps / f.avg_hr
+        
+        points.append({
+            "date": f.local_date.isoformat(),
+            "efficiency_mps_per_bpm": round(efficiency, 4),
+            "type": f.activity_type,
+        })
+    
+    return sorted(points, key=lambda p: p["date"])

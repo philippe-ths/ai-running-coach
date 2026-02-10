@@ -18,6 +18,7 @@ from app.schemas.trends import (
     PaceTrendPoint,
     SufferScorePoint,
     DailySufferScorePoint,
+    EfficiencyPoint,
 )
 from app.services.trends import (
     build_activity_facts,
@@ -27,6 +28,7 @@ from app.services.trends import (
     build_pace_trend,
     build_suffer_score_trend,
     build_continuous_suffer_scores,
+    build_efficiency_trend,
     get_available_types,
 )
 
@@ -122,6 +124,12 @@ def get_trends(
         for p in build_continuous_suffer_scores(activity_facts, range_key=range_upper)
     ]
 
+    # 7. Efficiency trend
+    efficiency_trend = [
+        EfficiencyPoint(**p)
+        for p in build_efficiency_trend(activity_facts)
+    ]
+
     return TrendsResponse(
         range=range_upper,
         summary=summary,
@@ -132,4 +140,5 @@ def get_trends(
         pace_trend=pace_trend,
         suffer_score=suffer_score,
         daily_suffer_score=daily_suffer_score,
+        efficiency_trend=efficiency_trend,
     )
