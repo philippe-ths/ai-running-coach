@@ -9,15 +9,16 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import { SufferScorePoint } from "@/lib/types";
+import { SufferScorePoint, DailySufferScorePoint } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
 
 interface Props {
-  data: SufferScorePoint[];
+  data: SufferScorePoint[] | DailySufferScorePoint[];
+  granularity: "daily" | "per-activity";
 }
 
-export default function SufferScoreChart({ data }: Props) {
-  const chartData = data.map((d) => ({
+export default function SufferScoreChart({ data, granularity }: Props) {
+  const chartData = data.map((d: any) => ({
     ...d,
     label: formatDateLabel(d.date),
   }));

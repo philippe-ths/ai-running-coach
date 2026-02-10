@@ -34,6 +34,11 @@ export interface SufferScorePoint {
   type: string;
 }
 
+export interface DailySufferScorePoint {
+  date: string;
+  effort_score: number;
+}
+
 export interface TrendsSummary {
   total_distance_m: number;
   total_moving_time_s: number;
@@ -49,6 +54,7 @@ export interface TrendsData {
   daily_time: DailyTimePoint[];
   pace_trend: PaceTrendPoint[];
   suffer_score: SufferScorePoint[];
+  daily_suffer_score: DailySufferScorePoint[];
 }
 
 export type TrendsRange = "7D" | "30D" | "3M" | "6M" | "1Y" | "ALL";

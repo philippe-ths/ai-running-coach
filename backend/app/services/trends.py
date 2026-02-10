@@ -309,3 +309,42 @@ def build_suffer_score_trend(
             "type": af.activity_type,
         })
     return points
+
+
+def build_continuous_suffer_scores(
+    activity_facts: List[ActivityFact],
+    range_key: str = "30D",
+) -> List[dict]:
+    """
+    Return one {date, effort_score} per day in the range.
+
+    Days without activities get effort_score = 0.
+    Days with multiple activities sum their effort scores.
+    """
+    today = date.today()
+    since = _resolve_since(range_key)
+
+    if since is not None:
+        start = since
+    elif activity_facts:
+        start = activity_facts[0].local_date
+    else:
+        start = today
+
+    # Sum effort scores per day
+    daily: dict[date, float] = {}
+    for af in activity_facts:
+        if af.effort_score is None:
+            continue
+        daily[af.local_date] = daily.get(af.local_date, 0) + af.effort_score
+
+    result: List[dict] = []
+    cursor = start
+    while cursor <= today:
+        result.append({
+            "date": cursor.isoformat(),
+            "effort_score": round(daily.get(cursor, 0), 1),
+        })
+        cursor += timedelta(days=1)
+
+    return result

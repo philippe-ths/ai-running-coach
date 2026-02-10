@@ -116,7 +116,10 @@ export default function TrendsPage() {
             />
           </div>
           <PaceTrendChart data={data.pace_trend} />
-          <SufferScoreChart data={data.suffer_score} />
+          <SufferScoreChart
+            data={range === "7D" || range === "30D" ? data.daily_suffer_score : data.suffer_score}
+            granularity={range === "7D" || range === "30D" ? "daily" : "per-activity"}
+          />
         </div>
       )}
     </div>
