@@ -12,6 +12,13 @@ export interface StopsAnalysis {
   stops: StopLocation[];
 }
 
+export interface EfficiencyAnalysis {
+  average: number;
+  best_sustained: number;
+  curve: number[];
+  unit: string;
+}
+
 export interface DerivedMetric {
   activity_class: string;
   effort_score: number;
@@ -22,6 +29,7 @@ export interface DerivedMetric {
   hr_drift?: number;
   time_in_zones?: Record<string, number>;
   stops_analysis?: StopsAnalysis;
+  efficiency_analysis?: EfficiencyAnalysis;
 }
 
 export interface ActivityStream {
