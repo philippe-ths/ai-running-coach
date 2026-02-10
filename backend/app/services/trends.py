@@ -127,9 +127,29 @@ def _resolve_since(range_key: str) -> Optional[date]:
     return date.today() - timedelta(days=days)
 
 
-def build_activity_facts(db: Session, range_key: str = "30D") -> List[ActivityFact]:
+def get_available_types(db: Session) -> List[str]:
+    """
+    Return the distinct activity types present in the database,
+    sorted alphabetically.
+    """
+    from sqlalchemy import distinct
+
+    stmt = (
+        select(distinct(Activity.type))
+        .where(Activity.is_deleted == False)  # noqa: E712
+        .order_by(Activity.type)
+    )
+    return [row for row in db.execute(stmt).scalars().all()]
+
+
+def build_activity_facts(
+    db: Session,
+    range_key: str = "30D",
+    types: Optional[List[str]] = None,
+) -> List[ActivityFact]:
     """
     Query activities within the given range and project them into ActivityFact rows.
+    Optionally filter by activity type (case-insensitive).
     """
     since = _resolve_since(range_key)
 
@@ -142,7 +162,14 @@ def build_activity_facts(db: Session, range_key: str = "30D") -> List[ActivityFa
         stmt = stmt.where(Activity.start_date >= datetime.combine(since, datetime.min.time()))
 
     activities = db.execute(stmt).scalars().all()
-    return [ActivityFact(a) for a in activities]
+    facts = [ActivityFact(a) for a in activities]
+
+    # Post-filter by effective_type so user_intent overrides are respected
+    if types:
+        type_set = {t.lower() for t in types}
+        facts = [f for f in facts if f.effective_type.lower() in type_set]
+
+    return facts
 
 
 def build_daily_facts(activity_facts: List[ActivityFact]) -> List[DailyFact]:

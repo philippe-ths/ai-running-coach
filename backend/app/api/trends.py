@@ -2,6 +2,8 @@
 API router for /api/trends — aggregated activity data for trend charts.
 """
 
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -17,6 +19,7 @@ from app.services.trends import (
     build_daily_facts,
     build_weekly_buckets,
     build_pace_trend,
+    get_available_types,
 )
 
 router = APIRouter()
@@ -24,17 +27,24 @@ router = APIRouter()
 ALLOWED_RANGES = {"7D", "30D", "3M", "6M", "1Y", "ALL"}
 
 
+@router.get("/trends/types", response_model=List[str])
+def list_activity_types(db: Session = Depends(get_db)):
+    """Return distinct activity types available for filtering."""
+    return get_available_types(db)
+
+
 @router.get("/trends", response_model=TrendsResponse)
 def get_trends(
     range: str = Query("30D", description="Time range: 7D, 30D, 3M, 6M, 1Y, ALL"),
+    types: Optional[List[str]] = Query(None, description="Activity types to include (multi-select)"),
     db: Session = Depends(get_db),
 ):
     range_upper = range.upper()
     if range_upper not in ALLOWED_RANGES:
         range_upper = "30D"
 
-    # 1. Activity-level facts
-    activity_facts = build_activity_facts(db, range_upper)
+    # 1. Activity-level facts (filtered by types if provided)
+    activity_facts = build_activity_facts(db, range_upper, types=types)
 
     # 2. Daily facts (sum per local date)
     daily_facts = build_daily_facts(activity_facts)

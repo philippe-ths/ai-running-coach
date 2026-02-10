@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { TrendsData, TrendsRange } from "@/lib/types";
 import RangeSelector from "@/components/trends/RangeSelector";
+import ActivityTypeFilter from "@/components/trends/ActivityTypeFilter";
 import WeeklyDistanceChart from "@/components/trends/WeeklyDistanceChart";
 import WeeklyTimeChart from "@/components/trends/WeeklyTimeChart";
 import PaceTrendChart from "@/components/trends/PaceTrendChart";
@@ -13,15 +14,30 @@ const API_BASE_URL =
 
 export default function TrendsPage() {
   const [range, setRange] = useState<TrendsRange>("30D");
+  const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [data, setData] = useState<TrendsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchTrends = useCallback(async (r: TrendsRange) => {
+  // Fetch available activity types once on mount
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/api/trends/types`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((types: string[]) => setAvailableTypes(types))
+      .catch(() => {});
+  }, []);
+
+  const fetchTrends = useCallback(async (r: TrendsRange, types: string[]) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/trends?range=${r}`);
+      const params = new URLSearchParams({ range: r });
+      // Only send types param when the user has explicitly selected a subset
+      if (types.length > 0) {
+        types.forEach((t) => params.append("types", t));
+      }
+      const res = await fetch(`${API_BASE_URL}/api/trends?${params}`);
       if (!res.ok) throw new Error(`API error: ${res.statusText}`);
       const json: TrendsData = await res.json();
       setData(json);
@@ -33,8 +49,8 @@ export default function TrendsPage() {
   }, []);
 
   useEffect(() => {
-    fetchTrends(range);
-  }, [range, fetchTrends]);
+    fetchTrends(range, selectedTypes);
+  }, [range, selectedTypes, fetchTrends]);
 
   return (
     <div className="space-y-6">
@@ -46,6 +62,11 @@ export default function TrendsPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <ActivityTypeFilter
+            available={availableTypes}
+            selected={selectedTypes}
+            onChange={setSelectedTypes}
+          />
           <RangeSelector selected={range} onChange={setRange} />
           <Link
             href="/"
