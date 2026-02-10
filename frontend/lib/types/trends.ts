@@ -39,6 +39,12 @@ export interface DailySufferScorePoint {
   effort_score: number;
 }
 
+export interface EfficiencyPoint {
+  date: string;
+  efficiency_mps_per_bpm: number;
+  type: string;
+}
+
 export interface TrendsSummary {
   total_distance_m: number;
   total_moving_time_s: number;
@@ -55,6 +61,7 @@ export interface TrendsData {
   pace_trend: PaceTrendPoint[];
   suffer_score: SufferScorePoint[];
   daily_suffer_score: DailySufferScorePoint[];
+  efficiency_trend: EfficiencyPoint[];
 }
 
 export type TrendsRange = "7D" | "30D" | "3M" | "6M" | "1Y" | "ALL";

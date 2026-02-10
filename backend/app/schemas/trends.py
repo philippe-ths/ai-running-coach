@@ -49,6 +49,12 @@ class DailySufferScorePoint(BaseModel):
     effort_score: float
 
 
+class EfficiencyPoint(BaseModel):
+    date: date
+    efficiency_mps_per_bpm: float
+    type: str
+
+
 class TrendsSummary(BaseModel):
     total_distance_m: int
     total_moving_time_s: int
@@ -65,3 +71,4 @@ class TrendsResponse(BaseModel):
     pace_trend: List[PaceTrendPoint]
     suffer_score: List[SufferScorePoint]
     daily_suffer_score: List[DailySufferScorePoint]
+    efficiency_trend: List[EfficiencyPoint]
