@@ -9,24 +9,26 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import { SufferScorePoint, DailySufferScorePoint } from "@/lib/types";
+import { SufferScorePoint, DailySufferScorePoint, WeeklySufferScorePoint } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
 
 interface Props {
-  data: SufferScorePoint[] | DailySufferScorePoint[];
-  granularity: "daily" | "per-activity";
+  data: SufferScorePoint[] | DailySufferScorePoint[] | WeeklySufferScorePoint[];
+  granularity: "daily" | "weekly";
 }
 
 export default function SufferScoreChart({ data, granularity }: Props) {
   const chartData = data.map((d: any) => ({
     ...d,
-    label: formatDateLabel(d.date),
+    label: formatDateLabel(d.date ?? d.week_start),
   }));
+
+  const title = `Suffer Score per ${granularity === "daily" ? "Day" : "Week"}`;
 
   return (
     <div className="bg-white rounded-lg border shadow-sm p-5">
       <h3 className="text-sm font-semibold text-gray-700 mb-4">
-        Suffer Score Over Time
+        {title}
       </h3>
       {chartData.length === 0 ? (
         <p className="text-gray-400 text-sm py-8 text-center">

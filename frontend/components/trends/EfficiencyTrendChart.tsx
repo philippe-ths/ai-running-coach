@@ -13,10 +13,12 @@ import {
 } from "recharts";
 import { EfficiencyPoint } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import ActivityTypeFilter from "./ActivityTypeFilter";
 
 interface Props {
   data: EfficiencyPoint[];
+  granularity: "daily" | "weekly";
 }
 
 function calculateSMA(data: EfficiencyPoint[], window: number = 5): (number | null)[] {
@@ -30,32 +32,72 @@ function calculateSMA(data: EfficiencyPoint[], window: number = 5): (number | nu
   return result;
 }
 
-export default function EfficiencyTrendChart({ data }: Props) {
+export default function EfficiencyTrendChart({ data, granularity }: Props) {
+  const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
+
+  // Derive available types from the dataset
+  const availableTypes = useMemo(() => {
+    const types = new Set(data.map((p) => p.type));
+    return Array.from(types).sort();
+  }, [data]);
+
   const chartData = useMemo(() => {
-    const sma = calculateSMA(data, 5); // 5-activity moving average
-    return data.map((p, idx) => ({
+    // 1. Filter data based on selection
+    let filtered =
+      selectedTypes.length === 0
+        ? data
+        : data.filter((p) => selectedTypes.includes(p.type));
+
+    // 2. Sort chronologically to ensure trend line is correct
+    filtered = [...filtered].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // 3. Calculate SMA on the filtered subset
+    const sma = calculateSMA(filtered, 5);
+
+    return filtered.map((p, idx) => ({
       ...p,
       label: formatDateLabel(p.date),
       // Scatter points
-      run: p.type.toLowerCase() === "run" ? p.efficiency_mps_per_bpm : undefined,
-      walk: p.type.toLowerCase() === "walk" ? p.efficiency_mps_per_bpm : undefined,
+      value: p.efficiency_mps_per_bpm, // Generic value key
+      [p.type]: p.efficiency_mps_per_bpm, // Specific value key
       // Trend line
       trend: sma[idx],
     }));
-  }, [data]);
+  }, [data, selectedTypes]);
 
-  const hasRun = data.some((p) => p.type.toLowerCase() === "run");
-  const hasWalk = data.some((p) => p.type.toLowerCase() === "walk");
+  // Extract unique types from chartData for coloring/legend
+  const presentTypes = useMemo(() => {
+    const types = new Set(chartData.map(p => p.type));
+    return Array.from(types);
+  }, [chartData]);
+  
+  const title = `Heart Rate Efficiency per ${granularity === "daily" ? "Day" : "Week"}`;
+
+  // Color map for known types
+  const getColor = (type: string) => {
+    const t = type.toLowerCase();
+    if (t === "run") return "#3b82f6";
+    if (t === "walk") return "#f59e0b";
+    if (t === "alpineski" || t === "ride") return "#8b5cf6";
+    return "#64748b";
+  };
 
   return (
     <div className="bg-white rounded-lg border shadow-sm p-5">
-      <div className="mb-4">
-        <h3 className="text-sm font-semibold text-gray-700">
-          Heart Rate Efficiency
-        </h3>
-        <p className="text-xs text-gray-500 mt-1">
-          Speed (m/s) per Heart beat. Higher is better.
-        </p>
+      <div className="mb-4 flex items-start justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
+          <p className="text-xs text-gray-500 mt-1">
+            Speed (m/s) per Heart beat. Higher is better.
+          </p>
+        </div>
+        <div>
+          <ActivityTypeFilter
+            available={availableTypes}
+            selected={selectedTypes}
+            onChange={setSelectedTypes}
+          />
+        </div>
       </div>
 
       {chartData.length === 0 ? (
@@ -82,8 +124,8 @@ export default function EfficiencyTrendChart({ data }: Props) {
                 tickFormatter={(val) => val.toFixed(3)}
               />
               <Tooltip
-                formatter={(value: number, name: string) => [
-                  value.toFixed(4),
+                formatter={(value: any, name: any) => [
+                  typeof value === "number" ? value.toFixed(4) : value,
                   name === "trend" ? "Trend (5-act avg)" : name,
                 ]}
                 labelFormatter={(label) => label}
@@ -100,35 +142,20 @@ export default function EfficiencyTrendChart({ data }: Props) {
                 name="Trend"
               />
 
-              {/* Individual Activities as Scatter points (using Line with only dots and no line connection if we want specific coloring) 
-                 Actually ComposedChart allows Scatter. But combining Line and Scatter is tricky with categorical axis sometimes. 
-                 Alternative: Use Line with strokeWidth={0} for dots.
-              */}
-              
-               {hasRun && (
-                <Line
+              {/* Dynamic Scatter Lines per Type */}
+              {presentTypes.map((type) => (
+               <Line
+                  key={type}
                   type="monotone"
-                  dataKey="run"
-                  stroke="#3b82f6"
+                  dataKey={type}
+                  stroke={getColor(type)}
                   strokeWidth={0}
-                  dot={{ r: 3, fill: "#3b82f6" }}
+                  dot={{ r: 3, fill: getColor(type) }}
                   connectNulls={false}
-                  name="Run"
+                  name={type}
                   isAnimationActive={false}
                 />
-              )}
-              {hasWalk && (
-                <Line
-                  type="monotone"
-                  dataKey="walk"
-                  stroke="#f59e0b"
-                  strokeWidth={0}
-                  dot={{ r: 3, fill: "#f59e0b" }}
-                  connectNulls={false}
-                  name="Walk"
-                  isAnimationActive={false}
-                />
-              )}
+              ))}
 
             </ComposedChart>
           </ResponsiveContainer>

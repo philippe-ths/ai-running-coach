@@ -32,12 +32,6 @@ class DailyTimePoint(BaseModel):
     activity_count: int
 
 
-class PaceTrendPoint(BaseModel):
-    date: date
-    pace_sec_per_km: float
-    type: str
-
-
 class SufferScorePoint(BaseModel):
     date: date
     effort_score: float
@@ -46,6 +40,11 @@ class SufferScorePoint(BaseModel):
 
 class DailySufferScorePoint(BaseModel):
     date: date
+    effort_score: float
+
+
+class WeeklySufferScorePoint(BaseModel):
+    week_start: date
     effort_score: float
 
 
@@ -59,16 +58,18 @@ class TrendsSummary(BaseModel):
     total_distance_m: int
     total_moving_time_s: int
     activity_count: int
+    total_suffer_score: float
 
 
 class TrendsResponse(BaseModel):
     range: str
     summary: TrendsSummary
+    previous_summary: Optional[TrendsSummary] = None
     weekly_distance: List[WeeklyDistancePoint]
     weekly_time: List[WeeklyTimePoint]
+    weekly_suffer_score: List[WeeklySufferScorePoint]
     daily_distance: List[DailyDistancePoint]
     daily_time: List[DailyTimePoint]
-    pace_trend: List[PaceTrendPoint]
     suffer_score: List[SufferScorePoint]
     daily_suffer_score: List[DailySufferScorePoint]
     efficiency_trend: List[EfficiencyPoint]

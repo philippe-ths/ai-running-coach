@@ -22,12 +22,6 @@ export interface DailyTimePoint {
   activity_count: number;
 }
 
-export interface PaceTrendPoint {
-  date: string;
-  pace_sec_per_km: number;
-  type: string;
-}
-
 export interface SufferScorePoint {
   date: string;
   effort_score: number;
@@ -36,6 +30,11 @@ export interface SufferScorePoint {
 
 export interface DailySufferScorePoint {
   date: string;
+  effort_score: number;
+}
+
+export interface WeeklySufferScorePoint {
+  week_start: string;
   effort_score: number;
 }
 
@@ -49,16 +48,18 @@ export interface TrendsSummary {
   total_distance_m: number;
   total_moving_time_s: number;
   activity_count: number;
+  total_suffer_score: number;
 }
 
 export interface TrendsData {
   range: string;
   summary: TrendsSummary;
+  previous_summary?: TrendsSummary | null;
   weekly_distance: WeeklyDistancePoint[];
   weekly_time: WeeklyTimePoint[];
+  weekly_suffer_score: WeeklySufferScorePoint[];
   daily_distance: DailyDistancePoint[];
   daily_time: DailyTimePoint[];
-  pace_trend: PaceTrendPoint[];
   suffer_score: SufferScorePoint[];
   daily_suffer_score: DailySufferScorePoint[];
   efficiency_trend: EfficiencyPoint[];
