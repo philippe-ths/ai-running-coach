@@ -8,6 +8,7 @@ import AdvancedMetrics from '@/components/AdvancedMetrics';
 import StreamCharts from '@/components/StreamCharts';
 import { SplitsPanel } from '@/components/SplitsPanel';
 import StopsPanel from '@/components/StopsPanel';
+import EfficiencyPanel from '@/components/EfficiencyPanel';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,6 +64,11 @@ export default async function ActivityDetail({ params }: { params: { id: string 
           {/* Advanced Metrics Visualization */}
           {activity.metrics && (
              <AdvancedMetrics metrics={activity.metrics} />
+          )}
+
+          {/* Efficiency Analysis */}
+          {activity.metrics?.efficiency_analysis && (
+              <EfficiencyPanel data={activity.metrics.efficiency_analysis} />
           )}
 
           {/* Stops Analysis */}
