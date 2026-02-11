@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Optional, List, Dict, Any
 from app.models import Activity
+from app.services.processing.stops import analyze_stops
 
 def calculate_time_in_zones(streams: Dict[str, List[any]], max_hr: int = 190) -> Optional[Dict[str, int]]:
     """
@@ -108,6 +109,78 @@ def calculate_hr_drift(streams: Dict[str, List[any]]) -> Optional[float]:
     decoupling = (1 - (ef_second / ef_first)) * 100
     return round(decoupling, 2)
 
+def calculate_efficiency(streams: Dict[str, List[any]]) -> Optional[Dict[str, Any]]:
+    """
+    Calculates Efficiency Factor (EF) stats.
+    Efficiency = Speed (m/min) / HR (bpm).
+    """
+    velocity = streams.get("velocity_smooth", [])
+    heartrate = streams.get("heartrate", [])
+    
+    if not velocity or not heartrate: 
+        return None
+    
+    # Ensure same length, trim to min
+    length = min(len(velocity), len(heartrate))
+    if length < 180: # Min 3 mins for meaningful "best sustained"
+        return None
+    
+    # Convert to numpy
+    v_arr = np.array(velocity[:length])
+    hr_arr = np.array(heartrate[:length])
+    
+    # --- 1. Average Efficiency (User for "Today's walk easy?") ---
+    # Filter valid running/walking: Speed > 0.8 m/s (slow walk), HR > 40
+    # User might walk? "Was today’s walk easy..."
+    # 0.8 m/s = ~20:00/km (3 km/h).
+    mask = (v_arr > 0.8) & (hr_arr > 40)
+    
+    if np.sum(mask) < 60:
+        return None
+        
+    clean_v = v_arr[mask]
+    clean_hr = hr_arr[mask]
+    
+    # Efficiency in m/min per bpm
+    eff_values = (clean_v * 60.0) / clean_hr
+    avg_efficiency = float(np.mean(eff_values))
+    
+    # --- 2. Best Sustained Efficiency (3 min) ---
+    # We use the raw stream, speed 0 -> eff 0.
+    # We want "sustained" so we treat stops as penalty.
+    
+    # Raw Efficiency Stream (0 where invalid/stopped to penalize stops in "sustained" window)
+    # Avoid division by zero
+    safe_hr = np.where(hr_arr > 40, hr_arr, 1) # avoid div by 0
+    raw_eff = (v_arr * 60.0) / safe_hr
+    
+    # Zero out invalid speeds or low HRs
+    raw_eff[(v_arr <= 0.8) | (hr_arr <= 40)] = 0.0
+    
+    # Convolution for moving average
+    window_sec = 180 # 3 minutes
+    kernel = np.ones(window_sec) / window_sec
+    rolling_eff = np.convolve(raw_eff, kernel, mode='valid')
+    
+    best_sustained = float(np.max(rolling_eff)) if len(rolling_eff) > 0 else avg_efficiency
+
+    # --- 3. Efficiency Curve (Rolling 60s) ---
+    # For chart. Smoother than raw.
+    chart_window = 60
+    chart_kernel = np.ones(chart_window) / chart_window
+    chart_curve = np.convolve(raw_eff, chart_kernel, mode='same')
+    
+    # Downsample for frontend (every 10th point)
+    # Store as simple list of values. Frontend maps to time x-axis.
+    curve_data = [round(x, 3) for x in chart_curve[::10].tolist()]
+
+    return {
+        "average": round(avg_efficiency, 2),
+        "best_sustained": round(best_sustained, 2),
+        "curve": curve_data, 
+        "unit": "m/min/bpm"
+    }
+
 def calculate_effort_score(activity: Activity) -> float:
     """
     Calculates a TRIMP-like effort score.
@@ -135,11 +208,15 @@ def compute_derived_metrics_data(activity: Activity, streams_dict: Dict[str, Lis
     drift = None
     pace_var = None
     zones = None
+    stops = None
+    efficiency = None
     
     if streams_dict:
         drift = calculate_hr_drift(streams_dict)
         pace_var = calculate_pace_variability(streams_dict)
-        
+        stops = analyze_stops(streams_dict)
+        efficiency = calculate_efficiency(streams_dict)
+
         # Use provided max_hr if reasonable, else default
         effective_max = max_hr if max_hr and max_hr > 150 else 190 
         
@@ -149,5 +226,7 @@ def compute_derived_metrics_data(activity: Activity, streams_dict: Dict[str, Lis
         "effort_score": effort,
         "pace_variability": pace_var,
         "hr_drift": drift,
-        "time_in_zones": zones
+        "time_in_zones": zones,
+        "stops_analysis": stops,
+        "efficiency_analysis": efficiency
     }

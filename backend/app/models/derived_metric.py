@@ -22,6 +22,8 @@ class DerivedMetric(Base):
     hr_drift: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     time_in_zones: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    stops_analysis: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    efficiency_analysis: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     flags: Mapped[list] = mapped_column(JSON, default=[])  # list[str]
     confidence: Mapped[str] = mapped_column(String)  # low, medium, high
     confidence_reasons: Mapped[list] = mapped_column(JSON, default=[])

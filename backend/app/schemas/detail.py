@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from app.schemas.activity import ActivityRead
 from app.schemas.checkin import CheckInRead
 from app.services.units.cadence import normalize_cadence_spm
+from app.services.processing.smoothing import smooth_cadence
 
 
 class DerivedMetricRead(BaseModel):
@@ -17,6 +18,8 @@ class DerivedMetricRead(BaseModel):
     confidence: str
     confidence_reasons: List[str] = []
     time_in_zones: Optional[Dict] = None
+    stops_analysis: Optional[Dict] = None
+    efficiency_analysis: Optional[Dict] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -73,5 +76,48 @@ class ActivityDetailRead(ActivityRead):
                     x * 2 if isinstance(x, (int, float)) else x
                     for x in cadence_stream.data
                 ]
+
+        return self
+
+    @model_validator(mode="after")
+    def generate_smoothed_cadence(self) -> "ActivityDetailRead":
+        """
+        Generates a 'smoothed_cadence' stream for better visualization.
+        """
+        if not self.streams:
+            return self
+
+        # Helper to get stream data safely
+        def get_stream_data(name: str) -> List[Any]:
+            s = next((s for s in self.streams if s.stream_type == name), None)
+            return s.data if s else []
+
+        cadence = get_stream_data("cadence")
+        if not cadence:
+            return self
+
+        velocity = get_stream_data("velocity_smooth")
+        moving = get_stream_data("moving")
+        time = get_stream_data("time")
+
+        # Time is required for gap interpolation
+        if not time:
+            return self
+
+        # Prevent duplicate generation if validator runs multiple times
+        if any(s.stream_type == "smoothed_cadence" for s in self.streams):
+           return self
+
+        smoothed_data = smooth_cadence(cadence, velocity, moving, time)
+
+        # Append new stream
+        self.streams.append(
+            ActivityStreamRead(stream_type="smoothed_cadence", data=smoothed_data)
+        )
+
+        # Recompute average from smoothed data (ignoring nulls)
+        valid_values = [v for v in smoothed_data if v is not None]
+        if valid_values:
+            self.avg_cadence = sum(valid_values) / len(valid_values)
 
         return self

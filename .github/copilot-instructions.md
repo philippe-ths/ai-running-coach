@@ -8,6 +8,7 @@
     - `strava/`: Strava client, OAuth, token refresh.
     - `units/`: Cadence normalisation.
     - `activity_service.py`: Sync, upsert, and query logic.
+    - `trends.py`: Aggregation logic for historical charts.
   - **Models (`backend/app/models/`)**: One SQLAlchemy model per file, barrel re-exported from `__init__.py`.
   - **Schemas (`backend/app/schemas/`)**: One Pydantic schema file per domain, barrel re-exported from `__init__.py`.
 - **Frontend (`frontend/`)**: Next.js 14+ (App Router), Tailwind CSS.
