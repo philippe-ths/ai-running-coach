@@ -7,4 +7,17 @@
 export type { DerivedMetric, ActivityStream, CheckIn } from "./types/metrics";
 export type { Activity } from "./types/activity";
 export type { UserProfile } from "./types/profile";
+export type {
+  WeeklyDistancePoint,
+  WeeklyTimePoint,
+  DailyDistancePoint,
+  DailyTimePoint,
+  SufferScorePoint,
+  DailySufferScorePoint,
+  WeeklySufferScorePoint,
+  EfficiencyPoint,
+  TrendsSummary,
+  TrendsData,
+  TrendsRange,
+} from "./types/trends";
 

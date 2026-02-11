@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import health, auth, activities, webhooks, profile
+from app.api import health, auth, activities, webhooks, profile, trends
 
 app = FastAPI(
     title="Running Coach",
@@ -28,6 +28,7 @@ app.include_router(auth.router, prefix="/api", tags=["Auth"])
 app.include_router(profile.router, prefix="/api", tags=["Profile"])
 app.include_router(activities.router, prefix="/api", tags=["Activities"])
 app.include_router(webhooks.router, prefix="/api", tags=["Webhooks"])
+app.include_router(trends.router, prefix="/api", tags=["Trends"])
 
 if __name__ == "__main__":
     import uvicorn

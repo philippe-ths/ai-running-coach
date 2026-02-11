@@ -31,6 +31,7 @@
         analysis/         # classifier, metrics, flags, engine
         units/            # cadence normalisation
         activity_service.py
+        trends.py         # Aggregation logic for charts
       jobs/               # RQ job definitions (strava_sync)
       main.py
       worker.py
@@ -145,6 +146,7 @@ Health: GET /api/health
 
 ## 8) Frontend pages
 - `/` — dashboard: connect button, recent activities, sync
+- `/trends` — historical analysis, distance/time/pace charts
 - `/activity/[id]` — stats, metrics, flags, stream charts, intent selector, check-in
 - `/profile` — profile editor (goal, experience, races, injuries)
 

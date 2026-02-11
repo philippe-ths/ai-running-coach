@@ -26,3 +26,17 @@ export function formatDuration(seconds: number): string {
 export function formatDistanceKm(metres: number): string {
   return `${(metres / 1000).toFixed(2)} km`;
 }
+
+/**
+ * Format an ISO date string ("2026-02-08") to "Feb 8" without
+ * timezone conversion.  parseISO creates midnight-UTC which shifts
+ * the displayed date when the browser is behind UTC.
+ */
+export function formatDateLabel(iso: string): string {
+  const MONTHS = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  ];
+  const [, m, d] = iso.split("-");
+  return `${MONTHS[parseInt(m, 10) - 1]} ${parseInt(d, 10)}`;
+}
