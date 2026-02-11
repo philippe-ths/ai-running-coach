@@ -9,6 +9,7 @@ import ActivityTypeFilter from "@/components/trends/ActivityTypeFilter";
 import TrendBarChart from "@/components/trends/TrendBarChart";
 import SufferScoreChart from "@/components/trends/SufferScoreChart";
 import EfficiencyTrendChart from "@/components/trends/EfficiencyTrendChart";
+import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
@@ -191,6 +192,10 @@ export default function TrendsPage() {
               granularity={granularity}
             />
           )}
+          <ZoneLoadChart
+            data={isDaily ? data.daily_zone_load : data.weekly_zone_load}
+            granularity={granularity}
+          />
         </div>
       )}
     </div>
