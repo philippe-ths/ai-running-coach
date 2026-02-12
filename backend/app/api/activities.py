@@ -112,10 +112,10 @@ def read_activity(
            db.refresh(activity)
 
     # Calculate Splits
-    splits_data = []
-    if activity.streams:
-        effective_type = activity.user_intent if activity.user_intent else activity.type
-        splits_data = calculate_splits(activity.streams, activity_type=effective_type)
+    effective_type = activity.user_intent if activity.user_intent else activity.type
+    splits_data = calculate_splits(
+        activity.streams or [], activity_type=effective_type
+    )
         
     # Convert to Pydantic model manually to inject transient splits data
     response = ActivityDetailRead.model_validate(activity)

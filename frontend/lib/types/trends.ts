@@ -44,6 +44,20 @@ export interface EfficiencyPoint {
   type: string;
 }
 
+export interface ZoneLoadWeekPoint {
+  week_start: string;
+  easy_min: number;
+  moderate_min: number;
+  hard_min: number;
+}
+
+export interface DailyZoneLoadPoint {
+  date: string;
+  easy_min: number;
+  moderate_min: number;
+  hard_min: number;
+}
+
 export interface TrendsSummary {
   total_distance_m: number;
   total_moving_time_s: number;
@@ -63,6 +77,8 @@ export interface TrendsData {
   suffer_score: SufferScorePoint[];
   daily_suffer_score: DailySufferScorePoint[];
   efficiency_trend: EfficiencyPoint[];
+  weekly_zone_load: ZoneLoadWeekPoint[];
+  daily_zone_load: DailyZoneLoadPoint[];
 }
 
 export type TrendsRange = "7D" | "30D" | "3M" | "6M" | "1Y" | "ALL";

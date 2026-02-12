@@ -23,6 +23,8 @@ from app.schemas.trends import (
     SufferScorePoint,
     DailySufferScorePoint,
     EfficiencyPoint,
+    ZoneLoadWeekPoint,
+    DailyZoneLoadPoint,
 )
 
 ALLOWED_RANGES = {"7D", "30D", "3M", "6M", "1Y", "ALL"}
@@ -39,7 +41,7 @@ class ActivityFact:
         "activity_id", "local_date", "activity_type", "user_intent",
         "distance_m", "moving_time_s", "elapsed_time_s",
         "elev_gain_m", "avg_hr", "avg_cadence", "average_speed_mps",
-        "effort_score",
+        "effort_score", "time_in_zones",
     )
 
     def __init__(self, activity: Activity):
@@ -57,6 +59,9 @@ class ActivityFact:
         self.average_speed_mps = activity.average_speed_mps
         self.effort_score: Optional[float] = (
             activity.metrics.effort_score if activity.metrics else None
+        )
+        self.time_in_zones: Optional[dict] = (
+            activity.metrics.time_in_zones if activity.metrics else None
         )
 
     @property
@@ -113,6 +118,7 @@ class WeekBucket:
     __slots__ = (
         "week_start", "total_distance_m", "total_moving_time_s",
         "total_effort_score", "activity_count",
+        "easy_seconds", "moderate_seconds", "hard_seconds",
     )
 
     def __init__(self, week_start: date):
@@ -121,6 +127,9 @@ class WeekBucket:
         self.total_moving_time_s = 0
         self.total_effort_score = 0.0
         self.activity_count = 0
+        self.easy_seconds = 0
+        self.moderate_seconds = 0
+        self.hard_seconds = 0
 
     def add(self, daily: DailyFact):
         self.total_distance_m += daily.total_distance_m
@@ -382,6 +391,90 @@ def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
     return sorted(points, key=lambda p: p["date"])
 
 
+def _collapse_to_3_zones(time_in_zones: dict) -> tuple[int, int, int]:
+    """Collapse 5-zone dict into 3-zone seconds: (easy, moderate, hard).
+
+    Easy    = Z1 + Z2  (< 70% max HR)
+    Moderate = Z3      (70-80% max HR)
+    Hard    = Z4 + Z5  (> 80% max HR)
+    """
+    z1 = time_in_zones.get("Z1", 0) or 0
+    z2 = time_in_zones.get("Z2", 0) or 0
+    z3 = time_in_zones.get("Z3", 0) or 0
+    z4 = time_in_zones.get("Z4", 0) or 0
+    z5 = time_in_zones.get("Z5", 0) or 0
+    return (z1 + z2, z3, z4 + z5)
+
+
+def build_zone_load_weekly(
+    activity_facts: List[ActivityFact],
+    weekly_buckets: List["WeekBucket"],
+) -> List[dict]:
+    """
+    Aggregate per-activity time_in_zones into weekly 3-zone buckets.
+
+    Returns one dict per week: {week_start, easy_min, moderate_min, hard_min}.
+    Weeks with no zone data get zeros.
+    """
+    # Sum zone seconds per ISO-week Monday
+    zone_by_week: dict[date, tuple[int, int, int]] = {}
+    for af in activity_facts:
+        if not af.time_in_zones:
+            continue
+        monday = af.local_date - timedelta(days=af.local_date.weekday())
+        easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
+        prev = zone_by_week.get(monday, (0, 0, 0))
+        zone_by_week[monday] = (
+            prev[0] + easy_s,
+            prev[1] + mod_s,
+            prev[2] + hard_s,
+        )
+
+    # Emit one point per weekly bucket (continuous)
+    result: List[dict] = []
+    for wb in weekly_buckets:
+        easy_s, mod_s, hard_s = zone_by_week.get(wb.week_start, (0, 0, 0))
+        result.append({
+            "week_start": wb.week_start.isoformat(),
+            "easy_min": round(easy_s / 60, 1),
+            "moderate_min": round(mod_s / 60, 1),
+            "hard_min": round(hard_s / 60, 1),
+        })
+    return result
+
+
+def build_zone_load_daily(
+    activity_facts: List[ActivityFact],
+    continuous_daily: List["DailyFact"],
+) -> List[dict]:
+    """
+    Per-day 3-zone minutes, continuous (every day in the range gets a row).
+    """
+    # Sum zone seconds per local date
+    zone_by_date: dict[date, tuple[int, int, int]] = {}
+    for af in activity_facts:
+        if not af.time_in_zones:
+            continue
+        easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
+        prev = zone_by_date.get(af.local_date, (0, 0, 0))
+        zone_by_date[af.local_date] = (
+            prev[0] + easy_s,
+            prev[1] + mod_s,
+            prev[2] + hard_s,
+        )
+
+    result: List[dict] = []
+    for df in continuous_daily:
+        easy_s, mod_s, hard_s = zone_by_date.get(df.local_date, (0, 0, 0))
+        result.append({
+            "date": df.local_date.isoformat(),
+            "easy_min": round(easy_s / 60, 1),
+            "moderate_min": round(mod_s / 60, 1),
+            "hard_min": round(hard_s / 60, 1),
+        })
+    return result
+
+
 def get_trends_report(
     db: Session,
     range_key: str = "30D",
@@ -492,6 +585,16 @@ def get_trends_report(
         for p in build_efficiency_trend(activity_facts)
     ]
 
+    # 9. Zone load (3-zone stacked bar)
+    weekly_zone_load = [
+        ZoneLoadWeekPoint(**p)
+        for p in build_zone_load_weekly(activity_facts, weekly)
+    ]
+    daily_zone_load = [
+        DailyZoneLoadPoint(**p)
+        for p in build_zone_load_daily(activity_facts, continuous_daily)
+    ]
+
     return TrendsResponse(
         range=range_upper,
         summary=summary,
@@ -504,4 +607,6 @@ def get_trends_report(
         suffer_score=suffer_score,
         daily_suffer_score=daily_suffer_score,
         efficiency_trend=efficiency_trend,
+        weekly_zone_load=weekly_zone_load,
+        daily_zone_load=daily_zone_load,
     )

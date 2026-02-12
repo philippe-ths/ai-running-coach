@@ -31,13 +31,16 @@ class ActivityStreamRead(BaseModel):
 
 class SplitRead(BaseModel):
     split: int
-    distance: float
+    split_type: str = "distance"
+    distance: Optional[float] = None
     elapsed_time: float
-    pace: float
-    speed: float
+    pace: Optional[float] = None
+    speed: Optional[float] = None
     avg_hr: Optional[float] = None
     avg_grade: Optional[float] = None
     avg_cadence: Optional[float] = None
+    avg_watts: Optional[float] = None
+    elev_gain: Optional[float] = None
     model_config = ConfigDict(from_attributes=True)
 
 
