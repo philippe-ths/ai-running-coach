@@ -16,6 +16,8 @@ export type {
   DailySufferScorePoint,
   WeeklySufferScorePoint,
   EfficiencyPoint,
+  ZoneLoadWeekPoint,
+  DailyZoneLoadPoint,
   TrendsSummary,
   TrendsData,
   TrendsRange,

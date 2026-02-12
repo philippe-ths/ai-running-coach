@@ -54,6 +54,22 @@ class EfficiencyPoint(BaseModel):
     type: str
 
 
+class ZoneLoadWeekPoint(BaseModel):
+    """One week of 3-zone load data (Easy / Moderate / Hard minutes)."""
+    week_start: date
+    easy_min: float
+    moderate_min: float
+    hard_min: float
+
+
+class DailyZoneLoadPoint(BaseModel):
+    """One day of 3-zone load data (Easy / Moderate / Hard minutes)."""
+    date: date
+    easy_min: float
+    moderate_min: float
+    hard_min: float
+
+
 class TrendsSummary(BaseModel):
     total_distance_m: int
     total_moving_time_s: int
@@ -73,3 +89,5 @@ class TrendsResponse(BaseModel):
     suffer_score: List[SufferScorePoint]
     daily_suffer_score: List[DailySufferScorePoint]
     efficiency_trend: List[EfficiencyPoint]
+    weekly_zone_load: List[ZoneLoadWeekPoint]
+    daily_zone_load: List[DailyZoneLoadPoint]

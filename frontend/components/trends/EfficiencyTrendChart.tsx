@@ -57,11 +57,11 @@ export default function EfficiencyTrendChart({ data, granularity }: Props) {
     return filtered.map((p, idx) => ({
       ...p,
       label: formatDateLabel(p.date),
-      // Scatter points
-      value: p.efficiency_mps_per_bpm, // Generic value key
-      [p.type]: p.efficiency_mps_per_bpm, // Specific value key
+      // Convert m/s per bpm → meters per heartbeat (×60)
+      value: +(p.efficiency_mps_per_bpm * 60).toFixed(2),
+      [p.type]: +(p.efficiency_mps_per_bpm * 60).toFixed(2),
       // Trend line
-      trend: sma[idx],
+      trend: sma[idx] != null ? +(sma[idx]! * 60).toFixed(2) : null,
     }));
   }, [data, selectedTypes]);
 
@@ -88,7 +88,7 @@ export default function EfficiencyTrendChart({ data, granularity }: Props) {
         <div>
           <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
           <p className="text-xs text-gray-500 mt-1">
-            Speed (m/s) per Heart beat. Higher is better.
+            Meters per heartbeat. Higher is better.
           </p>
         </div>
         <div>
@@ -119,13 +119,14 @@ export default function EfficiencyTrendChart({ data, granularity }: Props) {
                 tick={{ fontSize: 12 }}
                 tickLine={false}
                 axisLine={false}
-                width={40}
+                width={50}
                 domain={["auto", "auto"]}
-                tickFormatter={(val) => val.toFixed(3)}
+                tickFormatter={(val) => `${val.toFixed(1)} m`}
+                unit=""
               />
               <Tooltip
                 formatter={(value: any, name: any) => [
-                  typeof value === "number" ? value.toFixed(4) : value,
+                  typeof value === "number" ? `${value.toFixed(2)} m/beat` : value,
                   name === "trend" ? "Trend (5-act avg)" : name,
                 ]}
                 labelFormatter={(label) => label}
