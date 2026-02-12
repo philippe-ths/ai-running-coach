@@ -2,13 +2,16 @@ import { DerivedMetric, ActivityStream, CheckIn } from "./metrics";
 
 export interface Split {
   split: number;
-  distance: number;
+  split_type: 'distance' | 'time';
+  distance?: number;
   elapsed_time: number;
-  pace: number;
-  speed: number;
+  pace?: number;
+  speed?: number;
   avg_hr?: number;
   avg_grade?: number;
   avg_cadence?: number;
+  avg_watts?: number;
+  elev_gain?: number;
 }
 
 export interface Activity {
