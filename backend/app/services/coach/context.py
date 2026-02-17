@@ -89,6 +89,9 @@ def build_context_pack(db: Session, activity: Activity) -> dict:
             "efficiency_analysis": metrics.efficiency_analysis if metrics else None,
             "stops_analysis": metrics.stops_analysis if metrics else None,
             "interval_structure": metrics.interval_structure if metrics else None,
+            "risk_level": metrics.risk_level if metrics else None,
+            "risk_score": metrics.risk_score if metrics else None,
+            "risk_reasons": metrics.risk_reasons if metrics else [],
         },
         "check_in": {
             "rpe": check_in.rpe if check_in else None,

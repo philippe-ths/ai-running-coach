@@ -7,6 +7,7 @@ from app.services.processing.metrics import compute_derived_metrics_data
 from app.services.processing.classifier import classify_activity
 from app.services.processing.flags import generate_flags
 from app.services.processing.intervals import detect_intervals
+from app.services.processing.risk import compute_risk_score
 from app.services.activity_service import fetch_and_store_streams
 
 # Classes that warrant detailed stream processing
@@ -108,6 +109,19 @@ def process_activity(db: Session, activity_id: str) -> Optional[DerivedMetric]:
         history_metrics=history_metrics,
     )
     metrics_data["flags"] = all_flags
+
+    # 8.5 Risk score (deterministic, based on flags + check-in + training context)
+    check_in_data = {
+        "sleep_quality": check_in.sleep_quality if check_in else None,
+        "rpe": check_in.rpe if check_in else None,
+    }
+    # Compute training context for risk scoring
+    from app.services.coach.context import _build_training_context
+    training_ctx = _build_training_context(db, activity)
+    risk_result = compute_risk_score(all_flags, check_in_data, training_ctx)
+    metrics_data["risk_level"] = risk_result["risk_level"]
+    metrics_data["risk_score"] = risk_result["risk_score"]
+    metrics_data["risk_reasons"] = risk_result["risk_reasons"]
 
     # 9. Confidence
     confidence, confidence_reasons = compute_confidence(activity, streams_dict, check_in)
