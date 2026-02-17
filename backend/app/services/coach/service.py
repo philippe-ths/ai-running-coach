@@ -3,8 +3,12 @@ Coach service — orchestrates context pack → LLM → validate → store.
 """
 
 import json
+import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -61,10 +65,12 @@ async def get_or_generate_coach_report(
             user=user_message,
             max_tokens=1024,
         )
-        parsed = json.loads(raw_response)
+        # Strip markdown code fences if the model wraps its JSON
+        cleaned = _strip_code_fences(raw_response)
+        parsed = json.loads(cleaned)
         content = CoachReportContent.model_validate(parsed)
-    except (json.JSONDecodeError, ValidationError, Exception):
-        # Safe fallback
+    except (json.JSONDecodeError, ValidationError) as e:
+        logger.error("Coach report parse/validation error: %s", e)
         content = CoachReportContent(
             key_takeaways=[
                 "Analysis is temporarily unavailable for this activity.",
@@ -101,6 +107,16 @@ async def get_or_generate_coach_report(
     db.refresh(db_report)
 
     return _to_read(db_report)
+
+
+def _strip_code_fences(text: str) -> str:
+    """Remove markdown code fences (```json ... ```) that LLMs sometimes add."""
+    stripped = text.strip()
+    # Match ```json\n...\n``` or ```\n...\n```
+    match = re.match(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", stripped, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return stripped
 
 
 def _to_read(db_report: CoachReport) -> CoachReportRead:
