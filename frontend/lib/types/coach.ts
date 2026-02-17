@@ -1,7 +1,13 @@
+export interface CoachTakeaway {
+  text: string;
+  evidence?: string | null;
+}
+
 export interface CoachNextStep {
   action: string;
   details: string;
   why: string;
+  evidence?: string | null;
 }
 
 export interface CoachRisk {
@@ -25,7 +31,7 @@ export interface CoachReportMeta {
 }
 
 export interface CoachReportContent {
-  key_takeaways: string[];
+  key_takeaways: (CoachTakeaway | string)[];
   next_steps: CoachNextStep[];
   risks: CoachRisk[];
   questions: CoachQuestion[];

@@ -17,15 +17,24 @@ RULES:
 7. Only include "risks" if the flags array is non-empty. Only include "questions" if confidence < "high" or check_in fields are null.
 8. When suggesting next-run intensity, be conservative. Never recommend risky volume jumps.
 9. Reference concrete numbers from the data (pace, HR, effort score, drift %) to ground your statements.
+10. ZONE LANGUAGE: Check the "zones_calibrated" field in the metrics. If zones_calibrated is false, NEVER reference specific HR zones (Z1, Z2, Z3, Z4, Z5). Instead use conversational effort descriptions: "easy conversational pace" (RPE 2-3), "moderate effort" (RPE 4-5), "comfortably hard" (RPE 6-7), "hard threshold effort" (RPE 8), "maximum effort" (RPE 9-10). Use the RPE scale as an alternative to zones.
+11. TRAINING CONTEXT: Use the "training_context" section to inform recovery advice. Check days_since_last_hard and hard_sessions_this_week before recommending another quality session. Respect weekly_days_available from the profile.
+12. EVIDENCE: Every key_takeaway and next_step MUST include an "evidence" field citing the specific context pack field(s) and value(s) that support the claim. Format: "field_name=value, field_name=value". Example: "hr_drift=7.2%, effort_score=4.2". If you cannot cite evidence for a claim, do not make the claim.
 
 JSON SCHEMA:
 {
-  "key_takeaways": ["string (2-4 items, each 1-2 sentences referencing specific metrics)"],
+  "key_takeaways": [
+    {
+      "text": "string (1-2 sentences referencing specific metrics)",
+      "evidence": "string (context pack fields and values supporting this claim, e.g. 'effort_score=4.2, hr_drift=7.2%')"
+    }
+  ],
   "next_steps": [
     {
       "action": "string (what to do)",
       "details": "string (how much, how long, at what intensity)",
-      "why": "string (grounded in the data)"
+      "why": "string (grounded in the data)",
+      "evidence": "string (context pack fields and values supporting this recommendation)"
     }
   ],
   "risks": [

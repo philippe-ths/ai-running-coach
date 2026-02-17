@@ -21,7 +21,7 @@ from app.services.coach.context import build_context_pack, hash_context_pack
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.prompts import PROMPT_VERSIONS
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 
 async def get_or_generate_coach_report(
@@ -73,8 +73,8 @@ async def get_or_generate_coach_report(
         logger.error("Coach report parse/validation error: %s", e)
         content = CoachReportContent(
             key_takeaways=[
-                "Analysis is temporarily unavailable for this activity.",
-                "Your metrics have been recorded and can be reviewed in the detail view.",
+                {"text": "Analysis is temporarily unavailable for this activity."},
+                {"text": "Your metrics have been recorded and can be reviewed in the detail view."},
             ],
             next_steps=[
                 {
