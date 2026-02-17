@@ -1,11 +1,12 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.coach_report import CoachReport
 from app.schemas.coach import CoachReportRead
-from app.services.coach.service import get_or_generate_coach_report
+from app.services.coach.service import get_or_generate_coach_report, _to_read
 
 router = APIRouter()
 
@@ -16,8 +17,20 @@ router = APIRouter()
 )
 async def get_coach_report(
     activity_id: UUID,
+    generate: bool = Query(True, description="If false, only return cached report (404 if none)"),
     db: Session = Depends(get_db),
 ):
+    if not generate:
+        # Check cache only — don't trigger LLM generation
+        existing = (
+            db.query(CoachReport)
+            .filter(CoachReport.activity_id == str(activity_id))
+            .first()
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail="No cached report.")
+        return _to_read(existing)
+
     report = await get_or_generate_coach_report(db, str(activity_id))
     if not report:
         raise HTTPException(

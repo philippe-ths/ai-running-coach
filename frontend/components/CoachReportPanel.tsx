@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { CoachReport } from '@/lib/types';
 import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2 } from 'lucide-react';
 
@@ -11,16 +11,19 @@ interface Props {
 
 export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   const [report, setReport] = useState<CoachReport | null>(null);
-  const [status, setStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  const [status, setStatus] = useState<'checking' | 'idle' | 'loading' | 'loaded' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
 
-  if (!hasMetrics) return null;
-
-  async function fetchReport() {
+  const fetchReport = useCallback(async (generateIfMissing: boolean) => {
     setStatus('loading');
     setErrorMsg('');
     try {
-      const res = await fetch(`/api/activities/${activityId}/coach-report`);
+      const url = `/api/activities/${activityId}/coach-report?generate=${generateIfMissing}`;
+      const res = await fetch(url);
+      if (res.status === 404 && !generateIfMissing) {
+        setStatus('idle');
+        return;
+      }
       if (!res.ok) {
         throw new Error(`Failed to load coach report (${res.status})`);
       }
@@ -28,15 +31,29 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
       setReport(data);
       setStatus('loaded');
     } catch (err: unknown) {
+      if (!generateIfMissing) {
+        setStatus('idle');
+        return;
+      }
       setErrorMsg(err instanceof Error ? err.message : 'Something went wrong');
       setStatus('error');
     }
-  }
+  }, [activityId]);
+
+  // On mount, check if a cached report exists
+  useEffect(() => {
+    if (!hasMetrics) return;
+    fetchReport(false);
+  }, [hasMetrics, fetchReport]);
+
+  if (!hasMetrics) return null;
+
+  if (status === 'checking') return null;
 
   if (status === 'idle') {
     return (
       <button
-        onClick={fetchReport}
+        onClick={() => fetchReport(true)}
         className="w-full bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:border-blue-300 hover:shadow-md transition-all flex items-center justify-center gap-2 text-gray-600 hover:text-blue-600"
       >
         <Sparkles className="w-5 h-5" />
@@ -59,7 +76,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
       <div className="bg-red-50 rounded-xl border border-red-200 p-6">
         <p className="text-red-700 text-sm">{errorMsg}</p>
         <button
-          onClick={fetchReport}
+          onClick={() => fetchReport(true)}
           className="mt-2 text-sm text-red-600 hover:text-red-800 underline"
         >
           Try again
