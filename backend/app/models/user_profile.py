@@ -20,6 +20,7 @@ class UserProfile(Base):
     weekly_days_available: Mapped[int] = mapped_column(Integer)
     current_weekly_km: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_hr: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_hr_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # "user_entered", "race_estimate", "lab_test"
     upcoming_races: Mapped[list] = mapped_column(JSON, default=[])  # List[dict]
     injury_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

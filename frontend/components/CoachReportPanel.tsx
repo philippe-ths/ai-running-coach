@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { CoachReport } from '@/lib/types';
-import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2 } from 'lucide-react';
+import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2, RefreshCw } from 'lucide-react';
 
 interface Props {
   activityId: string;
@@ -14,11 +14,11 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   const [status, setStatus] = useState<'checking' | 'idle' | 'loading' | 'loaded' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
 
-  const fetchReport = useCallback(async (generateIfMissing: boolean) => {
+  const fetchReport = useCallback(async (generateIfMissing: boolean, force = false) => {
     setStatus('loading');
     setErrorMsg('');
     try {
-      const url = `/api/activities/${activityId}/coach-report?generate=${generateIfMissing}`;
+      const url = `/api/activities/${activityId}/coach-report?generate=${generateIfMissing}&force=${force}`;
       const res = await fetch(url);
       if (res.status === 404 && !generateIfMissing) {
         setStatus('idle');
@@ -94,23 +94,27 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
     <div className="space-y-4">
       {/* Key Takeaways */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <h2 className="text-xl font-semibold mb-3 text-gray-800 flex items-center gap-2">
-          <Sparkles className="w-5 h-5 text-blue-600" />
-          Coach Analysis
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-blue-600" />
+            Coach Analysis
+          </h2>
+          <button
+            onClick={() => fetchReport(true, true)}
+            className="text-xs text-gray-400 hover:text-blue-600 flex items-center gap-1 transition-colors"
+            title="Re-run coach analysis"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Re-run
+          </button>
+        </div>
         <ul className="space-y-2">
           {key_takeaways.map((item, i) => {
             const text = typeof item === 'string' ? item : item.text;
-            const evidence = typeof item === 'string' ? null : item.evidence;
             return (
               <li key={i} className="flex gap-2 text-sm text-gray-700">
                 <span className="text-blue-500 mt-0.5 shrink-0">&bull;</span>
-                <div>
-                  <span>{text}</span>
-                  {evidence && (
-                    <span className="text-xs text-gray-400 ml-1">({evidence})</span>
-                  )}
-                </div>
+                <span>{text}</span>
               </li>
             );
           })}
@@ -130,9 +134,6 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                 <p className="font-medium text-green-900 text-sm">{step.action}</p>
                 <p className="text-green-800 text-sm mt-1">{step.details}</p>
                 <p className="text-green-600 text-xs mt-1 italic">{step.why}</p>
-                {step.evidence && (
-                  <p className="text-gray-400 text-xs mt-1">Evidence: {step.evidence}</p>
-                )}
               </div>
             </div>
           </div>

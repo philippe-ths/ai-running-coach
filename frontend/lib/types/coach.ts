@@ -1,13 +1,18 @@
+export interface EvidenceRef {
+  field: string;
+  value: unknown;
+}
+
 export interface CoachTakeaway {
   text: string;
-  evidence?: string | null;
+  evidence?: EvidenceRef[] | string | null;
 }
 
 export interface CoachNextStep {
   action: string;
   details: string;
   why: string;
-  evidence?: string | null;
+  evidence?: EvidenceRef[] | string | null;
 }
 
 export interface CoachRisk {

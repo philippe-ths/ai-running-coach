@@ -6,7 +6,8 @@ from app.services.coach.prompts import build_system_prompt, ACTIVITY_PLAYBOOKS, 
 def test_build_prompt_includes_interval_playbook():
     prompt = build_system_prompt("coach_report_v1", "Intervals")
     assert "INTERVAL SESSION FOCUS" in prompt
-    assert "rep consistency" in prompt
+    assert "rep_pace_consistency_cv" in prompt
+    assert "workout_match" in prompt
     assert "HR drift" in prompt  # mentioned as "do not use"
 
 

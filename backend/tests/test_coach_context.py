@@ -129,7 +129,7 @@ def _add_metrics(db, activity, activity_class="Easy Run", effort_score=3.0, **ov
     return dm
 
 
-def _create_profile(db, user_id, max_hr=None, **overrides):
+def _create_profile(db, user_id, max_hr=None, max_hr_source=None, **overrides):
     """Helper to create a UserProfile."""
     p = UserProfile(
         user_id=user_id,
@@ -138,6 +138,7 @@ def _create_profile(db, user_id, max_hr=None, **overrides):
         weekly_days_available=overrides.get("weekly_days_available", 4),
         current_weekly_km=overrides.get("current_weekly_km", 30),
         max_hr=max_hr,
+        max_hr_source=max_hr_source,
     )
     db.add(p)
     db.flush()
@@ -145,7 +146,7 @@ def _create_profile(db, user_id, max_hr=None, **overrides):
 
 
 def test_zones_calibrated_true_when_profile_has_max_hr(db):
-    """zones_calibrated should be True when profile.max_hr > 100."""
+    """zones_calibrated should be True when profile.max_hr > 100 AND max_hr_source is set."""
     user_id = uuid.uuid4()
     # Need a User row for FK
     from app.models.user import User
@@ -154,12 +155,12 @@ def test_zones_calibrated_true_when_profile_has_max_hr(db):
 
     activity = _create_activity(db, user_id)
     _add_metrics(db, activity)
-    _create_profile(db, user_id, max_hr=185)
+    _create_profile(db, user_id, max_hr=185, max_hr_source="user_entered")
 
     pack = build_context_pack(db, activity)
 
     assert pack["metrics"]["zones_calibrated"] is True
-    assert pack["metrics"]["zones_basis"] == "user_max_hr"
+    assert pack["metrics"]["zones_basis"] == "user_user_entered"
     assert pack["profile"]["max_hr"] == 185
 
 
@@ -176,12 +177,12 @@ def test_zones_calibrated_false_when_no_profile(db):
     pack = build_context_pack(db, activity)
 
     assert pack["metrics"]["zones_calibrated"] is False
-    assert pack["metrics"]["zones_basis"] == "default_190"
+    assert pack["metrics"]["zones_basis"] == "uncalibrated"
     assert pack["profile"]["max_hr"] is None
 
 
 def test_zones_calibrated_false_when_default_hr(db):
-    """zones_calibrated should be False when profile.max_hr is None or <= 100."""
+    """zones_calibrated should be False when profile.max_hr is None or no source."""
     user_id = uuid.uuid4()
     from app.models.user import User
     db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
@@ -194,7 +195,24 @@ def test_zones_calibrated_false_when_default_hr(db):
     pack = build_context_pack(db, activity)
 
     assert pack["metrics"]["zones_calibrated"] is False
-    assert pack["metrics"]["zones_basis"] == "default_190"
+    assert pack["metrics"]["zones_basis"] == "uncalibrated"
+
+
+def test_zones_calibrated_false_when_no_source(db):
+    """zones_calibrated should be False when max_hr is set but has no source."""
+    user_id = uuid.uuid4()
+    from app.models.user import User
+    db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
+    db.flush()
+
+    activity = _create_activity(db, user_id)
+    _add_metrics(db, activity)
+    _create_profile(db, user_id, max_hr=190, max_hr_source=None)  # No source
+
+    pack = build_context_pack(db, activity)
+
+    assert pack["metrics"]["zones_calibrated"] is False
+    assert pack["metrics"]["zones_basis"] == "uncalibrated"
 
 
 def test_context_pack_includes_enriched_activity_fields(db):
@@ -270,7 +288,7 @@ def test_training_context_counts_hard_sessions(db):
 
 
 def test_context_pack_profile_includes_new_fields(db):
-    """Profile section should include max_hr and current_weekly_km."""
+    """Profile section should include max_hr, max_hr_source, and current_weekly_km."""
     user_id = uuid.uuid4()
     from app.models.user import User
     db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
@@ -278,9 +296,10 @@ def test_context_pack_profile_includes_new_fields(db):
 
     activity = _create_activity(db, user_id)
     _add_metrics(db, activity)
-    _create_profile(db, user_id, max_hr=190, current_weekly_km=35)
+    _create_profile(db, user_id, max_hr=190, max_hr_source="user_entered", current_weekly_km=35)
 
     pack = build_context_pack(db, activity)
 
     assert pack["profile"]["max_hr"] == 190
+    assert pack["profile"]["max_hr_source"] == "user_entered"
     assert pack["profile"]["current_weekly_km"] == 35
