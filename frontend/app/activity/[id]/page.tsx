@@ -10,6 +10,7 @@ import { SplitsPanel } from '@/components/SplitsPanel';
 import StopsPanel from '@/components/StopsPanel';
 import EfficiencyPanel from '@/components/EfficiencyPanel';
 import CoachReportPanel from '@/components/CoachReportPanel';
+import CoachChat from '@/components/CoachChat';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,6 +55,9 @@ export default async function ActivityDetail({ params }: { params: { id: string 
           
           {/* Coach Analysis */}
           <CoachReportPanel activityId={activity.id} hasMetrics={!!activity.metrics} />
+
+          {/* Coach Chat — follow-up conversation */}
+          {activity.metrics && <CoachChat activityId={activity.id} />}
 
           {/* Detailed Stream Charts */}
           {activity.streams && activity.streams.length > 0 && (

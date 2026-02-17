@@ -2,7 +2,7 @@
 LLM client abstraction — keeps the coach service decoupled from any specific provider.
 """
 
-from typing import Protocol
+from typing import AsyncIterator, List, Protocol
 
 
 class LLMClient(Protocol):
@@ -31,3 +31,20 @@ class AnthropicClient:
             messages=[{"role": "user", "content": user}],
         )
         return response.content[0].text
+
+    async def stream_chat(
+        self,
+        system: str,
+        messages: List[dict],
+        max_tokens: int = 1024,
+    ) -> AsyncIterator[str]:
+        """Stream text deltas for a multi-turn conversation."""
+        async with self.client.messages.stream(
+            model=self.model,
+            max_tokens=max_tokens,
+            temperature=0.3,
+            system=system,
+            messages=messages,
+        ) as stream:
+            async for text in stream.text_stream:
+                yield text
