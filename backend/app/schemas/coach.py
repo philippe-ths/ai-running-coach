@@ -35,6 +35,7 @@ class CoachReportMeta(BaseModel):
     schema_version: str
     input_hash: str
     generated_at: datetime
+    policy_violations: List[str] = Field(default_factory=list)
 
 
 class CoachReportContent(BaseModel):

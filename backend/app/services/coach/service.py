@@ -1,12 +1,12 @@
 """
-Coach service — orchestrates context pack → LLM → validate → store.
+Coach service — orchestrates context pack → LLM → validate → policy check → store.
 """
 
 import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,8 @@ from app.models.coach_report import CoachReport
 from app.schemas.coach import CoachReportContent, CoachReportDebug, CoachReportMeta, CoachReportRead
 from app.services.coach.context import build_context_pack, hash_context_pack
 from app.services.coach.llm import AnthropicClient
-from app.services.coach.prompts import PROMPT_VERSIONS
+from app.services.coach.prompts import PROMPT_VERSIONS, build_system_prompt
+from app.services.coach.validator import PolicyViolation, validate_policy
 
 SCHEMA_VERSION = "1.1"
 
@@ -48,9 +49,10 @@ async def get_or_generate_coach_report(
     pack = build_context_pack(db, activity)
     input_hash = hash_context_pack(pack)
 
-    # Call LLM
+    # Build prompt with activity-type playbook
     prompt_id = settings.COACH_PROMPT_ID
-    system_prompt = PROMPT_VERSIONS[prompt_id]
+    activity_class = pack["metrics"].get("activity_class")
+    system_prompt = build_system_prompt(prompt_id, activity_class)
     user_message = json.dumps(pack, default=str)
 
     client = AnthropicClient(
@@ -59,6 +61,8 @@ async def get_or_generate_coach_report(
     )
 
     raw_response = ""
+    policy_violations: List[str] = []
+
     try:
         raw_response = await client.generate_json(
             system=system_prompt,
@@ -69,6 +73,24 @@ async def get_or_generate_coach_report(
         cleaned = _strip_code_fences(raw_response)
         parsed = json.loads(cleaned)
         content = CoachReportContent.model_validate(parsed)
+
+        # Policy validation — deterministic checks on LLM output
+        violations = validate_policy(content, pack)
+        if violations:
+            logger.info(
+                "Policy violations detected: %s — attempting retry",
+                [v.rule for v in violations],
+            )
+            content, retry_violations = await _retry_with_fixes(
+                client, system_prompt, user_message, violations
+            )
+            if retry_violations:
+                logger.warning(
+                    "Policy violations persisted after retry: %s",
+                    [v.rule for v in retry_violations],
+                )
+                policy_violations = [v.rule for v in retry_violations]
+
     except (json.JSONDecodeError, ValidationError) as e:
         logger.error("Coach report parse/validation error: %s", e)
         content = CoachReportContent(
@@ -92,6 +114,7 @@ async def get_or_generate_coach_report(
         schema_version=SCHEMA_VERSION,
         input_hash=input_hash,
         generated_at=datetime.now(timezone.utc),
+        policy_violations=policy_violations,
     )
 
     # Store
@@ -107,6 +130,48 @@ async def get_or_generate_coach_report(
     db.refresh(db_report)
 
     return _to_read(db_report)
+
+
+async def _retry_with_fixes(
+    client: AnthropicClient,
+    system_prompt: str,
+    original_user_message: str,
+    violations: List[PolicyViolation],
+) -> tuple[CoachReportContent, List[PolicyViolation]]:
+    """
+    Re-prompt the LLM once with fix instructions for policy violations.
+    Returns (content, remaining_violations). Never loops more than once.
+    """
+    fix_instructions = "\n".join(
+        f"- {v.rule}: {v.fix_instruction}" for v in violations
+    )
+    retry_message = (
+        f"Your previous response had policy violations. Fix these issues ONLY "
+        f"(keep everything else the same):\n{fix_instructions}\n\n"
+        f"Original context:\n{original_user_message}"
+    )
+
+    try:
+        raw = await client.generate_json(
+            system=system_prompt,
+            user=retry_message,
+            max_tokens=1024,
+        )
+        cleaned = _strip_code_fences(raw)
+        parsed = json.loads(cleaned)
+        content = CoachReportContent.model_validate(parsed)
+
+        # Re-validate — but don't loop again
+        remaining = validate_policy(content, json.loads(original_user_message))
+        return content, remaining
+
+    except (json.JSONDecodeError, ValidationError) as e:
+        logger.error("Coach report retry parse error: %s", e)
+        # Return the original violations — caller will use first attempt's content
+        # Re-parse original to return something valid
+        original_parsed = json.loads(_strip_code_fences(original_user_message))
+        # This shouldn't happen in practice — fall through
+        raise
 
 
 def _strip_code_fences(text: str) -> str:

@@ -28,6 +28,7 @@ export interface CoachReportMeta {
   schema_version: string;
   input_hash: string;
   generated_at: string;
+  policy_violations?: string[];
 }
 
 export interface CoachReportContent {
