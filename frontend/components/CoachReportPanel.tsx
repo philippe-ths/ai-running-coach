@@ -99,12 +99,21 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
           Coach Analysis
         </h2>
         <ul className="space-y-2">
-          {key_takeaways.map((item, i) => (
-            <li key={i} className="flex gap-2 text-sm text-gray-700">
-              <span className="text-blue-500 mt-0.5 shrink-0">&bull;</span>
-              <span>{item}</span>
-            </li>
-          ))}
+          {key_takeaways.map((item, i) => {
+            const text = typeof item === 'string' ? item : item.text;
+            const evidence = typeof item === 'string' ? null : item.evidence;
+            return (
+              <li key={i} className="flex gap-2 text-sm text-gray-700">
+                <span className="text-blue-500 mt-0.5 shrink-0">&bull;</span>
+                <div>
+                  <span>{text}</span>
+                  {evidence && (
+                    <span className="text-xs text-gray-400 ml-1">({evidence})</span>
+                  )}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       </div>
 
@@ -121,6 +130,9 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                 <p className="font-medium text-green-900 text-sm">{step.action}</p>
                 <p className="text-green-800 text-sm mt-1">{step.details}</p>
                 <p className="text-green-600 text-xs mt-1 italic">{step.why}</p>
+                {step.evidence && (
+                  <p className="text-gray-400 text-xs mt-1">Evidence: {step.evidence}</p>
+                )}
               </div>
             </div>
           </div>
