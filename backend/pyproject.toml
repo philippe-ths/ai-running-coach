@@ -15,7 +15,8 @@ dependencies = [
     "redis>=5.0.0",
     "rq>=1.16.0",
     "python-multipart>=0.0.9",
-    "numpy>=1.24.0"
+    "numpy>=1.24.0",
+    "anthropic>=0.40.0"
 ]
 
 [tool.setuptools.packages.find]

@@ -14,6 +14,7 @@ from app.models.activity_stream import ActivityStream  # noqa: F401
 from app.models.derived_metric import DerivedMetric  # noqa: F401
 from app.models.user_profile import UserProfile  # noqa: F401
 from app.models.checkin import CheckIn  # noqa: F401
+from app.models.coach_report import CoachReport  # noqa: F401
 
 __all__ = [
     "generate_uuid",
@@ -24,4 +25,5 @@ __all__ = [
     "DerivedMetric",
     "UserProfile",
     "CheckIn",
+    "CoachReport",
 ]
