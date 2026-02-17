@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChatMessage } from '@/lib/types';
 import { MessageCircle, Send, Loader2, RotateCcw } from 'lucide-react';
+import Markdown from 'react-markdown';
 
 interface Props {
   activityId: string;
@@ -195,21 +196,21 @@ export default function CoachChat({ activityId }: Props) {
             key={msg.id}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
-            <div
-              className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
-                msg.role === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-800'
-              }`}
-            >
-              {msg.content}
-            </div>
+            {msg.role === 'user' ? (
+              <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap bg-blue-600 text-white">
+                {msg.content}
+              </div>
+            ) : (
+              <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800 prose prose-sm prose-gray max-w-none">
+                <Markdown>{msg.content}</Markdown>
+              </div>
+            )}
           </div>
         ))}
         {streaming && streamingText && (
           <div className="flex justify-start">
-            <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800 whitespace-pre-wrap">
-              {streamingText}
+            <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800 prose prose-sm prose-gray max-w-none">
+              <Markdown>{streamingText}</Markdown>
               <span className="inline-block w-1.5 h-4 bg-gray-400 ml-0.5 animate-pulse" />
             </div>
           </div>
