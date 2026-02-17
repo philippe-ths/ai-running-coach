@@ -9,6 +9,7 @@ import StreamCharts from '@/components/StreamCharts';
 import { SplitsPanel } from '@/components/SplitsPanel';
 import StopsPanel from '@/components/StopsPanel';
 import EfficiencyPanel from '@/components/EfficiencyPanel';
+import CoachReportPanel from '@/components/CoachReportPanel';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,6 +52,9 @@ export default async function ActivityDetail({ params }: { params: { id: string 
               sportType={activity.raw_summary?.sport_type || activity.raw_summary?.type || 'Run'}
           />
           
+          {/* Coach Analysis */}
+          <CoachReportPanel activityId={activity.id} hasMetrics={!!activity.metrics} />
+
           {/* Detailed Stream Charts */}
           {activity.streams && activity.streams.length > 0 && (
              <StreamCharts streams={activity.streams} />

@@ -30,6 +30,16 @@ from app.schemas.trends import (  # noqa: F401
     WeeklyTimePoint,
     TrendsResponse,
 )
+from app.schemas.coach import (  # noqa: F401
+    CoachTakeaway,
+    CoachNextStep,
+    CoachRisk,
+    CoachQuestion,
+    CoachReportMeta,
+    CoachReportContent,
+    CoachReportDebug,
+    CoachReportRead,
+)
 
 __all__ = [
     "UserCreate",
@@ -52,4 +62,11 @@ __all__ = [
     "WeeklyTimePoint",
     "PaceTrendPoint",
     "TrendsResponse",
+    "CoachTakeaway",
+    "CoachNextStep",
+    "CoachRisk",
+    "CoachQuestion",
+    "CoachReportMeta",
+    "CoachReportContent",
+    "CoachReportRead",
 ]

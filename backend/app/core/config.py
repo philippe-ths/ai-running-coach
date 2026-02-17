@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     STRAVA_WEBHOOK_VERIFY_TOKEN: str = ""
     STRAVA_WEBHOOK_CALLBACK_URL: str = "http://localhost:8000/api/webhooks/strava"
 
+    # Coach AI
+    ANTHROPIC_API_KEY: str = ""
+    COACH_MODEL_ID: str = "claude-sonnet-4-20250514"
+    COACH_PROMPT_ID: str = "coach_report_v1"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_ignore_empty=True,

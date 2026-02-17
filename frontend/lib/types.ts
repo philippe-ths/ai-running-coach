@@ -22,4 +22,13 @@ export type {
   TrendsData,
   TrendsRange,
 } from "./types/trends";
+export type {
+  CoachTakeaway,
+  CoachReport,
+  CoachReportContent,
+  CoachNextStep,
+  CoachRisk,
+  CoachQuestion,
+  CoachReportMeta,
+} from "./types/coach";
 

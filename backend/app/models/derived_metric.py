@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Float, ForeignKey, DateTime, JSON, Uuid
+from sqlalchemy import String, Float, Integer, ForeignKey, DateTime, JSON, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -27,6 +27,10 @@ class DerivedMetric(Base):
     flags: Mapped[list] = mapped_column(JSON, default=[])  # list[str]
     confidence: Mapped[str] = mapped_column(String)  # low, medium, high
     confidence_reasons: Mapped[list] = mapped_column(JSON, default=[])
+    interval_structure: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    risk_level: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    risk_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    risk_reasons: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
