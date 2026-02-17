@@ -5,16 +5,22 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class EvidenceRef(BaseModel):
+    """Machine-readable evidence reference — a field path + its value."""
+    field: str
+    value: Any
+
+
 class CoachTakeaway(BaseModel):
     text: str
-    evidence: Optional[str] = None  # e.g. "hr_drift=7.2%, effort_score=4.2"
+    evidence: Optional[List[EvidenceRef]] = None
 
 
 class CoachNextStep(BaseModel):
     action: str
     details: str
     why: str
-    evidence: Optional[str] = None
+    evidence: Optional[List[EvidenceRef]] = None
 
 
 class CoachRisk(BaseModel):
@@ -46,13 +52,20 @@ class CoachReportContent(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _coerce_bare_string_takeaways(cls, data: Any) -> Any:
-        """Backward compat: convert bare strings in key_takeaways to structured format."""
-        if isinstance(data, dict) and "key_takeaways" in data:
-            data["key_takeaways"] = [
-                {"text": item} if isinstance(item, str) else item
-                for item in data["key_takeaways"]
-            ]
+    def _coerce_legacy_formats(cls, data: Any) -> Any:
+        """Backward compat: convert bare strings and legacy evidence formats."""
+        if isinstance(data, dict):
+            # Coerce bare string takeaways
+            if "key_takeaways" in data:
+                data["key_takeaways"] = [
+                    {"text": item} if isinstance(item, str) else item
+                    for item in data["key_takeaways"]
+                ]
+            # Coerce string evidence → structured format
+            for section in ("key_takeaways", "next_steps"):
+                for item in data.get(section, []):
+                    if isinstance(item, dict) and isinstance(item.get("evidence"), str):
+                        item["evidence"] = _parse_legacy_evidence(item["evidence"])
         return data
 
 
@@ -71,3 +84,14 @@ class CoachReportRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+def _parse_legacy_evidence(evidence_str: str) -> list:
+    """Convert legacy 'field=value, field=value' string to structured refs."""
+    refs = []
+    for pair in evidence_str.split(","):
+        pair = pair.strip()
+        if "=" in pair:
+            field, _, value = pair.partition("=")
+            refs.append({"field": field.strip(), "value": value.strip()})
+    return refs if refs else [{"field": "raw", "value": evidence_str}]

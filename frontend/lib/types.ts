@@ -23,6 +23,7 @@ export type {
   TrendsRange,
 } from "./types/trends";
 export type {
+  EvidenceRef,
   CoachTakeaway,
   CoachReport,
   CoachReportContent,

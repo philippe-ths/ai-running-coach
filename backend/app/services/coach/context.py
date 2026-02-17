@@ -31,9 +31,18 @@ def build_context_pack(db: Session, activity: Activity) -> dict:
         .first()
     )
 
-    # Zone calibration: did the user set a real max_hr?
-    zones_calibrated = bool(profile and profile.max_hr and profile.max_hr > 100)
-    zones_basis = "user_max_hr" if zones_calibrated else "default_190"
+    # Zone calibration: only true if user explicitly set max_hr with a known source
+    has_explicit_max_hr = bool(
+        profile
+        and profile.max_hr
+        and profile.max_hr > 100
+        and getattr(profile, "max_hr_source", None)  # must have a source
+    )
+    zones_calibrated = has_explicit_max_hr
+    if has_explicit_max_hr:
+        zones_basis = f"user_{profile.max_hr_source}"
+    else:
+        zones_basis = "uncalibrated"
 
     # Recent training summary relative to this activity's date
     activity_date = activity.start_date.date()
@@ -89,6 +98,8 @@ def build_context_pack(db: Session, activity: Activity) -> dict:
             "efficiency_analysis": metrics.efficiency_analysis if metrics else None,
             "stops_analysis": metrics.stops_analysis if metrics else None,
             "interval_structure": metrics.interval_structure if metrics else None,
+            "workout_match": metrics.workout_match if metrics else None,
+            "interval_kpis": metrics.interval_kpis if metrics else None,
             "risk_level": metrics.risk_level if metrics else None,
             "risk_score": metrics.risk_score if metrics else None,
             "risk_reasons": metrics.risk_reasons if metrics else [],
@@ -106,6 +117,7 @@ def build_context_pack(db: Session, activity: Activity) -> dict:
             "weekly_days_available": profile.weekly_days_available if profile else None,
             "injury_notes": profile.injury_notes if profile else None,
             "max_hr": profile.max_hr if profile else None,
+            "max_hr_source": getattr(profile, "max_hr_source", None) if profile else None,
             "current_weekly_km": profile.current_weekly_km if profile else None,
         },
         "training_context": training_context,

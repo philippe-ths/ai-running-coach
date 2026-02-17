@@ -28,6 +28,8 @@ class DerivedMetric(Base):
     confidence: Mapped[str] = mapped_column(String)  # low, medium, high
     confidence_reasons: Mapped[list] = mapped_column(JSON, default=[])
     interval_structure: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    workout_match: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    interval_kpis: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     risk_level: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     risk_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     risk_reasons: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)

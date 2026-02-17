@@ -18,10 +18,20 @@ router = APIRouter()
 async def get_coach_report(
     activity_id: UUID,
     generate: bool = Query(True, description="If false, only return cached report (404 if none)"),
+    force: bool = Query(False, description="If true, delete cached report and regenerate"),
     db: Session = Depends(get_db),
 ):
-    if not generate:
-        # Check cache only — don't trigger LLM generation
+    if force:
+        existing = (
+            db.query(CoachReport)
+            .filter(CoachReport.activity_id == str(activity_id))
+            .first()
+        )
+        if existing:
+            db.delete(existing)
+            db.commit()
+
+    if not generate and not force:
         existing = (
             db.query(CoachReport)
             .filter(CoachReport.activity_id == str(activity_id))

@@ -19,14 +19,19 @@ RULES:
 9. Reference concrete numbers from the data (pace, HR, effort score, drift %) to ground your statements.
 10. ZONE LANGUAGE: Check the "zones_calibrated" field in the metrics. If zones_calibrated is false, NEVER reference specific HR zones (Z1, Z2, Z3, Z4, Z5). Instead use conversational effort descriptions: "easy conversational pace" (RPE 2-3), "moderate effort" (RPE 4-5), "comfortably hard" (RPE 6-7), "hard threshold effort" (RPE 8), "maximum effort" (RPE 9-10). Use the RPE scale as an alternative to zones.
 11. TRAINING CONTEXT: Use the "training_context" section to inform recovery advice. Check days_since_last_hard and hard_sessions_this_week before recommending another quality session. Respect weekly_days_available from the profile.
-12. EVIDENCE: Every key_takeaway and next_step MUST include an "evidence" field citing the specific context pack field(s) and value(s) that support the claim. Format: "field_name=value, field_name=value". Example: "hr_drift=7.2%, effort_score=4.2". If you cannot cite evidence for a claim, do not make the claim.
+12. EVIDENCE: Every key_takeaway and next_step MUST include an "evidence" array of machine-readable references. Each entry is {"field": "<context_pack_path>", "value": <actual_value>}. Example: [{"field": "metrics.effort_score", "value": 4.2}, {"field": "metrics.hr_drift", "value": 7.2}]. Do NOT include evidence as prose or inline in the text. If you cannot cite evidence, do not make the claim.
+13. CONFIDENCE GATING: Check "metrics.workout_match.detection_confidence" and "metrics.workout_match.match_score":
+    - If detection_confidence is "low" or match_score < 0.7: do NOT claim specific rep counts, distances, or structure as executed. Instead say "Your data suggests the intervals were not consistently detected" and recommend using a lap button.
+    - If detection_confidence is "medium": qualify interval claims with "approximately" or "roughly".
+    - Only with detection_confidence "high" AND match_score >= 0.8 may you state interval structure as fact.
+14. HONESTY OVER POLISH: If data quality is poor, say so directly. A professional coach admits uncertainty rather than papering over it.
 
 JSON SCHEMA:
 {
   "key_takeaways": [
     {
       "text": "string (1-2 sentences referencing specific metrics)",
-      "evidence": "string (context pack fields and values supporting this claim, e.g. 'effort_score=4.2, hr_drift=7.2%')"
+      "evidence": [{"field": "string", "value": "any"}]
     }
   ],
   "next_steps": [
@@ -34,7 +39,7 @@ JSON SCHEMA:
       "action": "string (what to do)",
       "details": "string (how much, how long, at what intensity)",
       "why": "string (grounded in the data)",
-      "evidence": "string (context pack fields and values supporting this recommendation)"
+      "evidence": [{"field": "string", "value": "any"}]
     }
   ],
   "risks": [
@@ -70,12 +75,19 @@ PROMPT_VERSIONS = {
 ACTIVITY_PLAYBOOKS = {
     "Intervals": """
 INTERVAL SESSION FOCUS:
-- If interval_structure is present, analyze rep consistency (work_duration_cv, work_speed_cv) and recovery quality (avg_hr_recovery_bpm).
-- Discuss total hard time (total_work_time_s) and work-to-rest ratio.
-- Note peak intensity achieved and whether it matched the session intent.
-- Recommend an easy day as the next session.
+- ALWAYS check metrics.workout_match FIRST before discussing intervals:
+  - If detection_confidence is "low": say interval detection was unreliable, suggest lap button or track.
+  - If detection_confidence is "medium": qualify all interval stats with "approximately".
+  - Only state rep counts/distances as fact if detection_confidence is "high".
+- PREFERRED INTERVAL KPIs (from metrics.interval_kpis):
+  - rep_pace_consistency_cv: lower = more consistent pacing across reps.
+  - recovery_quality_per_60s: HR drop per 60s of recovery. Higher = better recovery.
+  - first_vs_last_fade: ratio of last rep speed to first. Below 0.9 = significant fade.
+  - work_rest_ratio: actual work:rest from the session.
+  - total_z4_plus_s: seconds in Z4+ (only discuss if zones_calibrated is true).
 - Do NOT use HR drift as a primary signal for intervals — it is misleading for intermittent work.
 - If interval_structure is absent, note that detailed rep data was not available and keep analysis high-level.
+- Recommend an easy day as the next session.
 """,
     "Long Run": """
 LONG RUN FOCUS:

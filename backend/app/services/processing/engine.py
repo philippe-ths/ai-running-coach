@@ -8,10 +8,24 @@ from app.services.processing.classifier import classify_activity
 from app.services.processing.flags import generate_flags
 from app.services.processing.intervals import detect_intervals
 from app.services.processing.risk import compute_risk_score
+from app.services.processing.workout_matching import match_planned_to_detected, build_interval_kpis
 from app.services.activity_service import fetch_and_store_streams
 
 # Classes that warrant detailed stream processing
 DEEP_PROCESSING_CLASSES = ["Tempo", "Intervals", "Long Run", "Race", "Hills"]
+
+
+def _extract_planned_workout(check_in) -> dict | None:
+    """
+    Extract structured planned workout from check-in data.
+    Returns None if no planned workout is specified.
+
+    Future: this will come from a dedicated planned_workout field.
+    For now, returns None (no planned workout capture yet).
+    """
+    # Planned workout capture is not yet implemented in the UI.
+    # When it is, this function will parse the structured input.
+    return None
 
 async def process_deep(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     """
@@ -29,9 +43,10 @@ async def process_deep(db: Session, activity_id: str) -> Optional[DerivedMetric]
     return process_activity(db, activity_id)
 
 
-def compute_confidence(activity, streams_dict, check_in):
+def compute_confidence(activity, streams_dict, check_in, interval_structure=None, workout_match=None):
     """
     Determine confidence level and reasons based on available data.
+    Includes interval-specific sanity checks when applicable.
     Returns (level, reasons) tuple.
     """
     reasons = []
@@ -45,12 +60,41 @@ def compute_confidence(activity, streams_dict, check_in):
     if not check_in:
         reasons.append("no_user_checkin")
 
-    if "no_heart_rate_data" in reasons and "no_stream_data" in reasons:
+    # Interval-specific sanity checks
+    if workout_match:
+        match_reasons = workout_match.get("confidence_reasons", [])
+        for r in match_reasons:
+            if r not in reasons:
+                reasons.append(r)
+
+        match_score = workout_match.get("match_score")
+        if match_score is not None and match_score < 0.7:
+            reasons.append("interval_structure_mismatch")
+
+    if interval_structure:
+        summary = interval_structure.get("summary", {})
+        # Check for implausible total work time (> 45 min of hard running)
+        total_work = summary.get("total_work_time_s", 0)
+        if total_work > 2700:
+            reasons.append("work_time_implausibly_high")
+
+        # Check warmup/cooldown detection
+        if not interval_structure.get("warmup_duration_s"):
+            reasons.append("no_warmup_detected")
+
+    # Determine level — more reasons = lower confidence
+    critical = {"no_heart_rate_data", "no_stream_data", "interval_structure_mismatch",
+                "work_time_implausibly_high", "high_rep_distance_variability"}
+    critical_hits = critical & set(reasons)
+
+    if len(critical_hits) >= 2:
         level = "low"
-    elif "no_heart_rate_data" in reasons or "no_stream_data" in reasons:
+    elif len(critical_hits) >= 1 or len(reasons) >= 3:
         level = "medium"
-    else:
+    elif len(reasons) == 0:
         level = "high"
+    else:
+        level = "medium" if reasons else "high"
 
     return level, reasons
 
@@ -93,7 +137,26 @@ def process_activity(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     metrics_data["activity_class"] = classification
 
     # 6.5 Interval segmentation
-    metrics_data["interval_structure"] = detect_intervals(streams_dict, classification) if streams_dict else None
+    interval_structure = detect_intervals(streams_dict, classification) if streams_dict else None
+    metrics_data["interval_structure"] = interval_structure
+
+    # 6.6 Workout matching — compare planned vs detected
+    planned_workout = _extract_planned_workout(check_in)
+    workout_match = match_planned_to_detected(interval_structure, planned_workout)
+    metrics_data["workout_match"] = workout_match
+
+    # 6.7 Interval-specific KPIs
+    if interval_structure:
+        zones_calibrated = bool(profile and profile.max_hr and profile.max_hr > 100)
+        interval_kpis = build_interval_kpis(
+            interval_structure,
+            max_hr=max_hr,
+            zones_calibrated=zones_calibrated,
+            time_in_zones=metrics_data.get("time_in_zones"),
+        )
+        metrics_data["interval_kpis"] = interval_kpis
+    else:
+        metrics_data["interval_kpis"] = None
 
     # 7. Load history metrics for load spike detection
     history_metrics = (
@@ -123,8 +186,12 @@ def process_activity(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     metrics_data["risk_score"] = risk_result["risk_score"]
     metrics_data["risk_reasons"] = risk_result["risk_reasons"]
 
-    # 9. Confidence
-    confidence, confidence_reasons = compute_confidence(activity, streams_dict, check_in)
+    # 9. Confidence (with interval sanity checks)
+    confidence, confidence_reasons = compute_confidence(
+        activity, streams_dict, check_in,
+        interval_structure=interval_structure,
+        workout_match=workout_match,
+    )
     metrics_data["confidence"] = confidence
     metrics_data["confidence_reasons"] = confidence_reasons
 

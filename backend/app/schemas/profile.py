@@ -12,6 +12,7 @@ class UserProfileBase(BaseModel):
     weekly_days_available: int
     current_weekly_km: Optional[int] = None
     max_hr: Optional[int] = None
+    max_hr_source: Optional[str] = None  # "user_entered", "race_estimate", "lab_test"
     upcoming_races: List[Dict[str, Any]] = []
     injury_notes: Optional[str] = None
 

@@ -2,7 +2,7 @@
 Policy validator — deterministic post-LLM output checks.
 
 Runs after Pydantic schema validation to enforce coaching rules that
-the LLM sometimes ignores (zone language, missing questions, etc.).
+the LLM sometimes ignores (zone language, confidence gating, etc.).
 """
 
 import re
@@ -17,6 +17,15 @@ class PolicyViolation:
     rule: str
     detail: str
     fix_instruction: str
+
+
+# Patterns that indicate the LLM is claiming specific interval execution
+_INTERVAL_CLAIM_PATTERNS = [
+    re.compile(r"\b\d+\s*x\s*\d+\s*m?\b", re.IGNORECASE),  # "8x400m"
+    re.compile(r"\b\d+\s+reps?\b", re.IGNORECASE),  # "8 reps"
+    re.compile(r"\bexecuted\s+\d+", re.IGNORECASE),  # "executed 8"
+    re.compile(r"\bcompleted\s+\d+\s*(reps?|intervals?|repeats?)", re.IGNORECASE),
+]
 
 
 def validate_policy(
@@ -73,6 +82,34 @@ def validate_policy(
                 ),
             ))
 
+    # Rule 4: If detection_confidence < high and LLM claims specific interval execution
+    workout_match = context_pack.get("metrics", {}).get("workout_match", {})
+    if workout_match:
+        det_conf = workout_match.get("detection_confidence", "low")
+        match_score = workout_match.get("match_score")
+        low_confidence = det_conf == "low" or (
+            match_score is not None and match_score < 0.7
+        )
+        if low_confidence:
+            full_text = _extract_all_text(content)
+            for pattern in _INTERVAL_CLAIM_PATTERNS:
+                if pattern.search(full_text):
+                    violations.append(PolicyViolation(
+                        rule="ungated_interval_claim",
+                        detail=(
+                            f"LLM claims specific interval execution but "
+                            f"detection_confidence={det_conf}, match_score={match_score}"
+                        ),
+                        fix_instruction=(
+                            "Detection confidence is low. Do NOT claim specific rep counts, "
+                            "distances, or interval structure as fact. Instead say: "
+                            "'Your data suggests the intervals were not consistently detected. "
+                            "Consider using the lap button or running on a track for better "
+                            "rep-by-rep feedback.' Treat all rep statistics as approximate."
+                        ),
+                    ))
+                    break  # One violation is enough
+
     return violations
 
 
@@ -83,8 +120,6 @@ def _extract_all_text(content: CoachReportContent) -> str:
         parts.append(t.text if hasattr(t, "text") else str(t))
     for s in content.next_steps:
         parts.extend([s.action, s.details, s.why])
-        if s.evidence:
-            parts.append(s.evidence)
     for r in content.risks:
         parts.extend([r.explanation, r.mitigation])
     for q in content.questions:
