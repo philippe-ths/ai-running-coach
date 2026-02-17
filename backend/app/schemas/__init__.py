@@ -31,6 +31,7 @@ from app.schemas.trends import (  # noqa: F401
     TrendsResponse,
 )
 from app.schemas.coach import (  # noqa: F401
+    CoachTakeaway,
     CoachNextStep,
     CoachRisk,
     CoachQuestion,
@@ -61,6 +62,7 @@ __all__ = [
     "WeeklyTimePoint",
     "PaceTrendPoint",
     "TrendsResponse",
+    "CoachTakeaway",
     "CoachNextStep",
     "CoachRisk",
     "CoachQuestion",

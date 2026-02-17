@@ -88,6 +88,7 @@ def build_context_pack(db: Session, activity: Activity) -> dict:
             "zones_basis": zones_basis,
             "efficiency_analysis": metrics.efficiency_analysis if metrics else None,
             "stops_analysis": metrics.stops_analysis if metrics else None,
+            "interval_structure": metrics.interval_structure if metrics else None,
         },
         "check_in": {
             "rpe": check_in.rpe if check_in else None,

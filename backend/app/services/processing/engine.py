@@ -6,6 +6,7 @@ from app.models import Activity, DerivedMetric, CheckIn, ActivityStream, StravaA
 from app.services.processing.metrics import compute_derived_metrics_data
 from app.services.processing.classifier import classify_activity
 from app.services.processing.flags import generate_flags
+from app.services.processing.intervals import detect_intervals
 from app.services.activity_service import fetch_and_store_streams
 
 # Classes that warrant detailed stream processing
@@ -89,6 +90,9 @@ def process_activity(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     # 6. Classify
     classification = classify_activity(activity, history)
     metrics_data["activity_class"] = classification
+
+    # 6.5 Interval segmentation
+    metrics_data["interval_structure"] = detect_intervals(streams_dict, classification) if streams_dict else None
 
     # 7. Load history metrics for load spike detection
     history_metrics = (
