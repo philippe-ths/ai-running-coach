@@ -63,6 +63,17 @@ def get_chat(activity_id: UUID, db: Session = Depends(get_db)):
     return ChatHistoryResponse(messages=messages)
 
 
+@router.delete("/activities/{activity_id}/coach-chat", status_code=204)
+def delete_chat(activity_id: UUID, db: Session = Depends(get_db)):
+    """Clear conversation history for an activity."""
+    from app.models.coach_chat_message import CoachChatMessage
+
+    db.query(CoachChatMessage).filter(
+        CoachChatMessage.activity_id == str(activity_id)
+    ).delete()
+    db.commit()
+
+
 @router.post("/activities/{activity_id}/coach-chat")
 async def post_chat(
     activity_id: UUID,
