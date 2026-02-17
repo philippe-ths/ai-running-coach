@@ -2,8 +2,8 @@
 Coach chat service — conversational follow-up on a coach report.
 
 Builds a system prompt from the same context pack that produced the report,
-plus the athlete profile and recent trends, then streams a multi-turn
-conversation via the LLM.
+plus the athlete profile, recent trends, per-km splits, and stream summaries,
+so the coach can discuss any metric the athlete sees on the page.
 """
 
 import json
@@ -11,7 +11,7 @@ import logging
 from datetime import date, timedelta
 from typing import AsyncIterator, List
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
 from app.models import Activity, UserProfile
@@ -19,6 +19,7 @@ from app.models.coach_chat_message import CoachChatMessage
 from app.models.coach_report import CoachReport
 from app.schemas.chat import ChatMessageRead
 from app.services.coach.llm import AnthropicClient
+from app.services.processing.splits import calculate_splits
 from app.services.trends import _query_activity_facts
 
 logger = logging.getLogger(__name__)
@@ -38,16 +39,20 @@ ATHLETE PROFILE:
 RECENT TRAINING (last 30 days):
 {trends_json}
 
+PER-KM SPLITS:
+{splits_json}
+
 RULES:
 1. Answer based ONLY on the data provided above. Never invent facts.
 2. NEVER diagnose injuries or medical conditions. If asked about pain, recommend professional assessment.
-3. Reference specific numbers from the data when relevant (pace, HR, effort score, etc.).
+3. Reference specific numbers from the data when relevant (pace, HR, effort score, splits, etc.).
 4. Keep answers conversational but grounded — you are a knowledgeable coach, not a chatbot.
 5. If the athlete asks about something not covered by the data, say so honestly.
 6. ZONE LANGUAGE: If zones_calibrated is false in the metrics, NEVER reference specific HR zones (Z1-Z5). Use effort descriptions instead (easy, moderate, hard).
 7. Be concise. Most answers should be 2-4 sentences unless the athlete asks for detail.
 8. When discussing training recommendations, be conservative. Never recommend risky volume jumps.
-9. You may suggest adjustments to the initial analysis if the athlete provides new context (e.g., "I was running on trails" or "I felt sick")."""
+9. You may suggest adjustments to the initial analysis if the athlete provides new context (e.g., "I was running on trails" or "I felt sick").
+10. SPLITS DATA: You have access to per-km (or per-5min) splits with pace, avg HR, avg grade, elevation gain, cadence, and power for each split. Use this data when the athlete asks about pacing, specific kilometers, or split-level performance. Format pace as min:sec/km when discussing it."""
 
 
 def _build_trends_summary(db: Session, activity: Activity) -> dict:
@@ -85,6 +90,7 @@ def _build_chat_system_prompt(
     report: dict,
     profile: dict,
     trends: dict,
+    splits: list,
 ) -> str:
     """Assemble the chat system prompt from all context sources."""
     return CHAT_SYSTEM_TEMPLATE.format(
@@ -92,6 +98,7 @@ def _build_chat_system_prompt(
         report_json=json.dumps(report, default=str),
         profile_json=json.dumps(profile, default=str),
         trends_json=json.dumps(trends, default=str),
+        splits_json=json.dumps(splits, default=str),
     )
 
 
@@ -126,7 +133,12 @@ async def stream_chat_response(
         yield "I don't have an analysis for this activity yet. Please generate the coach report first."
         return
 
-    activity = db.query(Activity).filter(Activity.id == activity_id).first()
+    activity = (
+        db.query(Activity)
+        .options(joinedload(Activity.streams))
+        .filter(Activity.id == activity_id)
+        .first()
+    )
     if not activity:
         yield "Activity not found."
         return
@@ -134,6 +146,30 @@ async def stream_chat_response(
     # Build context from the stored context pack
     context_pack = report_row.context_pack or {}
     report_content = report_row.report or {}
+
+    # Compute per-km splits from the activity's streams
+    effective_type = activity.user_intent or activity.type
+    splits_raw = calculate_splits(activity.streams or [], activity_type=effective_type)
+    # Format splits for readability — convert pace from sec/km to min:sec string
+    splits_formatted = []
+    for s in splits_raw:
+        entry = {
+            "km": s.get("split"),
+            "distance_m": round(s["distance"]) if s.get("distance") else None,
+            "elapsed_time_s": round(s.get("elapsed_time", 0)),
+            "avg_hr": round(s["avg_hr"]) if s.get("avg_hr") else None,
+            "avg_grade_pct": round(s["avg_grade"], 1) if s.get("avg_grade") is not None else None,
+            "elev_gain_m": s.get("elev_gain"),
+            "avg_cadence_spm": round(s["avg_cadence"]) if s.get("avg_cadence") else None,
+            "avg_watts": round(s["avg_watts"]) if s.get("avg_watts") else None,
+        }
+        # Format pace as min:sec/km
+        pace = s.get("pace")
+        if pace and pace > 0:
+            mins = int(pace // 60)
+            secs = int(pace % 60)
+            entry["pace_per_km"] = f"{mins}:{secs:02d}"
+        splits_formatted.append(entry)
 
     # Get athlete profile
     profile = (
@@ -158,7 +194,7 @@ async def stream_chat_response(
 
     # Build system prompt
     system_prompt = _build_chat_system_prompt(
-        context_pack, report_content, profile_dict, trends
+        context_pack, report_content, profile_dict, trends, splits_formatted
     )
 
     # Save the user message
