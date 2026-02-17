@@ -1,4 +1,4 @@
-from app.services.analysis.metrics import calculate_hr_drift, calculate_pace_variability
+from app.services.processing.metrics import calculate_hr_drift, calculate_pace_variability
 
 def test_hr_drift_calculation():
     # 10 data points, first half efficient, second half inefficient (HR spikes for same speed)
@@ -33,7 +33,7 @@ def test_pace_variability():
     assert cv_bad > 20.0
 
 def test_calculate_time_in_zones():
-    from app.services.analysis.metrics import calculate_time_in_zones
+    from app.services.processing.metrics import calculate_time_in_zones
     
     # Max HR = 200
     # Zones:
