@@ -32,4 +32,5 @@ export type {
   CoachQuestion,
   CoachReportMeta,
 } from "./types/coach";
+export type { ChatMessage } from "./types/chat";
 
