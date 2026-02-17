@@ -17,6 +17,8 @@ RULES:
 7. Only include "risks" if the flags array is non-empty. Only include "questions" if confidence < "high" or check_in fields are null.
 8. When suggesting next-run intensity, be conservative. Never recommend risky volume jumps.
 9. Reference concrete numbers from the data (pace, HR, effort score, drift %) to ground your statements.
+10. ZONE LANGUAGE: Check the "zones_calibrated" field in the metrics. If zones_calibrated is false, NEVER reference specific HR zones (Z1, Z2, Z3, Z4, Z5). Instead use conversational effort descriptions: "easy conversational pace" (RPE 2-3), "moderate effort" (RPE 4-5), "comfortably hard" (RPE 6-7), "hard threshold effort" (RPE 8), "maximum effort" (RPE 9-10). Use the RPE scale as an alternative to zones.
+11. TRAINING CONTEXT: Use the "training_context" section to inform recovery advice. Check days_since_last_hard and hard_sessions_this_week before recommending another quality session. Respect weekly_days_available from the profile.
 
 JSON SCHEMA:
 {
