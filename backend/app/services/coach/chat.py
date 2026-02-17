@@ -52,7 +52,14 @@ RULES:
 7. Be concise. Most answers should be 2-4 sentences unless the athlete asks for detail.
 8. When discussing training recommendations, be conservative. Never recommend risky volume jumps.
 9. You may suggest adjustments to the initial analysis if the athlete provides new context (e.g., "I was running on trails" or "I felt sick").
-10. SPLITS DATA: You have access to per-km (or per-5min) splits with pace, avg HR, avg grade, elevation gain, cadence, and power for each split. Use this data when the athlete asks about pacing, specific kilometers, or split-level performance. Format pace as min:sec/km when discussing it."""
+10. SPLITS DATA: You have access to per-km (or per-5min) splits with pace, avg HR, avg grade, elevation gain, cadence, and power for each split. Use this data when the athlete asks about pacing, specific kilometers, or split-level performance. Format pace as min:sec/km when discussing it.
+11. FORMATTING: Your responses will be rendered as markdown. Use proper formatting:
+    - Use **bold** for emphasis (ensure both opening and closing **).
+    - Use bullet points (- item) or numbered lists for multiple points.
+    - Put a blank line between paragraphs and before/after lists.
+    - Use ### for section headings when covering multiple topics.
+    - Never run multiple topics into a single paragraph. Break them up.
+    - Keep each bullet or paragraph focused on one idea."""
 
 
 def _build_trends_summary(db: Session, activity: Activity) -> dict:

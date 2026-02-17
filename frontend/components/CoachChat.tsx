@@ -201,16 +201,20 @@ export default function CoachChat({ activityId }: Props) {
                 {msg.content}
               </div>
             ) : (
-              <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800 prose prose-sm prose-gray max-w-none">
-                <Markdown>{msg.content}</Markdown>
+              <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800">
+                <div className="prose prose-sm prose-gray max-w-none prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm">
+                  <Markdown>{msg.content}</Markdown>
+                </div>
               </div>
             )}
           </div>
         ))}
         {streaming && streamingText && (
           <div className="flex justify-start">
-            <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800 prose prose-sm prose-gray max-w-none">
-              <Markdown>{streamingText}</Markdown>
+            <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800">
+              <div className="prose prose-sm prose-gray max-w-none prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm">
+                <Markdown>{streamingText}</Markdown>
+              </div>
               <span className="inline-block w-1.5 h-4 bg-gray-400 ml-0.5 animate-pulse" />
             </div>
           </div>
