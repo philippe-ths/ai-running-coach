@@ -44,3 +44,6 @@ frontend/tsconfig.tsbuildinfo
 # IDE
 .vscode/
 .idea/
+
+# Claude Code local settings
+.claude/
