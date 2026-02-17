@@ -192,6 +192,39 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
           })}
         </span>
       </div>
+
+      {/* Debug */}
+      <details className="text-xs text-slate-400">
+        <summary className="cursor-pointer hover:text-slate-600">
+          Debug: LLM Input & Output
+        </summary>
+        <div className="mt-2 space-y-3">
+          <div>
+            <h4 className="font-semibold text-slate-500 mb-1">System Prompt</h4>
+            <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
+              {report.debug.system_prompt}
+            </pre>
+          </div>
+          <div>
+            <h4 className="font-semibold text-slate-500 mb-1">Context Pack (LLM Input)</h4>
+            <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto max-h-96 overflow-y-auto">
+              {JSON.stringify(report.debug.context_pack, null, 2)}
+            </pre>
+          </div>
+          <div>
+            <h4 className="font-semibold text-slate-500 mb-1">Raw LLM Response</h4>
+            <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
+              {report.debug.raw_llm_response || '(empty)'}
+            </pre>
+          </div>
+          <div>
+            <h4 className="font-semibold text-slate-500 mb-1">Meta</h4>
+            <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto">
+              {JSON.stringify(report.meta, null, 2)}
+            </pre>
+          </div>
+        </div>
+      </details>
     </div>
   );
 }

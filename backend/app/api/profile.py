@@ -4,23 +4,24 @@ from sqlalchemy import select
 from typing import Optional
 
 from app.db.session import get_db
-from app.models import User, UserProfile
+from app.models import User, StravaAccount, UserProfile
 from app.schemas import UserProfileRead, UserProfileCreate
 
 router = APIRouter()
 
 def get_current_user_profile(db: Session, auto_create_user: bool = True) -> UserProfile:
     """
-    Helper for Local MVP: gets the first available user's profile,
+    Helper for Local MVP: gets the Strava-linked user's profile,
     creating defaults if necessary.
     """
-    user = db.execute(select(User)).scalars().first()
+    # Prefer the user with a linked Strava account (the real user)
+    strava_account = db.execute(select(StravaAccount)).scalars().first()
+    user = strava_account.user if strava_account else db.execute(select(User)).scalars().first()
     if not user and auto_create_user:
-        # Create a default user if none exists (safe for local MVP)
         user = User(email="local@runner.com")
         db.add(user)
         db.commit()
-    
+
     if not user:
          raise HTTPException(status_code=404, detail="No user found")
 

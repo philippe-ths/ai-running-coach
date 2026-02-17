@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models import Activity
 from app.models.coach_report import CoachReport
-from app.schemas.coach import CoachReportContent, CoachReportMeta, CoachReportRead
+from app.schemas.coach import CoachReportContent, CoachReportDebug, CoachReportMeta, CoachReportRead
 from app.services.coach.context import build_context_pack, hash_context_pack
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.prompts import PROMPT_VERSIONS
@@ -121,10 +121,16 @@ def _strip_code_fences(text: str) -> str:
 
 def _to_read(db_report: CoachReport) -> CoachReportRead:
     """Convert a DB CoachReport row into the read schema."""
+    meta = CoachReportMeta.model_validate(db_report.meta)
     return CoachReportRead(
         id=db_report.id,
         activity_id=db_report.activity_id,
         report=CoachReportContent.model_validate(db_report.report),
-        meta=CoachReportMeta.model_validate(db_report.meta),
+        meta=meta,
+        debug=CoachReportDebug(
+            context_pack=db_report.context_pack or {},
+            system_prompt=PROMPT_VERSIONS.get(meta.prompt_id, "unknown"),
+            raw_llm_response=db_report.raw_llm_response,
+        ),
         created_at=db_report.created_at,
     )

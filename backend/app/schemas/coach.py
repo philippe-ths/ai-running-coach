@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Literal
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,11 +38,18 @@ class CoachReportContent(BaseModel):
     questions: List[CoachQuestion] = Field(default_factory=list, max_length=4)
 
 
+class CoachReportDebug(BaseModel):
+    context_pack: Dict[str, Any]
+    system_prompt: str
+    raw_llm_response: Optional[str] = None
+
+
 class CoachReportRead(BaseModel):
     id: UUID
     activity_id: UUID
     report: CoachReportContent
     meta: CoachReportMeta
+    debug: CoachReportDebug
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

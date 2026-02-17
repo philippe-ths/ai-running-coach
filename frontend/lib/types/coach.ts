@@ -31,10 +31,17 @@ export interface CoachReportContent {
   questions: CoachQuestion[];
 }
 
+export interface CoachReportDebug {
+  context_pack: Record<string, unknown>;
+  system_prompt: string;
+  raw_llm_response: string | null;
+}
+
 export interface CoachReport {
   id: string;
   activity_id: string;
   report: CoachReportContent;
   meta: CoachReportMeta;
+  debug: CoachReportDebug;
   created_at: string;
 }

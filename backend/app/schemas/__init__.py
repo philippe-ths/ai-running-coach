@@ -36,6 +36,7 @@ from app.schemas.coach import (  # noqa: F401
     CoachQuestion,
     CoachReportMeta,
     CoachReportContent,
+    CoachReportDebug,
     CoachReportRead,
 )
 
