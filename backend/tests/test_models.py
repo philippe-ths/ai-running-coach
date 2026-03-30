@@ -1,7 +1,10 @@
+import pytest
 from datetime import datetime
 from sqlalchemy import text
 from app.db.session import SessionLocal
 from app.models import User, Activity
+
+pytestmark = pytest.mark.integration
 
 def test_create_user_and_activity():
     db = SessionLocal()

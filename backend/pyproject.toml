@@ -19,6 +19,17 @@ dependencies = [
     "anthropic>=0.40.0"
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0"
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires local services or deeper cross-layer setup that is outside the stable global test baseline"
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]

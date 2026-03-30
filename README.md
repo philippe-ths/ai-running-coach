@@ -63,6 +63,32 @@ npm run dev
 
 Open: http://localhost:3000
 
+## Automated validation
+
+The repository-level automated regression suite is:
+
+```bash
+make test
+```
+
+This currently runs:
+- backend stable automated tests via `python -m pytest -m "not integration"`
+- frontend automated regression checks via `npm run test`, which runs lint and production build validation
+
+### Install backend test dependencies
+If you want to run the backend suite in a fresh environment, install the test extras:
+
+```bash
+cd backend
+pip install -e ".[test]"
+```
+
+### Current boundary
+- `make test` is the main repo-wide regression routine.
+- The backend global baseline excludes tests marked `integration`, which currently rely on local services or deeper cross-layer behavior that is not yet dependable as a routine regression check.
+- Smoke checks are a separate test layer and are not yet standardized in this repository-level command.
+- Frontend unit and route-level automated coverage are also tracked separately from this baseline.
+
 ## Strava setup
 1. Create a Strava API application and copy Client ID + Client Secret.
 2. Set backend env vars in `backend/.env`: STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, STRAVA_REDIRECT_URI.
