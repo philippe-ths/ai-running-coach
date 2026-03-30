@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChatMessage } from '@/lib/types';
-import { MessageCircle, Send, Loader2 } from 'lucide-react';
+import { MessageCircle, Send, Loader2, RotateCcw } from 'lucide-react';
+import Markdown from 'react-markdown';
 
 interface Props {
   activityId: string;
@@ -121,6 +122,16 @@ export default function CoachChat({ activityId }: Props) {
     }
   };
 
+  const resetChat = async () => {
+    try {
+      await fetch(`/api/activities/${activityId}/coach-chat`, { method: 'DELETE' });
+      setMessages([]);
+      setStreamingText('');
+    } catch {
+      // Silently fail
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -151,14 +162,26 @@ export default function CoachChat({ activityId }: Props) {
           <MessageCircle className="w-4 h-4 text-blue-600" />
           Chat with Coach
         </h3>
-        {messages.length === 0 && (
-          <button
-            onClick={() => setExpanded(false)}
-            className="text-xs text-gray-400 hover:text-gray-600"
-          >
-            Close
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {messages.length > 0 && !streaming && (
+            <button
+              onClick={resetChat}
+              className="text-xs text-gray-400 hover:text-red-500 flex items-center gap-1 transition-colors"
+              title="Clear chat history"
+            >
+              <RotateCcw className="w-3 h-3" />
+              Reset
+            </button>
+          )}
+          {messages.length === 0 && (
+            <button
+              onClick={() => setExpanded(false)}
+              className="text-xs text-gray-400 hover:text-gray-600"
+            >
+              Close
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
@@ -173,21 +196,25 @@ export default function CoachChat({ activityId }: Props) {
             key={msg.id}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
-            <div
-              className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
-                msg.role === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-800'
-              }`}
-            >
-              {msg.content}
-            </div>
+            {msg.role === 'user' ? (
+              <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap bg-blue-600 text-white">
+                {msg.content}
+              </div>
+            ) : (
+              <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800">
+                <div className="prose prose-sm prose-gray max-w-none prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm">
+                  <Markdown>{msg.content}</Markdown>
+                </div>
+              </div>
+            )}
           </div>
         ))}
         {streaming && streamingText && (
           <div className="flex justify-start">
-            <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800 whitespace-pre-wrap">
-              {streamingText}
+            <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 text-gray-800">
+              <div className="prose prose-sm prose-gray max-w-none prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm">
+                <Markdown>{streamingText}</Markdown>
+              </div>
               <span className="inline-block w-1.5 h-4 bg-gray-400 ml-0.5 animate-pulse" />
             </div>
           </div>
