@@ -65,6 +65,16 @@ Open: http://localhost:3000
 
 ## Automated validation
 
+The repository-level smoke suite is:
+
+```bash
+make smoke
+```
+
+This currently runs:
+- backend readiness coverage via a lightweight FastAPI health check smoke test
+- frontend route readiness coverage via a mocked API server plus a running Next.js app that verifies the core routes load successfully
+
 The repository-level automated regression suite is:
 
 ```bash
@@ -84,9 +94,10 @@ pip install -e ".[test]"
 ```
 
 ### Current boundary
+- `make smoke` is the fast readiness layer for basic startup and core route availability.
 - `make test` is the main repo-wide regression routine.
 - The backend global baseline excludes tests marked `integration`, which currently rely on local services or deeper cross-layer behavior that is not yet dependable as a routine regression check.
-- Smoke checks are a separate test layer and are not yet standardized in this repository-level command.
+- Smoke checks are now standardized as a separate repository-level command.
 - Frontend unit and route-level automated coverage are also tracked separately from this baseline.
 
 ## Strava setup
