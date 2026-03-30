@@ -1,4 +1,12 @@
-.PHONY: test backend-test frontend-test
+.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test
+
+smoke: backend-smoke frontend-smoke
+
+backend-smoke:
+	cd backend && python -m pytest tests/test_smoke.py
+
+frontend-smoke:
+	cd frontend && npm run smoke
 
 test: backend-test frontend-test
 
