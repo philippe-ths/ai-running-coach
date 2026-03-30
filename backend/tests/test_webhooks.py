@@ -30,6 +30,7 @@ def test_webhook_verification_fail_token(client, test_webhook_token):
     )
     assert response.status_code == 403
 
+@pytest.mark.integration
 def test_webhook_receive_event(client, override_get_db):
     """
     Test receiving a new activity event.

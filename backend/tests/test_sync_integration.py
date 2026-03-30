@@ -5,6 +5,7 @@ from app.api.activities import sync_activities
 from app.models import Activity, StravaAccount, User
 from app.schemas import SyncResponse
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_integration_sync_upserts_and_runs_analysis(db: Session):
     """

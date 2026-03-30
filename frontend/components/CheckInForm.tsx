@@ -54,11 +54,10 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
       setPain(existingCheckIn.pain_score);
       setEffort(existingCheckIn.rpe);
       setNotes(existingCheckIn.notes || '');
-      if (!isEditing) setIsEditing(false);
     }
     // Also sync intent if it changes externally or on load
     setIntent(currentType || assignedClass || typeOptions[0]);
-  }, [existingCheckIn, currentType, assignedClass]); 
+  }, [existingCheckIn, currentType, assignedClass, typeOptions]); 
   
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -141,7 +140,7 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
                   <div className="col-span-2 pt-1">
                        <dt className="text-xs font-bold uppercase tracking-wider text-green-800 opacity-60 mb-1">Notes</dt>
                        <dd className="italic bg-white/50 p-2 rounded border border-green-100/50 text-green-900 break-words">
-                        "{existingCheckIn.notes}"
+                        &ldquo;{existingCheckIn.notes}&rdquo;
                       </dd>
                   </div>
               )}
