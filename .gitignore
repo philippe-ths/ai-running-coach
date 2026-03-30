@@ -20,6 +20,9 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+*.egg-info/
+*.egg
+.eggs/
 
 # Python virtualenvs
 .venv/
