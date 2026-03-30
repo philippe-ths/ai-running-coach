@@ -1,21 +1,6 @@
----
-applyTo: "**"
----
-# Coding Standards
+# Instructions
 
-## Branch Discipline
-- NEVER commit or push directly to `master` or `main`
-- Always work on a feature or fix branch
+Read the following files before responding to any request in this repository:
 
-## Code Hygiene
-- Always scope code — no globals, no leaking state
-- Keep functions and modules focused on a single responsibility
-
-## Testing & Validation
-- Test all changes before considering them done
-- Never mock API calls or create dummy/stub data — if an API is unavailable, fail loudly with a clear error
-- Review your own code before committing
-
-## Commits
-- Make small, atomic commits with clear, descriptive messages
-- Each commit should represent one logical change
+- `ai-workflow.md` — defines the required workflow for all implementation tasks. Follow it for every task.
+- `project-spec.md` — reflects the current implementation. Use it as the reference for architecture, patterns, and conventions.

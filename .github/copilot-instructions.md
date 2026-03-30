@@ -1,4 +1,4 @@
-# Copilot Instructions
+# Instructions
 
 Read the following files before responding to any request in this repository:
 
