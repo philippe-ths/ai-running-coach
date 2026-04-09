@@ -1,8 +1,11 @@
 import asyncio
+import logging
 from sqlalchemy import select
 from app.db.session import SessionLocal
 from app.models import User, StravaAccount, Activity
 from app.services import activity_service
+
+logger = logging.getLogger(__name__)
 
 def sync_recent_activities_job(user_id: str):
     """
@@ -15,11 +18,11 @@ def sync_recent_activities_job(user_id: str):
         account = db.execute(stmt).scalars().first()
         
         if not account:
-            print(f"Job failed: No Strava account for user_id {user_id}")
+            logger.error("Job failed: No Strava account for user_id %s", user_id)
             return
 
         asyncio.run(activity_service.sync_recent_activities(db, account))
-        print(f"Sync complete for user {user_id}")
+        logger.info("Sync complete for user %s", user_id)
     finally:
         db.close()
 
@@ -33,12 +36,12 @@ def sync_activity_job(strava_athlete_id: int, strava_activity_id: int):
         account = db.execute(stmt).scalars().first()
         
         if not account:
-            print(f"Skipping sync: Unknown athlete {strava_athlete_id}")
+            logger.warning("Skipping sync: Unknown athlete %s", strava_athlete_id)
             return
 
         asyncio.run(
             activity_service.sync_activity_by_id(db, account, strava_activity_id)
         )
-        print(f"Synced activity {strava_activity_id}")
+        logger.info("Synced activity %s", strava_activity_id)
     finally:
         db.close()
