@@ -2,6 +2,8 @@
 
 Local-first app that connects to Strava, ingests running activities, computes training signals, and displays actionable analysis.
 
+Most Strava-based tools surface raw stats but offer little actionable insight — they tell you what happened, not what to do next. This project is an experiment in using computed training signals and an LLM coaching layer to bridge that gap, producing short and opinionated post-run analysis from the data you already have.
+
 ## Stack
 - Backend: FastAPI + SQLAlchemy + Alembic + Postgres
 - Jobs: Redis + RQ
