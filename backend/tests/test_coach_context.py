@@ -1,86 +1,15 @@
-"""Tests for the coach context pack builder."""
+"""Tests for the coach context pack builder.
 
-import json
+Hash determinism, shape, and the typed-pack round-trip invariants are covered
+in test_coach_context_pack.py. This file covers the build-time behaviour:
+zone calibration, training-context pass-through, and profile field exposure.
+"""
+
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.models import Activity, DerivedMetric, UserProfile
-from app.services.coach.context import build_context_pack, hash_context_pack
-
-
-# ---------------------------------------------------------------------------
-# Hash tests (no DB needed)
-# ---------------------------------------------------------------------------
-
-def test_hash_deterministic():
-    pack = {"activity": {"date": "2024-01-01", "type": "Run"}, "metrics": {"effort_score": 100}}
-    h1 = hash_context_pack(pack)
-    h2 = hash_context_pack(pack)
-    assert h1 == h2
-    assert len(h1) == 64  # SHA-256 hex
-
-
-def test_hash_changes_on_input_change():
-    pack1 = {"activity": {"date": "2024-01-01"}, "metrics": {"effort_score": 100}}
-    pack2 = {"activity": {"date": "2024-01-01"}, "metrics": {"effort_score": 101}}
-    assert hash_context_pack(pack1) != hash_context_pack(pack2)
-
-
-# ---------------------------------------------------------------------------
-# Context pack shape (no DB needed)
-# ---------------------------------------------------------------------------
-
-def test_context_pack_shape():
-    """Verify expected top-level keys match the v2 contract."""
-    expected_keys = {
-        "activity",
-        "metrics",
-        "check_in",
-        "profile",
-        "recent_training_summary",
-        "safety_rules",
-    }
-    # Simulate a minimal pack with all v2 keys
-    pack = {
-        "activity": {
-            "date": None, "name": "Morning Run", "type": "Run",
-            "distance_m": 0, "moving_time_s": 0,
-            "avg_hr": None, "max_hr": None, "avg_cadence": None,
-            "elev_gain_m": 0,
-        },
-        "metrics": {
-            "activity_class": None, "effort_score": None,
-            "hr_drift": None, "pace_variability": None,
-            "flags": [], "confidence": "low", "confidence_reasons": [],
-            "time_in_zones": None,
-            "zones_calibrated": False, "zones_basis": "default_190",
-            "efficiency_analysis": None, "stops_analysis": None,
-            "training_context": {
-                "intensity_distribution_7d": {"easy": 0, "moderate": 0, "hard": 0},
-                "days_since_last_hard": None,
-                "hard_sessions_this_week": 0,
-            },
-        },
-        "check_in": {
-            "rpe": None, "pain_score": None, "pain_location": None,
-            "sleep_quality": None, "notes": None,
-        },
-        "profile": {
-            "goal_type": None, "experience_level": None,
-            "weekly_days_available": None, "injury_notes": None,
-            "max_hr": None, "current_weekly_km": None,
-        },
-        "recent_training_summary": {"last_7d": {}, "last_28d": {}, "previous_28d": {}},
-        "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
-    }
-    assert set(pack.keys()) == expected_keys
-    # Verify it's JSON-serializable
-    json.dumps(pack, default=str)
-
-
-# ---------------------------------------------------------------------------
-# Integration tests (require DB fixture)
-# ---------------------------------------------------------------------------
+from app.services.coach.context import build_context_pack
 
 def _create_activity(db, user_id, name="Morning Run", start_date=None, **overrides):
     """Helper to create a minimal Activity row."""
@@ -159,9 +88,9 @@ def test_zones_calibrated_true_when_profile_has_max_hr(db):
 
     pack = build_context_pack(db, activity)
 
-    assert pack["metrics"]["zones_calibrated"] is True
-    assert pack["metrics"]["zones_basis"] == "user_user_entered"
-    assert pack["profile"]["max_hr"] == 185
+    assert pack.metrics.zones_calibrated is True
+    assert pack.metrics.zones_basis == "user_user_entered"
+    assert pack.profile.max_hr == 185
 
 
 def test_zones_calibrated_false_when_no_profile(db):
@@ -176,9 +105,9 @@ def test_zones_calibrated_false_when_no_profile(db):
 
     pack = build_context_pack(db, activity)
 
-    assert pack["metrics"]["zones_calibrated"] is False
-    assert pack["metrics"]["zones_basis"] == "uncalibrated"
-    assert pack["profile"]["max_hr"] is None
+    assert pack.metrics.zones_calibrated is False
+    assert pack.metrics.zones_basis == "uncalibrated"
+    assert pack.profile.max_hr is None
 
 
 def test_zones_calibrated_false_when_default_hr(db):
@@ -194,8 +123,8 @@ def test_zones_calibrated_false_when_default_hr(db):
 
     pack = build_context_pack(db, activity)
 
-    assert pack["metrics"]["zones_calibrated"] is False
-    assert pack["metrics"]["zones_basis"] == "uncalibrated"
+    assert pack.metrics.zones_calibrated is False
+    assert pack.metrics.zones_basis == "uncalibrated"
 
 
 def test_zones_calibrated_false_when_no_source(db):
@@ -211,8 +140,8 @@ def test_zones_calibrated_false_when_no_source(db):
 
     pack = build_context_pack(db, activity)
 
-    assert pack["metrics"]["zones_calibrated"] is False
-    assert pack["metrics"]["zones_basis"] == "uncalibrated"
+    assert pack.metrics.zones_calibrated is False
+    assert pack.metrics.zones_basis == "uncalibrated"
 
 
 def test_context_pack_includes_enriched_activity_fields(db):
@@ -227,9 +156,9 @@ def test_context_pack_includes_enriched_activity_fields(db):
 
     pack = build_context_pack(db, activity)
 
-    assert pack["activity"]["name"] == "Tempo Thursday"
-    assert pack["activity"]["avg_cadence"] == 178.0
-    assert pack["activity"]["max_hr"] == 182.0
+    assert pack.activity.name == "Tempo Thursday"
+    assert pack.activity.avg_cadence == 178.0
+    assert pack.activity.max_hr == 182.0
 
 
 def test_context_pack_passes_training_context_through(db):
@@ -249,7 +178,7 @@ def test_context_pack_passes_training_context_through(db):
 
     pack = build_context_pack(db, activity)
 
-    assert pack["metrics"]["training_context"] == persisted
+    assert pack.metrics.training_context == persisted
 
 
 def test_context_pack_training_context_none_when_unset(db):
@@ -264,7 +193,7 @@ def test_context_pack_training_context_none_when_unset(db):
 
     pack = build_context_pack(db, activity)
 
-    assert pack["metrics"]["training_context"] is None
+    assert pack.metrics.training_context is None
 
 
 def test_context_pack_profile_includes_new_fields(db):
@@ -280,6 +209,6 @@ def test_context_pack_profile_includes_new_fields(db):
 
     pack = build_context_pack(db, activity)
 
-    assert pack["profile"]["max_hr"] == 190
-    assert pack["profile"]["max_hr_source"] == "user_entered"
-    assert pack["profile"]["current_weekly_km"] == 35
+    assert pack.profile.max_hr == 190
+    assert pack.profile.max_hr_source == "user_entered"
+    assert pack.profile.current_weekly_km == 35

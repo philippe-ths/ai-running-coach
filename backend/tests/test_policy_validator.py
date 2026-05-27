@@ -1,6 +1,7 @@
 """Tests for the coach policy validator."""
 
 from app.schemas.coach import CoachReportContent, CoachTakeaway, CoachNextStep, CoachRisk, CoachQuestion
+from app.schemas.coach_context import CoachContextPack
 from app.services.coach.validator import validate_policy
 
 
@@ -21,28 +22,44 @@ def _make_content(**overrides):
     return CoachReportContent(**defaults)
 
 
-def _make_pack(**overrides):
-    """Build a minimal context pack with sensible defaults."""
-    pack = {
-        "metrics": {
-            "zones_calibrated": True,
-            "flags": [],
-            "confidence": "high",
-        },
-        "check_in": {
-            "rpe": 6,
-            "pain_score": 0,
-            "pain_location": None,
-            "sleep_quality": 4,
-            "notes": None,
-        },
-    }
-    for key, val in overrides.items():
-        if key in pack:
-            pack[key].update(val)
-        else:
-            pack[key] = val
-    return pack
+_DEFAULT_PACK_DICT = {
+    "activity": {
+        "date": "2026-02-15T10:00:00+00:00", "name": "Run", "type": "Run",
+        "distance_m": 10000, "moving_time_s": 3600,
+        "avg_hr": 150.0, "max_hr": 175.0, "avg_cadence": 170.0, "elev_gain_m": 50.0,
+    },
+    "metrics": {
+        "activity_class": "Easy Run", "effort_score": 3.0,
+        "hr_drift": None, "pace_variability": None,
+        "flags": [], "confidence": "high", "confidence_reasons": [],
+        "time_in_zones": None, "zones_calibrated": True, "zones_basis": "user_user_entered",
+        "efficiency_analysis": None, "stops_analysis": None, "interval_structure": None,
+        "workout_match": None, "interval_kpis": None,
+        "risk_level": None, "risk_score": None, "risk_reasons": [],
+        "training_context": None,
+    },
+    "check_in": {
+        "rpe": 6, "pain_score": 0, "pain_location": None, "sleep_quality": 4, "notes": None,
+    },
+    "profile": {
+        "goal_type": None, "experience_level": None, "weekly_days_available": None,
+        "injury_notes": None, "max_hr": None, "max_hr_source": None, "current_weekly_km": None,
+    },
+    "recent_training_summary": {
+        "last_7d": {"activity_count": 0, "total_distance_m": 0, "total_moving_time_s": 0, "total_effort": 0.0},
+        "last_28d": {"activity_count": 0, "total_distance_m": 0, "total_moving_time_s": 0, "total_effort": 0.0},
+        "previous_28d": {"activity_count": 0, "total_distance_m": 0, "total_moving_time_s": 0, "total_effort": 0.0},
+    },
+    "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
+}
+
+
+def _make_pack(**section_overrides) -> CoachContextPack:
+    """Build a CoachContextPack from a default pack, with shallow per-section overrides."""
+    pack = {key: dict(value) if isinstance(value, dict) else value for key, value in _DEFAULT_PACK_DICT.items()}
+    for section, override in section_overrides.items():
+        pack[section].update(override)
+    return CoachContextPack.model_validate(pack)
 
 
 class TestPolicyValidator:

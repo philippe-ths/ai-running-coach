@@ -1,0 +1,263 @@
+"""Characterisation tests for the typed CoachContextPack schema.
+
+These tests pin the migration's load-bearing invariant: a typed pack must produce
+the byte-identical cache hash the legacy dict-based pack produced, and round-trip
+through model_validate / model_dump without losing or reordering fields.
+"""
+
+import uuid
+from datetime import datetime, timezone
+
+from app.models import Activity, DerivedMetric, UserProfile
+from app.models.user import User
+from app.schemas.coach_context import CoachContextPack
+from app.services.coach.context import build_context_pack, hash_context_pack
+
+
+def _legacy_full_pack() -> dict:
+    """A pack dict in the same shape build_context_pack produces, with every field populated."""
+    return {
+        "activity": {
+            "date": "2026-02-15T10:00:00+00:00",
+            "name": "Tempo Thursday",
+            "type": "Run",
+            "distance_m": 10000,
+            "moving_time_s": 3600,
+            "avg_hr": 150.0,
+            "max_hr": 175.0,
+            "avg_cadence": 170.0,
+            "elev_gain_m": 50.0,
+        },
+        "metrics": {
+            "activity_class": "Easy Run",
+            "effort_score": 3.0,
+            "hr_drift": 4.2,
+            "pace_variability": 6.5,
+            "flags": ["high_drift"],
+            "confidence": "high",
+            "confidence_reasons": ["full_stream_coverage"],
+            "time_in_zones": {"Z1": 600, "Z2": 1200, "Z3": 600, "Z4": 300, "Z5": 60},
+            "zones_calibrated": True,
+            "zones_basis": "user_user_entered",
+            "efficiency_analysis": {"power_per_hr": 1.42},
+            "stops_analysis": {"count": 0},
+            "interval_structure": None,
+            "workout_match": {"detection_confidence": "low", "match_score": 0.4},
+            "interval_kpis": None,
+            "risk_level": "low",
+            "risk_score": 2,
+            "risk_reasons": [],
+            "training_context": {
+                "intensity_distribution_7d": {"easy": 3, "moderate": 1, "hard": 0},
+                "days_since_last_hard": 4,
+                "hard_sessions_this_week": 0,
+            },
+        },
+        "check_in": {
+            "rpe": 6,
+            "pain_score": 0,
+            "pain_location": None,
+            "sleep_quality": 7,
+            "notes": "Felt strong.",
+        },
+        "profile": {
+            "goal_type": "half",
+            "experience_level": "intermediate",
+            "weekly_days_available": 4,
+            "injury_notes": None,
+            "max_hr": 185,
+            "max_hr_source": "user_entered",
+            "current_weekly_km": 35,
+        },
+        "recent_training_summary": {
+            "last_7d": {
+                "activity_count": 3,
+                "total_distance_m": 28000,
+                "total_moving_time_s": 9800,
+                "total_effort": 12.4,
+            },
+            "last_28d": {
+                "activity_count": 12,
+                "total_distance_m": 110000,
+                "total_moving_time_s": 38000,
+                "total_effort": 48.1,
+            },
+            "previous_28d": {
+                "activity_count": 10,
+                "total_distance_m": 95000,
+                "total_moving_time_s": 33000,
+                "total_effort": 41.0,
+            },
+        },
+        "safety_rules": {
+            "never_diagnose": True,
+            "pain_severe_threshold": 7,
+            "no_invented_facts": True,
+        },
+    }
+
+
+def _legacy_sparse_pack() -> dict:
+    """A pack with every Optional field set to None and every defaultable collection empty."""
+    return {
+        "activity": {
+            "date": "2026-02-15T10:00:00+00:00",
+            "name": None,
+            "type": None,
+            "distance_m": 0,
+            "moving_time_s": 0,
+            "avg_hr": None,
+            "max_hr": None,
+            "avg_cadence": None,
+            "elev_gain_m": 0.0,
+        },
+        "metrics": {
+            "activity_class": None,
+            "effort_score": None,
+            "hr_drift": None,
+            "pace_variability": None,
+            "flags": [],
+            "confidence": "low",
+            "confidence_reasons": [],
+            "time_in_zones": None,
+            "zones_calibrated": False,
+            "zones_basis": "uncalibrated",
+            "efficiency_analysis": None,
+            "stops_analysis": None,
+            "interval_structure": None,
+            "workout_match": None,
+            "interval_kpis": None,
+            "risk_level": None,
+            "risk_score": None,
+            "risk_reasons": [],
+            "training_context": None,
+        },
+        "check_in": {
+            "rpe": None,
+            "pain_score": None,
+            "pain_location": None,
+            "sleep_quality": None,
+            "notes": None,
+        },
+        "profile": {
+            "goal_type": None,
+            "experience_level": None,
+            "weekly_days_available": None,
+            "injury_notes": None,
+            "max_hr": None,
+            "max_hr_source": None,
+            "current_weekly_km": None,
+        },
+        "recent_training_summary": {
+            "last_7d": {
+                "activity_count": 0,
+                "total_distance_m": 0,
+                "total_moving_time_s": 0,
+                "total_effort": 0.0,
+            },
+            "last_28d": {
+                "activity_count": 0,
+                "total_distance_m": 0,
+                "total_moving_time_s": 0,
+                "total_effort": 0.0,
+            },
+            "previous_28d": {
+                "activity_count": 0,
+                "total_distance_m": 0,
+                "total_moving_time_s": 0,
+                "total_effort": 0.0,
+            },
+        },
+        "safety_rules": {
+            "never_diagnose": True,
+            "pain_severe_threshold": 7,
+            "no_invented_facts": True,
+        },
+    }
+
+
+def test_roundtrip_preserves_full_dict_shape():
+    pack_dict = _legacy_full_pack()
+    pack = CoachContextPack.model_validate(pack_dict)
+    assert pack.to_serializable_dict() == pack_dict
+
+
+def test_roundtrip_preserves_sparse_dict_shape():
+    pack_dict = _legacy_sparse_pack()
+    pack = CoachContextPack.model_validate(pack_dict)
+    assert pack.to_serializable_dict() == pack_dict
+
+
+def test_fingerprint_matches_legacy_hash_full():
+    pack_dict = _legacy_full_pack()
+    expected = hash_context_pack(pack_dict)
+    pack = CoachContextPack.model_validate(pack_dict)
+    assert pack.fingerprint() == expected
+
+
+def test_fingerprint_matches_legacy_hash_sparse():
+    pack_dict = _legacy_sparse_pack()
+    expected = hash_context_pack(pack_dict)
+    pack = CoachContextPack.model_validate(pack_dict)
+    assert pack.fingerprint() == expected
+
+
+def test_real_fixture_pack_roundtrips_through_typed_schema(db):
+    """Build a pack from a real fixture activity and confirm the typed schema preserves it."""
+    user_id = uuid.uuid4()
+    db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
+    db.flush()
+
+    activity = Activity(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        strava_activity_id=12345,
+        name="Tempo Thursday",
+        type="Run",
+        user_intent="tempo",
+        start_date=datetime(2026, 2, 15, 10, 0, tzinfo=timezone.utc),
+        distance_m=10000,
+        moving_time_s=3600,
+        elapsed_time_s=3700,
+        avg_hr=150.0,
+        max_hr=175.0,
+        avg_cadence=170.0,
+        elev_gain_m=50.0,
+        average_speed_mps=2.78,
+    )
+    db.add(activity)
+    db.flush()
+
+    db.add(DerivedMetric(
+        id=uuid.uuid4(),
+        activity_id=activity.id,
+        activity_class="Tempo",
+        effort_score=5.5,
+        pace_variability=4.2,
+        hr_drift=3.1,
+        time_in_zones={"Z2": 600, "Z3": 1800, "Z4": 1200},
+        flags=["high_intensity"],
+        confidence="high",
+        confidence_reasons=["full_coverage"],
+        training_context={"intensity_distribution_7d": {"easy": 3, "moderate": 1, "hard": 0}},
+    ))
+    db.add(UserProfile(
+        user_id=user_id,
+        goal_type="half",
+        experience_level="intermediate",
+        weekly_days_available=4,
+        current_weekly_km=35,
+        max_hr=185,
+        max_hr_source="user_entered",
+    ))
+    db.flush()
+    # Refresh so .metrics / .check_in relationships populate.
+    db.refresh(activity)
+
+    pack = build_context_pack(db, activity)
+    pack_dict = pack.to_serializable_dict()
+
+    # Round-trip through model_validate preserves the dict shape.
+    assert CoachContextPack.model_validate(pack_dict).to_serializable_dict() == pack_dict
+    # The typed fingerprint matches the legacy dict-based hash byte-for-byte.
+    assert pack.fingerprint() == hash_context_pack(pack_dict)

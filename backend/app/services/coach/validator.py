@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import List
 
 from app.schemas.coach import CoachReportContent
+from app.schemas.coach_context import CoachContextPack
 
 
 @dataclass
@@ -30,7 +31,7 @@ _INTERVAL_CLAIM_PATTERNS = [
 
 def validate_policy(
     content: CoachReportContent,
-    context_pack: dict,
+    context_pack: CoachContextPack,
 ) -> List[PolicyViolation]:
     """
     Run deterministic policy checks on LLM output.
@@ -39,8 +40,10 @@ def validate_policy(
     violations = []
 
     # Rule 1: If all check_in fields are null and questions is empty → must ask questions
-    check_in = context_pack.get("check_in", {})
-    all_null = all(v is None for v in check_in.values())
+    check_in = context_pack.check_in
+    all_null = all(
+        getattr(check_in, field) is None for field in type(check_in).model_fields
+    )
     if all_null and len(content.questions) == 0:
         violations.append(PolicyViolation(
             rule="missing_questions_for_null_checkin",
@@ -53,8 +56,7 @@ def validate_policy(
         ))
 
     # Rule 2: If zones_calibrated=false and output mentions Z1/Z2/Z3/Z4/Z5
-    zones_calibrated = context_pack.get("metrics", {}).get("zones_calibrated", False)
-    if not zones_calibrated:
+    if not context_pack.metrics.zones_calibrated:
         full_text = _extract_all_text(content)
         zone_pattern = re.compile(r"\bZ[1-5]\b")
         if zone_pattern.search(full_text):
@@ -70,7 +72,7 @@ def validate_policy(
             ))
 
     # Rule 3: If risk references a flag not in the flags array
-    valid_flags = set(context_pack.get("metrics", {}).get("flags", []))
+    valid_flags = set(context_pack.metrics.flags)
     for risk in content.risks:
         if risk.flag not in valid_flags:
             violations.append(PolicyViolation(
@@ -83,7 +85,7 @@ def validate_policy(
             ))
 
     # Rule 4: If detection_confidence < high and LLM claims specific interval execution
-    workout_match = context_pack.get("metrics", {}).get("workout_match", {})
+    workout_match = context_pack.metrics.workout_match
     if workout_match:
         det_conf = workout_match.get("detection_confidence", "low")
         match_score = workout_match.get("match_score")
