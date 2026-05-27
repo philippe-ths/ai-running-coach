@@ -110,8 +110,8 @@ async def sync_recent_activities(db: Session, strava_account: StravaAccount) -> 
                 await fetch_and_store_streams(db, strava_account, activity)
 
                 # 2. Run processing
-                from app.services.processing import engine
-                engine.process_activity(db, str(activity.id))
+                from app.services import analysis
+                analysis.analyze(db, str(activity.id))
                 stats.analyzed += 1
                 
                 # Commit per activity to allow partial success

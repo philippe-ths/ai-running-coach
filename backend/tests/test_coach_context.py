@@ -37,7 +37,6 @@ def test_context_pack_shape():
         "metrics",
         "check_in",
         "profile",
-        "training_context",
         "recent_training_summary",
         "safety_rules",
     }
@@ -56,6 +55,11 @@ def test_context_pack_shape():
             "time_in_zones": None,
             "zones_calibrated": False, "zones_basis": "default_190",
             "efficiency_analysis": None, "stops_analysis": None,
+            "training_context": {
+                "intensity_distribution_7d": {"easy": 0, "moderate": 0, "hard": 0},
+                "days_since_last_hard": None,
+                "hard_sessions_this_week": 0,
+            },
         },
         "check_in": {
             "rpe": None, "pain_score": None, "pain_location": None,
@@ -65,11 +69,6 @@ def test_context_pack_shape():
             "goal_type": None, "experience_level": None,
             "weekly_days_available": None, "injury_notes": None,
             "max_hr": None, "current_weekly_km": None,
-        },
-        "training_context": {
-            "intensity_distribution_7d": {"easy": 0, "moderate": 0, "hard": 0},
-            "days_since_last_hard": None,
-            "hard_sessions_this_week": 0,
         },
         "recent_training_summary": {"last_7d": {}, "last_28d": {}, "previous_28d": {}},
         "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
@@ -123,6 +122,7 @@ def _add_metrics(db, activity, activity_class="Easy Run", effort_score=3.0, **ov
         confidence_reasons=overrides.get("confidence_reasons", []),
         efficiency_analysis=overrides.get("efficiency_analysis"),
         stops_analysis=overrides.get("stops_analysis"),
+        training_context=overrides.get("training_context"),
     )
     db.add(dm)
     db.flush()
@@ -232,59 +232,39 @@ def test_context_pack_includes_enriched_activity_fields(db):
     assert pack["activity"]["max_hr"] == 182.0
 
 
-def test_context_pack_includes_training_context(db):
-    """Training context should appear with correct structure."""
+def test_context_pack_passes_training_context_through(db):
+    """build_context_pack returns the value persisted on DerivedMetric.training_context."""
+    user_id = uuid.uuid4()
+    from app.models.user import User
+    db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
+    db.flush()
+
+    persisted = {
+        "intensity_distribution_7d": {"easy": 2, "moderate": 1, "hard": 1},
+        "days_since_last_hard": 3,
+        "hard_sessions_this_week": 1,
+    }
+    activity = _create_activity(db, user_id)
+    _add_metrics(db, activity, training_context=persisted)
+
+    pack = build_context_pack(db, activity)
+
+    assert pack["metrics"]["training_context"] == persisted
+
+
+def test_context_pack_training_context_none_when_unset(db):
+    """If DerivedMetric.training_context is unset, the pack carries None."""
     user_id = uuid.uuid4()
     from app.models.user import User
     db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
     db.flush()
 
     activity = _create_activity(db, user_id)
-    _add_metrics(db, activity)
+    _add_metrics(db, activity)  # no training_context override
 
     pack = build_context_pack(db, activity)
 
-    tc = pack["training_context"]
-    assert "intensity_distribution_7d" in tc
-    assert "days_since_last_hard" in tc
-    assert "hard_sessions_this_week" in tc
-    dist = tc["intensity_distribution_7d"]
-    assert "easy" in dist
-    assert "moderate" in dist
-    assert "hard" in dist
-
-
-def test_training_context_counts_hard_sessions(db):
-    """Training context should correctly count easy/moderate/hard sessions."""
-    user_id = uuid.uuid4()
-    from app.models.user import User
-    db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
-    db.flush()
-
-    base_date = datetime(2026, 2, 15, 10, 0, tzinfo=timezone.utc)
-
-    # Create 3 history activities in the past 7 days
-    easy = _create_activity(db, user_id, name="Easy 1", start_date=base_date - timedelta(days=1))
-    _add_metrics(db, easy, activity_class="Easy Run")
-
-    interval = _create_activity(db, user_id, name="Intervals", start_date=base_date - timedelta(days=2))
-    _add_metrics(db, interval, activity_class="Intervals")
-
-    long_run = _create_activity(db, user_id, name="Long Run", start_date=base_date - timedelta(days=3))
-    _add_metrics(db, long_run, activity_class="Long Run")
-
-    # The target activity
-    target = _create_activity(db, user_id, name="Today's Run", start_date=base_date)
-    _add_metrics(db, target)
-
-    pack = build_context_pack(db, target)
-
-    tc = pack["training_context"]
-    assert tc["intensity_distribution_7d"]["easy"] == 1
-    assert tc["intensity_distribution_7d"]["moderate"] == 1
-    assert tc["intensity_distribution_7d"]["hard"] == 1
-    assert tc["hard_sessions_this_week"] == 1
-    assert tc["days_since_last_hard"] == 2  # interval was 2 days ago
+    assert pack["metrics"]["training_context"] is None
 
 
 def test_context_pack_profile_includes_new_fields(db):

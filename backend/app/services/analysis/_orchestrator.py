@@ -3,12 +3,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.models import Activity, DerivedMetric, CheckIn, ActivityStream, StravaAccount, UserProfile
-from app.services.processing.metrics import compute_derived_metrics_data
-from app.services.processing.classifier import classify_activity
-from app.services.processing.flags import generate_flags
-from app.services.processing.intervals import detect_intervals
-from app.services.processing.risk import compute_risk_score
-from app.services.processing.workout_matching import match_planned_to_detected, build_interval_kpis
+from app.services.analysis.metrics import compute_derived_metrics_data
+from app.services.analysis.classifier import classify_activity
+from app.services.analysis.flags import generate_flags
+from app.services.analysis.intervals import detect_intervals
+from app.services.analysis.risk import compute_risk_score
+from app.services.analysis.workout_matching import match_planned_to_detected, build_interval_kpis
 from app.services.activity_service import fetch_and_store_streams
 
 # Classes that warrant detailed stream processing
@@ -27,9 +27,9 @@ def _extract_planned_workout(check_in) -> dict | None:
     # When it is, this function will parse the structured input.
     return None
 
-async def process_deep(db: Session, activity_id: str) -> Optional[DerivedMetric]:
+async def analyze_with_streams(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     """
-    Explicitly fetches streams and re-runs processing.
+    Explicitly fetches streams and re-runs analysis.
     """
     activity = db.query(Activity).filter(Activity.id == activity_id).first()
     if not activity: return None
@@ -40,7 +40,7 @@ async def process_deep(db: Session, activity_id: str) -> Optional[DerivedMetric]
         await fetch_and_store_streams(db, account, activity)
 
     # Run normal processing (which now picks up streams)
-    return process_activity(db, activity_id)
+    return analyze(db, activity_id)
 
 
 def compute_confidence(activity, streams_dict, check_in, interval_structure=None, workout_match=None):
@@ -99,7 +99,7 @@ def compute_confidence(activity, streams_dict, check_in, interval_structure=None
     return level, reasons
 
 
-def process_activity(db: Session, activity_id: str) -> Optional[DerivedMetric]:
+def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     """
     Main entry point.
     Loads activity, history, computes all metrics, saves DerivedMetric.
@@ -178,9 +178,11 @@ def process_activity(db: Session, activity_id: str) -> Optional[DerivedMetric]:
         "sleep_quality": check_in.sleep_quality if check_in else None,
         "rpe": check_in.rpe if check_in else None,
     }
-    # Compute training context for risk scoring
-    from app.services.coach.context import _build_training_context
-    training_ctx = _build_training_context(db, activity)
+    # Compute training context for risk scoring; persist so the coach pipeline
+    # can read it instead of recomputing.
+    from app.services.analysis._training_context import build_training_context
+    training_ctx = build_training_context(db, activity)
+    metrics_data["training_context"] = training_ctx
     risk_result = compute_risk_score(all_flags, check_in_data, training_ctx)
     metrics_data["risk_level"] = risk_result["risk_level"]
     metrics_data["risk_score"] = risk_result["risk_score"]

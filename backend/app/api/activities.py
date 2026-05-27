@@ -7,9 +7,8 @@ from sqlalchemy import select
 from app.db.session import get_db
 from app.models import Activity, StravaAccount, CheckIn
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead
-from app.services import activity_service
-from app.services.processing import engine as processing_engine
-from app.services.processing.splits import calculate_splits
+from app.services import activity_service, analysis
+from app.services.analysis.splits import calculate_splits
 
 router = APIRouter()
 
@@ -22,7 +21,7 @@ async def process_activity_deep(
     Fetches full streams from Strava (if Rate Limits allow) and re-runs processing.
     Useful for detailed breakdown of 'Complex' runs.
     """
-    metrics = await processing_engine.process_deep(db, str(activity_id))
+    metrics = await analysis.analyze_with_streams(db, str(activity_id))
     if not metrics:
         raise HTTPException(status_code=400, detail="Processing failed or activity not found.")
     
@@ -49,7 +48,7 @@ def update_activity_intent(
     db.refresh(activity)
     
     # Re-run processing pipeline with new intent
-    processing_engine.process_activity(db, str(activity_id))
+    analysis.analyze(db, str(activity_id))
     
     return activity
 
@@ -100,7 +99,7 @@ def read_activity(
     # Lazy Data Repair: If activity_class is "Easy Run" but it's clearly an Indoor Ride/Walk etc, repair it on read.
     # This fixes stale data from earlier classifier versions without requiring full re-sync.
     if activity.metrics and activity.metrics.activity_class == "Easy Run":
-       from app.services.processing.classifier import classify_activity
+       from app.services.analysis.classifier import classify_activity
        
        # Pass an empty history for now (fast check)
        current_class = classify_activity(activity, []) 
@@ -143,6 +142,6 @@ def create_checkin(
     db.refresh(db_obj)
 
     # 2. Trigger Re-Processing to incorporate user feedback
-    processing_engine.process_activity(db, str(activity_id))
+    analysis.analyze(db, str(activity_id))
 
     return db_obj

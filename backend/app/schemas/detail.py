@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from app.schemas.activity import ActivityRead
 from app.schemas.checkin import CheckInRead
 from app.services.units.cadence import normalize_cadence_spm
-from app.services.processing.smoothing import smooth_cadence
+from app.services.analysis.smoothing import smooth_cadence
 
 
 class DerivedMetricRead(BaseModel):

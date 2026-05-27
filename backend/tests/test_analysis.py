@@ -1,8 +1,8 @@
 from datetime import datetime
 from app.models import Activity, CheckIn
-from app.services.processing.classifier import classify_activity
-from app.services.processing.metrics import calculate_effort_score
-from app.services.processing.flags import generate_flags
+from app.services.analysis.classifier import classify_activity
+from app.services.analysis.metrics import calculate_effort_score
+from app.services.analysis.flags import generate_flags
 
 def test_classifier_long_run():
     # Long run > 75 mins
