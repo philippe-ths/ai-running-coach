@@ -19,7 +19,7 @@ from app.models.coach_chat_message import CoachChatMessage
 from app.models.coach_report import CoachReport
 from app.schemas.chat import ChatMessageRead
 from app.services.coach.llm import AnthropicClient
-from app.services.processing.splits import calculate_splits
+from app.services.analysis.splits import calculate_splits
 from app.services.trends import _query_activity_facts
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 """Tests for the deterministic risk score computation."""
 
-from app.services.processing.risk import compute_risk_score
+from app.services.analysis.risk import compute_risk_score
 
 
 class TestRiskScoreBasics:

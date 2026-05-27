@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from app.services.processing.workout_matching import (
+from app.services.analysis.workout_matching import (
     match_planned_to_detected,
     build_interval_kpis,
 )

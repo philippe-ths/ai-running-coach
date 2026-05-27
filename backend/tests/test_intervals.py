@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from app.services.processing.intervals import detect_intervals
+from app.services.analysis.intervals import detect_intervals
 
 
 def _make_interval_streams(

@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Optional, List, Dict, Any
 from app.models import Activity
-from app.services.processing.stops import analyze_stops
+from app.services.analysis.stops import analyze_stops
 
 def calculate_time_in_zones(streams: Dict[str, List[any]], max_hr: int = 190) -> Optional[Dict[str, int]]:
     """

@@ -8,17 +8,12 @@ from the database (activity, metrics, check-in, profile, trends).
 import hashlib
 import json
 from datetime import timedelta
-from typing import List, Optional
+from typing import Optional
 
-from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.models import Activity, DerivedMetric, UserProfile
+from app.models import Activity, UserProfile
 from app.services.trends import _query_activity_facts
-
-# Activity classes considered "hard" for training context
-HARD_CLASSES = {"Intervals", "Tempo", "Race", "Hills"}
-MODERATE_CLASSES = {"Long Run"}
 
 
 def build_context_pack(db: Session, activity: Activity) -> dict:
@@ -65,8 +60,9 @@ def build_context_pack(db: Session, activity: Activity) -> dict:
             "total_effort": round(sum(f.effort_score or 0 for f in facts), 1),
         }
 
-    # Training context: intensity distribution and recency signals
-    training_context = _build_training_context(db, activity)
+    # Training context: intensity distribution and recency signals (persisted
+    # by the analysis pipeline on DerivedMetric).
+    training_context = metrics.training_context if metrics else None
 
     pack = {
         "activity": {
@@ -103,6 +99,7 @@ def build_context_pack(db: Session, activity: Activity) -> dict:
             "risk_level": metrics.risk_level if metrics else None,
             "risk_score": metrics.risk_score if metrics else None,
             "risk_reasons": metrics.risk_reasons if metrics else [],
+            "training_context": training_context,
         },
         "check_in": {
             "rpe": check_in.rpe if check_in else None,
@@ -120,7 +117,6 @@ def build_context_pack(db: Session, activity: Activity) -> dict:
             "max_hr_source": getattr(profile, "max_hr_source", None) if profile else None,
             "current_weekly_km": profile.current_weekly_km if profile else None,
         },
-        "training_context": training_context,
         "recent_training_summary": {
             "last_7d": _summarize(facts_7d),
             "last_28d": _summarize(facts_28d),
@@ -133,56 +129,6 @@ def build_context_pack(db: Session, activity: Activity) -> dict:
         },
     }
     return pack
-
-
-def _build_training_context(db: Session, activity: Activity) -> dict:
-    """Compute intensity distribution and recency signals for the last 7 days."""
-    activity_date = activity.start_date.date()
-    start = activity_date - timedelta(days=7)
-
-    # Query recent activities with metrics loaded
-    recent = (
-        db.execute(
-            select(Activity)
-            .where(
-                Activity.user_id == activity.user_id,
-                Activity.start_date >= start,
-                Activity.start_date < activity.start_date,
-                Activity.is_deleted == False,
-            )
-            .options(selectinload(Activity.metrics))
-            .order_by(Activity.start_date.desc())
-        )
-        .scalars()
-        .all()
-    )
-
-    easy = 0
-    moderate = 0
-    hard = 0
-    days_since_last_hard = None
-
-    for a in recent:
-        ac = a.metrics.activity_class if a.metrics else "Easy Run"
-        if ac in HARD_CLASSES:
-            hard += 1
-            if days_since_last_hard is None:
-                delta = (activity_date - a.start_date.date()).days
-                days_since_last_hard = delta
-        elif ac in MODERATE_CLASSES:
-            moderate += 1
-        else:
-            easy += 1
-
-    return {
-        "intensity_distribution_7d": {
-            "easy": easy,
-            "moderate": moderate,
-            "hard": hard,
-        },
-        "days_since_last_hard": days_since_last_hard,
-        "hard_sessions_this_week": hard,
-    }
 
 
 def hash_context_pack(pack: dict) -> str:
