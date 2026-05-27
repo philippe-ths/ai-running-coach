@@ -113,6 +113,15 @@ function createMockApiServer() {
       return;
     }
 
+    if (pathname === "/api/auth/strava/status") {
+      return sendJson(res, 200, {
+        connected: true,
+        athlete_id: 12345,
+        scope: "read,activity:read_all,profile:read_all",
+        expires_at: 9999999999,
+      });
+    }
+
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ detail: `Unhandled smoke route: ${pathname}` }));
   });

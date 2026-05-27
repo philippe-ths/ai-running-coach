@@ -1,6 +1,7 @@
 import time
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.models import StravaAccount, User
 from app.services.strava_ingestion import (
@@ -56,3 +57,30 @@ async def test_ensure_valid_access_token_returns_existing_when_valid(db):
 
     assert token == "old_access"
     assert adapter.refresh_calls == []
+
+
+def test_strava_status_returns_disconnected_when_no_account(client: TestClient):
+    response = client.get("/api/auth/strava/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "connected": False,
+        "athlete_id": None,
+        "scope": None,
+        "expires_at": None,
+    }
+
+
+def test_strava_status_returns_connected_when_account_linked(client: TestClient, db):
+    expires_at = int(time.time()) + 3600
+    _make_account(db, expires_at=expires_at)
+
+    response = client.get("/api/auth/strava/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "connected": True,
+        "athlete_id": 42,
+        "scope": "read,activity:read_all",
+        "expires_at": expires_at,
+    }
