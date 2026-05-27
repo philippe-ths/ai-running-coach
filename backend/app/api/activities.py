@@ -7,8 +7,9 @@ from sqlalchemy import select
 from app.db.session import get_db
 from app.models import Activity, StravaAccount, CheckIn
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead
-from app.services import activity_service, analysis
+from app.services import activity_queries, analysis
 from app.services.analysis.splits import calculate_splits
+from app.services.strava_ingestion import get_strava_port, ingest_recent_activities
 
 router = APIRouter()
 
@@ -72,8 +73,18 @@ async def sync_activities(
     if not account:
         raise HTTPException(status_code=404, detail="No linked Strava account found. Connect Strava first.")
 
-    result = await activity_service.sync_recent_activities(db, account)
-    return result
+    activities, stats = await ingest_recent_activities(db, account, get_strava_port())
+
+    for activity in activities:
+        try:
+            analysis.analyze(db, str(activity.id))
+            stats.analyzed += 1
+        except Exception as exc:
+            stats.errors.append(
+                f"Analysis failed for activity {activity.strava_activity_id}: {exc}"
+            )
+
+    return stats
 
 @router.get("/activities", response_model=List[ActivityRead])
 def read_activities(
@@ -85,14 +96,14 @@ def read_activities(
     Get stored activities (paginated).
     """
     # Note: In multi-user app, filter by current_user.id
-    return activity_service.get_activities(db, skip=skip, limit=limit)
+    return activity_queries.get_activities(db, skip=skip, limit=limit)
 
 @router.get("/activities/{activity_id}", response_model=ActivityDetailRead)
 def read_activity(
     activity_id: UUID, 
     db: Session = Depends(get_db)
 ):
-    activity = activity_service.get_activity(db, str(activity_id))
+    activity = activity_queries.get_activity(db, str(activity_id))
     if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
         

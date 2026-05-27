@@ -9,7 +9,6 @@ from app.services.analysis.flags import generate_flags
 from app.services.analysis.intervals import detect_intervals
 from app.services.analysis.risk import compute_risk_score
 from app.services.analysis.workout_matching import match_planned_to_detected, build_interval_kpis
-from app.services.activity_service import fetch_and_store_streams
 
 # Classes that warrant detailed stream processing
 DEEP_PROCESSING_CLASSES = ["Tempo", "Intervals", "Long Run", "Race", "Hills"]
@@ -37,7 +36,9 @@ async def analyze_with_streams(db: Session, activity_id: str) -> Optional[Derive
     # Fetch streams
     account = db.query(StravaAccount).filter(StravaAccount.user_id == activity.user_id).first()
     if account:
-        await fetch_and_store_streams(db, account, activity)
+        from app.services.strava_ingestion import get_strava_port, refetch_streams
+
+        await refetch_streams(db, account, activity, get_strava_port())
 
     # Run normal processing (which now picks up streams)
     return analyze(db, activity_id)
