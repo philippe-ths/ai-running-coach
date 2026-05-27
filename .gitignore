@@ -45,19 +45,17 @@ frontend/tsconfig.tsbuildinfo
 *.log
 
 # IDE
-.vscode/
 .idea/
 
-# Claude Code local settings
-.claude/
-
-# Codex
-.codex/
-
 # AI workflow and skills (tooling config, not product code)
-.github/copilot-instructions.md
-.github/skills/
+.agents/
 .ai-policy/
+.claude/
+.codex/
+.gemini/
 .githooks/
+.github/
+.vscode/
+AGENTS.md
 ai-workflow.md
-project-spec.md
+claude.md
