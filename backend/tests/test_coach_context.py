@@ -161,6 +161,27 @@ def test_context_pack_includes_enriched_activity_fields(db):
     assert pack.activity.max_hr == 182.0
 
 
+def test_context_pack_normalizes_raw_strava_cadence(db):
+    """Sub-130 raw Strava cadence (strides/min) must be doubled to spm before
+    landing in the coach context pack.
+
+    The DB column stores the raw Strava value; the read schema doubles it for
+    every user-facing surface. The context pack must apply the same conversion
+    so the LLM and the user see the same number for the same activity.
+    """
+    user_id = uuid.uuid4()
+    from app.models.user import User
+    db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
+    db.flush()
+
+    activity = _create_activity(db, user_id, avg_cadence=80.4)
+    _add_metrics(db, activity)
+
+    pack = build_context_pack(db, activity)
+
+    assert pack.activity.avg_cadence == 160.8
+
+
 def test_context_pack_passes_training_context_through(db):
     """build_context_pack returns the value persisted on DerivedMetric.training_context."""
     user_id = uuid.uuid4()

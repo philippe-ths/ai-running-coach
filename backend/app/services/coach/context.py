@@ -24,6 +24,7 @@ from app.schemas.coach_context import (
     TrainingPeriodSummary,
 )
 from app.services.trends import _query_activity_facts
+from app.services.units.cadence import normalize_cadence_spm
 
 
 def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
@@ -83,7 +84,9 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
             moving_time_s=activity.moving_time_s,
             avg_hr=activity.avg_hr,
             max_hr=activity.max_hr,
-            avg_cadence=activity.avg_cadence,
+            avg_cadence=normalize_cadence_spm(
+                activity.user_intent or activity.type, activity.avg_cadence
+            ),
             elev_gain_m=activity.elev_gain_m,
         ),
         metrics=MetricsContext(
