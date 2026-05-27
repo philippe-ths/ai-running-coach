@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from typing import Optional
 
 from app.core.config import settings
 from app.db.session import get_db
@@ -11,10 +13,31 @@ from app.services.strava_ingestion import get_strava_port
 router = APIRouter()
 
 
+class StravaConnectionStatus(BaseModel):
+    connected: bool
+    athlete_id: Optional[int] = None
+    scope: Optional[str] = None
+    expires_at: Optional[int] = None
+
+
 @router.get("/auth/strava/login")
 def strava_login():
     """Redirects user to Strava OAuth page."""
     return RedirectResponse(get_strava_port().get_auth_url())
+
+
+@router.get("/auth/strava/status", response_model=StravaConnectionStatus)
+def strava_status(db: Session = Depends(get_db)) -> StravaConnectionStatus:
+    """Reports whether a Strava account is linked, and surfaces the athlete id and token scope."""
+    account = db.execute(select(StravaAccount)).scalars().first()
+    if account is None:
+        return StravaConnectionStatus(connected=False)
+    return StravaConnectionStatus(
+        connected=True,
+        athlete_id=account.strava_athlete_id,
+        scope=account.scope,
+        expires_at=account.expires_at,
+    )
 
 
 @router.get("/auth/strava/callback")
