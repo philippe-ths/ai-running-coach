@@ -12,11 +12,10 @@ Most Strava-based tools surface raw stats but offer little actionable insight â€
 ## Repo structure
 ```
 /
-  backend/      # FastAPI app, models, schemas, services, jobs
-  frontend/     # Next.js app, components, types, utilities
+  backend/             # FastAPI app, models, schemas, services, jobs
+  frontend/            # Next.js app, components, types, utilities
   docker-compose.yml
-  SPEC.md
-  ARCHITECTURE.md
+  project-context.md   # Current product, scope, architecture, and structure reference
   README.md
 ```
 
@@ -116,7 +115,7 @@ pip install -e ".[test]"
 | Frontend | 3000 |
 
 ## Development notes
-- Keep changes small and aligned with SPEC.md and ARCHITECTURE.md.
+- Keep changes small and aligned with `project-context.md`.
 - When data confidence is low, default to conservative analysis.
 - Models live in `backend/app/models/` (one file per model, barrel re-exported from `__init__.py`).
 - Schemas live in `backend/app/schemas/` (one file per domain).
