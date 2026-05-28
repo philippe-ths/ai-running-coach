@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update
@@ -9,6 +11,8 @@ from app.models import Activity
 from app.core.queue import queue
 from app.jobs.process_new_activity import process_new_activity_job
 from app.jobs.strava_sync import sync_activity_job
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -32,9 +36,22 @@ def verify_webhook(
     """
     Strava verification challenge.
     """
-    if mode == "subscribe" and verify_token == settings.STRAVA_WEBHOOK_VERIFY_TOKEN:
+    expected_token = settings.STRAVA_WEBHOOK_VERIFY_TOKEN
+    if not expected_token and settings.APP_ENV == "production":
+        # Fail closed: an empty configured token would otherwise let anyone
+        # register a webhook subscription against this deployment by sending
+        # ?hub.verify_token= against the default of "".
+        logger.critical(
+            "strava_webhook_verify_token_missing_in_production",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Service unavailable: webhook verify token not configured",
+        )
+
+    if mode == "subscribe" and verify_token == expected_token:
         return {"hub.challenge": challenge}
-    
+
     raise HTTPException(status_code=403, detail="Invalid verification token")
 
 @router.post("/webhooks/strava")
