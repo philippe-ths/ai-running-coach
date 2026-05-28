@@ -13,6 +13,7 @@ from redis import Redis
 from rq_scheduler import Scheduler
 
 from app.core.config import settings
+from app.core.observability import init_logging, init_sentry
 from app.jobs.polling import poll_for_new_activities_job
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,8 @@ def register_polling_schedule(scheduler: Scheduler | None = None) -> None:
 
 def run() -> None:
     """Register the schedule, then enter the rq-scheduler poll loop."""
+    init_logging()
+    init_sentry("scheduler")
     scheduler = _build_scheduler()
     register_polling_schedule(scheduler)
     logger.info("Entering rq-scheduler run loop")
@@ -57,5 +60,4 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     run()

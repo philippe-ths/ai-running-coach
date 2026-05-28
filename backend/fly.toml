@@ -23,7 +23,7 @@ primary_region = "lhr"
 
 [processes]
   web = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
-  worker = "sh -c 'rq worker --url $REDIS_URL'"
+  worker = "python -m app.worker"
   scheduler = "python -m app.jobs.scheduler"
 
 [deploy]
