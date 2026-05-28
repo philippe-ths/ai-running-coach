@@ -11,7 +11,7 @@
 # Change `app` to match the name you used with `fly apps create`.
 # Change `primary_region` to match your Neon / Upstash region (lhr, cdg, fra).
 
-app = "running-coach"
+app = "running-coach-ths"
 primary_region = "lhr"
 
 [build]
@@ -23,7 +23,7 @@ primary_region = "lhr"
 
 [processes]
   web = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
-  worker = "rq worker --url $REDIS_URL"
+  worker = "sh -c 'rq worker --url $REDIS_URL'"
   scheduler = "python -m app.jobs.scheduler"
 
 [deploy]
