@@ -1,8 +1,9 @@
-"""rq-scheduler bootstrap: register the recurring polling job.
+"""rq-scheduler bootstrap and long-lived runner.
 
-Run this once at startup of the scheduler process to install the recurring
-schedule, then run `rqscheduler --url $REDIS_URL` as a long-lived process
-to actually fire scheduled jobs.
+Running this module as `python -m app.jobs.scheduler` first registers the
+recurring polling schedule (idempotent across restarts) and then enters the
+rq-scheduler poll loop so scheduled jobs actually fire. One process, one
+command — suitable as a Fly.io `[processes]` entrypoint.
 """
 
 import logging
@@ -19,12 +20,15 @@ logger = logging.getLogger(__name__)
 _SCHEDULED_JOB_ID = "poll_for_new_activities_recurring"
 
 
-def register_polling_schedule() -> None:
-    """Idempotently install the recurring polling schedule into Redis."""
+def _build_scheduler() -> Scheduler:
     redis = Redis.from_url(settings.REDIS_URL)
-    scheduler = Scheduler(connection=redis)
+    return Scheduler(connection=redis)
 
-    # Cancel any existing instances to avoid duplicates after restarts.
+
+def register_polling_schedule(scheduler: Scheduler | None = None) -> None:
+    """Idempotently install the recurring polling schedule into Redis."""
+    scheduler = scheduler or _build_scheduler()
+
     for job in list(scheduler.get_jobs()):
         if job.id == _SCHEDULED_JOB_ID:
             scheduler.cancel(job)
@@ -44,6 +48,14 @@ def register_polling_schedule() -> None:
     )
 
 
+def run() -> None:
+    """Register the schedule, then enter the rq-scheduler poll loop."""
+    scheduler = _build_scheduler()
+    register_polling_schedule(scheduler)
+    logger.info("Entering rq-scheduler run loop")
+    scheduler.run()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    register_polling_schedule()
+    run()
