@@ -1,9 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, auth, activities, webhooks, profile, trends, coach
+from app.api import health, auth, activities, webhooks, profile, trends, coach, debug
 from app.core.auth import BasicAuthMiddleware
 from app.core.config import settings
+from app.core.observability import init_logging, init_sentry
+
+init_logging()
+init_sentry("web")
 
 app = FastAPI(
     title="Running Coach",
@@ -33,6 +37,7 @@ app.include_router(activities.router, prefix="/api", tags=["Activities"])
 app.include_router(webhooks.router, prefix="/api", tags=["Webhooks"])
 app.include_router(trends.router, prefix="/api", tags=["Trends"])
 app.include_router(coach.router, prefix="/api", tags=["Coach"])
+app.include_router(debug.router, prefix="/api", tags=["Debug"])
 
 if __name__ == "__main__":
     import uvicorn
