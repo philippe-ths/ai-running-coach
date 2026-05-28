@@ -4,14 +4,13 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { TrendsData, TrendsRange } from "@/lib/types";
 import { formatDistanceKm, formatDuration } from "@/lib/format";
+import { fetchFromAPI } from "@/lib/api";
 import RangeSelector from "@/components/trends/RangeSelector";
 import ActivityTypeFilter from "@/components/trends/ActivityTypeFilter";
 import TrendBarChart from "@/components/trends/TrendBarChart";
 import SufferScoreChart from "@/components/trends/SufferScoreChart";
 import EfficiencyTrendChart from "@/components/trends/EfficiencyTrendChart";
 import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
 const DiffStat = ({
   current,
@@ -56,9 +55,8 @@ export default function TrendsPage() {
 
   // Fetch available activity types once on mount
   useEffect(() => {
-    fetch(`${API_BASE_URL}/api/trends/types`)
-      .then((res) => (res.ok ? res.json() : []))
-      .then((types: string[]) => setAvailableTypes(types))
+    fetchFromAPI("/api/trends/types")
+      .then((types: string[] | null) => setAvailableTypes(types ?? []))
       .catch(() => {});
   }, []);
 
@@ -71,9 +69,7 @@ export default function TrendsPage() {
       if (types.length > 0) {
         types.forEach((t) => params.append("types", t));
       }
-      const res = await fetch(`${API_BASE_URL}/api/trends?${params}`);
-      if (!res.ok) throw new Error(`API error: ${res.statusText}`);
-      const json: TrendsData = await res.json();
+      const json: TrendsData = await fetchFromAPI(`/api/trends?${params}`);
       setData(json);
     } catch (e: any) {
       setError(e.message || "Failed to load trends");
