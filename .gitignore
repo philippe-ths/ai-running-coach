@@ -60,3 +60,5 @@ frontend/tsconfig.tsbuildinfo
 AGENTS.md
 ai-workflow.md
 claude.md
+.vercel
+.env*
