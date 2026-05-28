@@ -17,8 +17,15 @@ def _make_interval_structure(
     rest_speed: float = 2.0,
     distance_per_rep: float = 400.0,
     include_hr: bool = True,
+    seed: int = 42,
 ):
-    """Build a synthetic interval_structure dict matching detect_intervals output."""
+    """Build a synthetic interval_structure dict matching detect_intervals output.
+
+    The per-rep jitter on distance and speed is drawn from a locally-seeded
+    generator so the fixture is deterministic regardless of test order. Pass
+    a different seed when a test wants different jitter.
+    """
+    rng = np.random.default_rng(seed)
     work_segments = []
     rest_segments = []
     for i in range(reps):
@@ -26,8 +33,8 @@ def _make_interval_structure(
             "segment_number": i + 1,
             "start_time_s": 300 + i * (work_duration + rest_duration),
             "duration_s": work_duration,
-            "distance_m": round(distance_per_rep + np.random.uniform(-20, 20), 1),
-            "avg_speed_mps": round(work_speed + np.random.uniform(-0.2, 0.2), 2),
+            "distance_m": round(distance_per_rep + rng.uniform(-20, 20), 1),
+            "avg_speed_mps": round(work_speed + rng.uniform(-0.2, 0.2), 2),
             "avg_hr": 170.0 if include_hr else None,
             "peak_hr": 178.0 if include_hr else None,
         }
