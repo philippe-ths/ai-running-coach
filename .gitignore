@@ -54,7 +54,8 @@ frontend/tsconfig.tsbuildinfo
 .codex/
 .gemini/
 .githooks/
-.github/
+.github/*
+!.github/workflows/
 .vscode/
 AGENTS.md
 ai-workflow.md
