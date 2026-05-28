@@ -27,6 +27,18 @@ class Settings(BaseSettings):
     COACH_MODEL_ID: str = "claude-sonnet-4-20250514"
     COACH_PROMPT_ID: str = "coach_report_v1"
 
+    # Email notifications (feature off when SMTP_HOST is empty)
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_USE_STARTTLS: bool = True
+    NOTIFY_TO: str = ""
+
+    # Polling fallback for missed Strava webhooks
+    POLLING_INTERVAL_SECONDS: int = 120
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_ignore_empty=True,

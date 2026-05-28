@@ -55,6 +55,17 @@ In a second terminal (from `backend/`, venv activated):
 rq worker --url $REDIS_URL
 ```
 
+### 4b) Run the polling scheduler (optional, enables ASAP coach-report emails)
+In a third terminal (from `backend/`, venv activated):
+```bash
+python -m app.jobs.scheduler   # registers the recurring polling schedule once
+rqscheduler --url $REDIS_URL   # long-running process that actually fires jobs
+```
+The polling fallback periodically asks Strava for new activities and runs the
+ingest → analyze → coach report → email pipeline for each new one, in case
+your local backend can't receive Strava webhooks directly. Email delivery is
+off until `SMTP_HOST` and `NOTIFY_TO` are set in `backend/.env`.
+
 ### 5) Run frontend
 ```bash
 cd frontend
