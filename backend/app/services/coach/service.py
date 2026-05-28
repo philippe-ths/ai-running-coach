@@ -9,6 +9,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
+import anthropic
+
 logger = logging.getLogger(__name__)
 
 from pydantic import ValidationError
@@ -97,8 +99,8 @@ async def get_or_generate_coach_report(
                 )
                 policy_violations = [v.rule for v in retry_violations]
 
-    except (json.JSONDecodeError, ValidationError) as e:
-        logger.error("Coach report parse/validation error: %s", e)
+    except (json.JSONDecodeError, ValidationError, anthropic.APIError) as e:
+        logger.error("Coach report parse/validation/transport error: %s", e)
         is_fallback = True
         content = CoachReportContent(
             key_takeaways=[

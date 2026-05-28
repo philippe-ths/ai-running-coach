@@ -4,6 +4,8 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+import anthropic
+import httpx
 import pytest
 
 from app.models import (
@@ -114,3 +116,28 @@ async def test_is_fallback_false_on_happy_path(db):
     stored = db.query(CoachReport).filter(CoachReport.activity_id == activity.id).first()
     assert stored is not None
     assert stored.is_fallback is False
+
+
+@pytest.mark.asyncio
+async def test_is_fallback_true_when_llm_transport_error_propagates(db):
+    """After the LLM client's retry is exhausted, the underlying
+    anthropic.APIError propagates. The coach service must route that to the
+    same is_fallback=True path as JSONDecodeError / ValidationError so the
+    pipeline job does not die on a transient outage."""
+    activity = _seed_activity_with_metrics(db)
+
+    timeout_err = anthropic.APITimeoutError(
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+    fake_client = AsyncMock()
+    fake_client.generate_json = AsyncMock(side_effect=timeout_err)
+
+    with patch(
+        "app.services.coach.service.AnthropicClient", return_value=fake_client
+    ):
+        report = await get_or_generate_coach_report(db, str(activity.id))
+
+    assert report is not None
+    stored = db.query(CoachReport).filter(CoachReport.activity_id == activity.id).first()
+    assert stored is not None
+    assert stored.is_fallback is True
