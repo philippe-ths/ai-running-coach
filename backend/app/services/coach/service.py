@@ -5,6 +5,7 @@ Coach service — orchestrates context pack → LLM → validate → policy chec
 import json
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -32,17 +33,19 @@ async def get_or_generate_coach_report(
     """
     Returns cached report if one exists, otherwise generates a new one via LLM.
     """
+    activity_uuid = _coerce_uuid(activity_id)
+
     # Check cache
     existing = (
         db.query(CoachReport)
-        .filter(CoachReport.activity_id == activity_id)
+        .filter(CoachReport.activity_id == activity_uuid)
         .first()
     )
     if existing:
         return _to_read(existing)
 
     # Load activity
-    activity = db.query(Activity).filter(Activity.id == activity_id).first()
+    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
     if not activity or not activity.metrics:
         return None
 
@@ -64,6 +67,7 @@ async def get_or_generate_coach_report(
 
     raw_response = ""
     policy_violations: List[str] = []
+    is_fallback = False
 
     try:
         raw_response = await client.generate_json(
@@ -95,6 +99,7 @@ async def get_or_generate_coach_report(
 
     except (json.JSONDecodeError, ValidationError) as e:
         logger.error("Coach report parse/validation error: %s", e)
+        is_fallback = True
         content = CoachReportContent(
             key_takeaways=[
                 {"text": "Analysis is temporarily unavailable for this activity."},
@@ -121,11 +126,12 @@ async def get_or_generate_coach_report(
 
     # Store
     db_report = CoachReport(
-        activity_id=activity_id,
+        activity_id=activity_uuid,
         report=content.model_dump(),
         meta=meta.model_dump(mode="json"),
         context_pack=pack_dict,
         raw_llm_response=raw_response,
+        is_fallback=is_fallback,
     )
     db.add(db_report)
     db.commit()
@@ -171,6 +177,14 @@ async def _retry_with_fixes(
     except (json.JSONDecodeError, ValidationError) as e:
         logger.error("Coach report retry parse error: %s", e)
         raise
+
+
+def _coerce_uuid(value) -> uuid.UUID:
+    """Accept either a UUID or its string form. Postgres tolerates the latter
+    via implicit cast; SQLite (used in tests) does not, so coerce up front."""
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(str(value))
 
 
 def _strip_code_fences(text: str) -> str:

@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models import Activity
 from app.core.queue import queue
+from app.jobs.process_new_activity import process_new_activity_job
 from app.jobs.strava_sync import sync_activity_job
 
 router = APIRouter()
@@ -57,19 +58,28 @@ async def receive_webhook(
         db.commit()
         return {"status": "processed", "action": "deleted"}
 
-    elif event.aspect_type in ["create", "update"]:
-        # Enqueue job
-        # We use explicit job ID to prevent dupes in queue
-        job_id = f"sync_{event.object_id}_{event.event_time}"
-        
+    elif event.aspect_type == "create":
+        # Fresh activity: run the full pipeline (ingest → analyze → coach → notify).
+        job_id = f"pipeline_{event.object_id}_{event.event_time}"
         queue.enqueue(
-            sync_activity_job, 
-            strava_athlete_id=event.owner_id, 
+            process_new_activity_job,
+            strava_athlete_id=event.owner_id,
             strava_activity_id=event.object_id,
             job_id=job_id,
-            result_ttl=3600 # Keep result for 1 hour
+            result_ttl=3600,
         )
-        
-        return {"status": "processed", "action": "enqueued"}
+        return {"status": "processed", "action": "enqueued_pipeline"}
+
+    elif event.aspect_type == "update":
+        # Existing activity edit (title, visibility): re-ingest only.
+        job_id = f"sync_{event.object_id}_{event.event_time}"
+        queue.enqueue(
+            sync_activity_job,
+            strava_athlete_id=event.owner_id,
+            strava_activity_id=event.object_id,
+            job_id=job_id,
+            result_ttl=3600,
+        )
+        return {"status": "processed", "action": "enqueued_sync"}
 
     return {"status": "ignored", "reason": "unknown_aspect"}

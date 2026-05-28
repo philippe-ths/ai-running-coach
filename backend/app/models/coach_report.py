@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import ForeignKey, DateTime, JSON, Uuid, Text
+from sqlalchemy import Boolean, ForeignKey, DateTime, JSON, Uuid, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -20,6 +20,10 @@ class CoachReport(Base):
     meta: Mapped[dict] = mapped_column(JSON)
     context_pack: Mapped[dict] = mapped_column(JSON)
     raw_llm_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    is_fallback: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

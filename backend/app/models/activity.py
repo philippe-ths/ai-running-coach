@@ -38,6 +38,10 @@ class Activity(Base):
     raw_summary: Mapped[dict] = mapped_column(JSON, default={})
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    coach_notification_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), onupdate=func.now(), server_default=func.now()

@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -30,7 +31,8 @@ async def analyze_with_streams(db: Session, activity_id: str) -> Optional[Derive
     """
     Explicitly fetches streams and re-runs analysis.
     """
-    activity = db.query(Activity).filter(Activity.id == activity_id).first()
+    activity_uuid = _coerce_uuid(activity_id)
+    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
     if not activity: return None
 
     # Fetch streams
@@ -42,6 +44,12 @@ async def analyze_with_streams(db: Session, activity_id: str) -> Optional[Derive
 
     # Run normal processing (which now picks up streams)
     return analyze(db, activity_id)
+
+
+def _coerce_uuid(value) -> uuid.UUID:
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(str(value))
 
 
 def compute_confidence(activity, streams_dict, check_in, interval_structure=None, workout_match=None):
@@ -105,8 +113,10 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     Main entry point.
     Loads activity, history, computes all metrics, saves DerivedMetric.
     """
+    activity_uuid = _coerce_uuid(activity_id)
+
     # 1. Load Activity
-    stmt = select(Activity).where(Activity.id == activity_id)
+    stmt = select(Activity).where(Activity.id == activity_uuid)
     activity = db.execute(stmt).scalars().first()
     if not activity:
         return None
