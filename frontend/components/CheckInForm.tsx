@@ -72,7 +72,7 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
         
         // Parallel requests: Save Check-In AND Save Intent
         const promises = [
-            fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/activities/${activityId}/checkin`, {
+            fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/activities/${activityId}/checkin`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(checkInPayload)
@@ -82,7 +82,7 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
         // Only update intent if logic dictates (or always to be safe/simple)
         // The endpoint is PUT /intent
         promises.push(
-            fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/activities/${activityId}/intent`, {
+            fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/activities/${activityId}/intent`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ user_intent: intent })

@@ -24,7 +24,7 @@ export default function ProfilePage() {
   });
 
   useEffect(() => {
-    fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/profile`)
+    fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/profile`)
       .then(res => {
         if (!res.ok) throw new Error('Failed to load profile');
         return res.json();
@@ -51,7 +51,7 @@ export default function ProfilePage() {
     e.preventDefault();
     setSaving(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/profile`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/profile`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)

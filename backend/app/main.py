@@ -16,9 +16,16 @@ app = FastAPI(
 )
 
 # TODO(phase-2): remove BasicAuthMiddleware when session auth from ADR 0005 lands.
+# /api/auth/strava/callback is exempt because Strava redirects the user's browser
+# there directly with an OAuth code; the code itself is the auth, and Strava has
+# no way to send basic auth credentials.
 app.add_middleware(
     BasicAuthMiddleware,
-    exempt_prefixes=("/api/health", "/api/webhooks"),
+    exempt_prefixes=(
+        "/api/health",
+        "/api/webhooks",
+        "/api/auth/strava/callback",
+    ),
 )
 
 app.add_middleware(

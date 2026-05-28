@@ -42,6 +42,10 @@ class TestExemptRoutes:
         response = client.get("/api/webhooks/strava")
         assert response.status_code != 401
 
+    def test_strava_oauth_callback_is_reachable_without_credentials(self, client, auth_enabled):
+        response = client.get("/api/auth/strava/callback")
+        assert response.status_code != 401
+
 
 class TestGatedRoutes:
     def test_gated_route_rejects_request_without_authorization_header(self, client, auth_enabled):

@@ -13,7 +13,7 @@ export default function SyncButton() {
     setLoading(true);
     setStats(null);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/sync`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/sync`, {
         method: 'POST'
       });
       

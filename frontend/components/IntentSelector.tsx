@@ -23,7 +23,7 @@ export default function IntentSelector({ activityId, currentType, assignedClass 
     setLoading(true);
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/activities/${activityId}/intent`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/activities/${activityId}/intent`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
