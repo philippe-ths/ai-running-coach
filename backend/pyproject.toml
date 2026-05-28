@@ -1,6 +1,6 @@
 [project]
 name = "running-coach-backend"
-version = "0.1.0"
+version = "0.2.0"
 description = "Running Coach Backend"
 requires-python = ">=3.11"
 dependencies = [

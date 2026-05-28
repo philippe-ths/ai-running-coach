@@ -10,6 +10,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Opt JavaScript-based actions into Node 24 ahead of the June 2026
+# deprecation of Node 20. The pinned major tags (checkout@v4, setup-python@v5,
+# setup-node@v4) still ship Node 20 internally; this env forces them onto the
+# runner's Node 24. See issue #71.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   backend-test:
     name: backend-test

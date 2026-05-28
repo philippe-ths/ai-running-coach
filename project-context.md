@@ -1,7 +1,9 @@
+> Domain vocabulary lives in `CONTEXT.md`. This file describes the current implementation; the glossary describes the language.
+
 ## Product Summary
 
-Running Coach is a local-first MVP that connects to Strava, ingests running activities, computes training signals, and produces opinionated post-run analysis.
-The intended user is an individual runner running the app on their own machine against their own Strava account.
+Running Coach is a single-user MVP that connects to Strava, ingests running activities, computes training signals, and produces opinionated post-run analysis.
+The intended user is an individual runner connected to their own Strava account; the app runs either locally via docker compose or as a deployed single-user instance on Fly and Vercel (see `docs/deployment/phase-1-plan.md`). Phase 2 introduces multi-user signup per ADR 0005.
 The core flow is: connect Strava → sync activities → deep-process a run → view derived metrics and an LLM-generated coach report on the activity page.
 
 ## Domain Concepts
