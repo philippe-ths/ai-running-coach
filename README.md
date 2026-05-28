@@ -1,6 +1,6 @@
-# Running Coach (Strava) — Local-first MVP
+# Running Coach (Strava): Single-user MVP
 
-Local-first app that connects to Strava, ingests running activities, computes training signals, and displays actionable analysis.
+App that connects to Strava, ingests running activities, computes training signals, and displays actionable analysis. Runs locally via `docker compose` or as a deployed single-user instance on Fly and Vercel (see [Production deployment](#production-deployment)).
 
 Most Strava-based tools surface raw stats but offer little actionable insight — they tell you what happened, not what to do next. This project is an experiment in using computed training signals and an LLM coaching layer to bridge that gap, producing short and opinionated post-run analysis from the data you already have.
 
@@ -8,6 +8,10 @@ Most Strava-based tools surface raw stats but offer little actionable insight �
 - Backend: FastAPI + SQLAlchemy + Alembic + Postgres
 - Jobs: Redis + RQ
 - Frontend: Next.js (App Router)
+
+## Production deployment
+
+The app also runs in production on Fly.io (backend) and Vercel (frontend), with Neon Postgres, Upstash Redis, and Sentry. The setup is documented in [`docs/deployment/phase-1-plan.md`](docs/deployment/phase-1-plan.md). It is single-user and gated by HTTP basic auth; multi-user readiness is tracked under Phase 2 (see [ADR 0005](docs/adr/0005-magic-link-is-identity-strava-is-an-integration.md) and [ADR 0006](docs/adr/0006-multi-user-drops-polling-for-user-triggered-self-healing.md)).
 
 ## Repo structure
 ```
