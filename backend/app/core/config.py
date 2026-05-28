@@ -5,8 +5,7 @@ class Settings(BaseSettings):
     APP_ENV: str = "local"
     APP_BASE_URL: str = "http://localhost:3000"
     API_BASE_URL: str = "http://localhost:8000"
-    SECRET_KEY: str = "dev-only-secret"
-    
+
     # Database
     # Defaulting to a sensible local docker default if not provided, 
     # but strictly it should come from .env
