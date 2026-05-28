@@ -22,7 +22,7 @@ primary_region = "lhr"
   PYTHONUNBUFFERED = "1"
 
 [processes]
-  web = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
+  web = "python -m app.web"
   worker = "python -m app.worker"
   scheduler = "python -m app.jobs.scheduler"
 
