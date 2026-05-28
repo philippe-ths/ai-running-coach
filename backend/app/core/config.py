@@ -39,6 +39,22 @@ class Settings(BaseSettings):
     # Polling fallback for missed Strava webhooks
     POLLING_INTERVAL_SECONDS: int = 120
 
+    # Phase 1 deployment: throwaway basic auth in front of /api/*.
+    # Both must be set for the middleware to enforce; either empty disables it.
+    # TODO(phase-2): remove when session auth lands.
+    BASIC_AUTH_USER: str = ""
+    BASIC_AUTH_PASSWORD: str = ""
+
+    # Sentry DSN; empty disables Sentry init (Phase 1 step 3 wires the SDK).
+    SENTRY_DSN: str = ""
+
+    # CORS allowlist (comma-separated). Drives app.add_middleware(CORSMiddleware).
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_ignore_empty=True,

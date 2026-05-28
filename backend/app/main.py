@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from app.api import health, auth, activities, webhooks, profile, trends, coach
+from app.core.auth import BasicAuthMiddleware
+from app.core.config import settings
 
 app = FastAPI(
     title="Running Coach",
@@ -8,15 +11,15 @@ app = FastAPI(
     version="0.2.0",
 )
 
-# CORS Configuration
-origins = [
-    "http://localhost:3000",
-    "http://localhost:8000",
-]
+# TODO(phase-2): remove BasicAuthMiddleware when session auth from ADR 0005 lands.
+app.add_middleware(
+    BasicAuthMiddleware,
+    exempt_prefixes=("/api/health", "/api/webhooks"),
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.cors_allowed_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
