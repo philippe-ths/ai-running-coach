@@ -11,8 +11,7 @@ import SufferScoreChart from "@/components/trends/SufferScoreChart";
 import EfficiencyTrendChart from "@/components/trends/EfficiencyTrendChart";
 import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
 const DiffStat = ({
   current,
