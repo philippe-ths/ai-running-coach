@@ -107,3 +107,60 @@ class TestDisabledByDefault:
         monkeypatch.setattr(settings, "BASIC_AUTH_PASSWORD", "")
         response = client.get("/api/profile")
         assert response.status_code == 200
+
+
+class TestProductionFailsClosed:
+    """In APP_ENV=production, missing basic-auth credentials must fail closed.
+
+    Local-dev convenience (no creds, no gate) is intentional but unsafe to leak
+    into production. A typo during secret rotation or a missed Fly secret on
+    initial deploy would otherwise expose every gated route silently.
+    """
+
+    def test_gated_route_returns_503_when_both_credentials_missing(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "APP_ENV", "production")
+        monkeypatch.setattr(settings, "BASIC_AUTH_USER", "")
+        monkeypatch.setattr(settings, "BASIC_AUTH_PASSWORD", "")
+        response = client.get("/api/profile")
+        assert response.status_code == 503
+
+    def test_gated_route_returns_503_when_only_user_set(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "APP_ENV", "production")
+        monkeypatch.setattr(settings, "BASIC_AUTH_USER", _AUTH_USER)
+        monkeypatch.setattr(settings, "BASIC_AUTH_PASSWORD", "")
+        response = client.get("/api/profile")
+        assert response.status_code == 503
+
+    def test_gated_route_returns_503_when_only_password_set(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "APP_ENV", "production")
+        monkeypatch.setattr(settings, "BASIC_AUTH_USER", "")
+        monkeypatch.setattr(settings, "BASIC_AUTH_PASSWORD", _AUTH_PASSWORD)
+        response = client.get("/api/profile")
+        assert response.status_code == 503
+
+    def test_exempt_routes_remain_reachable_in_production(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "APP_ENV", "production")
+        monkeypatch.setattr(settings, "BASIC_AUTH_USER", "")
+        monkeypatch.setattr(settings, "BASIC_AUTH_PASSWORD", "")
+        response = client.get("/api/health")
+        assert response.status_code == 200
+
+    def test_production_with_credentials_set_authenticates_normally(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "APP_ENV", "production")
+        monkeypatch.setattr(settings, "BASIC_AUTH_USER", _AUTH_USER)
+        monkeypatch.setattr(settings, "BASIC_AUTH_PASSWORD", _AUTH_PASSWORD)
+        response = client.get(
+            "/api/profile",
+            headers={"Authorization": _basic(_AUTH_USER, _AUTH_PASSWORD)},
+        )
+        assert response.status_code == 200
+
+    def test_production_with_credentials_set_rejects_wrong_creds(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "APP_ENV", "production")
+        monkeypatch.setattr(settings, "BASIC_AUTH_USER", _AUTH_USER)
+        monkeypatch.setattr(settings, "BASIC_AUTH_PASSWORD", _AUTH_PASSWORD)
+        response = client.get(
+            "/api/profile",
+            headers={"Authorization": _basic(_AUTH_USER, "wrong-password")},
+        )
+        assert response.status_code == 401
