@@ -4,6 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { CoachReport } from '@/lib/types';
 import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2, RefreshCw } from 'lucide-react';
 
+// Public env var inlined at build time. Set NEXT_PUBLIC_SHOW_DEBUG_PANEL=true
+// (or "1") on the build environment to expose the LLM-input/output panel.
+const SHOW_DEBUG_PANEL =
+  process.env.NEXT_PUBLIC_SHOW_DEBUG_PANEL === 'true' ||
+  process.env.NEXT_PUBLIC_SHOW_DEBUG_PANEL === '1';
+
 interface Props {
   activityId: string;
   hasMetrics: boolean;
@@ -206,38 +212,41 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
         </span>
       </div>
 
-      {/* Debug */}
-      <details className="text-xs text-slate-400">
-        <summary className="cursor-pointer hover:text-slate-600">
-          Debug: LLM Input & Output
-        </summary>
-        <div className="mt-2 space-y-3">
-          <div>
-            <h4 className="font-semibold text-slate-500 mb-1">System Prompt</h4>
-            <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
-              {report.debug.system_prompt}
-            </pre>
+      {/* Debug: opt-in via NEXT_PUBLIC_SHOW_DEBUG_PANEL=true (or "1"). Off in
+          prod by default; the panel exposes the full context pack and prompt. */}
+      {SHOW_DEBUG_PANEL && (
+        <details className="text-xs text-slate-400">
+          <summary className="cursor-pointer hover:text-slate-600">
+            Debug: LLM Input & Output
+          </summary>
+          <div className="mt-2 space-y-3">
+            <div>
+              <h4 className="font-semibold text-slate-500 mb-1">System Prompt</h4>
+              <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
+                {report.debug.system_prompt}
+              </pre>
+            </div>
+            <div>
+              <h4 className="font-semibold text-slate-500 mb-1">Context Pack (LLM Input)</h4>
+              <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto max-h-96 overflow-y-auto">
+                {JSON.stringify(report.debug.context_pack, null, 2)}
+              </pre>
+            </div>
+            <div>
+              <h4 className="font-semibold text-slate-500 mb-1">Raw LLM Response</h4>
+              <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
+                {report.debug.raw_llm_response || '(empty)'}
+              </pre>
+            </div>
+            <div>
+              <h4 className="font-semibold text-slate-500 mb-1">Meta</h4>
+              <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto">
+                {JSON.stringify(report.meta, null, 2)}
+              </pre>
+            </div>
           </div>
-          <div>
-            <h4 className="font-semibold text-slate-500 mb-1">Context Pack (LLM Input)</h4>
-            <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto max-h-96 overflow-y-auto">
-              {JSON.stringify(report.debug.context_pack, null, 2)}
-            </pre>
-          </div>
-          <div>
-            <h4 className="font-semibold text-slate-500 mb-1">Raw LLM Response</h4>
-            <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
-              {report.debug.raw_llm_response || '(empty)'}
-            </pre>
-          </div>
-          <div>
-            <h4 className="font-semibold text-slate-500 mb-1">Meta</h4>
-            <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto">
-              {JSON.stringify(report.meta, null, 2)}
-            </pre>
-          </div>
-        </div>
-      </details>
+        </details>
+      )}
     </div>
   );
 }

@@ -28,7 +28,6 @@ export default function RootLayout({
                 Trends
               </Link>
             </div>
-            <div className="text-sm text-gray-500">MVP Mode</div>
           </div>
         </nav>
         <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-8">
