@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { RefreshCw } from 'lucide-react';
+import { fetchFromAPI } from '@/lib/api';
 
 export default function SyncButton() {
   const router = useRouter();
@@ -13,13 +14,7 @@ export default function SyncButton() {
     setLoading(true);
     setStats(null);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/sync`, {
-        method: 'POST'
-      });
-      
-      if (!res.ok) throw new Error("Sync failed");
-      
-      const data = await res.json();
+      const data = await fetchFromAPI('/api/sync', { method: 'POST' });
       setStats(data);
       router.refresh(); // Reload server components to show new activities
       

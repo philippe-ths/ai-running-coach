@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import secrets
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -20,6 +21,8 @@ from starlette.types import ASGIApp
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 _REALM = "running-coach"
 _UNAUTH_HEADERS = {"WWW-Authenticate": f'Basic realm="{_REALM}", charset="UTF-8"'}
 
@@ -27,9 +30,11 @@ _UNAUTH_HEADERS = {"WWW-Authenticate": f'Basic realm="{_REALM}", charset="UTF-8"
 class BasicAuthMiddleware(BaseHTTPMiddleware):
     """Block requests that do not present matching HTTP basic credentials.
 
-    The middleware is a no-op when either credential is unset in settings, so
-    local development without secrets continues to work. In production both
-    values must be set or every gated endpoint is publicly reachable.
+    Outside production the middleware is a no-op when either credential is
+    unset, so local development without secrets continues to work. In
+    production a missing credential fails closed (503), because a typo during
+    secret rotation or a missed Fly secret on first deploy would otherwise
+    expose every gated route silently.
     """
 
     def __init__(self, app: ASGIApp, exempt_prefixes: tuple[str, ...]) -> None:
@@ -44,6 +49,12 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         expected_user = settings.BASIC_AUTH_USER
         expected_password = settings.BASIC_AUTH_PASSWORD
         if not expected_user or not expected_password:
+            if settings.APP_ENV == "production":
+                logger.critical(
+                    "basic_auth_credentials_missing_in_production",
+                    extra={"path": path},
+                )
+                return _service_unavailable()
             return await call_next(request)
 
         credentials = _parse_basic_auth(request.headers.get("authorization"))
@@ -83,3 +94,7 @@ def _parse_basic_auth(header_value: str | None) -> tuple[str, str] | None:
 
 def _unauthorized() -> Response:
     return Response(status_code=401, headers=_UNAUTH_HEADERS, content="Unauthorized")
+
+
+def _service_unavailable() -> Response:
+    return Response(status_code=503, content="Service Unavailable: auth misconfigured")
