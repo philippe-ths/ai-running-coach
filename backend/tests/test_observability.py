@@ -132,6 +132,26 @@ class TestInitSentry:
         assert kwargs["traces_sample_rate"] == 0.0
         mock_tag.assert_called_once_with("component", "worker")
 
+    def test_swallows_init_exception_so_process_still_boots(self, monkeypatch, caplog):
+        """A malformed DSN, a startup-time network policy, or a bad integration
+        kwarg used to abort the import of any process that called init_sentry
+        at module import time. The wrap catches the failure, logs it, and lets
+        the process keep booting without Sentry."""
+        monkeypatch.setattr(settings, "SENTRY_DSN", "this-is-not-a-real-dsn")
+
+        def _boom(*_args, **_kwargs):
+            raise Exception("malformed DSN")
+
+        with patch.object(observability.sentry_sdk, "init", side_effect=_boom), \
+                patch.object(observability.sentry_sdk, "set_tag") as mock_tag, \
+                caplog.at_level(logging.ERROR, logger="app.core.observability"):
+            observability.init_sentry("web")
+
+        # set_tag must not run if init failed
+        mock_tag.assert_not_called()
+        # A failure to init is loud but not fatal
+        assert any("sentry" in rec.message.lower() for rec in caplog.records)
+
 
 @pytest.fixture(autouse=True)
 def _restore_logging_after_each_test():

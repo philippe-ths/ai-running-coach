@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { fetchFromAPI } from '@/lib/api';
 
 const ACTIVITY_TYPES = [
   "Easy Run", "Recovery", "Long Run", 
@@ -23,15 +24,10 @@ export default function IntentSelector({ activityId, currentType, assignedClass 
     setLoading(true);
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/activities/${activityId}/intent`, {
+      await fetchFromAPI(`/api/activities/${activityId}/intent`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({ user_intent: newIntent }),
       });
-
-      if (!res.ok) throw new Error("Failed to update intent");
       router.refresh(); // Refresh page to see new metrics
     } catch (err) {
       console.error(err);

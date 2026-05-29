@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import { fetchFromAPI } from '@/lib/api';
 
 const OPTIONS_BY_TYPE: Record<string, string[]> = {
   Run: ["Easy Run", "Recovery", "Long Run", "Tempo", "Intervals", "Hills", "Race", "Treadmill"],
@@ -70,30 +71,19 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
             notes: notes || null
         };
         
-        // Parallel requests: Save Check-In AND Save Intent
-        const promises = [
-            fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/activities/${activityId}/checkin`, {
+        // Parallel requests: Save Check-In AND Save Intent. fetchFromAPI
+        // throws on non-OK, so Promise.all rejects if either call fails.
+        await Promise.all([
+            fetchFromAPI(`/api/activities/${activityId}/checkin`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(checkInPayload)
-            })
-        ];
-
-        // Only update intent if logic dictates (or always to be safe/simple)
-        // The endpoint is PUT /intent
-        promises.push(
-            fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/activities/${activityId}/intent`, {
+                body: JSON.stringify(checkInPayload),
+            }),
+            fetchFromAPI(`/api/activities/${activityId}/intent`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_intent: intent })
-            })
-        );
-        
-        const results = await Promise.all(promises);
-        results.forEach(res => {
-            if (!res.ok) throw new Error("Failed to save data");
-        });
-        
+                body: JSON.stringify({ user_intent: intent }),
+            }),
+        ]);
+
         // Optimistic update / switch to view
         setIsEditing(false);
         router.refresh(); 

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import ConnectStravaButton from '@/components/ConnectStravaButton';
+import { fetchFromAPI } from '@/lib/api';
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -24,12 +25,12 @@ export default function ProfilePage() {
   });
 
   useEffect(() => {
-    fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/profile`)
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to load profile');
-        return res.json();
-      })
+    fetchFromAPI('/api/profile')
       .then(data => {
+        if (!data) {
+          setLoading(false);
+          return;
+        }
         setFormData({
             goal_type: data.goal_type || 'general',
             experience_level: data.experience_level || 'intermediate',
@@ -51,12 +52,10 @@ export default function ProfilePage() {
     e.preventDefault();
     setSaving(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || ''}/api/profile`, {
+      await fetchFromAPI('/api/profile', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(formData),
       });
-      if (!res.ok) throw new Error('Failed to update');
       router.push('/');
     } catch (err) {
       console.error(err);

@@ -76,16 +76,27 @@ def init_sentry(component: str) -> None:
 
     `component` is the Fly process group ("web", "worker", "scheduler") and is
     attached to every event as a tag so the Sentry UI can filter by process.
+
+    Failures inside `sentry_sdk.init` (malformed DSN, startup network policy,
+    bad integration kwarg) are caught and logged. They must not prevent the
+    process from booting; the same image runs `alembic upgrade head` as Fly's
+    release_command, so an import-time crash here can block deploys.
     """
     if not settings.SENTRY_DSN:
         return
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        environment=settings.APP_ENV,
-        traces_sample_rate=0.0,
-        integrations=[
-            LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
-            RqIntegration(),
-        ],
-    )
-    sentry_sdk.set_tag("component", component)
+    try:
+        sentry_sdk.init(
+            dsn=settings.SENTRY_DSN,
+            environment=settings.APP_ENV,
+            traces_sample_rate=0.0,
+            integrations=[
+                LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+                RqIntegration(),
+            ],
+        )
+        sentry_sdk.set_tag("component", component)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "sentry_init_failed",
+            extra={"component": component},
+        )
