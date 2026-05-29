@@ -103,7 +103,8 @@ def compute_confidence(activity, streams_dict, check_in, interval_structure=None
     elif len(reasons) == 0:
         level = "high"
     else:
-        level = "medium" if reasons else "high"
+        # 0 < len(reasons) < 3 and no critical hits.
+        level = "medium"
 
     return level, reasons
 
