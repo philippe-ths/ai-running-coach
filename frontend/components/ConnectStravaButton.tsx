@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { CheckCircle2, ExternalLink, RefreshCw } from 'lucide-react';
+import { fetchFromAPI } from '@/lib/api';
 
 type StravaStatus = {
   connected: boolean;
@@ -9,20 +10,20 @@ type StravaStatus = {
   expires_at: number | null;
 };
 
+// OAuth login link is a browser navigation (not a fetch), and the callback
+// path is exempted from basic auth in the Next.js proxy, so leaving these
+// as relative URLs keeps the flow working in both local and deployed envs.
+const STRAVA_LOGIN_HREF = '/api/auth/strava/login';
+
 export default function ConnectStravaButton() {
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || '';
   const [status, setStatus] = useState<StravaStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API_BASE_URL}/api/auth/strava/status`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`status ${res.status}`);
-        return res.json();
-      })
-      .then((data: StravaStatus) => {
-        if (!cancelled) setStatus(data);
+    fetchFromAPI('/api/auth/strava/status')
+      .then((data: StravaStatus | null) => {
+        if (!cancelled && data) setStatus(data);
       })
       .catch(() => {
         if (!cancelled) setStatus({ connected: false, athlete_id: null, scope: null, expires_at: null });
@@ -33,7 +34,7 @@ export default function ConnectStravaButton() {
     return () => {
       cancelled = true;
     };
-  }, [API_BASE_URL]);
+  }, []);
 
   if (loading) {
     return <span className="text-sm text-gray-500">Checking Strava…</span>;
@@ -52,7 +53,7 @@ export default function ConnectStravaButton() {
           </span>
         </span>
         <a
-          href={`${API_BASE_URL}/api/auth/strava/login`}
+          href={STRAVA_LOGIN_HREF}
           className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
           title="Re-run the Strava OAuth flow to refresh tokens or switch athletes"
         >
@@ -65,7 +66,7 @@ export default function ConnectStravaButton() {
 
   return (
     <a
-      href={`${API_BASE_URL}/api/auth/strava/login`}
+      href={STRAVA_LOGIN_HREF}
       className="inline-flex items-center gap-2 bg-[#FC4C02] text-white px-4 py-2 rounded font-semibold hover:bg-[#E34402] transition-colors"
     >
       <ExternalLink size={18} />
