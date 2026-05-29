@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -49,6 +50,27 @@ class Settings(BaseSettings):
 
     # CORS allowlist (comma-separated). Drives app.add_middleware(CORSMiddleware).
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def _ensure_psycopg_driver(cls, v: str) -> str:
+        """Normalise the DATABASE_URL to the psycopg driver SQLAlchemy needs.
+
+        Railway's managed Postgres (and most providers) hand out a bare
+        ``postgresql://`` URL, and some emit the legacy ``postgres://`` scheme.
+        SQLAlchemy requires the explicit ``postgresql+psycopg://`` driver
+        prefix. Normalising here means every consumer (the engine in
+        ``db/session.py`` and Alembic in ``alembic/env.py``) inherits a
+        driver-qualified URL. A URL that already names a driver
+        (e.g. ``postgresql+psycopg://``) or a non-postgres URL is left as-is.
+        """
+        if v.startswith("postgresql+"):
+            return v
+        if v.startswith("postgresql://"):
+            return "postgresql+psycopg://" + v[len("postgresql://"):]
+        if v.startswith("postgres://"):
+            return "postgresql+psycopg://" + v[len("postgres://"):]
+        return v
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:

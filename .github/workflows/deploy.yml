@@ -1,4 +1,4 @@
-name: ci-and-deploy
+name: ci
 
 on:
   push:
@@ -62,20 +62,3 @@ jobs:
 
       - name: Lint + build
         run: npm run test
-
-  deploy:
-    name: deploy
-    needs: [backend-test, frontend-test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: fly-deploy
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Deploy to Fly
-        working-directory: backend
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl deploy --remote-only --config fly.toml
