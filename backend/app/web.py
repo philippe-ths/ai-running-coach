@@ -9,6 +9,7 @@ which means access logs are emitted as JSON in production.
 """
 
 import logging
+import os
 
 import uvicorn
 
@@ -20,11 +21,14 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     init_logging()
     init_sentry("web")
-    logger.info("Web booting; uvicorn binding 0.0.0.0:8000")
+    # Railway (and most PaaS) route to an injected $PORT; default to 8000 for
+    # local/docker parity where no PORT is set.
+    port = int(os.environ.get("PORT", "8000"))
+    logger.info("Web booting; uvicorn binding 0.0.0.0:%d", port)
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=port,
         log_config=None,
     )
 
