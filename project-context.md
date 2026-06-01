@@ -3,7 +3,7 @@
 ## Product Summary
 
 Running Coach is a single-user MVP that connects to Strava, ingests running activities, computes training signals, and produces opinionated post-run analysis.
-The intended user is an individual runner connected to their own Strava account; the app runs either locally via docker compose or as a deployed single-user instance on Fly and Vercel (see `docs/deployment/phase-1-plan.md`). Phase 2 introduces multi-user signup per ADR 0005.
+The intended user is an individual runner connected to their own Strava account; the app runs either locally via docker compose or as a deployed single-user instance on Railway (backend, Postgres, Redis) and Vercel (frontend). Phase 2 introduces multi-user signup per ADR 0005.
 The core flow is: connect Strava → sync activities → deep-process a run → view derived metrics and an LLM-generated coach report on the activity page.
 
 ## Domain Concepts
@@ -27,7 +27,7 @@ Coach-report email delivery is gated by `SMTP_HOST` and `NOTIFY_TO`; with both u
 The frontend renders an activity list on the home page, a per-activity detail page with charts and panels, a profile page, and a trends page with filters and chart views.
 Planned-workout capture is not yet implemented; `_extract_planned_workout` in `services/analysis/_orchestrator.py` returns `None` as a placeholder.
 There is no multi-user auth layer; the backend assumes a single local user and auto-creates one on first profile read.
-There is no production deployment target in-repo; the only runtime is local via `docker compose` plus uvicorn and `next dev`.
+There is no committed production deployment config in-repo; Railway hosts the backend, Postgres, and Redis, and Vercel hosts the frontend, both configured outside the repo. Locally the runtime is `docker compose` plus uvicorn and `next dev`.
 
 ## Important Constraints
 

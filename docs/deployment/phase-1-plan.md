@@ -1,5 +1,7 @@
 # Phase 1 deployment plan: ship the single-user app to Fly.io
 
+> **Historical — superseded.** This plan targeted Fly.io (backend), Neon (Postgres), and Upstash (Redis). The backend was later migrated to Railway, which consolidates the backend (web, worker, scheduler), Postgres, and Redis under a single workspace hard usage limit; the frontend remains on Vercel. See issue #97. This document is retained for historical context and the code/middleware changes it describes (basic auth, structured logging, settings) remain accurate; the Fly/Neon/Upstash provisioning and CI sections do not reflect the current deployment.
+
 This is the concrete checklist for Phase 1 of the deployment roadmap agreed in a grilling session on 2026-05-28. The goal is **getting the current single-user codebase running in production on the public internet, end-to-end, with observability**, as a deliberate exercise in learning deployment without bundling other concerns.
 
 Phase 1 explicitly does **not** include: multi-user auth (Phase 2), LLM provider abstraction (Phase 3), eval harness (Phase 3), prompt caching (Phase 3), custom domain (optional, deferrable).
