@@ -3,7 +3,7 @@
 Running this module as `python -m app.jobs.scheduler` first registers the
 recurring polling schedule (idempotent across restarts) and then enters the
 rq-scheduler poll loop so scheduled jobs actually fire. One process, one
-command — suitable as a Fly.io `[processes]` entrypoint.
+command — suitable as a standalone process entrypoint.
 """
 
 import logging

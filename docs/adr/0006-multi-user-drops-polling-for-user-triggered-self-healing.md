@@ -14,7 +14,7 @@ The time-based polling job and its scheduler are deleted entirely:
 
 - `app/jobs/polling.py` removed.
 - `app/jobs/scheduler.py` removed.
-- The `rqscheduler` process disappears from the runtime topology. Fly.io deployment runs two processes (web + worker) instead of three. `docker-compose.yml`'s scheduler service is removed for parity.
+- The `rqscheduler` process disappears from the runtime topology. The deployment runs two processes (web + worker) instead of three. `docker-compose.yml`'s scheduler service is removed for parity.
 - `POLLING_INTERVAL_SECONDS` is dropped from settings.
 
 ADR 0004's dedup mechanism (`coach_notification_sent_at` on `Activity`) is **retained unchanged**. The self-healing path and the webhook path are still two sources of the same `process_new_activity_job`, and the same race condition (webhook briefly delayed; self-healing catches it first, or vice versa) is still possible. The dedup column continues to be the single source of truth for "did this activity already get processed."

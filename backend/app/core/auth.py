@@ -33,7 +33,7 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
     Outside production the middleware is a no-op when either credential is
     unset, so local development without secrets continues to work. In
     production a missing credential fails closed (503), because a typo during
-    secret rotation or a missed Fly secret on first deploy would otherwise
+    secret rotation or a missed secret on first deploy would otherwise
     expose every gated route silently.
     """
 

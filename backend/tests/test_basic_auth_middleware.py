@@ -113,7 +113,7 @@ class TestProductionFailsClosed:
     """In APP_ENV=production, missing basic-auth credentials must fail closed.
 
     Local-dev convenience (no creds, no gate) is intentional but unsafe to leak
-    into production. A typo during secret rotation or a missed Fly secret on
+    into production. A typo during secret rotation or a missed secret on
     initial deploy would otherwise expose every gated route silently.
     """
 

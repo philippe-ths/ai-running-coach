@@ -2,8 +2,8 @@
 
 Called from the entrypoint of each process group (web, worker, scheduler) so
 unhandled exceptions and error-level logs from any of them reach Sentry, and
-so log output is uniformly structured for ingestion by `flyctl logs` or any
-future log aggregator.
+so log output is uniformly structured for ingestion by the hosting platform's
+log collector or any future log aggregator.
 """
 
 from __future__ import annotations
@@ -74,13 +74,13 @@ def init_logging() -> None:
 def init_sentry(component: str) -> None:
     """Initialise the Sentry SDK. No-op when SENTRY_DSN is unset.
 
-    `component` is the Fly process group ("web", "worker", "scheduler") and is
+    `component` is the process group ("web", "worker", "scheduler") and is
     attached to every event as a tag so the Sentry UI can filter by process.
 
     Failures inside `sentry_sdk.init` (malformed DSN, startup network policy,
     bad integration kwarg) are caught and logged. They must not prevent the
-    process from booting; the same image runs `alembic upgrade head` as Fly's
-    release_command, so an import-time crash here can block deploys.
+    process from booting; the same image runs `alembic upgrade head` as the
+    deploy's release command, so an import-time crash here can block deploys.
     """
     if not settings.SENTRY_DSN:
         return
