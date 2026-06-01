@@ -17,14 +17,21 @@ dependencies = [
     "rq-scheduler>=0.13.1",
     "python-multipart>=0.0.9",
     "numpy>=1.24.0",
-    "anthropic>=0.40.0",
-    "sentry-sdk[fastapi]>=2.0.0"
+    "anthropic>=0.40.0"
 ]
 
 [project.optional-dependencies]
+# Optional error tracking. Logs-only by default (issue #102); install this
+# extra and set SENTRY_DSN to re-enable Sentry capture.
+observability = [
+    "sentry-sdk[fastapi]>=2.0.0"
+]
 test = [
     "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0"
+    "pytest-asyncio>=0.23.0",
+    # Pull in the optional SDK so the suite can exercise the Sentry-present
+    # path; production installs core deps only and relies on the import guard.
+    "running-coach-backend[observability]"
 ]
 
 [tool.pytest.ini_options]
