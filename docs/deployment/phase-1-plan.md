@@ -1,6 +1,8 @@
 # Phase 1 deployment plan: ship the single-user app to Fly.io
 
 > **Historical — superseded.** This plan targeted Fly.io (backend), Neon (Postgres), and Upstash (Redis). The backend was later migrated to Railway, which consolidates the backend (web, worker, scheduler), Postgres, and Redis under a single workspace hard usage limit; the frontend remains on Vercel. See issue #97. This document is retained for historical context and the code/middleware changes it describes (basic auth, structured logging, settings) remain accurate; the Fly/Neon/Upstash provisioning and CI sections do not reflect the current deployment.
+>
+> **Observability — Sentry dropped (issue #102).** Error tracking was formally dropped in favour of logs-only observability for the single-user MVP. Structured JSON logging (described below) remains active and is the observability surface; `sentry-sdk` is now an optional `observability` extra rather than a runtime dependency, and `SENTRY_DSN` is unset in production. The done-criterion below — "Sentry has captured at least one deliberately-induced exception" — is therefore superseded and intentionally unmet. Re-enabling Sentry is `pip install -e "backend[observability]"` plus setting `SENTRY_DSN`.
 
 This is the concrete checklist for Phase 1 of the deployment roadmap agreed in a grilling session on 2026-05-28. The goal is **getting the current single-user codebase running in production on the public internet, end-to-end, with observability**, as a deliberate exercise in learning deployment without bundling other concerns.
 

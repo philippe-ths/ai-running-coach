@@ -1,9 +1,11 @@
-"""Sentry SDK init and structured JSON logging.
+"""Structured JSON logging, with optional Sentry error tracking.
 
 Called from the entrypoint of each process group (web, worker, scheduler) so
-unhandled exceptions and error-level logs from any of them reach Sentry, and
-so log output is uniformly structured for ingestion by the hosting platform's
-log collector or any future log aggregator.
+log output is uniformly structured for ingestion by the hosting platform's log
+collector. Error tracking via Sentry is optional and logs-only by default (see
+issue #102): `sentry_sdk` is not a runtime dependency and `init_sentry` is a
+no-op unless both the SDK is installed (`pip install -e ".[observability]"`)
+and `SENTRY_DSN` is set.
 """
 
 from __future__ import annotations
@@ -14,9 +16,14 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
-import sentry_sdk
-from sentry_sdk.integrations.logging import LoggingIntegration
-from sentry_sdk.integrations.rq import RqIntegration
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.integrations.rq import RqIntegration
+
+    _SENTRY_AVAILABLE = True
+except ImportError:
+    _SENTRY_AVAILABLE = False
 
 from app.core.config import settings
 
@@ -72,7 +79,12 @@ def init_logging() -> None:
 
 
 def init_sentry(component: str) -> None:
-    """Initialise the Sentry SDK. No-op when SENTRY_DSN is unset.
+    """Initialise the Sentry SDK. No-op unless the SDK is installed and
+    SENTRY_DSN is set.
+
+    Sentry is optional (logs-only by default; see issue #102). When the
+    `observability` extra is not installed, `sentry_sdk` is absent and this is
+    a no-op regardless of SENTRY_DSN.
 
     `component` is the process group ("web", "worker", "scheduler") and is
     attached to every event as a tag so the Sentry UI can filter by process.
@@ -82,7 +94,7 @@ def init_sentry(component: str) -> None:
     process from booting; the same image runs `alembic upgrade head` as the
     deploy's release command, so an import-time crash here can block deploys.
     """
-    if not settings.SENTRY_DSN:
+    if not _SENTRY_AVAILABLE or not settings.SENTRY_DSN:
         return
     try:
         sentry_sdk.init(

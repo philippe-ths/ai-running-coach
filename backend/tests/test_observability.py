@@ -111,6 +111,21 @@ class TestInitLogging:
         assert payload["level"] == "INFO"
 
 
+class TestInitSentryWithoutSDK:
+    """Sentry is optional (issue #102): with the SDK absent, init_sentry is a
+    no-op regardless of SENTRY_DSN, and importing the module never fails."""
+
+    def test_noop_when_sdk_unavailable_even_with_dsn_set(self, monkeypatch):
+        monkeypatch.setattr(observability, "_SENTRY_AVAILABLE", False)
+        monkeypatch.setattr(settings, "SENTRY_DSN", "https://x@example.ingest.sentry.io/1")
+        # Must not raise (no sentry_sdk reference is reached) and must do nothing.
+        observability.init_sentry("web")
+
+
+@pytest.mark.skipif(
+    not observability._SENTRY_AVAILABLE,
+    reason="sentry_sdk not installed (install the 'observability' extra)",
+)
 class TestInitSentry:
     def test_is_noop_when_dsn_is_unset(self, monkeypatch):
         monkeypatch.setattr(settings, "SENTRY_DSN", "")
