@@ -20,6 +20,7 @@ A `RunnerBaseline` stores rolling baselines used for comparison and drift detect
 
 The backend exposes JSON endpoints under `/api` for health, Strava OAuth, profile CRUD, activity listing/detail, sync, deep processing, intent labelling, check-ins, trends, coach report, and coach chat.
 Strava ingestion supports both manual sync (`POST /api/sync`) and incoming webhooks (`/api/webhooks/strava`); webhook `aspect_type=create` events enqueue `process_new_activity_job` (ingest → analyze → coach → email), `update` events enqueue `sync_activity_job` (re-ingest only), and `delete` events soft-delete the activity row.
+Incoming webhook events are authenticated before any side effect by `_event_is_authentic` in `app/api/webhooks.py`: `owner_id` must match a connected `StravaAccount`, and `subscription_id` must match `STRAVA_WEBHOOK_SUBSCRIPTION_ID` when that setting is non-zero, otherwise the request is rejected with 403.
 A polling fallback (`poll_for_new_activities_job`) discovers activities Strava webhook missed and converges on the same pipeline; it runs every `POLLING_INTERVAL_SECONDS` via an `rq-scheduler` process.
 Deep processing classifies the activity, computes metrics from streams (smoothing, splits, intervals, stops, efficiency, risk), and runs workout matching against any planned workout.
 The coach pipeline builds a context pack, calls Anthropic, validates the response against a Pydantic schema, then runs a deterministic policy validator before storing the report; LLM/parse failures persist a fallback `CoachReport` with `is_fallback=True`.
@@ -27,7 +28,7 @@ Coach-report email delivery is gated by `SMTP_HOST` and `NOTIFY_TO`; with both u
 The frontend renders an activity list on the home page, a per-activity detail page with charts and panels, a profile page, and a trends page with filters and chart views.
 Planned-workout capture is not yet implemented; `_extract_planned_workout` in `services/analysis/_orchestrator.py` returns `None` as a placeholder.
 There is no multi-user auth layer; the backend assumes a single local user and auto-creates one on first profile read.
-There is no committed production deployment config in-repo; Railway hosts the backend, Postgres, and Redis, and Vercel hosts the frontend, both configured outside the repo. Locally the runtime is `docker compose` plus uvicorn and `next dev`.
+Railway hosts the backend, Postgres, and Redis, and Vercel hosts the frontend; their build and deploy config lives on the platforms rather than in an in-repo deploy manifest. The repo's only committed automation is the CI workflow under `.github/workflows/`. Locally the runtime is `docker compose` plus uvicorn and `next dev`.
 
 ## Important Constraints
 
@@ -35,7 +36,8 @@ Settings come from `backend/.env` via `pydantic-settings`; `DATABASE_URL` is req
 Anthropic access requires `ANTHROPIC_API_KEY`; the coach model id and prompt id are configured via `COACH_MODEL_ID` and `COACH_PROMPT_ID`.
 Email notifications are gated by `SMTP_HOST` (empty = notifier is no-op) and `NOTIFY_TO`; transport is configured via `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_USE_STARTTLS`.
 The polling fallback interval is `POLLING_INTERVAL_SECONDS` (default 120s, ~720 Strava calls/day per account, well under Strava's 1000/day limit).
-CORS is restricted to `http://localhost:3000` and `http://localhost:8000` in `app/main.py`.
+CORS origins are configured via `CORS_ALLOWED_ORIGINS` (comma-separated, default `http://localhost:3000,http://localhost:8000`), parsed by `Settings.cors_allowed_origins_list` and applied in `app/main.py`.
+Error tracking is logs-only by default; Sentry capture is opt-in, requiring the `observability` extra (`sentry-sdk[fastapi]`) installed and `SENTRY_DSN` set, otherwise `init_sentry` in `app/core/observability.py` is a no-op.
 The deterministic policy validator in `services/coach/validator.py` rejects LLM output that claims specific interval execution counts (e.g. "8x400m", "executed 8") and other policy violations; per `ai-workflow.md` this gate must not be bypassed.
 When data confidence is low, downstream analysis is expected to default to conservative output (documented intent in `README.md`).
 Postgres is exposed on host port `5433` (mapped from container `5432`); Redis on `6379`; backend on `8000`; frontend on `3000`.
@@ -65,6 +67,7 @@ Data flow: Strava API → strava_ingestion → Activity/ActivityStream rows → 
 `numpy`: numerical computation in the processing pipeline (smoothing, metrics, intervals).
 `anthropic`: Claude API client used by the coach service.
 `python-multipart`: form parsing required by FastAPI for non-JSON request bodies.
+`sentry-sdk[fastapi]` (optional `observability` extra): error tracking, installed only when Sentry capture is enabled.
 `pytest`, `pytest-asyncio` (test extra): test runner and async test support.
 `next`, `react`, `react-dom`: frontend framework and renderer.
 `recharts`: charting library for stream and trend views.
@@ -78,7 +81,7 @@ Data flow: Strava API → strava_ingestion → Activity/ActivityStream rows → 
 
 `backend/app/main.py` boots the FastAPI app and registers routers.
 `backend/app/api/` contains one router per resource: `health.py`, `auth.py`, `profile.py`, `activities.py`, `webhooks.py`, `trends.py`, `coach.py`.
-`backend/app/core/config.py` defines the typed settings object; `backend/app/core/queue.py` holds RQ queue setup.
+`backend/app/core/config.py` defines the typed settings object; `backend/app/core/queue.py` holds RQ queue setup; `backend/app/core/observability.py` provides `init_logging` and `init_sentry` (import-guarded, no-op without the optional SDK).
 `backend/app/db/base.py` defines the SQLAlchemy `Base`; `backend/app/db/session.py` provides `SessionLocal` and the `get_db` dependency.
 `backend/app/models/` holds one ORM model per file (`activity`, `activity_stream`, `checkin`, `coach_chat_message`, `coach_report`, `derived_metric`, `runner_baseline`, `strava_account`, `user`, `user_profile`) with a barrel `__init__.py`.
 `backend/app/schemas/` holds Pydantic request/response schemas, one file per domain (`activity`, `chat`, `checkin`, `coach`, `detail`, `profile`, `sync`, `trends`, `user`).
@@ -108,7 +111,7 @@ Backend unit and policy coverage exists for analysis, coach context, coach schem
 Integration-tagged tests are excluded from the default regression run because they depend on local services or deeper cross-layer setup.
 Frontend regression runs via `npm run test`, which invokes `next lint` then `next build`; there is no Jest or component test runner configured.
 Frontend smoke runs via `npm run smoke` (`scripts/smoke.mjs`), which boots a mock API on `3001` and a Next dev server on `3100` and verifies core routes load.
-There is no CI workflow file under `.github/workflows/`; `.github/` contains `copilot-instructions.md` and a `hooks/` directory only.
+CI runs via `.github/workflows/deploy.yml` (workflow name `ci`) on push and pull requests to `main`, with a `backend-test` job (`make backend-test` on Python 3.12) and a `frontend-test` job (`npm run test` on Node 20); `.github/` also contains `copilot-instructions.md` and a `hooks/` directory.
 Major gap: no automated frontend unit or component tests beyond the build-time lint and smoke route checks.
 Major gap: no end-to-end test that exercises a real Strava-to-coach-report flow.
 
