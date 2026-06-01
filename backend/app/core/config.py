@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     STRAVA_REDIRECT_URI: str = "http://localhost:8000/api/auth/strava/callback"
     STRAVA_WEBHOOK_VERIFY_TOKEN: str = ""
     STRAVA_WEBHOOK_CALLBACK_URL: str = "http://localhost:8000/api/webhooks/strava"
+    # Active push-subscription id returned by Strava at registration. Strava
+    # does not sign webhook payloads, so incoming events are authenticated by
+    # matching this id (when set) and the connected athlete. 0 = unenforced
+    # (local dev); set this to the live subscription id in production. See #100.
+    STRAVA_WEBHOOK_SUBSCRIPTION_ID: int = 0
 
     # Coach AI
     ANTHROPIC_API_KEY: str = ""
