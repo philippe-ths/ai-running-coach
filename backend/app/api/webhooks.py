@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.models import Activity
+from app.models import Activity, StravaAccount
 from app.core.queue import queue
 from app.jobs.process_new_activity import process_new_activity_job
 from app.jobs.strava_sync import sync_activity_job
@@ -54,14 +54,63 @@ def verify_webhook(
 
     raise HTTPException(status_code=403, detail="Invalid verification token")
 
+def _event_is_authentic(event: "StravaEvent", db: Session) -> bool:
+    """Authenticate an incoming webhook event.
+
+    Strava does not sign webhook payloads, and the endpoint is exempt from
+    basic auth so the verification handshake can reach it. Anyone who learns
+    the callback URL could otherwise POST a forged but well-formed event to
+    enqueue jobs or soft-delete activities (see #100). Guard with two cheap
+    equality checks against values we already hold:
+
+    1. The event must reference our active push subscription. Strava only
+       returns the subscription id to us at registration, so it is the
+       stronger (secret-ish) check. Skipped when unconfigured (id 0) so local
+       dev is not blocked.
+    2. The event owner must be a connected athlete. Athlete ids are public, so
+       this check is weaker on its own, but it is always available from the DB
+       and never drifts, so it stays on even when (1) is unconfigured.
+    """
+    expected_subscription_id = settings.STRAVA_WEBHOOK_SUBSCRIPTION_ID
+    if expected_subscription_id and event.subscription_id != expected_subscription_id:
+        logger.warning(
+            "strava_webhook_rejected_subscription_mismatch",
+            extra={
+                "event_subscription_id": event.subscription_id,
+                "object_id": event.object_id,
+            },
+        )
+        return False
+
+    account = db.execute(
+        select(StravaAccount).where(
+            StravaAccount.strava_athlete_id == event.owner_id
+        )
+    ).scalars().first()
+    if account is None:
+        logger.warning(
+            "strava_webhook_rejected_unknown_owner",
+            extra={"owner_id": event.owner_id, "object_id": event.object_id},
+        )
+        return False
+
+    return True
+
+
 @router.post("/webhooks/strava")
 async def receive_webhook(
-    event: StravaEvent, 
+    event: StravaEvent,
     db: Session = Depends(get_db)
 ):
     """
     Handle incoming events from Strava.
     """
+    if not _event_is_authentic(event, db):
+        # Reject before any side effect (enqueue or soft-delete). A forged
+        # sender is not Strava, so a 403 here does not affect the real
+        # subscription's health.
+        raise HTTPException(status_code=403, detail="Unauthenticated webhook event")
+
     if event.object_type != "activity":
         # We assume we only care about activities for now
         return {"status": "ignored", "reason": "not_activity"}

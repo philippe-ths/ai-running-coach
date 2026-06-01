@@ -97,11 +97,30 @@ class TestWebhookVerifyFailsClosedInProduction:
         assert response.status_code != 503
 
 @pytest.mark.integration
-def test_webhook_receive_event(client, override_get_db):
+def test_webhook_receive_event(client, db):
     """
     Test receiving a new activity event.
     Since handling is mocked/placeholder for now, just check 200 OK
     """
+    from uuid import uuid4
+    from app.models import StravaAccount, User
+
+    # The event must come from a connected athlete to be authentic (#100).
+    user = User(email=f"u-{uuid4()}@example.com")
+    db.add(user)
+    db.commit()
+    db.add(
+        StravaAccount(
+            user_id=user.id,
+            strava_athlete_id=999,
+            access_token="test-token-do-not-use-in-prod",
+            refresh_token="test-refresh-do-not-use-in-prod",
+            expires_at=9999999999,
+            scope="read",
+        )
+    )
+    db.commit()
+
     payload = {
         "object_type": "activity",
         "object_id": 12345,
