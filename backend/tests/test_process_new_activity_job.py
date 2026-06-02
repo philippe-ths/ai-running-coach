@@ -9,6 +9,7 @@ import pytest
 from app.core.config import settings
 from app.jobs.process_new_activity import process_new_activity
 from app.models import Activity, StravaAccount, User, UserProfile
+from app.models.coach_report import CoachReport
 from app.services.notifications import InMemoryNotifier, set_notifier
 from app.services.strava_ingestion import (
     InMemoryStravaAdapter,
@@ -182,6 +183,79 @@ async def test_pipeline_skips_email_when_llm_fallback(
     assert notifier.sent == []
     activity = db.query(Activity).filter_by(strava_activity_id=9001).first()
     assert activity.coach_notification_sent_at is None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_sends_telegram_on_happy_path(
+    db, strava_adapter, notifier, configured, monkeypatch
+):
+    # Telegram configured on top of the email settings: the Telegram channel
+    # takes priority, so the notification is rendered Telegram-shaped.
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "42")
+    _user, account = _seed(db)
+    _seed_strava(strava_adapter)
+
+    fake_client = AsyncMock()
+    fake_client.generate_json = AsyncMock(return_value=_valid_llm_json())
+
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake_client):
+        result = await process_new_activity(
+            db=db, account=account, strava_activity_id=9001,
+            strava_port=strava_adapter, notifier=notifier,
+        )
+
+    assert result is not None
+    assert len(notifier.sent) == 1
+    sent = notifier.sent[0]
+    assert sent.to == "42"
+    assert "8.2km" in sent.subject
+    assert "Stayed in zone 2 throughout." in sent.text
+    # Telegram carries the activity link out of band, not embedded HTML.
+    assert sent.html == ""
+    assert sent.url == "http://localhost:3000/activity/" + str(
+        db.query(Activity).filter_by(strava_activity_id=9001).first().id
+    )
+
+    activity = db.query(Activity).filter_by(strava_activity_id=9001).first()
+    assert activity.coach_notification_sent_at is not None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_send_failure_is_non_fatal_and_leaves_sentinel_null(
+    db, strava_adapter, configured, monkeypatch
+):
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "42")
+    _user, account = _seed(db)
+    _seed_strava(strava_adapter)
+
+    class FailingNotifier:
+        def send(self, notification):
+            raise OSError("Network is unreachable")
+
+    fake_client = AsyncMock()
+    fake_client.generate_json = AsyncMock(return_value=_valid_llm_json())
+
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake_client):
+        # Must not raise: a transport failure is swallowed and logged.
+        result = await process_new_activity(
+            db=db, account=account, strava_activity_id=9001,
+            strava_port=strava_adapter, notifier=FailingNotifier(),
+        )
+
+    assert result is None
+    activity = db.query(Activity).filter_by(strava_activity_id=9001).first()
+    # Sentinel left null so the activity stays eligible for a later re-send.
+    assert activity.coach_notification_sent_at is None
+    # The coach report itself was still generated and persisted.
+    report = (
+        db.query(CoachReport)
+        .filter(CoachReport.activity_id == activity.id)
+        .first()
+    )
+    assert report is not None
+    assert report.is_fallback is False
 
 
 @pytest.mark.asyncio
