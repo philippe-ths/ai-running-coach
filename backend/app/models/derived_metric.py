@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Float, Integer, ForeignKey, DateTime, JSON, Uuid
+from sqlalchemy import String, Float, Integer, Boolean, ForeignKey, DateTime, JSON, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -16,7 +16,15 @@ class DerivedMetric(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=generate_uuid)
     activity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("activities.id"), unique=True)
 
-    activity_class: Mapped[str] = mapped_column(String)  # Interval, Tempo, Long, etc.
+    # Orthogonal classification axes (ADR 0007). Replaces the former single
+    # `activity_class` label. Nullable because non-run activities and runs
+    # without HR populate only the axes that apply to them.
+    effort: Mapped[Optional[str]] = mapped_column(String, nullable=True)          # recovery|easy|moderate|tempo|hard
+    duration_class: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # standard|long
+    structure: Mapped[Optional[str]] = mapped_column(String, nullable=True)       # continuous|intervals
+    is_hilly: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    is_race: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
     effort_score: Mapped[float] = mapped_column(Float)
     pace_variability: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     hr_drift: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
