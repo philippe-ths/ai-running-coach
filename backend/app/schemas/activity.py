@@ -52,4 +52,6 @@ class ActivityRead(ActivityBase):
 
 
 class ActivityIntentUpdate(BaseModel):
-    user_intent: str
+    # Optional: null clears the stated intent (the runner is leaving the
+    # activity to the measured classification rather than overriding it).
+    user_intent: Optional[str] = None

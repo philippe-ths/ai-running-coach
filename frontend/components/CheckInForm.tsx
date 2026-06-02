@@ -45,8 +45,10 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
   const [notes, setNotes] = useState(existingCheckIn?.notes ?? '');
   
   // Intent State. Stated intent is independent of the measured classification
-  // (ADR 0007), so it is not pre-seeded from the detected headline.
-  const [intent, setIntent] = useState(currentType || typeOptions[0]);
+  // (ADR 0007), so it is not pre-seeded from the detected headline. Empty means
+  // "not set — use the detected classification", a neutral default rather than a
+  // misleading specific type.
+  const [intent, setIntent] = useState(currentType || "");
 
   const [submitting, setSubmitting] = useState(false);
 
@@ -58,8 +60,8 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
       setNotes(existingCheckIn.notes || '');
     }
     // Also sync intent if it changes externally or on load
-    setIntent(currentType || typeOptions[0]);
-  }, [existingCheckIn, currentType, typeOptions]);
+    setIntent(currentType || "");
+  }, [existingCheckIn, currentType]);
   
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -81,7 +83,9 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
             }),
             fetchFromAPI(`/api/activities/${activityId}/intent`, {
                 method: 'PUT',
-                body: JSON.stringify({ user_intent: intent }),
+                // Empty selection clears the intent rather than recording a type
+                // the runner never chose.
+                body: JSON.stringify({ user_intent: intent === "" ? null : intent }),
             }),
         ]);
 
@@ -113,9 +117,9 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
               <div className="col-span-2 flex justify-between border-b border-green-100 pb-1">
                   <dt className="text-green-800 opacity-80">Type</dt>
                   <dd className="font-medium text-right">
-                       {intent}
+                       {currentType || headline || 'Auto-detected'}
                        <span className="text-[10px] block opacity-60 font-normal">
-                         {currentType ? '(Manual)' : '(Auto)'}
+                         {currentType ? '(Manual)' : '(Auto-detected)'}
                        </span>
                   </dd>
               </div>
@@ -157,13 +161,14 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
           onChange={(e) => setIntent(e.target.value)}
           className="w-full border border-gray-300 rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all bg-white"
         >
+          <option value="">{headline ? `Auto-detected: ${headline}` : "Auto-detected"}</option>
           {typeOptions.map(type => (
               <option key={type} value={type}>{type}</option>
           ))}
         </select>
         {headline && (
             <p className="text-xs text-gray-400 mt-1">
-                Detected as: {headline}
+                Detected as: {headline}{intent === "" ? "" : " · overridden below"}
             </p>
         )}
       </div>
@@ -214,7 +219,7 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
               setPain(existingCheckIn.pain_score);
               setEffort(existingCheckIn.rpe);
               setNotes(existingCheckIn.notes || '');
-              setIntent(currentType || typeOptions[0]);
+              setIntent(currentType || "");
               setIsEditing(false);
             }}
             className="px-3 py-2 rounded text-sm font-medium text-gray-600 hover:bg-gray-200 border border-gray-300 transition-colors"
