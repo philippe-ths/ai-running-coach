@@ -13,6 +13,7 @@ from typing import Iterable
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.queue import queue
 from app.db.session import SessionLocal
 from app.models import Activity, StravaAccount
@@ -24,8 +25,6 @@ from app.services.strava_ingestion import (
 
 logger = logging.getLogger(__name__)
 
-_LOOKBACK = timedelta(hours=6)
-
 
 async def poll_for_new_activities(
     *, db: Session, strava_port: StravaPort
@@ -36,7 +35,9 @@ async def poll_for_new_activities(
     accounts: Iterable[StravaAccount] = db.query(StravaAccount).all()
     enqueued: list[int] = []
 
-    since = datetime.now(timezone.utc) - _LOOKBACK
+    since = datetime.now(timezone.utc) - timedelta(
+        seconds=settings.POLLING_LOOKBACK_SECONDS
+    )
 
     for account in accounts:
         try:

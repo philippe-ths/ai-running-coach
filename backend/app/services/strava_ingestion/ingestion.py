@@ -125,11 +125,19 @@ async def ingest_recent_activities(
     port: StravaPort,
     *,
     since: datetime | None = None,
+    fetch_streams: bool = True,
 ) -> tuple[list[Activity], SyncResponse]:
-    """Fetch recent activities, upsert them, and fetch their streams.
+    """Fetch recent activities, upsert them, and (optionally) fetch their streams.
 
     Returns the persisted Activity rows alongside a SyncResponse summary.
     Analysis is the caller's responsibility.
+
+    `fetch_streams=False` upserts activity summaries only, skipping the
+    per-activity stream call. This is the rate-limit-safe path for a
+    full-history backfill: streams cost one Strava call per activity, so
+    eagerly fetching them across a long window blows the 100-requests/15-min
+    ceiling. Summaries alone fully populate the activity list and the distance
+    / time trend charts; stream-derived analysis backfills separately. See #109.
     """
     stats = SyncResponse()
     ingested: list[Activity] = []
@@ -150,7 +158,8 @@ async def ingest_recent_activities(
                 db.flush()
                 stats.upserted += 1
 
-                await _fetch_and_store_streams(db, activity, access_token, port)
+                if fetch_streams:
+                    await _fetch_and_store_streams(db, activity, access_token, port)
                 db.commit()
 
                 ingested.append(activity)

@@ -4,6 +4,7 @@ from app.models import Activity, ActivityStream, StravaAccount, User
 from app.services.strava_ingestion import (
     InMemoryStravaAdapter,
     ingest_activity_by_id,
+    ingest_recent_activities,
     refetch_streams,
 )
 
@@ -57,6 +58,51 @@ async def test_ingest_activity_by_id_upserts_single_activity_no_streams(db):
     assert streams == []
     assert adapter.stream_calls == []
     assert adapter.activity_calls == [777]
+
+
+@pytest.mark.asyncio
+async def test_ingest_recent_summary_only_skips_stream_calls(db):
+    """fetch_streams=False upserts summaries without any per-activity stream call.
+
+    This is the rate-limit-safe backfill path: the activity rows land (so the
+    list and distance/time trend charts populate) but no stream rows are written
+    and no stream call is made. See #109.
+    """
+    account = _make_account(db, athlete_id=22222)
+    adapter = InMemoryStravaAdapter()
+    adapter.seed_activities([_raw_activity(801, "Backfilled"), _raw_activity(802, "Backfilled 2")])
+    adapter.seed_streams(801, {"time": {"data": [0, 1, 2]}})
+
+    ingested, stats = await ingest_recent_activities(
+        db, account, adapter, fetch_streams=False
+    )
+
+    assert stats.upserted == 2
+    assert {a.strava_activity_id for a in ingested} == {801, 802}
+    assert adapter.stream_calls == []
+    assert db.query(ActivityStream).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_ingest_recent_default_fetches_streams(db):
+    """Regression: the default path still fetches streams for each activity."""
+    account = _make_account(db, athlete_id=33333)
+    adapter = InMemoryStravaAdapter()
+    adapter.seed_activities([_raw_activity(901, "Routine")])
+    adapter.seed_streams(901, {"time": {"data": [0, 1, 2]}, "heartrate": {"data": [120, 130, 140]}})
+
+    ingested, stats = await ingest_recent_activities(db, account, adapter)
+
+    assert stats.upserted == 1
+    assert len(adapter.stream_calls) == 1
+    assert adapter.stream_calls[0][0] == 901
+    stored = {
+        s.stream_type
+        for s in db.query(ActivityStream)
+        .filter(ActivityStream.activity_id == ingested[0].id)
+        .all()
+    }
+    assert stored == {"time", "heartrate"}
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,12 @@ _BASE_BACKOFF_S = 1.0
 # Cap an honoured Retry-After so a misbehaving header cannot freeze a worker.
 _MAX_RETRY_AFTER_S = 60.0
 
+# Hard cap on pages walked by list_recent_activities. At per_page=50 this bounds
+# a single call to 2000 activities, enough for a full-history backfill of a
+# realistic single user. If the cap is hit the result is truncated; we log so a
+# silent truncation never masquerades as "fetched everything". See #109.
+_MAX_PAGES = 40
+
 
 def _parse_retry_after(response: httpx.Response, default: float) -> float:
     raw = response.headers.get("Retry-After")
@@ -130,33 +136,53 @@ class HTTPStravaAdapter:
         since: datetime,
         per_page: int = 50,
     ) -> list[dict]:
-        params = {
-            "page": 1,
-            "per_page": per_page,
-            "after": int(since.timestamp()),
-        }
+        """Return every activity since `since`, walking pages until exhausted.
+
+        Strava paginates `/athlete/activities`; a page shorter than `per_page`
+        is the last one. Fetching only page 1 (the old behaviour) silently
+        dropped any activity beyond the first `per_page` in the window, which is
+        what left the #109 gap unrecoverable by both polling and manual sync.
+        """
         headers = {"Authorization": f"Bearer {access_token}"}
+        after = int(since.timestamp())
+        activities: list[dict] = []
         async with httpx.AsyncClient() as client:
-            response = await _send_with_retry(
-                lambda: client.get(
-                    f"{_BASE_URL}/athlete/activities",
-                    headers=headers,
-                    params=params,
-                ),
-                label="list_recent_activities",
-            )
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                logger.error(
-                    "Strava API Error: %s - %s", e.response.status_code, e.response.text
+            for page in range(1, _MAX_PAGES + 1):
+                params = {"page": page, "per_page": per_page, "after": after}
+                response = await _send_with_retry(
+                    lambda: client.get(
+                        f"{_BASE_URL}/athlete/activities",
+                        headers=headers,
+                        params=params,
+                    ),
+                    label="list_recent_activities",
                 )
-                if e.response.status_code == 403:
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as e:
                     logger.error(
-                        "Missing Scopes: Ensure 'activity:read_all' is granted."
+                        "Strava API Error: %s - %s",
+                        e.response.status_code,
+                        e.response.text,
                     )
-                raise
-            return response.json()
+                    if e.response.status_code == 403:
+                        logger.error(
+                            "Missing Scopes: Ensure 'activity:read_all' is granted."
+                        )
+                    raise
+                batch = response.json()
+                activities.extend(batch)
+                if len(batch) < per_page:
+                    break
+            else:
+                logger.warning(
+                    "list_recent_activities hit the %s-page cap; result may be "
+                    "truncated (after=%s, per_page=%s)",
+                    _MAX_PAGES,
+                    after,
+                    per_page,
+                )
+        return activities
 
     async def get_activity(self, access_token: str, activity_id: int) -> dict:
         headers = {"Authorization": f"Bearer {access_token}"}
