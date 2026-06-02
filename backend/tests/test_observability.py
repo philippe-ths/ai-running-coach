@@ -191,6 +191,81 @@ class TestSentryCaptureActive:
         assert observability.sentry_capture_active() is True
 
 
+class TestSecretRedaction:
+    """Telegram bot tokens ride in the Bot API URL path, which httpx logs at
+    INFO. The redaction filter must mask the secret without dropping the line
+    or touching other (safe) request logs. See #131."""
+
+    FAKE_TOKEN = "bot123456789:AAFakeSecret_tokenPART-xyz123"
+
+    def test_redacts_token_in_plain_string(self):
+        out = observability._redact_secrets(f"sent via {self.FAKE_TOKEN} ok")
+        assert "AAFakeSecret_tokenPART-xyz123" not in out
+        assert "bot123456789:<redacted>" in out
+
+    def test_redacts_token_inside_url(self):
+        url = f"https://api.telegram.org/{self.FAKE_TOKEN}/sendMessage"
+        assert (
+            observability._redact_secrets(url)
+            == "https://api.telegram.org/bot123456789:<redacted>/sendMessage"
+        )
+
+    def test_leaves_non_matching_string_as_same_object(self):
+        s = "https://www.strava.com/api/v3/athlete/activities?page=1"
+        # Strava uses header auth, no secret in the URL: must be untouched.
+        assert observability._redact_secrets(s) is s
+
+    def test_preserves_non_string_type_when_no_secret(self):
+        result = observability._redact_secrets(200)
+        assert result == 200 and isinstance(result, int)
+
+    def test_filter_masks_httpx_style_record(self):
+        # Mirrors how httpx emits a request log: msg with %s, URL in args.
+        record = logging.LogRecord(
+            name="httpx",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg='HTTP Request: %s %s "%s"',
+            args=("POST", f"https://api.telegram.org/{self.FAKE_TOKEN}/sendMessage", "HTTP/1.1 200 OK"),
+            exc_info=None,
+        )
+        assert observability.SecretRedactingFilter().filter(record) is True
+        message = record.getMessage()
+        assert "AAFakeSecret_tokenPART-xyz123" not in message
+        assert "bot123456789:<redacted>" in message
+
+    def test_filter_masks_non_string_url_arg(self):
+        # httpx passes an httpx.URL object, not a str; redaction works on str().
+        class _FakeURL:
+            def __str__(self):
+                return f"https://api.telegram.org/{TestSecretRedaction.FAKE_TOKEN}/sendMessage"
+
+        record = logging.LogRecord(
+            name="httpx", level=logging.INFO, pathname=__file__, lineno=1,
+            msg="HTTP Request: %s", args=(_FakeURL(),), exc_info=None,
+        )
+        observability.SecretRedactingFilter().filter(record)
+        assert "AAFakeSecret_tokenPART-xyz123" not in record.getMessage()
+
+    def test_init_logging_wires_redaction_end_to_end(self, monkeypatch):
+        monkeypatch.setattr(settings, "APP_ENV", "production")
+        observability.init_logging()
+        buffer = io.StringIO()
+        logging.getLogger().handlers[0].stream = buffer
+
+        logging.getLogger("httpx").info(
+            'HTTP Request: %s %s "%s"',
+            "POST",
+            f"https://api.telegram.org/{self.FAKE_TOKEN}/sendMessage",
+            "HTTP/1.1 200 OK",
+        )
+
+        out = buffer.getvalue()
+        assert "AAFakeSecret_tokenPART-xyz123" not in out
+        assert "bot123456789:<redacted>" in out
+
+
 @pytest.fixture(autouse=True)
 def _restore_logging_after_each_test():
     """Tests mutate the root logger; restore baseline afterwards."""

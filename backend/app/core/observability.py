@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from datetime import datetime, timezone
 from typing import Any
@@ -36,6 +37,44 @@ _STANDARD_LOG_RECORD_FIELDS = frozenset(
         "relativeCreated", "stack_info", "thread", "threadName", "taskName",
     }
 )
+
+
+# Telegram bot tokens look like `bot<numeric-id>:<35-char secret>` and ride in
+# the Bot API URL path, which httpx logs at INFO. Mask the secret part, keeping
+# the (non-secret) numeric bot id so the log line stays useful. See #131.
+_TELEGRAM_TOKEN_RE = re.compile(r"(bot\d+):[A-Za-z0-9_-]+")
+_TELEGRAM_TOKEN_REPLACEMENT = r"\1:<redacted>"
+
+
+def _redact_secrets(value: Any) -> Any:
+    """Mask known secrets in a log value, preserving type when nothing matches.
+
+    Operates on the string form so it also catches non-str args (e.g. an
+    `httpx.URL`). Returns the original object unchanged when no secret is
+    present, so normal log formatting (and arg types) are untouched.
+    """
+    text = value if isinstance(value, str) else str(value)
+    redacted = _TELEGRAM_TOKEN_RE.sub(_TELEGRAM_TOKEN_REPLACEMENT, text)
+    return redacted if redacted != text else value
+
+
+class SecretRedactingFilter(logging.Filter):
+    """Strip secrets from log records before they are formatted.
+
+    Attached to the root handler (not a logger) so it also sees records that
+    propagate up from third-party loggers such as `httpx`. Mutating the record
+    is safe here: the record is only emitted by this one handler.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _redact_secrets(record.msg)
+        if record.args:
+            if isinstance(record.args, dict):
+                record.args = {k: _redact_secrets(v) for k, v in record.args.items()}
+            else:
+                record.args = tuple(_redact_secrets(a) for a in record.args)
+        return True
 
 
 class JSONFormatter(logging.Formatter):
@@ -74,6 +113,7 @@ def init_logging() -> None:
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
         )
+    handler.addFilter(SecretRedactingFilter())
     root.addHandler(handler)
     root.setLevel(logging.INFO)
 
