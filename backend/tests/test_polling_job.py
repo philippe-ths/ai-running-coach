@@ -1,11 +1,12 @@
 """Polling job: discovers new activities via Strava and enqueues the pipeline."""
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
 
+from app.core.config import settings
 from app.jobs.polling import poll_for_new_activities
 from app.models import Activity, StravaAccount, User
 from app.services.strava_ingestion import InMemoryStravaAdapter
@@ -134,3 +135,23 @@ async def test_polling_with_no_accounts_is_a_noop(db, fake_queue):
     enqueued = await poll_for_new_activities(db=db, strava_port=adapter)
     assert enqueued == []
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_polling_lookback_window_comes_from_settings(db, fake_queue, monkeypatch):
+    """The `since` handed to Strava reflects POLLING_LOOKBACK_SECONDS, so the
+    window is wide enough to self-heal multi-day outages (#109), not the old
+    hardcoded 6 hours."""
+    _seed_user_and_account(db, athlete_id=606)
+    monkeypatch.setattr(settings, "POLLING_LOOKBACK_SECONDS", 7 * 24 * 3600)
+
+    adapter = InMemoryStravaAdapter()
+    adapter.seed_activities([])
+
+    before = datetime.now(timezone.utc)
+    await poll_for_new_activities(db=db, strava_port=adapter)
+    after = datetime.now(timezone.utc)
+
+    assert len(adapter.list_calls) == 1
+    _token, since, _per_page = adapter.list_calls[0]
+    assert before - timedelta(days=7) - timedelta(seconds=5) <= since <= after - timedelta(days=7) + timedelta(seconds=5)

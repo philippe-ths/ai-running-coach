@@ -79,6 +79,97 @@ async def test_list_recent_activities_uses_after_param_and_bearer_header(monkeyp
     assert request.headers["Authorization"] == "Bearer abc"
 
 
+class _PagedRecorder:
+    """Transport that serves a different page body per `page` query param.
+
+    Ground truth: Strava paginates /athlete/activities and a page shorter than
+    per_page is the last one. Pages beyond what's seeded return an empty body.
+    """
+
+    def __init__(self, pages: list[list[dict]]):
+        self.pages = pages
+        self.requests: list[httpx.Request] = []
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        page = int(request.url.params["page"])
+        body = self.pages[page - 1] if page - 1 < len(self.pages) else []
+        return httpx.Response(200, json=body)
+
+
+def _install_paged_transport(monkeypatch, pages: list[list[dict]]) -> _PagedRecorder:
+    recorder = _PagedRecorder(pages)
+    original_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(recorder)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+    return recorder
+
+
+@pytest.mark.asyncio
+async def test_list_recent_activities_paginates_until_short_page(monkeypatch):
+    full_page = [{"id": i} for i in range(50)]
+    short_page = [{"id": 100}, {"id": 101}]
+    recorder = _install_paged_transport(monkeypatch, [full_page, short_page])
+
+    since = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    result = await HTTPStravaAdapter().list_recent_activities(
+        access_token="abc", since=since, per_page=50
+    )
+
+    # Both pages were walked and concatenated.
+    assert len(result) == 52
+    assert [int(r.url.params["page"]) for r in recorder.requests] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_list_recent_activities_single_short_page_makes_one_request(monkeypatch):
+    recorder = _install_paged_transport(monkeypatch, [[{"id": 1}, {"id": 2}]])
+
+    since = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    result = await HTTPStravaAdapter().list_recent_activities(
+        access_token="abc", since=since, per_page=50
+    )
+
+    assert len(result) == 2
+    assert len(recorder.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_recent_activities_full_then_empty_page_stops(monkeypatch):
+    # An exactly-full page forces a second request; the empty page ends it.
+    full_page = [{"id": i} for i in range(50)]
+    recorder = _install_paged_transport(monkeypatch, [full_page, []])
+
+    since = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    result = await HTTPStravaAdapter().list_recent_activities(
+        access_token="abc", since=since, per_page=50
+    )
+
+    assert len(result) == 50
+    assert [int(r.url.params["page"]) for r in recorder.requests] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_list_recent_activities_caps_pages_and_truncates(monkeypatch):
+    from app.services.strava_ingestion import http_adapter
+
+    # Every page is full, so only the page cap stops the walk.
+    always_full = [[{"id": i} for i in range(50)] for _ in range(http_adapter._MAX_PAGES + 5)]
+    recorder = _install_paged_transport(monkeypatch, always_full)
+
+    since = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    result = await HTTPStravaAdapter().list_recent_activities(
+        access_token="abc", since=since, per_page=50
+    )
+
+    assert len(recorder.requests) == http_adapter._MAX_PAGES
+    assert len(result) == http_adapter._MAX_PAGES * 50
+
+
 @pytest.mark.asyncio
 async def test_get_activity_streams_uses_key_by_type_and_comma_keys(monkeypatch):
     recorder = _install_transport(

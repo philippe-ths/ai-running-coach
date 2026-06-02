@@ -1,3 +1,6 @@
+from datetime import datetime, timedelta
+from unittest.mock import patch
+
 import pytest
 
 from app.api.activities import sync_activities
@@ -15,6 +18,58 @@ def strava_adapter():
     set_strava_port(adapter)
     yield adapter
     set_strava_port(None)
+
+
+def _seed_account(db, athlete_id: int) -> StravaAccount:
+    user = User(email=f"sync_{athlete_id}@example.com")
+    db.add(user)
+    db.commit()
+    account = StravaAccount(
+        user_id=user.id,
+        strava_athlete_id=athlete_id,
+        access_token="valid_token",
+        refresh_token="fake_refresh",
+        expires_at=9999999999,
+        scope="read,activity:read_all",
+    )
+    db.add(account)
+    db.commit()
+    return account
+
+
+def _run_sync_capturing_args(client, db, athlete_id, query=""):
+    """POST /api/sync through the real HTTP path (so Query defaults resolve),
+    capturing the since/fetch_streams the endpoint hands to ingestion."""
+    _seed_account(db, athlete_id=athlete_id)
+    captured = {}
+
+    async def _capture(db_, account_, port_, *, since, fetch_streams):
+        captured["since"] = since
+        captured["fetch_streams"] = fetch_streams
+        return [], SyncResponse()
+
+    with patch("app.api.activities.ingest_recent_activities", _capture):
+        resp = client.post(f"/api/sync?strava_athlete_id={athlete_id}{query}")
+    assert resp.status_code == 200, resp.text
+    return captured
+
+
+def test_sync_default_window_fetches_streams_over_30_days(client, db):
+    """Default sync: 30-day window, streams fetched (routine deep processing)."""
+    captured = _run_sync_capturing_args(client, db, athlete_id=70001)
+
+    assert captured["fetch_streams"] is True
+    expected = datetime.now() - timedelta(days=30)
+    assert abs((captured["since"] - expected).total_seconds()) < 5
+
+
+def test_sync_large_window_is_summary_only_backfill(client, db):
+    """A window beyond 30 days imports summaries only (rate-limit-safe backfill)."""
+    captured = _run_sync_capturing_args(client, db, athlete_id=70002, query="&since_days=3650")
+
+    assert captured["fetch_streams"] is False
+    expected = datetime.now() - timedelta(days=3650)
+    assert abs((captured["since"] - expected).total_seconds()) < 5
 
 
 @pytest.mark.integration

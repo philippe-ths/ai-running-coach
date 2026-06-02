@@ -43,6 +43,12 @@ class Settings(BaseSettings):
 
     # Polling fallback for missed Strava webhooks
     POLLING_INTERVAL_SECONDS: int = 120
+    # How far back each poll asks Strava for activities. Must exceed the
+    # longest outage we expect the self-healing poll to recover from: any gap
+    # older than this window can only be closed by a manual sync. Default 7
+    # days. For a single recreational runner this stays within one page, so it
+    # does not increase the steady-state Strava call budget. See #109.
+    POLLING_LOOKBACK_SECONDS: int = 604800  # 7 days
 
     # Phase 1 deployment: throwaway basic auth in front of /api/*.
     # Both must be set for the middleware to enforce; either empty disables it.
