@@ -50,6 +50,16 @@ class Settings(BaseSettings):
     # does not increase the steady-state Strava call budget. See #109.
     POLLING_LOOKBACK_SECONDS: int = 604800  # 7 days
 
+    # Historical stream-analysis backfill (#110). A manually-triggered,
+    # self-pacing job fetches streams + re-runs analysis for activities that
+    # were imported summary-only. Each batch makes one Strava call per activity;
+    # batch size over the pause must stay under Strava's 100-requests/15-min
+    # ceiling alongside polling. Default 20 calls per 300s = 60/15min, plus
+    # polling's ~7, stays well under 100. The backfill is one-time, so the daily
+    # total is just the backlog size and converges to zero.
+    BACKFILL_BATCH_SIZE: int = 20
+    BACKFILL_BATCH_PAUSE_SECONDS: int = 300
+
     # Phase 1 deployment: throwaway basic auth in front of /api/*.
     # Both must be set for the middleware to enforce; either empty disables it.
     # TODO(phase-2): remove when session auth lands.
