@@ -31,7 +31,12 @@ Coach-report email delivery is gated by `SMTP_HOST` and `NOTIFY_TO`; with both u
 The frontend renders an activity list on the home page, a per-activity detail page with charts and panels, a profile page, and a trends page with filters and chart views.
 Planned-workout capture is not yet implemented; `_extract_planned_workout` in `services/analysis/_orchestrator.py` returns `None` as a placeholder.
 There is no multi-user auth layer; the backend assumes a single local user and auto-creates one on first profile read.
-Railway hosts the backend, Postgres, and Redis, and Vercel hosts the frontend; their build and deploy config lives on the platforms rather than in an in-repo deploy manifest. The repo's only committed automation is the CI workflow under `.github/workflows/`. Locally the runtime is `docker compose` plus uvicorn and `next dev`.
+Railway runs the backend as three services off one image (`web` FastAPI, `worker` RQ jobs, `scheduler` rqscheduler) plus managed Postgres and Redis; Vercel hosts the Next.js frontend.
+The Vercel frontend reaches the backend over HTTP: server components call `BACKEND_URL` directly and the catch-all route handler `frontend/app/api/[...path]/route.ts` proxies client-side `/api/*` calls, both injecting HTTP Basic credentials server-side so the browser never sees them.
+The backend gates all routes with `BasicAuthMiddleware`, exempting `/api/health`, `/api/webhooks`, and `/api/auth/strava/callback`; this Phase 1 layer is replaced by ADR 0005 magic-link sessions in Phase 2.
+Build and deploy config lives on the platforms rather than in an in-repo deploy manifest; the repo's only committed automation is the CI workflow under `.github/workflows/`.
+Locally `docker compose` provides only Postgres and Redis, while the host runs `uvicorn`, `rq worker`, an optional `rqscheduler`, and `next dev`.
+The full production and local-dev topology, the connection seam, and per-service env var ownership are documented in `docs/deployment/topology.md`.
 
 ## Important Constraints
 
@@ -85,7 +90,7 @@ Data flow: Strava API → strava_ingestion → Activity/ActivityStream rows → 
 ## Project Structure
 
 `backend/app/main.py` boots the FastAPI app and registers routers.
-`backend/app/api/` contains one router per resource: `health.py`, `auth.py`, `profile.py`, `activities.py`, `webhooks.py`, `trends.py`, `coach.py`.
+`backend/app/api/` contains one router per resource: `health.py`, `auth.py`, `profile.py`, `activities.py`, `webhooks.py`, `trends.py`, `coach.py`, `debug.py`.
 `backend/app/core/config.py` defines the typed settings object; `backend/app/core/queue.py` holds RQ queue setup; `backend/app/core/observability.py` provides `init_logging` and `init_sentry` (import-guarded, no-op without the optional SDK).
 `backend/app/db/base.py` defines the SQLAlchemy `Base`; `backend/app/db/session.py` provides `SessionLocal` and the `get_db` dependency.
 `backend/app/models/` holds one ORM model per file (`activity`, `activity_stream`, `checkin`, `coach_chat_message`, `coach_report`, `derived_metric`, `runner_baseline`, `strava_account`, `user`, `user_profile`) with a barrel `__init__.py`.
