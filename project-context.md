@@ -112,7 +112,6 @@ Data flow: Strava API → strava_ingestion → Activity/ActivityStream rows → 
 `frontend/scripts/smoke.mjs` is the readiness smoke harness that boots a mock API and Next dev server.
 `docker-compose.yml` defines Postgres 16 and Redis 7 services for local development.
 `Makefile` exposes `smoke`, `backend-smoke`, `frontend-smoke`, `test`, `backend-test`, `frontend-test`, `seed-local`.
-`make seed-local` runs `backend/scripts/seed_from_prod.py`, which resets the local schema and copies a production snapshot (Strava tokens redacted by default) so local testing uses real data without a Strava OAuth link; the two local/deployed testing paths are documented in `docs/testing/local-seed.md`.
 
 ## Testing Overview
 
@@ -126,6 +125,16 @@ CI runs via `.github/workflows/deploy.yml` (workflow name `ci`) on push and pull
 Major gap: no automated frontend unit or component tests beyond the build-time lint and smoke route checks.
 Major gap: no end-to-end test that exercises a real Strava-to-coach-report flow.
 
+## Real-Data Verification
+
+There is no Strava OAuth application for dev or local, so the connect-then-sync path cannot bootstrap data outside production; real-data verification therefore uses one of the two paths below, both documented in `docs/testing/local-seed.md`.
+Path 1 (deployed): the production Vercel app (`https://ai-running-coach-eta.vercel.app/`) and the per-branch preview deployments are publicly reachable and render real synced data because the frontend injects the backend's HTTP Basic credentials server-side, so browser automation against them verifies any UI or read-path change with no local setup.
+Preview deployments are not isolated environments: they point at the same single production backend and Postgres/Redis as production, so any write triggered on a preview (sync, destructive migration, delete) mutates production data.
+Path 2 (local): `make seed-local` runs `backend/scripts/seed_from_prod.py`, which resets the local schema to the branch's migration head and copies a production snapshot (users, profile, Strava account, activities, streams, derived metrics, coach reports, chat, check-ins) so the analyze -> coach -> frontend chain runs offline against real data; `SEED_ARGS="--activities N"` bounds the snapshot.
+The seed redacts Strava tokens by default so local cannot call Strava and cannot rotate the production refresh token, which means the home page "Sync Now" action fails on a seeded local DB; `SEED_ARGS="--with-live-tokens"` is the opt-in for exercising a real sync and shares the production token.
+`seed_from_prod.py` reads the source URL from `SEED_SOURCE_URL` (the `make` target injects Railway's `DATABASE_PUBLIC_URL` via the project token at `~/.railway_token`), only ever reads from the source, and refuses any target URL that is not `localhost`/`127.0.0.1`.
+Local verification runs the backend via `uvicorn app.main:app --port 8000` and the frontend via `npm run dev` (port 3000) against the docker-compose Postgres/Redis; `BasicAuthMiddleware` is a no-op locally when `BASIC_AUTH_USER`/`BASIC_AUTH_PASSWORD` are unset, so local API calls need no credentials.
+
 ## Maintenance Checklist
 
 Update this file when a new top-level path is added under `backend/app/`, `frontend/app/`, `frontend/components/`, or `frontend/lib/`.
@@ -134,4 +143,5 @@ Update this file when a direct dependency is added or removed in `backend/pyproj
 Update this file when the deterministic policy validator's rule set materially changes or a new policy gate is introduced.
 Update this file when the Strava ingestion, processing pipeline, or coach pipeline gains or loses a stage.
 Update this file when the local runtime topology (ports, services, env vars) changes.
+Update the Real-Data Verification section when the seeding script, its safety defaults, or the deployed/preview environment topology changes, or when a dev/local Strava OAuth path is added.
 Update this file when planned-workout capture is implemented and `_extract_planned_workout` starts returning real data.
