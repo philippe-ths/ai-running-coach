@@ -29,6 +29,24 @@ async def process_activity_deep(
     
     return metrics
 
+@router.post("/activities/backfill-streams")
+def backfill_streams(db: Session = Depends(get_db)):
+    """Kick off a paced backfill of stream-derived analysis for historical
+    summary-only activities (#110).
+
+    Enqueues a self-pacing job that fetches streams and re-runs analysis a small
+    batch at a time, staying within Strava's rate limits and never notifying.
+    Returns how many activities are currently eligible.
+    """
+    from app.jobs.backfill_streams import enqueue_backfill
+
+    eligible = enqueue_backfill(db)
+    return {
+        "eligible": eligible,
+        "status": "scheduled" if eligible else "nothing_to_do",
+    }
+
+
 @router.put("/activities/{activity_id}/intent", response_model=ActivityRead)
 def update_activity_intent(
     activity_id: UUID,

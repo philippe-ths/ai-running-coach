@@ -42,6 +42,14 @@ class Activity(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Set once the historical stream-analysis backfill (#110) has attempted this
+    # activity, regardless of whether Strava had streams for it. Combined with
+    # the presence of `streams` rows, it makes the backfill resumable and
+    # convergent: each summary-only activity is attempted exactly once.
+    streams_backfilled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), onupdate=func.now(), server_default=func.now()
