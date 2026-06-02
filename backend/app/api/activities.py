@@ -9,6 +9,7 @@ from app.db.session import get_db
 from app.models import Activity, StravaAccount, CheckIn
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead
 from app.services import activity_queries, analysis
+from app.services.analysis.classifier import Classification, compose_headline
 from app.services.analysis.splits import calculate_splits
 from app.services.strava_ingestion import get_strava_port, ingest_recent_activities
 
@@ -26,8 +27,10 @@ async def process_activity_deep(
     metrics = await analysis.analyze_with_streams(db, str(activity_id))
     if not metrics:
         raise HTTPException(status_code=400, detail="Processing failed or activity not found.")
-    
-    return metrics
+
+    read = DerivedMetricRead.model_validate(metrics)
+    read.headline = compose_headline(metrics.activity, Classification.from_metrics(metrics))
+    return read
 
 @router.post("/activities/backfill-streams")
 def backfill_streams(db: Session = Depends(get_db)):
@@ -152,30 +155,20 @@ def read_activity(
     if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
         
-    # Lazy Data Repair: If activity_class is "Easy Run" but it's clearly an Indoor Ride/Walk etc, repair it on read.
-    # This fixes stale data from earlier classifier versions without requiring full re-sync.
-    if activity.metrics and activity.metrics.activity_class == "Easy Run":
-       from app.services.analysis.classifier import classify_activity
-       
-       # Pass an empty history for now (fast check)
-       current_class = classify_activity(activity, []) 
-       
-       if current_class != "Easy Run":
-           activity.metrics.activity_class = current_class
-           db.add(activity.metrics)
-           db.commit()
-           db.refresh(activity)
-
     # Calculate Splits
     effective_type = activity.user_intent if activity.user_intent else activity.type
     splits_data = calculate_splits(
         activity.streams or [], activity_type=effective_type
     )
-        
-    # Convert to Pydantic model manually to inject transient splits data
+
+    # Convert to Pydantic model manually to inject transient splits + headline
     response = ActivityDetailRead.model_validate(activity)
     response.splits = splits_data
-    
+    if response.metrics:
+        response.metrics.headline = compose_headline(
+            activity, Classification.from_metrics(activity.metrics)
+        )
+
     return response
 
 @router.post("/activities/{activity_id}/checkin", response_model=CheckInRead)

@@ -11,8 +11,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import Activity
 
-HARD_CLASSES = {"Intervals", "Tempo", "Race", "Hills"}
-MODERATE_CLASSES = {"Long Run"}
+# Map the measured effort axis (ADR 0007) onto a coarse load bucket.
+_HARD_EFFORTS = {"tempo", "hard"}
+_MODERATE_EFFORTS = {"moderate"}
 
 
 def build_training_context(db: Session, activity: Activity) -> dict:
@@ -42,12 +43,14 @@ def build_training_context(db: Session, activity: Activity) -> dict:
     days_since_last_hard = None
 
     for a in recent:
-        ac = a.metrics.activity_class if a.metrics else "Easy Run"
-        if ac in HARD_CLASSES:
+        m = a.metrics
+        eff = m.effort if m else None
+        is_intervals = bool(m and m.structure == "intervals")
+        if is_intervals or eff in _HARD_EFFORTS:
             hard += 1
             if days_since_last_hard is None:
                 days_since_last_hard = (activity_date - a.start_date.date()).days
-        elif ac in MODERATE_CLASSES:
+        elif eff in _MODERATE_EFFORTS:
             moderate += 1
         else:
             easy += 1

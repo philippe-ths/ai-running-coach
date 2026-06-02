@@ -10,7 +10,13 @@ from app.services.analysis.smoothing import smooth_cadence
 
 
 class DerivedMetricRead(BaseModel):
-    activity_class: str
+    # Classification axes (ADR 0007) + headline injected by the read endpoint.
+    headline: Optional[str] = None
+    effort: Optional[str] = None
+    duration_class: Optional[str] = None
+    structure: Optional[str] = None
+    is_hilly: Optional[bool] = None
+    is_race: Optional[bool] = None
     effort_score: float
     pace_variability: Optional[float] = None
     hr_drift: Optional[float] = None

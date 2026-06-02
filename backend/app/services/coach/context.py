@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy.orm import Session
 
 from app.models import Activity, UserProfile
+from app.services.analysis.classifier import Classification, compose_headline  # noqa: F401
 from app.schemas.coach_context import (
     ActivityContext,
     CheckInContext,
@@ -90,7 +91,12 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
             elev_gain_m=activity.elev_gain_m,
         ),
         metrics=MetricsContext(
-            activity_class=metrics.activity_class if metrics else None,
+            headline=compose_headline(activity, Classification.from_metrics(metrics)),
+            effort=metrics.effort if metrics else None,
+            duration_class=metrics.duration_class if metrics else None,
+            structure=metrics.structure if metrics else None,
+            is_hilly=metrics.is_hilly if metrics else None,
+            is_race=metrics.is_race if metrics else None,
             effort_score=round(metrics.effort_score, 1) if metrics else None,
             hr_drift=round(metrics.hr_drift, 1) if metrics and metrics.hr_drift else None,
             pace_variability=(

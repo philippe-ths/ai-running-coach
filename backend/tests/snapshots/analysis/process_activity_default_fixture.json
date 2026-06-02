@@ -1,10 +1,10 @@
 {
-  "activity_class": "Tempo",
   "confidence": "medium",
   "confidence_reasons": [
     "no_gps_data",
     "no_intervals_detected"
   ],
+  "duration_class": "standard",
   "efficiency_analysis": {
     "average": 1.2,
     "best_sustained": 1.2,
@@ -282,16 +282,20 @@
     ],
     "unit": "m/min/bpm"
   },
+  "effort": "tempo",
   "effort_score": 346.6,
   "flags": [],
   "hr_drift": 0.0,
   "interval_kpis": null,
   "interval_structure": null,
+  "is_hilly": false,
+  "is_race": false,
   "pace_variability": 0.0,
   "risk_level": "green",
   "risk_reasons": [],
   "risk_score": 0,
   "stops_analysis": null,
+  "structure": "continuous",
   "time_in_zones": {
     "Z1": 0,
     "Z2": 0,
@@ -303,9 +307,9 @@
     "days_since_last_hard": 3,
     "hard_sessions_this_week": 1,
     "intensity_distribution_7d": {
-      "easy": 1,
+      "easy": 0,
       "hard": 1,
-      "moderate": 1
+      "moderate": 2
     }
   },
   "workout_match": {

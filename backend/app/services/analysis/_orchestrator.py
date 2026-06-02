@@ -11,10 +11,6 @@ from app.services.analysis.intervals import detect_intervals
 from app.services.analysis.risk import compute_risk_score
 from app.services.analysis.workout_matching import match_planned_to_detected, build_interval_kpis
 
-# Classes that warrant detailed stream processing
-DEEP_PROCESSING_CLASSES = ["Tempo", "Intervals", "Long Run", "Race", "Hills"]
-
-
 def _extract_planned_workout(check_in) -> dict | None:
     """
     Extract structured planned workout from check-in data.
@@ -144,12 +140,28 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     # 5. Compute metrics
     metrics_data = compute_derived_metrics_data(activity, streams_dict, max_hr=max_hr)
 
-    # 6. Classify
-    classification = classify_activity(activity, history)
-    metrics_data["activity_class"] = classification
+    # 6. Classify into orthogonal axes (ADR 0007). Probe interval structure from
+    # the streams first so the structure axis is data-driven; detect_intervals
+    # returning a structure is the "repeated work/rest" half of the predicate
+    # (the other half, genuine pace variability, is applied in the classifier).
+    interval_structure = detect_intervals(streams_dict, "Intervals") if streams_dict else None
+    classification = classify_activity(
+        activity, history,
+        time_in_zones=metrics_data.get("time_in_zones"),
+        pace_variability=metrics_data.get("pace_variability"),
+        has_interval_structure=interval_structure is not None,
+        max_hr=max_hr,
+    )
+    metrics_data["effort"] = classification.effort
+    metrics_data["duration_class"] = classification.duration_class
+    metrics_data["structure"] = classification.structure
+    metrics_data["is_hilly"] = classification.is_hilly
+    metrics_data["is_race"] = classification.is_race
 
-    # 6.5 Interval segmentation
-    interval_structure = detect_intervals(streams_dict, classification) if streams_dict else None
+    # 6.5 Interval segmentation — keep the probed structure only when the
+    # structure axis resolved to intervals.
+    if classification.structure != "intervals":
+        interval_structure = None
     metrics_data["interval_structure"] = interval_structure
 
     # 6.6 Workout matching — compare planned vs detected

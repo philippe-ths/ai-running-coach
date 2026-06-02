@@ -36,12 +36,16 @@ def _create_activity(db, user_id, name="Morning Run", start_date=None, **overrid
     return a
 
 
-def _add_metrics(db, activity, activity_class="Easy Run", effort_score=3.0, **overrides):
+def _add_metrics(db, activity, effort="easy", effort_score=3.0, **overrides):
     """Helper to attach a DerivedMetric to an activity."""
     dm = DerivedMetric(
         id=uuid.uuid4(),
         activity_id=activity.id,
-        activity_class=activity_class,
+        effort=effort,
+        duration_class=overrides.get("duration_class", "standard"),
+        structure=overrides.get("structure", "continuous"),
+        is_hilly=overrides.get("is_hilly", False),
+        is_race=overrides.get("is_race", False),
         effort_score=effort_score,
         pace_variability=overrides.get("pace_variability"),
         hr_drift=overrides.get("hr_drift"),
