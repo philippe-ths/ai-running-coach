@@ -78,6 +78,18 @@ def init_logging() -> None:
     root.setLevel(logging.INFO)
 
 
+def sentry_capture_active() -> bool:
+    """True only when Sentry error capture is actually live.
+
+    Capture requires *both* the optional `observability` extra installed (so
+    `sentry_sdk` imported) *and* `SENTRY_DSN` set. A DSN alone is not enough
+    (see issue #102: logs-only by default). This is the single source of truth
+    for "is error tracking on", so no path can advertise capture that is not
+    actually wired up.
+    """
+    return _SENTRY_AVAILABLE and bool(settings.SENTRY_DSN)
+
+
 def init_sentry(component: str) -> None:
     """Initialise the Sentry SDK. No-op unless the SDK is installed and
     SENTRY_DSN is set.
@@ -94,7 +106,7 @@ def init_sentry(component: str) -> None:
     process from booting; the same image runs `alembic upgrade head` as the
     deploy's release command, so an import-time crash here can block deploys.
     """
-    if not _SENTRY_AVAILABLE or not settings.SENTRY_DSN:
+    if not sentry_capture_active():
         return
     try:
         sentry_sdk.init(

@@ -168,6 +168,29 @@ class TestInitSentry:
         assert any("sentry" in rec.message.lower() for rec in caplog.records)
 
 
+class TestSentryCaptureActive:
+    """`sentry_capture_active` is the single source of truth for "capture on".
+    It requires BOTH the SDK installed and a DSN set (issue #102: logs-only by
+    default). A DSN alone must not report capture as active."""
+
+    def test_inactive_when_dsn_unset(self, monkeypatch):
+        monkeypatch.setattr(observability, "_SENTRY_AVAILABLE", True)
+        monkeypatch.setattr(settings, "SENTRY_DSN", "")
+        assert observability.sentry_capture_active() is False
+
+    def test_inactive_when_sdk_absent_even_with_dsn_set(self, monkeypatch):
+        # The dead-signal case from #105: a DSN is configured but the optional
+        # SDK is not installed, so nothing actually captures.
+        monkeypatch.setattr(observability, "_SENTRY_AVAILABLE", False)
+        monkeypatch.setattr(settings, "SENTRY_DSN", "https://x@example.ingest.sentry.io/1")
+        assert observability.sentry_capture_active() is False
+
+    def test_active_only_when_sdk_present_and_dsn_set(self, monkeypatch):
+        monkeypatch.setattr(observability, "_SENTRY_AVAILABLE", True)
+        monkeypatch.setattr(settings, "SENTRY_DSN", "https://x@example.ingest.sentry.io/1")
+        assert observability.sentry_capture_active() is True
+
+
 @pytest.fixture(autouse=True)
 def _restore_logging_after_each_test():
     """Tests mutate the root logger; restore baseline afterwards."""

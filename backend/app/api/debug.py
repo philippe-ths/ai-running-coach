@@ -9,7 +9,7 @@ they outlive their usefulness past the first production deploy.
 
 from fastapi import APIRouter, HTTPException
 
-from app.core.config import settings
+from app.core.observability import sentry_capture_active
 
 router = APIRouter()
 
@@ -22,11 +22,13 @@ class SentrySmokeError(RuntimeError):
 def trigger_sentry_test_exception() -> None:
     """Raise an exception so we can confirm Sentry captures it.
 
-    Disabled when SENTRY_DSN is unset so calling this in a misconfigured
-    environment produces a clean 404 rather than a meaningless 500.
+    Disabled unless Sentry capture is actually active. Capture needs both the
+    optional `observability` extra installed and `SENTRY_DSN` set (logs-only by
+    default; see issue #102), so a DSN alone is not enough. When capture is off
+    this returns a clean 404 rather than raising an exception nothing records.
     """
-    if not settings.SENTRY_DSN:
-        raise HTTPException(status_code=404, detail="sentry not configured")
+    if not sentry_capture_active():
+        raise HTTPException(status_code=404, detail="sentry capture not active")
     raise SentrySmokeError(
         "phase-1 step 3 smoke test — if you see this in Sentry, the pipeline works"
     )
