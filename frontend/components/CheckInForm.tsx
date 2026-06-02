@@ -22,11 +22,11 @@ interface Props {
   activityId: string;
   existingCheckIn?: CheckInData | null;
   currentType?: string | null;
-  assignedClass?: string;
+  headline?: string | null; // measured classification headline (ADR 0007)
   sportType?: string; // e.g. "Run", "Walk"
 }
 
-export default function CheckInForm({ activityId, existingCheckIn, currentType, assignedClass, sportType = "Run" }: Props) {
+export default function CheckInForm({ activityId, existingCheckIn, currentType, headline, sportType = "Run" }: Props) {
   const router = useRouter();
   
   // Determine available options based on sport type
@@ -44,8 +44,9 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
   const [effort, setEffort] = useState<number | ''>(existingCheckIn?.rpe ?? '');
   const [notes, setNotes] = useState(existingCheckIn?.notes ?? '');
   
-  // Intent State
-  const [intent, setIntent] = useState(currentType || assignedClass || "Easy Run");
+  // Intent State. Stated intent is independent of the measured classification
+  // (ADR 0007), so it is not pre-seeded from the detected headline.
+  const [intent, setIntent] = useState(currentType || typeOptions[0]);
 
   const [submitting, setSubmitting] = useState(false);
 
@@ -57,8 +58,8 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
       setNotes(existingCheckIn.notes || '');
     }
     // Also sync intent if it changes externally or on load
-    setIntent(currentType || assignedClass || typeOptions[0]);
-  }, [existingCheckIn, currentType, assignedClass, typeOptions]); 
+    setIntent(currentType || typeOptions[0]);
+  }, [existingCheckIn, currentType, typeOptions]);
   
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -160,9 +161,9 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
               <option key={type} value={type}>{type}</option>
           ))}
         </select>
-        {assignedClass && typeOptions.includes(assignedClass) && (
+        {headline && (
             <p className="text-xs text-gray-400 mt-1">
-                Detected as: {assignedClass}
+                Detected as: {headline}
             </p>
         )}
       </div>
@@ -213,7 +214,7 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
               setPain(existingCheckIn.pain_score);
               setEffort(existingCheckIn.rpe);
               setNotes(existingCheckIn.notes || '');
-              setIntent(currentType || assignedClass || typeOptions[0]);
+              setIntent(currentType || typeOptions[0]);
               setIsEditing(false);
             }}
             className="px-3 py-2 rounded text-sm font-medium text-gray-600 hover:bg-gray-200 border border-gray-300 transition-colors"

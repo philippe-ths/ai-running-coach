@@ -23,7 +23,7 @@ export default async function Dashboard() {
   const totalTime = activities.reduce((sum: number, act: any) => sum + (act.moving_time_s || 0), 0);
   const hardDays = activities.filter((act: any) => {
       // Very crude "hard day" check if HR > 150 or label contains Hard/Tempo
-      // Ideally check derived metric "activity_class"
+      // Ideally use the derived effort axis once the list endpoint exposes it.
       return (act.avg_hr && act.avg_hr > 155) || (act.name && act.name.match(/Tempo|Interval|Race/i));
   }).length;
 
