@@ -32,7 +32,19 @@ class Settings(BaseSettings):
     COACH_MODEL_ID: str = "claude-sonnet-4-20250514"
     COACH_PROMPT_ID: str = "coach_report_v1"
 
-    # Email notifications (feature off when SMTP_HOST is empty)
+    # Coach-report notifications. Channel selection (see
+    # app/services/notifications/__init__.py): Telegram when
+    # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID are both set, else email when
+    # SMTP_HOST + NOTIFY_TO are both set, else no-op.
+
+    # Telegram bot transport (#127). Railway blocks outbound SMTP, so the
+    # deployed worker delivers coach reports over Telegram's HTTPS Bot API
+    # instead. Both must be set for the channel to activate.
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+
+    # Email notifications (legacy/local channel; SMTP is unreachable from the
+    # Railway worker, kept for local use and Pro-plan deployments).
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USER: str = ""

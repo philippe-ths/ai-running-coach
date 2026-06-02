@@ -18,8 +18,11 @@ from app.models import Activity, StravaAccount
 from app.models.coach_report import CoachReport
 from app.services.analysis import analyze_with_streams
 from app.services.coach.service import get_or_generate_coach_report
-from app.services.notifications import Notification, get_notifier
-from app.services.notifications.email_template import render_coach_report_email
+from app.services.notifications import (
+    Notification,
+    build_coach_notification,
+    get_notifier,
+)
 from app.services.notifications.port import NotifierPort
 from app.services.strava_ingestion import (
     StravaPort,
@@ -41,7 +44,8 @@ async def process_new_activity(
     """Run the full ingest → analyze → coach → notify pipeline.
 
     Returns the Notification that was sent, or None if skipped (already
-    notified, fallback report, NOTIFY_TO unset, or missing inputs).
+    notified, fallback report, notifications unconfigured, send failed, or
+    missing inputs).
     """
     activity = await ingest_activity_by_id(
         db, account, strava_port, strava_activity_id
@@ -78,26 +82,34 @@ async def process_new_activity(
         )
         return None
 
-    if not settings.NOTIFY_TO:
-        logger.info(
-            "Skipping notification for activity %s: NOTIFY_TO unset",
-            strava_activity_id,
-        )
-        return None
-
     activity_class = (
         activity.metrics.activity_class if activity.metrics else (activity.type or "Activity")
     )
-    subject, html, text = render_coach_report_email(
+    notification = build_coach_notification(
         report=report,
         activity_class=activity_class,
         distance_m=activity.distance_m or 0,
         app_base_url=settings.APP_BASE_URL,
     )
-    notification = Notification(
-        to=settings.NOTIFY_TO, subject=subject, html=html, text=text
-    )
-    notifier.send(notification)
+    if notification is None:
+        logger.info(
+            "Skipping notification for activity %s: no channel configured",
+            strava_activity_id,
+        )
+        return None
+
+    try:
+        notifier.send(notification)
+    except Exception:
+        # A delivery failure must not crash the pipeline or lose the coach
+        # report (already persisted). Leave the sentinel null so the activity
+        # remains eligible for a later re-send (e.g. the manual action in #114),
+        # and log loudly so the failure is observable rather than silent.
+        logger.exception(
+            "Notification send failed for activity %s; sentinel left unset",
+            strava_activity_id,
+        )
+        return None
 
     activity.coach_notification_sent_at = datetime.now(timezone.utc)
     db.add(activity)
