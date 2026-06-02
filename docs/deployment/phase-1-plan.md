@@ -1,4 +1,4 @@
-# Phase 1 deployment plan: ship the single-user app to Fly.io
+# Phase 1 deployment plan (historical, Fly.io) — superseded by Railway: ship the single-user app
 
 > **Historical — superseded.** This plan targeted Fly.io (backend), Neon (Postgres), and Upstash (Redis). The backend was later migrated to Railway, which consolidates the backend (web, worker, scheduler), Postgres, and Redis under a single workspace hard usage limit; the frontend remains on Vercel. See issue #97. This document is retained for historical context and the code/middleware changes it describes (basic auth, structured logging, settings) remain accurate; the Fly/Neon/Upstash provisioning and CI sections do not reflect the current deployment.
 >
