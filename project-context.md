@@ -111,7 +111,8 @@ Data flow: Strava API → strava_ingestion → Activity/ActivityStream rows → 
 `frontend/lib/types/` holds domain types (`activity`, `chat`, `coach`, `metrics`, `profile`, `trends`); `frontend/lib/types.ts` is the barrel.
 `frontend/scripts/smoke.mjs` is the readiness smoke harness that boots a mock API and Next dev server.
 `docker-compose.yml` defines Postgres 16 and Redis 7 services for local development.
-`Makefile` exposes `smoke`, `backend-smoke`, `frontend-smoke`, `test`, `backend-test`, `frontend-test`.
+`Makefile` exposes `smoke`, `backend-smoke`, `frontend-smoke`, `test`, `backend-test`, `frontend-test`, `seed-local`.
+`make seed-local` runs `backend/scripts/seed_from_prod.py`, which resets the local schema and copies a production snapshot (Strava tokens redacted by default) so local testing uses real data without a Strava OAuth link; the two local/deployed testing paths are documented in `docs/testing/local-seed.md`.
 
 ## Testing Overview
 
