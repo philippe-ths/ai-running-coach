@@ -4,9 +4,26 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import settings
 from app.main import app
 from app.db.session import get_db
 from app.db.base import Base
+
+
+@pytest.fixture(autouse=True)
+def _isolate_notification_channels(monkeypatch):
+    """Pin notification-channel settings off by default.
+
+    Channel selection (`_active_channel`) reads `settings`, which loads from
+    `backend/.env`. Without this, a developer `.env` that has Telegram or SMTP
+    configured leaks into tests and flips channel selection, so the email-path
+    tests fail (and CI passes only because CI has none of these set). Resetting
+    them here makes every test start from "no channel configured"; tests that
+    need a channel opt in via their own monkeypatch. Autouse fixtures run before
+    a test's explicitly-requested fixtures, so per-test overrides still win.
+    """
+    for var in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SMTP_HOST", "NOTIFY_TO"):
+        monkeypatch.setattr(settings, var, "")
 
 # Use an in-memory SQLite database for tests, or a separate test DB
 # For simplicity with SQLAlchemy features, an in-memory SQLite is easiest 
