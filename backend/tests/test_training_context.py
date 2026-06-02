@@ -31,12 +31,13 @@ def _make_activity(db, user_id, name, start_date):
     return a
 
 
-def _attach_class(db, activity, activity_class):
+def _attach_axes(db, activity, effort=None, structure="continuous"):
     db.add(
         DerivedMetric(
             id=uuid.uuid4(),
             activity_id=activity.id,
-            activity_class=activity_class,
+            effort=effort,
+            structure=structure,
             effort_score=10.0,
             flags=[],
             confidence="high",
@@ -54,13 +55,13 @@ def test_counts_hard_moderate_easy(db):
     base = datetime(2026, 2, 15, 10, 0, tzinfo=timezone.utc)
 
     easy = _make_activity(db, user_id, "Easy", base - timedelta(days=1))
-    _attach_class(db, easy, "Easy Run")
+    _attach_axes(db, easy, effort="easy")
 
     intervals = _make_activity(db, user_id, "Intervals", base - timedelta(days=2))
-    _attach_class(db, intervals, "Intervals")
+    _attach_axes(db, intervals, effort="hard", structure="intervals")
 
-    long_run = _make_activity(db, user_id, "Long", base - timedelta(days=3))
-    _attach_class(db, long_run, "Long Run")
+    moderate = _make_activity(db, user_id, "Moderate", base - timedelta(days=3))
+    _attach_axes(db, moderate, effort="moderate")
 
     target = _make_activity(db, user_id, "Target", base)
 

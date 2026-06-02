@@ -14,7 +14,7 @@ from app.schemas.coach import (
 from app.services.notifications.email_template import render_coach_report_email
 
 
-def _build_report(*, activity_class: str = "Easy", confidence: str = "medium") -> CoachReportRead:
+def _build_report(*, headline: str = "Easy", confidence: str = "medium") -> CoachReportRead:
     return CoachReportRead(
         id=uuid4(),
         activity_id=uuid4(),
@@ -58,10 +58,10 @@ def _build_report(*, activity_class: str = "Easy", confidence: str = "medium") -
 
 
 def test_subject_includes_class_distance_confidence():
-    report = _build_report(activity_class="Easy Run", confidence="medium")
+    report = _build_report(headline="Easy Run", confidence="medium")
     subject, _html, _text = render_coach_report_email(
         report=report,
-        activity_class="Easy Run",
+        headline="Easy Run",
         distance_m=8200,
         app_base_url="http://localhost:3000",
     )
@@ -74,7 +74,7 @@ def test_subject_does_not_append_literal_run_word():
     report = _build_report()
     subject, html, text = render_coach_report_email(
         report=report,
-        activity_class="Indoor Ride",
+        headline="Indoor Ride",
         distance_m=0,
         app_base_url="http://localhost:3000",
     )
@@ -87,7 +87,7 @@ def test_subject_drops_distance_when_zero():
     report = _build_report()
     subject, html, text = render_coach_report_email(
         report=report,
-        activity_class="Indoor Ride",
+        headline="Indoor Ride",
         distance_m=0,
         app_base_url="http://localhost:3000",
     )
@@ -101,7 +101,7 @@ def test_html_contains_all_sections_and_app_link():
     report = _build_report()
     _subject, html, _text = render_coach_report_email(
         report=report,
-        activity_class="Easy",
+        headline="Easy",
         distance_m=8200,
         app_base_url="http://localhost:3000",
     )
@@ -119,7 +119,7 @@ def test_text_body_contains_takeaways_and_link():
     report = _build_report()
     _subject, _html, text = render_coach_report_email(
         report=report,
-        activity_class="Easy",
+        headline="Easy",
         distance_m=8200,
         app_base_url="http://localhost:3000",
     )
@@ -132,7 +132,7 @@ def test_distance_rounded_to_one_decimal():
     report = _build_report()
     subject, _html, _text = render_coach_report_email(
         report=report,
-        activity_class="Tempo Run",
+        headline="Tempo Run",
         distance_m=5347,
         app_base_url="http://localhost:3000",
     )

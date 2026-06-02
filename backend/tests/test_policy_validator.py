@@ -29,7 +29,9 @@ _DEFAULT_PACK_DICT = {
         "avg_hr": 150.0, "max_hr": 175.0, "avg_cadence": 170.0, "elev_gain_m": 50.0,
     },
     "metrics": {
-        "activity_class": "Easy Run", "effort_score": 3.0,
+        "headline": "Easy run", "effort": "easy", "duration_class": "standard",
+        "structure": "continuous", "is_hilly": False, "is_race": False,
+        "effort_score": 3.0,
         "hr_drift": None, "pace_variability": None,
         "flags": [], "confidence": "high", "confidence_reasons": [],
         "time_in_zones": None, "zones_calibrated": True, "zones_basis": "user_user_entered",
@@ -119,7 +121,7 @@ class TestPolicyValidator:
         content = _make_content(
             key_takeaways=[
                 CoachTakeaway(text="Keep at easy conversational pace.", evidence=[{"field": "metrics.effort_score", "value": 2.0}]),
-                CoachTakeaway(text="Good recovery run.", evidence=[{"field": "metrics.activity_class", "value": "Easy Run"}]),
+                CoachTakeaway(text="Good recovery run.", evidence=[{"field": "metrics.headline", "value": "Easy run"}]),
             ],
         )
         pack = _make_pack(metrics={"zones_calibrated": False, "flags": [], "confidence": "high"})

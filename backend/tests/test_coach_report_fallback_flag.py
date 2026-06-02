@@ -62,7 +62,9 @@ def _seed_activity_with_metrics(db) -> Activity:
     # Minimal DerivedMetric so get_or_generate_coach_report has metrics to read
     metric = DerivedMetric(
         activity_id=activity.id,
-        activity_class="Easy",
+        effort="easy",
+        structure="continuous",
+        duration_class="standard",
         effort_score=50.0,
         flags=[],
         confidence="medium",

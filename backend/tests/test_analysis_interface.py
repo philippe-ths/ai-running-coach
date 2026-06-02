@@ -159,7 +159,11 @@ def _serialize_dm(dm) -> dict:
     """Capture the analytical fields of a DerivedMetric. Excludes non-deterministic
     columns (primary key, FK, timestamps)."""
     return {
-        "activity_class": dm.activity_class,
+        "effort": dm.effort,
+        "duration_class": dm.duration_class,
+        "structure": dm.structure,
+        "is_hilly": dm.is_hilly,
+        "is_race": dm.is_race,
         "effort_score": dm.effort_score,
         "pace_variability": dm.pace_variability,
         "hr_drift": dm.hr_drift,
