@@ -64,7 +64,7 @@ def get_notifier() -> NotifierPort:
 def build_coach_notification(
     *,
     report: CoachReportRead,
-    activity_class: str,
+    headline: str,
     distance_m: int,
     app_base_url: str,
 ) -> Optional[Notification]:
@@ -85,7 +85,7 @@ def build_coach_notification(
 
         subject, text, url = render_coach_report_telegram(
             report=report,
-            activity_class=activity_class,
+            headline=headline,
             distance_m=distance_m,
             app_base_url=app_base_url,
         )
@@ -103,7 +103,7 @@ def build_coach_notification(
 
         subject, html, text = render_coach_report_email(
             report=report,
-            activity_class=activity_class,
+            headline=headline,
             distance_m=distance_m,
             app_base_url=app_base_url,
         )

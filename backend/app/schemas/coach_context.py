@@ -35,7 +35,13 @@ class ActivityContext(BaseModel):
 class MetricsContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    activity_class: Optional[str]
+    # Classification axes (ADR 0007) plus the derived headline.
+    headline: Optional[str]
+    effort: Optional[str]
+    duration_class: Optional[str]
+    structure: Optional[str]
+    is_hilly: Optional[bool]
+    is_race: Optional[bool]
     effort_score: Optional[float]
     hr_drift: Optional[float]
     pace_variability: Optional[float]

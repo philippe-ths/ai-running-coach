@@ -22,10 +22,13 @@ def generate_flags(
         flags.append("data_low_confidence_hr")
 
     # --- Intensity Mismatch ---
-    is_easy = metric_data.get("activity_class") == "Easy Run"
-    if is_easy and activity.avg_hr and activity.max_hr:
-        if (activity.avg_hr / activity.max_hr) > 0.8:
-            flags.append("intensity_mismatch")
+    # Stated intent was easy/recovery but the measured effort was hard. This is
+    # the intent-vs-executed gap (ADR 0007): the axes always reflect the data, so
+    # a mismatch is only meaningful against what the runner said they intended.
+    intent = (activity.user_intent or "").lower()
+    effort = metric_data.get("effort")
+    if intent in ("easy run", "easy", "recovery") and effort in ("tempo", "hard"):
+        flags.append("intensity_mismatch")
 
     # --- Fatigue Possible (was cardiac_drift_high) ---
     drift = metric_data.get("hr_drift")
@@ -33,11 +36,15 @@ def generate_flags(
         flags.append("fatigue_possible")
 
     # --- Pace Unstable ---
+    # A continuous high-effort run is expected to hold a steady pace; high
+    # variability there signals instability (intervals are excluded — their
+    # variability is by design).
     pace_var = metric_data.get("pace_variability")
     if (
         pace_var is not None
         and pace_var > 15.0
-        and metric_data.get("activity_class") == "Tempo"
+        and metric_data.get("structure") == "continuous"
+        and metric_data.get("effort") in ("tempo", "hard")
     ):
         flags.append("pace_unstable")
 

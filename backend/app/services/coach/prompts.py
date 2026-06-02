@@ -69,7 +69,8 @@ PROMPT_VERSIONS = {
 }
 
 # ---------------------------------------------------------------------------
-# Activity-type playbooks — appended to the system prompt based on activity_class
+# Activity-type playbooks — appended to the system prompt based on the playbook
+# key derived from the classification axes (classifier.playbook_key, ADR 0007)
 # ---------------------------------------------------------------------------
 
 ACTIVITY_PLAYBOOKS = {
@@ -129,9 +130,13 @@ RACE FOCUS:
 }
 
 
-def build_system_prompt(base_prompt_id: str, activity_class: str = None) -> str:
-    """Build the full system prompt with optional activity-type playbook appended."""
+def build_system_prompt(base_prompt_id: str, playbook_key: str = None) -> str:
+    """Build the full system prompt with optional activity-type playbook appended.
+
+    `playbook_key` is derived from the classification axes (ADR 0007) by
+    classifier.playbook_key.
+    """
     base = PROMPT_VERSIONS[base_prompt_id]
-    if activity_class and activity_class in ACTIVITY_PLAYBOOKS:
-        return base + "\n\n" + ACTIVITY_PLAYBOOKS[activity_class]
+    if playbook_key and playbook_key in ACTIVITY_PLAYBOOKS:
+        return base + "\n\n" + ACTIVITY_PLAYBOOKS[playbook_key]
     return base

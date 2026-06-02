@@ -4,7 +4,7 @@ from app.schemas.coach import CoachReportRead
 def render_coach_report_telegram(
     *,
     report: CoachReportRead,
-    activity_class: str,
+    headline: str,
     distance_m: int,
     app_base_url: str,
 ) -> tuple[str, str, str]:
@@ -16,7 +16,7 @@ def render_coach_report_telegram(
     """
     distance_km = round((distance_m or 0) / 1000.0, 1)
     confidence = report.meta.confidence
-    activity_label = activity_class or "Activity"
+    activity_label = headline or "Activity"
     if distance_km > 0:
         title = f"{activity_label} — {distance_km}km · {confidence} confidence"
     else:

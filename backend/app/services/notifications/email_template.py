@@ -6,14 +6,14 @@ from app.schemas.coach import CoachReportRead
 def render_coach_report_email(
     *,
     report: CoachReportRead,
-    activity_class: str,
+    headline: str,
     distance_m: int,
     app_base_url: str,
 ) -> tuple[str, str, str]:
     """Render subject + HTML body + plain-text body for a coach report email."""
     distance_km = round((distance_m or 0) / 1000.0, 1)
     confidence = report.meta.confidence
-    activity_label = activity_class or "Activity"
+    activity_label = headline or "Activity"
     # Subject shape: "{label} — {dist}km · {conf} confidence" for activities
     # with distance, "{label} — {conf} confidence" for those without (indoor
     # rides record 0m). The label already includes the noun (e.g. "Easy Run",

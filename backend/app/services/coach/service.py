@@ -23,6 +23,7 @@ from app.schemas.coach import CoachReportContent, CoachReportDebug, CoachReportM
 from app.schemas.coach_context import CoachContextPack
 from app.services.coach.context import build_context_pack
 from app.services.coach.llm import AnthropicClient
+from app.services.analysis.classifier import Classification, playbook_key
 from app.services.coach.prompts import PROMPT_VERSIONS, build_system_prompt
 from app.services.coach.validator import PolicyViolation, validate_policy
 
@@ -56,10 +57,10 @@ async def get_or_generate_coach_report(
     input_hash = pack.fingerprint()
     pack_dict = pack.to_serializable_dict()
 
-    # Build prompt with activity-type playbook
+    # Build prompt with activity-type playbook, selected from the axes (ADR 0007)
     prompt_id = settings.COACH_PROMPT_ID
-    activity_class = pack.metrics.activity_class
-    system_prompt = build_system_prompt(prompt_id, activity_class)
+    classification = Classification.from_metrics(activity.metrics)
+    system_prompt = build_system_prompt(prompt_id, playbook_key(activity, classification))
     user_message = json.dumps(pack_dict, default=str)
 
     client = AnthropicClient(

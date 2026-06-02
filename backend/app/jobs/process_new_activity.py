@@ -17,6 +17,7 @@ from app.db.session import SessionLocal
 from app.models import Activity, StravaAccount
 from app.models.coach_report import CoachReport
 from app.services.analysis import analyze_with_streams
+from app.services.analysis.classifier import Classification, compose_headline
 from app.services.coach.service import get_or_generate_coach_report
 from app.services.notifications import (
     Notification,
@@ -82,12 +83,12 @@ async def process_new_activity(
         )
         return None
 
-    activity_class = (
-        activity.metrics.activity_class if activity.metrics else (activity.type or "Activity")
+    headline = compose_headline(
+        activity, Classification.from_metrics(activity.metrics)
     )
     notification = build_coach_notification(
         report=report,
-        activity_class=activity_class,
+        headline=headline,
         distance_m=activity.distance_m or 0,
         app_base_url=settings.APP_BASE_URL,
     )
