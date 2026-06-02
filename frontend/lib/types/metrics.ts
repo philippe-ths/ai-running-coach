@@ -20,7 +20,13 @@ export interface EfficiencyAnalysis {
 }
 
 export interface DerivedMetric {
-  activity_class: string;
+  // Orthogonal classification axes (ADR 0007) + the derived headline.
+  headline?: string | null;
+  effort?: string | null;
+  duration_class?: string | null;
+  structure?: string | null;
+  is_hilly?: boolean | null;
+  is_race?: boolean | null;
   effort_score: number;
   flags: string[];
   confidence: string;

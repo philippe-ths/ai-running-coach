@@ -9,7 +9,6 @@ interface Activity {
   start_date: string;
   distance_m: number;
   moving_time_s: number;
-  activity_class?: string; 
 }
 
 export default function ActivityList({ activities }: { activities: Activity[] }) {

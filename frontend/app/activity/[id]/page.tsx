@@ -30,9 +30,14 @@ export default async function ActivityDetail({ params }: { params: { id: string 
         <div className="flex justify-between items-start">
             <div>
                 <h1 className="text-3xl font-bold text-gray-900">{activity.name}</h1>
-                <div className="flex gap-4 mt-2 text-gray-600">
+                <div className="flex gap-4 mt-2 text-gray-600 items-center">
                     <span>{format(new Date(activity.start_date), 'PPPP p')}</span>
                     <span>{formatDistanceKm(activity.distance_m)}</span>
+                    {activity.metrics?.headline && (
+                        <span className="inline-block px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-sm font-medium">
+                            {activity.metrics.headline}
+                        </span>
+                    )}
                 </div>
             </div>
             {/* IntentSelector moved to main content */}
@@ -49,7 +54,7 @@ export default async function ActivityDetail({ params }: { params: { id: string 
               activityId={activity.id} 
               existingCheckIn={activity.check_in} 
               currentType={activity.user_intent ?? null}
-              assignedClass={activity.metrics?.activity_class}
+              headline={activity.metrics?.headline}
               sportType={activity.raw_summary?.sport_type || activity.raw_summary?.type || 'Run'}
           />
           
