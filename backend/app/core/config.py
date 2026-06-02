@@ -62,9 +62,20 @@ class Settings(BaseSettings):
 
     # Phase 1 deployment: throwaway basic auth in front of /api/*.
     # Both must be set for the middleware to enforce; either empty disables it.
-    # TODO(phase-2): remove when session auth lands.
+    # TODO(phase-2): remove at the basic-auth cutover (PR-B of #118).
     BASIC_AUTH_USER: str = ""
     BASIC_AUTH_PASSWORD: str = ""
+
+    # Email magic-link auth (ADR 0005, #118).
+    # Cookie carrying the opaque session token. Secure should be true wherever
+    # the app is served over HTTPS; left false so plain-HTTP local dev works.
+    SESSION_COOKIE_NAME: str = "rc_session"
+    SESSION_COOKIE_SECURE: bool = False
+    SESSION_TTL_SECONDS: int = 60 * 60 * 24 * 30  # 30 days
+    LOGIN_TOKEN_TTL_SECONDS: int = 900  # 15 minutes
+    # request-link rate limits, enforced via Redis. Caps the email-spam vector.
+    LOGIN_RATE_PER_EMAIL_HOUR: int = 5
+    LOGIN_RATE_PER_IP_MINUTE: int = 10
 
     # Sentry DSN; empty disables Sentry init (Phase 1 step 3 wires the SDK).
     SENTRY_DSN: str = ""

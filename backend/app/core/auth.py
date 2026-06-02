@@ -46,27 +46,9 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         if self._is_exempt(path):
             return await call_next(request)
 
-        expected_user = settings.BASIC_AUTH_USER
-        expected_password = settings.BASIC_AUTH_PASSWORD
-        if not expected_user or not expected_password:
-            if settings.APP_ENV == "production":
-                logger.critical(
-                    "basic_auth_credentials_missing_in_production",
-                    extra={"path": path},
-                )
-                return _service_unavailable()
-            return await call_next(request)
-
-        credentials = _parse_basic_auth(request.headers.get("authorization"))
-        if credentials is None:
-            return _unauthorized()
-
-        user, password = credentials
-        user_ok = secrets.compare_digest(user.encode("utf-8"), expected_user.encode("utf-8"))
-        pass_ok = secrets.compare_digest(password.encode("utf-8"), expected_password.encode("utf-8"))
-        if not (user_ok and pass_ok):
-            return _unauthorized()
-
+        rejection = evaluate_basic_auth(request)
+        if rejection is not None:
+            return rejection
         return await call_next(request)
 
     def _is_exempt(self, path: str) -> bool:
@@ -74,6 +56,38 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
             path == prefix or path.startswith(prefix + "/")
             for prefix in self._exempt_prefixes
         )
+
+
+def evaluate_basic_auth(request: Request) -> Response | None:
+    """Evaluate HTTP basic auth for a request.
+
+    Returns a ``Response`` to reject the request, or ``None`` to allow it. No-op
+    (allow) when credentials are unset outside production so local dev works;
+    fails closed (503) when unset in production. Shared by the transitional
+    session middleware so a request without a valid session can still fall back
+    to basic auth during the PR-A → PR-B cutover.
+    """
+    expected_user = settings.BASIC_AUTH_USER
+    expected_password = settings.BASIC_AUTH_PASSWORD
+    if not expected_user or not expected_password:
+        if settings.APP_ENV == "production":
+            logger.critical(
+                "basic_auth_credentials_missing_in_production",
+                extra={"path": request.url.path},
+            )
+            return _service_unavailable()
+        return None
+
+    credentials = _parse_basic_auth(request.headers.get("authorization"))
+    if credentials is None:
+        return _unauthorized()
+
+    user, password = credentials
+    user_ok = secrets.compare_digest(user.encode("utf-8"), expected_user.encode("utf-8"))
+    pass_ok = secrets.compare_digest(password.encode("utf-8"), expected_password.encode("utf-8"))
+    if not (user_ok and pass_ok):
+        return _unauthorized()
+    return None
 
 
 def _parse_basic_auth(header_value: str | None) -> tuple[str, str] | None:

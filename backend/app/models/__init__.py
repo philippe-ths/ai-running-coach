@@ -8,6 +8,8 @@ from the submodule when you only need one model.
 
 from app.models.base import generate_uuid  # noqa: F401
 from app.models.user import User  # noqa: F401
+from app.models.login_token import LoginToken  # noqa: F401
+from app.models.session import Session  # noqa: F401
 from app.models.strava_account import StravaAccount  # noqa: F401
 from app.models.activity import Activity  # noqa: F401
 from app.models.activity_stream import ActivityStream  # noqa: F401
@@ -21,6 +23,8 @@ from app.models.runner_baseline import RunnerBaseline  # noqa: F401
 __all__ = [
     "generate_uuid",
     "User",
+    "LoginToken",
+    "Session",
     "StravaAccount",
     "Activity",
     "ActivityStream",

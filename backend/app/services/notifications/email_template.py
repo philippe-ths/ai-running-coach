@@ -3,6 +3,30 @@ from html import escape
 from app.schemas.coach import CoachReportRead
 
 
+def render_login_email(*, verify_url: str, ttl_minutes: int) -> tuple[str, str, str]:
+    """Render subject + HTML body + plain-text body for a magic-link email."""
+    subject = "Your Running Coach sign-in link"
+    safe_url = escape(verify_url)
+    html = (
+        "<!doctype html><html><body style=\"font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:16px;\">"
+        "<h2>Sign in to Running Coach</h2>"
+        "<p>Click the button below to sign in. This link works once and expires "
+        f"in {ttl_minutes} minutes.</p>"
+        f"<p><a href=\"{safe_url}\" style=\"display:inline-block;padding:10px 16px;"
+        "background:#111;color:#fff;border-radius:6px;text-decoration:none;\">Sign in</a></p>"
+        f"<p style=\"color:#666;font-size:13px;\">Or paste this link into your browser:<br/>{safe_url}</p>"
+        "<p style=\"color:#666;font-size:13px;\">If you did not request this, you can ignore this email.</p>"
+        "</body></html>"
+    )
+    text = (
+        "Sign in to Running Coach\n\n"
+        f"Open this link to sign in (works once, expires in {ttl_minutes} minutes):\n"
+        f"{verify_url}\n\n"
+        "If you did not request this, you can ignore this email.\n"
+    )
+    return subject, html, text
+
+
 def render_coach_report_email(
     *,
     report: CoachReportRead,

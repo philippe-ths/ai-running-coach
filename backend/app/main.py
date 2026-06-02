@@ -2,9 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import health, auth, activities, webhooks, profile, trends, coach, debug
-from app.core.auth import BasicAuthMiddleware
 from app.core.config import settings
 from app.core.observability import init_logging, init_sentry
+from app.core.session_auth import SessionAuthMiddleware
 
 init_logging()
 init_sentry("web")
@@ -15,16 +15,19 @@ app = FastAPI(
     version="0.2.0",
 )
 
-# TODO(phase-2): remove BasicAuthMiddleware when session auth from ADR 0005 lands.
-# /api/auth/strava/callback is exempt because Strava redirects the user's browser
-# there directly with an OAuth code; the code itself is the auth, and Strava has
-# no way to send basic auth credentials.
+# Session gate (ADR 0005). The whole /api/auth/* surface is exempt: the
+# magic-link request/verify/logout endpoints serve unauthenticated callers, and
+# the Strava OAuth callback is hit by a browser redirect carrying the OAuth code
+# as its own auth. /api/webhooks/* is server-to-server (authenticated in-handler)
+# and /api/health must stay open for probes.
+# PR-A: this middleware still falls back to basic auth so the not-yet-cutover
+# frontend keeps working. PR-B removes that fallback and deletes app/core/auth.py.
 app.add_middleware(
-    BasicAuthMiddleware,
+    SessionAuthMiddleware,
     exempt_prefixes=(
         "/api/health",
         "/api/webhooks",
-        "/api/auth/strava/callback",
+        "/api/auth",
     ),
 )
 
