@@ -105,6 +105,27 @@ def _report_text(content: CoachReportContent) -> str:
     return _extract_all_text(content).lower()
 
 
+def _assertive_text(content: CoachReportContent) -> str:
+    """The report's ASSERTED claims only, lower-cased: headline, thesis, lead
+    argument, takeaways, next steps and risks — but NOT questions. A question the
+    coach asks ("how did this feel compared to your last session?") is not an
+    assertion, so trend-claim detection must not fire on it."""
+    parts: List[str] = []
+    if content.headline:
+        parts.append(content.headline)
+    if content.thesis:
+        parts.append(content.thesis)
+    if content.lead_argument is not None:
+        parts.append(content.lead_argument.text)
+    for t in content.key_takeaways:
+        parts.append(t.text if hasattr(t, "text") else str(t))
+    for s in content.next_steps:
+        parts.extend([s.action, s.details, s.why])
+    for r in content.risks:
+        parts.extend([r.explanation, r.mitigation])
+    return " ".join(parts).lower()
+
+
 _WORD_RE = re.compile(r"[a-z0-9]+")
 # Common words that inflate overlap without signalling repetition of substance.
 _STOPWORDS = frozenset(
@@ -284,7 +305,8 @@ def _has_trend_claim(text: str) -> List[str]:
 
 def assert_abstained_on_thin_trend(content: CoachReportContent, pack: CoachContextPack) -> AssertionResult:
     trend = pack.longitudinal.baseline_trend
-    text = _report_text(content)
+    # Scan asserted claims only: a comparative QUESTION is not a trend claim.
+    text = _assertive_text(content)
     matched = _has_trend_claim(text)
 
     if trend is not None:

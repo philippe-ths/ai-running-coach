@@ -10,12 +10,15 @@ import json
 from datetime import timedelta
 from typing import Any, Dict, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import Activity, RunnerBaseline, UserProfile
+from app.models.checkin import CheckIn
 from app.models.coach_report import CoachReport
 from app.services.analysis.baseline import bucket_key
 from app.services.analysis.classifier import Classification, compose_headline  # noqa: F401
+from app.services.coach.perceived_effort import build_perceived_effort
 from app.schemas.coach_context import (
     ActivityContext,
     BaselineTrendDelta,
@@ -23,6 +26,7 @@ from app.schemas.coach_context import (
     CoachContextPack,
     LongitudinalContext,
     MetricsContext,
+    PerceivedEffortContext,
     PriorReportDigest,
     ProfileContext,
     RecentTrainingSummary,
@@ -31,6 +35,10 @@ from app.schemas.coach_context import (
 )
 from app.services.trends import _query_activity_facts
 from app.services.units.cadence import normalize_cadence_spm
+
+# Defensive cap on prior check-ins scanned for the pain trend. Pain check-ins are
+# sparse, so this comfortably covers the recent history the trend needs.
+_PAIN_HISTORY_SCAN_LIMIT = 50
 
 # Bound on how many prior reports the longitudinal digest carries into the pack.
 # The brief asks for "the last 1-2 reports"; two is enough to advance the
@@ -158,6 +166,13 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
             previous_28d=_summarize(facts_prev_28d),
         ),
         longitudinal=_build_longitudinal_context(db, activity),
+        perceived_effort=build_perceived_effort(
+            rpe=check_in.rpe if check_in else None,
+            effort_axis=metrics.effort if metrics else None,
+            effort_score=round(metrics.effort_score, 1) if metrics and metrics.effort_score is not None else None,
+            discount_signals=metrics.discount_signals if metrics else None,
+            pain_scores=_recent_pain_scores(db, activity),
+        ),
         safety_rules=SafetyRules(
             never_diagnose=True,
             pain_severe_threshold=7,
@@ -177,6 +192,34 @@ def _build_longitudinal_context(db: Session, activity: Activity) -> Longitudinal
         prior_reports=_prior_report_digests(db, activity),
         baseline_trend=_matching_baseline_trend(db, activity),
     )
+
+
+def _recent_pain_scores(db: Session, activity: Activity) -> list[int]:
+    """Chronological (oldest-first) pain scores for the M6 pain trend, scoped to
+    THIS run's pain location so the trend never conflates distinct injuries (a
+    knee easing while a shin builds is not one trend). Returns an empty list when
+    this run has no pain location to anchor on, so the trend degrades to absent.
+    Reads existing rows only."""
+    current = getattr(activity, "check_in", None)
+    location = (current.pain_location or "").strip() if current else ""
+    if not location:
+        return []  # no location anchor -> no location-specific trend
+    rows = (
+        db.query(CheckIn.pain_score, Activity.start_date)
+        .join(Activity, CheckIn.activity_id == Activity.id)
+        .filter(
+            Activity.user_id == activity.user_id,
+            Activity.is_deleted == False,  # noqa: E712
+            Activity.start_date <= activity.start_date,
+            CheckIn.pain_score.isnot(None),
+            func.lower(func.trim(CheckIn.pain_location)) == location.lower(),
+        )
+        # Newest-first so the cap keeps the most recent; id breaks start_date ties.
+        .order_by(Activity.start_date.desc(), Activity.id.desc())
+        .limit(_PAIN_HISTORY_SCAN_LIMIT)
+        .all()
+    )
+    return [pain for pain, _ in reversed(rows)]  # return oldest-first
 
 
 def _prior_report_digests(db: Session, activity: Activity) -> list[PriorReportDigest]:
