@@ -221,6 +221,17 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     metrics_data["confidence"] = confidence
     metrics_data["confidence_reasons"] = confidence_reasons
 
+    # 9.5 Discount signals (N4) — deterministic confounder annotation. Flags
+    # when HR drift is likely inflated by heat/terrain/stimulant rather than
+    # genuine fatigue. Reuses the profile loaded for max_hr above.
+    from app.services.analysis.discount_signals import compute_discount_signals
+    metrics_data["discount_signals"] = compute_discount_signals(
+        average_temp=activity.raw_summary.get("average_temp") if activity.raw_summary else None,
+        is_hilly=metrics_data.get("is_hilly"),
+        hr_drift=metrics_data.get("hr_drift"),
+        stimulant_use=profile.stimulant_use if profile else None,
+    )
+
     # 10. Upsert DerivedMetric
     existing_dm = db.query(DerivedMetric).filter(DerivedMetric.activity_id == activity.id).first()
 

@@ -38,7 +38,7 @@ _DEFAULT_PACK_DICT = {
         "efficiency_analysis": None, "stops_analysis": None, "interval_structure": None,
         "workout_match": None, "interval_kpis": None,
         "risk_level": None, "risk_score": None, "risk_reasons": [],
-        "training_context": None,
+        "training_context": None, "discount_signals": None,
     },
     "check_in": {
         "rpe": 6, "pain_score": 0, "pain_location": None, "sleep_quality": 4, "notes": None,
@@ -369,6 +369,53 @@ class TestMedicalScopeRule:
     def test_default_valid_report_has_no_medical_overreach(self):
         violations = validate_policy(_make_content(), _make_pack())
         assert "medical_overreach" not in [v.rule for v in violations]
+
+    # --- grounded-reshape (N3): the verdict layer must be policed too ---
+
+    def test_medical_overreach_in_lead_argument_scanned(self):
+        """The strongest claim is the most prominent text; the medical-scope
+        rule must scan lead_argument, not just key_takeaways."""
+        content = _make_content(
+            lead_argument=CoachTakeaway(text="This elevated HR means you have anemia."),
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_medical_overreach_in_thesis_scanned(self):
+        content = _make_content(
+            thesis="Your numbers mean you have hypertension.",
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_medical_overreach_in_headline_scanned(self):
+        content = _make_content(
+            headline="Run that diagnosed your overtraining syndrome",
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_uncalibrated_zone_reference_in_lead_argument_scanned(self):
+        """Zone-language rule must also cover the verdict layer."""
+        content = _make_content(
+            lead_argument=CoachTakeaway(text="You spent most of the run in Z2."),
+        )
+        pack = _make_pack(metrics={"zones_calibrated": False})
+        violations = validate_policy(content, pack)
+        assert "uncalibrated_zone_reference" in [v.rule for v in violations]
+
+    def test_clean_verdict_layer_no_violation(self):
+        """A populated but clean verdict layer adds no false positives."""
+        content = _make_content(
+            headline="Solid aerobic long run",
+            thesis="Your aerobic base held up well across the session.",
+            lead_argument=CoachTakeaway(
+                text="HR drift stayed low for the distance.",
+                evidence=[{"field": "metrics.hr_drift", "value": 2.1}],
+            ),
+        )
+        violations = validate_policy(content, _make_pack())
+        assert violations == []
 
     # --- hardening from adversarial review ---
 

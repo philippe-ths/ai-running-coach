@@ -19,7 +19,7 @@ import pytest
 from app.services.coach.llm import AnthropicClient
 
 
-def _ok_response(text: str = '{"key_takeaways":[],"next_steps":[]}'):
+def _ok_response(text: str = '{"key_takeaways":[{"text":"ok"}],"next_steps":[{"action":"a","details":"d","why":"w"}]}'):
     """Build a minimal stand-in for an anthropic Message response."""
     return SimpleNamespace(content=[SimpleNamespace(text=text)])
 

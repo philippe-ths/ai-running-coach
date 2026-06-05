@@ -37,6 +37,9 @@ export interface CoachReportMeta {
 }
 
 export interface CoachReportContent {
+  headline?: string;
+  thesis?: string;
+  lead_argument?: CoachTakeaway;
   key_takeaways: (CoachTakeaway | string)[];
   next_steps: CoachNextStep[];
   risks: CoachRisk[];

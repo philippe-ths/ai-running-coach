@@ -93,7 +93,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
 
   if (!report) return null;
 
-  const { key_takeaways, next_steps, risks, questions } = report.report;
+  const { headline, thesis, lead_argument, key_takeaways, next_steps, risks, questions } = report.report;
   const { confidence, generated_at } = report.meta;
 
   return (
@@ -114,6 +114,20 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
             Re-run
           </button>
         </div>
+        {headline && (
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">{headline}</h3>
+        )}
+        {thesis && (
+          <p className="text-sm text-gray-700 mb-3 leading-relaxed">{thesis}</p>
+        )}
+        {lead_argument && (
+          <div className="mb-3 bg-blue-50 rounded-lg border border-blue-200 p-4">
+            <div className="flex items-start gap-2">
+              <Sparkles className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+              <p className="text-sm font-medium text-blue-900">{lead_argument.text}</p>
+            </div>
+          </div>
+        )}
         <ul className="space-y-2">
           {key_takeaways.map((item, i) => {
             const text = typeof item === 'string' ? item : item.text;

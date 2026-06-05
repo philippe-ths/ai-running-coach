@@ -52,17 +52,33 @@ def test_valid_full_report():
     assert len(content.questions) == 1
 
 
-def test_rejects_too_few_takeaways():
+def test_rejects_empty_takeaways():
+    """Zero takeaways is invalid (min_length=1)."""
     with pytest.raises(ValidationError):
-        CoachReportContent.model_validate(
-            _valid_content(key_takeaways=[{"text": "Only one"}])
-        )
+        CoachReportContent.model_validate(_valid_content(key_takeaways=[]))
+
+
+def test_accepts_single_takeaway():
+    """A single takeaway is now valid (min_length relaxed from 2 to 1, N3)."""
+    content = CoachReportContent.model_validate(
+        _valid_content(key_takeaways=[{"text": "Only one"}])
+    )
+    assert len(content.key_takeaways) == 1
+
+
+def test_accepts_six_takeaways():
+    """Up to six takeaways is valid (max_length relaxed from 4 to 6, N3)."""
+    content = CoachReportContent.model_validate(
+        _valid_content(key_takeaways=[{"text": t} for t in ["A", "B", "C", "D", "E", "F"]])
+    )
+    assert len(content.key_takeaways) == 6
 
 
 def test_rejects_too_many_takeaways():
+    """Seven takeaways exceeds the new max_length of 6."""
     with pytest.raises(ValidationError):
         CoachReportContent.model_validate(
-            _valid_content(key_takeaways=[{"text": t} for t in ["A", "B", "C", "D", "E"]])
+            _valid_content(key_takeaways=[{"text": t} for t in ["A", "B", "C", "D", "E", "F", "G"]])
         )
 
 
@@ -174,3 +190,48 @@ def test_next_step_evidence_optional():
         next_steps=[{"action": "Run", "details": "Easy", "why": "Recovery"}]
     ))
     assert content.next_steps[0].evidence is None
+
+
+# ---------------------------------------------------------------------------
+# Grounded reshape (N3) — headline / thesis / lead_argument
+# ---------------------------------------------------------------------------
+
+def test_legacy_report_without_grounded_fields_validates():
+    """A legacy report (no headline/thesis/lead_argument) still validates; the
+    new fields are additive/optional and default to None."""
+    content = CoachReportContent.model_validate(_valid_content())
+    assert content.headline is None
+    assert content.thesis is None
+    assert content.lead_argument is None
+
+
+def test_report_with_grounded_fields_round_trips():
+    """A report carrying the new verdict layer validates and round-trips through
+    serialization, including lead_argument's evidence refs."""
+    data = _valid_content(
+        headline="Solid aerobic long run",
+        thesis="Your aerobic base held up well across 90 minutes.",
+        lead_argument={
+            "text": "HR drift was minimal for the distance.",
+            "evidence": [{"field": "metrics.hr_drift", "value": 2.1}],
+        },
+    )
+    content = CoachReportContent.model_validate(data)
+    assert content.headline == "Solid aerobic long run"
+    assert content.thesis.startswith("Your aerobic base")
+    assert content.lead_argument.text == "HR drift was minimal for the distance."
+    assert content.lead_argument.evidence[0].field == "metrics.hr_drift"
+    assert content.lead_argument.evidence[0].value == 2.1
+
+    dumped = content.model_dump()
+    reparsed = CoachReportContent.model_validate(dumped)
+    assert reparsed.headline == content.headline
+    assert reparsed.lead_argument.evidence[0].field == "metrics.hr_drift"
+
+
+def test_single_takeaway_report_is_valid():
+    """A one-takeaway report is valid under the relaxed cardinality (N3)."""
+    content = CoachReportContent.model_validate(
+        _valid_content(key_takeaways=[{"text": "One strong, well-grounded point."}])
+    )
+    assert len(content.key_takeaways) == 1
