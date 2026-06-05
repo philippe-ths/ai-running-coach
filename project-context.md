@@ -13,7 +13,7 @@ An `Activity` is a single Strava activity record owned by a `User`, identified b
 An `ActivityStream` holds per-sample time-series data (HR, pace, cadence, power) attached to an `Activity`.
 A `DerivedMetric` row attaches one set of computed signals to one `Activity` (activity class, effort score, pace variability, HR drift, time-in-zones, stops, efficiency, intervals, flags, confidence, risk).
 A `CheckIn` captures subjective post-run input from the user against an `Activity`.
-A `CoachReport` is the cached structured LLM analysis for an `Activity`; `CoachChatMessage` rows form a follow-up conversation against that activity.
+A `CoachReport` is the cached structured LLM analysis for an `Activity`, keyed by `(activity_id, prompt_id, schema_version)` so a prompt/schema change retains prior-version reports instead of overwriting them; `CoachChatMessage` rows form a follow-up conversation against that activity.
 A `RunnerBaseline` stores rolling baselines used for comparison and drift detection.
 
 ## Scope
@@ -48,7 +48,7 @@ The polling lookback window is `POLLING_LOOKBACK_SECONDS` (default 604800s / 7 d
 The historical stream backfill is paced by `BACKFILL_BATCH_SIZE` (default 20, activities per batch) and `BACKFILL_BATCH_PAUSE_SECONDS` (default 300, delay before the next batch); the default 20 stream calls per 5 minutes plus polling stays under Strava's 100-requests/15-min ceiling, and because the backfill is one-time its daily cost is just the backlog size and converges to zero.
 CORS origins are configured via `CORS_ALLOWED_ORIGINS` (comma-separated, default `http://localhost:3000,http://localhost:8000`), parsed by `Settings.cors_allowed_origins_list` and applied in `app/main.py`.
 Error tracking is logs-only by default; Sentry capture is opt-in, requiring the `observability` extra (`sentry-sdk[fastapi]`) installed and `SENTRY_DSN` set, otherwise `init_sentry` in `app/core/observability.py` is a no-op.
-The deterministic policy validator in `services/coach/validator.py` rejects LLM output that claims specific interval execution counts (e.g. "8x400m", "executed 8") and other policy violations; per `ai-workflow.md` this gate must not be bypassed.
+The deterministic policy validator in `services/coach/validator.py` has five rules: it rejects LLM output that misses questions for a null check-in, references uncalibrated HR zones, cites a risk flag not in the flags array, claims specific interval execution counts (e.g. "8x400m", "executed 8") under low detection confidence, and (the medical-scope rule) gives dose advice, uses diagnosis verbs, issues directive medication advice, or asserts a clinical condition about the runner, while still permitting interpretive metric correction and a non-diagnostic referral nudge; per `ai-workflow.md` this gate must not be bypassed.
 When data confidence is low, downstream analysis is expected to default to conservative output (documented intent in `README.md`).
 Postgres is exposed on host port `5433` (mapped from container `5432`); Redis on `6379`; backend on `8000`; frontend on `3000`.
 Backend test baseline excludes tests marked `integration` (pytest marker registered in `pyproject.toml`).

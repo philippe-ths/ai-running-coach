@@ -29,6 +29,86 @@ _INTERVAL_CLAIM_PATTERNS = [
 ]
 
 
+# --- Rule 5: medical-scope boundary (N2) -----------------------------------
+# Oracle: plan section 8. Reject dose advice and diagnosis verbs; never let a
+# single wearable number escalate into a health claim. Permit interpretive
+# metric correction ("discount this drift, it was hot") and the non-diagnostic
+# referral nudge ("consider seeing a clinician"). High precision is the
+# priority: over-firing rejects legitimate reports and forces a fallback.
+
+# Pharmaceutical dose units ("200mg", "200mgs", "5 mcg", "2000 IU").
+# Deliberately excludes grams (sports-nutrition language) and the bare word
+# "dose"/"dosage" (idiomatic coaching: "small doses of easy running"); a real
+# dose instruction is caught here by its unit, or by _MED_DIRECTIVE_PATTERN when
+# a change verb targets a "dose"/"dosage". Known limit: spelled-out numbers
+# ("five hundred milligrams") and gram-dosed compounds are not matched.
+_DOSE_PATTERN = re.compile(
+    r"\b\d+\s?(?:mgs?|mcgs?|µg|milligrams?|micrograms?|i\.?u\.?)\b",
+    re.IGNORECASE,
+)
+
+# Diagnosis verbs in any form.
+_DIAGNOSIS_VERB_PATTERN = re.compile(r"\bdiagnos(?:e|es|ed|ing|is)\b", re.IGNORECASE)
+
+# Directive medication advice: a change/start verb aimed at a medication noun
+# (including "dose"/"dosage") within a short window. The {0,25} bound keeps the
+# match linear (no catastrophic backtracking). Known limit: verb enumeration is
+# inherently leaky.
+_MED_DIRECTIVE_PATTERN = re.compile(
+    r"\b(?:take|taking|start|starting|stop|stopping|begin|beginning|increase|"
+    r"decrease|reduce|lower|raise|adjust|change|switch|go|get|put|need|needs|"
+    r"consider|prescrib\w+)\b[\w\s,'\"-]{0,25}?"
+    r"\b(?:medications?|meds?|beta[\s-]?blockers?|statins?|antidepressants?|"
+    r"ssris?|supplements?|iron (?:pills?|tablets?|supplements?)|"
+    r"doses?|dosages?)\b",
+    re.IGNORECASE,
+)
+
+# Clinical conditions a non-medical coach must not assert as fact. This list is
+# deliberately non-exhaustive (it can never cover every condition); it backstops
+# the most common overreach. "depression" is included despite a rare
+# elevation-"depression" terrain phrasing, because asserting a mood disorder is
+# the higher-cost miss.
+_CONDITION_TERMS = (
+    r"anemi[ac]|anaemi[ac]|overtraining syndrome|red-?s|"
+    r"relative energy deficiency|hypothyroid\w*|hyperthyroid\w*|"
+    r"thyroid (?:disorder|condition|disease)|arrhythmias?|"
+    r"atrial fibrillation|a-?fib|myocarditis|cardiomyopathy|"
+    r"heart (?:disease|condition)|hypertension|high blood pressure|asthma|"
+    r"iron deficiency|low ferritin|diabet(?:es|ic)|depress(?:ion|ed)"
+)
+
+# A condition term asserted (not merely named) about the runner: an assertion
+# verb immediately followed by the condition, with an optional article/qualifier.
+_HEALTH_CLAIM_PATTERN = re.compile(
+    r"\b(?:have|has|having|got|you're|you are|suffering from|suffer from|"
+    r"diagnosed with|indicates?|means|sign of|signs of|symptom of|symptoms of|"
+    r"consistent with|points? to)\s+"
+    r"(?:a |an |the |some |possible |likely |early |signs? of |chronic )?"
+    r"(?:" + _CONDITION_TERMS + r")\b",
+    re.IGNORECASE,
+)
+
+# Negations that flip an apparent claim into a reassurance ("no signs of X").
+# Note: "any" is intentionally NOT here — it is a common non-negating word
+# ("any fatigue?") and including it silently suppressed real claims.
+_NEGATION_PATTERN = re.compile(
+    r"\b(?:no|not|n't|never|without|free of|rule out|ruled out|"
+    r"denies?|negative for|nothing|unlikely)\b",
+    re.IGNORECASE,
+)
+
+
+def _has_asserted_health_claim(text: str) -> bool:
+    """True if a clinical condition is asserted about the runner and not negated."""
+    for match in _HEALTH_CLAIM_PATTERN.finditer(text):
+        window = text[max(0, match.start() - 40):match.start()]
+        if _NEGATION_PATTERN.search(window):
+            continue  # "no signs of overtraining syndrome" — reassurance, not a claim
+        return True
+    return False
+
+
 def validate_policy(
     content: CoachReportContent,
     context_pack: CoachContextPack,
@@ -111,6 +191,31 @@ def validate_policy(
                         ),
                     ))
                     break  # One violation is enough
+
+    # Rule 5: medical-scope boundary — reject medical overreach (plan section 8).
+    full_text = _extract_all_text(content)
+    medical_reason = None
+    if _DOSE_PATTERN.search(full_text):
+        medical_reason = "contains dose advice (a pharmaceutical dose or dosage instruction)"
+    elif _DIAGNOSIS_VERB_PATTERN.search(full_text):
+        medical_reason = "uses a diagnosis verb"
+    elif _MED_DIRECTIVE_PATTERN.search(full_text):
+        medical_reason = "gives directive medication advice"
+    elif _has_asserted_health_claim(full_text):
+        medical_reason = "asserts a clinical condition about the runner"
+    if medical_reason:
+        violations.append(PolicyViolation(
+            rule="medical_overreach",
+            detail=f"Output {medical_reason}, which is outside the coaching scope",
+            fix_instruction=(
+                "Stay inside the general-wellness coaching lane. Do NOT give drug or "
+                "supplement doses, use diagnosis verbs, name or assert a clinical "
+                "condition, or escalate a single wearable number into a health claim. "
+                "You MAY interpret and correct a metric (e.g. 'discount this HR drift, "
+                "it was hot, so it overstates fatigue') and you MAY suggest seeing a "
+                "clinician as a non-diagnostic nudge. Rephrase to remove the overreach."
+            ),
+        ))
 
     return violations
 

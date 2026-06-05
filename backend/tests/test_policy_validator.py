@@ -223,3 +223,269 @@ class TestPolicyValidator:
         violations = validate_policy(content, pack)
         rules = [v.rule for v in violations]
         assert "ungated_interval_claim" not in rules
+
+
+class TestMedicalScopeRule:
+    """Rule 5 (N2): reject dose advice, diagnosis verbs, and escalation of a
+    single wearable number into a health claim. Permit interpretive metric
+    correction and the (future M9) non-diagnostic referral nudge.
+
+    Oracle: the medical-scope boundary stated in
+    docs/coach-report-improvement-plan.md section 8.
+    """
+
+    def test_dose_advice_in_milligrams_rejected(self):
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Supplement iron",
+                details="Take 200mg of iron daily for the next month.",
+                why="To address the drift.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_dosage_word_rejected(self):
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Adjust meds",
+                details="Increase your dosage before hard sessions.",
+                why="Performance.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_diagnosis_verb_rejected(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="This drift pattern lets me diagnose overtraining."),
+                CoachTakeaway(text="Strong session."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_wearable_number_escalated_to_health_claim_rejected(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="Your resting HR of 60 means you have a heart condition."),
+                CoachTakeaway(text="Take it easy."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_named_condition_assertion_rejected(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="Based on this elevated HR, you are anemic."),
+                CoachTakeaway(text="Rest up."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_directive_medication_advice_rejected(self):
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Medication",
+                details="Stop taking your beta-blocker before your race.",
+                why="It blunts heart rate.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    # --- permitted: interpretive correction and non-diagnostic referral ---
+
+    def test_interpretive_heat_correction_permitted(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="Discount this HR drift: it was 28C, and heat inflates HR, so the drift overstates fatigue."),
+                CoachTakeaway(text="Solid easy run."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" not in [v.rule for v in violations]
+
+    def test_medication_interpretive_context_permitted(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="Your HR reads a few bpm high because you noted a stimulant this week, so this drift overstates fatigue."),
+                CoachTakeaway(text="Keep the easy days easy."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" not in [v.rule for v in violations]
+
+    def test_non_diagnostic_referral_nudge_permitted(self):
+        """The M9 referral layer must survive: a 'consider seeing a clinician'
+        nudge with no dose, diagnosis verb, or asserted condition is permitted."""
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Consider checking in with a clinician",
+                details="If your resting HR stays elevated for two weeks, it is worth seeing a doctor.",
+                why="A persistent pattern is worth a professional look.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" not in [v.rule for v in violations]
+
+    def test_nutrition_grams_permitted(self):
+        """Sports-nutrition framing in grams is not a pharmaceutical dose."""
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Fuel the long run",
+                details="Aim for 60g of carbs per hour on runs over 90 minutes.",
+                why="Glycogen.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" not in [v.rule for v in violations]
+
+    def test_preventive_condition_mention_permitted(self):
+        """Naming a condition to prevent it (not asserting the runner has it) is fine."""
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Eat iron-rich foods",
+                details="To avoid iron deficiency, include leafy greens and red meat.",
+                why="General nutrition.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" not in [v.rule for v in violations]
+
+    def test_negated_condition_not_flagged(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="Your numbers look clean: no signs of overtraining syndrome here."),
+                CoachTakeaway(text="Nice work."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" not in [v.rule for v in violations]
+
+    def test_default_valid_report_has_no_medical_overreach(self):
+        violations = validate_policy(_make_content(), _make_pack())
+        assert "medical_overreach" not in [v.rule for v in violations]
+
+    # --- hardening from adversarial review ---
+
+    def test_any_in_preamble_does_not_suppress_claim(self):
+        """'any' is not a negation: it must not disable the gate on a real claim."""
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="Do you notice any fatigue? You clearly have overtraining syndrome."),
+                CoachTakeaway(text="Rest up."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_asthma_assertion_rejected(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="Your breathing pattern suggests you have asthma."),
+                CoachTakeaway(text="Ease off."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_hypertension_assertion_rejected(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="These numbers mean you have hypertension."),
+                CoachTakeaway(text="Take it easy."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_standalone_depression_assertion_rejected(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="Your low motivation means you have depression."),
+                CoachTakeaway(text="Be kind to yourself."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_dose_of_training_idiom_permitted(self):
+        """'dose' as a coaching idiom (no drug/supplement context) must pass."""
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="Small doses of easy running build the base."),
+                CoachTakeaway(text="The right dose of intensity matters."),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" not in [v.rule for v in violations]
+
+    def test_directive_dose_of_supplement_rejected(self):
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Caffeine",
+                details="Take a higher dose of caffeine pills pre-race.",
+                why="Ergogenic boost.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_med_directive_begin_statin_rejected(self):
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Meds", details="Begin a statin for your cholesterol.", why="Health.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_med_directive_put_you_on_rejected(self):
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Meds", details="I would put you on a beta-blocker for the race.", why="Calm the HR.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_med_directive_need_supplements_rejected(self):
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Iron", details="You need more iron supplements this block.", why="Recovery.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_consider_ssri_rejected(self):
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Meds", details="Consider an SSRI to steady your mood.", why="Wellbeing.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_consider_easy_week_permitted(self):
+        """'consider' is only a problem when aimed at a medication noun."""
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Recover", details="Consider an easy week to absorb the training.", why="Adaptation.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" not in [v.rule for v in violations]
+
+    def test_plural_mgs_dose_rejected(self):
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Iron", details="Take 200mgs of iron daily.", why="Levels.",
+            )],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]

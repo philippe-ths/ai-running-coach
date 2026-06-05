@@ -9,7 +9,11 @@ from app.models.coach_report import CoachReport
 from app.schemas.chat import ChatHistoryResponse, ChatMessageSend
 from app.schemas.coach import CoachReportRead
 from app.services.coach.chat import get_chat_history, stream_chat_response
-from app.services.coach.service import get_or_generate_coach_report, _to_read
+from app.services.coach.service import (
+    get_active_report_row,
+    get_or_generate_coach_report,
+    _to_read,
+)
 
 router = APIRouter()
 
@@ -21,30 +25,16 @@ router = APIRouter()
 async def get_coach_report(
     activity_id: UUID,
     generate: bool = Query(True, description="If false, only return cached report (404 if none)"),
-    force: bool = Query(False, description="If true, delete cached report and regenerate"),
+    force: bool = Query(False, description="If true, regenerate the active-version report (prior versions retained)"),
     db: Session = Depends(get_db),
 ):
-    if force:
-        existing = (
-            db.query(CoachReport)
-            .filter(CoachReport.activity_id == str(activity_id))
-            .first()
-        )
-        if existing:
-            db.delete(existing)
-            db.commit()
-
     if not generate and not force:
-        existing = (
-            db.query(CoachReport)
-            .filter(CoachReport.activity_id == str(activity_id))
-            .first()
-        )
+        existing = get_active_report_row(db, str(activity_id))
         if not existing:
             raise HTTPException(status_code=404, detail="No cached report.")
         return _to_read(existing)
 
-    report = await get_or_generate_coach_report(db, str(activity_id))
+    report = await get_or_generate_coach_report(db, str(activity_id), force=force)
     if not report:
         raise HTTPException(
             status_code=404,

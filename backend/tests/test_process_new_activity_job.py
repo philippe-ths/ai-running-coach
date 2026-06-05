@@ -259,6 +259,50 @@ async def test_pipeline_send_failure_is_non_fatal_and_leaves_sentinel_null(
 
 
 @pytest.mark.asyncio
+async def test_pipeline_fallback_gate_uses_active_version_not_stale_row(
+    db, strava_adapter, notifier, configured
+):
+    """Regression (N1): once version rows coexist, the notify gate must read the
+    *active*-version report's is_fallback, not an arbitrary `.first()` row. A
+    retained stale fallback row from a prior schema version must not suppress
+    notification of a fresh, good active-version report."""
+    _user, account = _seed(db)
+    _seed_strava(strava_adapter)
+
+    # First run produces a fallback report (invalid JSON); notification skipped.
+    bad_client = AsyncMock()
+    bad_client.generate_json = AsyncMock(return_value="invalid json")
+    with patch("app.services.coach.service.AnthropicClient", return_value=bad_client):
+        first = await process_new_activity(
+            db=db, account=account, strava_activity_id=9001,
+            strava_port=strava_adapter, notifier=notifier,
+        )
+    assert first is None
+    activity = db.query(Activity).filter_by(strava_activity_id=9001).first()
+    stale = db.query(CoachReport).filter(CoachReport.activity_id == activity.id).first()
+    assert stale.is_fallback is True
+    # Demote it to a prior version: retained, and inserted before the fresh row,
+    # so a version-unaware `.first()` would return it (lowest rowid in SQLite).
+    stale.schema_version = "1.0"
+    db.commit()
+    stale_id = stale.id
+
+    # Second run generates a fresh, good active-version report.
+    good_client = AsyncMock()
+    good_client.generate_json = AsyncMock(return_value=_valid_llm_json())
+    with patch("app.services.coach.service.AnthropicClient", return_value=good_client):
+        second = await process_new_activity(
+            db=db, account=account, strava_activity_id=9001,
+            strava_port=strava_adapter, notifier=notifier,
+        )
+
+    assert second is not None
+    assert len(notifier.sent) == 1
+    # Prior-version row retained alongside the fresh active one.
+    assert db.query(CoachReport).filter(CoachReport.id == stale_id).first() is not None
+
+
+@pytest.mark.asyncio
 async def test_pipeline_skips_when_notify_to_unset(
     db, strava_adapter, notifier, monkeypatch
 ):

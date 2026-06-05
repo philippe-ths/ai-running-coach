@@ -130,10 +130,15 @@ async def stream_chat_response(
     full context, retrieves conversation history, and streams the LLM response.
     Saves both the user message and the full assistant response to the DB.
     """
-    # Load the coach report (must exist before chatting)
-    report_row = (
+    # Load the coach report (must exist before chatting). Prefer the active
+    # version; fall back to the most recent report of any version so chat still
+    # works against an activity whose only report predates a version bump.
+    from app.services.coach.service import get_active_report_row
+
+    report_row = get_active_report_row(db, activity_id) or (
         db.query(CoachReport)
         .filter(CoachReport.activity_id == activity_id)
+        .order_by(CoachReport.created_at.desc())
         .first()
     )
     if not report_row:
