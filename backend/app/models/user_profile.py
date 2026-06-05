@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, date
 from typing import Optional
 
-from sqlalchemy import String, Integer, ForeignKey, DateTime, Date, Text, JSON
+from sqlalchemy import String, Integer, ForeignKey, DateTime, Date, Text, JSON, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -23,6 +23,9 @@ class UserProfile(Base):
     max_hr_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # "user_entered", "race_estimate", "lab_test"
     upcoming_races: Mapped[list] = mapped_column(JSON, default=[])  # List[dict]
     injury_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Opt-in medication/physiology flag (N4 confounder stage reads it). Nullable:
+    # unset means "unknown", not "no stimulant use".
+    stimulant_use: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

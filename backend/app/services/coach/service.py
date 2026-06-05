@@ -28,7 +28,7 @@ from app.services.analysis.classifier import Classification, playbook_key
 from app.services.coach.prompts import PROMPT_VERSIONS, build_system_prompt
 from app.services.coach.validator import PolicyViolation, validate_policy
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 
 
 def get_active_report_row(db: Session, activity_id) -> Optional[CoachReport]:

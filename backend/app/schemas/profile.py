@@ -15,6 +15,7 @@ class UserProfileBase(BaseModel):
     max_hr_source: Optional[str] = None  # "user_entered", "race_estimate", "lab_test"
     upcoming_races: List[Dict[str, Any]] = []
     injury_notes: Optional[str] = None
+    stimulant_use: Optional[bool] = None
 
 
 class UserProfileCreate(UserProfileBase):

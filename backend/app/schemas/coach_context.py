@@ -60,6 +60,7 @@ class MetricsContext(BaseModel):
     risk_score: Optional[int]
     risk_reasons: Optional[List[str]]
     training_context: Optional[Dict[str, Any]]
+    discount_signals: Optional[Dict[str, Any]]
 
 
 class CheckInContext(BaseModel):

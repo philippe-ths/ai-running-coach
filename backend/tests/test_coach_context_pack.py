@@ -57,6 +57,7 @@ def _legacy_full_pack() -> dict:
                 "days_since_last_hard": 4,
                 "hard_sessions_this_week": 0,
             },
+            "discount_signals": None,
         },
         "check_in": {
             "rpe": 6,
@@ -141,6 +142,7 @@ def _legacy_sparse_pack() -> dict:
             "risk_score": None,
             "risk_reasons": [],
             "training_context": None,
+            "discount_signals": None,
         },
         "check_in": {
             "rpe": None,

@@ -119,6 +119,7 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
             risk_score=metrics.risk_score if metrics else None,
             risk_reasons=metrics.risk_reasons if metrics else [],
             training_context=training_context,
+            discount_signals=metrics.discount_signals if metrics else None,
         ),
         check_in=CheckInContext(
             rpe=check_in.rpe if check_in else None,

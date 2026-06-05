@@ -223,6 +223,16 @@ def validate_policy(
 def _extract_all_text(content: CoachReportContent) -> str:
     """Concatenate all text fields for pattern matching."""
     parts = []
+    # Grounded-reshape (N3) verdict layer: scan headline/thesis/lead_argument so
+    # the medical-scope and zone-language rules also cover the strongest claim,
+    # not just the takeaway list. Safety requirement: the lead argument is the
+    # most prominent text, so it must be policed too.
+    if content.headline:
+        parts.append(content.headline)
+    if content.thesis:
+        parts.append(content.thesis)
+    if content.lead_argument is not None:
+        parts.append(content.lead_argument.text)
     for t in content.key_takeaways:
         parts.append(t.text if hasattr(t, "text") else str(t))
     for s in content.next_steps:

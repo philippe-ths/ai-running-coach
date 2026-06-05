@@ -45,7 +45,13 @@ class CoachReportMeta(BaseModel):
 
 
 class CoachReportContent(BaseModel):
-    key_takeaways: List[CoachTakeaway] = Field(..., min_length=2, max_length=4)
+    # Grounded reshape (N3): a verdict-first surface layered above the existing
+    # list fields. All optional and additive so legacy reports (and the
+    # versioned cache from M0) without them still validate.
+    headline: Optional[str] = None
+    thesis: Optional[str] = None
+    lead_argument: Optional[CoachTakeaway] = None
+    key_takeaways: List[CoachTakeaway] = Field(..., min_length=1, max_length=6)
     next_steps: List[CoachNextStep] = Field(..., min_length=1, max_length=3)
     risks: List[CoachRisk] = Field(default_factory=list)
     questions: List[CoachQuestion] = Field(default_factory=list, max_length=4)
@@ -66,6 +72,14 @@ class CoachReportContent(BaseModel):
                 for item in data.get(section, []):
                     if isinstance(item, dict) and isinstance(item.get("evidence"), str):
                         item["evidence"] = _parse_legacy_evidence(item["evidence"])
+            # Coerce the single lead_argument (N3) the same way as a takeaway: a
+            # bare string or string-evidence must not force a fallback report.
+            lead = data.get("lead_argument")
+            if isinstance(lead, str):
+                lead = {"text": lead}
+                data["lead_argument"] = lead
+            if isinstance(lead, dict) and isinstance(lead.get("evidence"), str):
+                lead["evidence"] = _parse_legacy_evidence(lead["evidence"])
         return data
 
 

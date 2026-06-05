@@ -42,6 +42,7 @@ class DerivedMetric(Base):
     risk_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     risk_reasons: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     training_context: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    discount_signals: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
