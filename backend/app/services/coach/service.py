@@ -14,6 +14,7 @@ import anthropic
 logger = logging.getLogger(__name__)
 
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -30,22 +31,47 @@ from app.services.coach.validator import PolicyViolation, validate_policy
 SCHEMA_VERSION = "1.1"
 
 
+def get_active_report_row(db: Session, activity_id) -> Optional[CoachReport]:
+    """Return the cached report row for the *active* version of this activity.
+
+    The active version is the current (COACH_PROMPT_ID, SCHEMA_VERSION) pair.
+    Rows from older prompt/schema versions are retained but ignored here, so a
+    version bump causes a clean cache miss and regeneration rather than serving
+    a stale shape.
+    """
+    activity_uuid = _coerce_uuid(activity_id)
+    return (
+        db.query(CoachReport)
+        .filter(
+            CoachReport.activity_id == activity_uuid,
+            CoachReport.prompt_id == settings.COACH_PROMPT_ID,
+            CoachReport.schema_version == SCHEMA_VERSION,
+        )
+        .first()
+    )
+
+
 async def get_or_generate_coach_report(
-    db: Session, activity_id: str
+    db: Session, activity_id: str, force: bool = False
 ) -> Optional[CoachReportRead]:
     """
-    Returns cached report if one exists, otherwise generates a new one via LLM.
+    Returns the cached report for the active version if one exists, otherwise
+    generates a new one via LLM.
+
+    force=True regenerates the active-version report (replacing only that row);
+    prior-version reports are always retained, so regeneration is never
+    destructive to history.
     """
     activity_uuid = _coerce_uuid(activity_id)
 
-    # Check cache
-    existing = (
-        db.query(CoachReport)
-        .filter(CoachReport.activity_id == activity_uuid)
-        .first()
-    )
-    if existing:
+    # Check cache (active version only)
+    existing = get_active_report_row(db, activity_uuid)
+    if existing and not force:
         return _to_read(existing)
+    if force and existing:
+        # Replace only the active-version row; prior versions are untouched.
+        db.delete(existing)
+        db.commit()
 
     # Load activity
     activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
@@ -127,9 +153,11 @@ async def get_or_generate_coach_report(
         policy_violations=policy_violations,
     )
 
-    # Store
+    # Store (version columns mirror meta so the cache can key on them)
     db_report = CoachReport(
         activity_id=activity_uuid,
+        prompt_id=prompt_id,
+        schema_version=SCHEMA_VERSION,
         report=content.model_dump(),
         meta=meta.model_dump(mode="json"),
         context_pack=pack_dict,
@@ -137,7 +165,16 @@ async def get_or_generate_coach_report(
         is_fallback=is_fallback,
     )
     db.add(db_report)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent request generated the active-version row first (the delete
+        # -> LLM -> insert window is not atomic). Yield to the row that landed.
+        db.rollback()
+        winner = get_active_report_row(db, activity_uuid)
+        if winner is not None:
+            return _to_read(winner)
+        raise
     db.refresh(db_report)
 
     return _to_read(db_report)

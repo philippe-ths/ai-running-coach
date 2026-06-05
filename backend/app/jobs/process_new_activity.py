@@ -6,7 +6,6 @@ this job. Dedup is enforced via `Activity.coach_notification_sent_at`.
 
 import asyncio
 import logging
-import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -15,10 +14,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Activity, StravaAccount
-from app.models.coach_report import CoachReport
 from app.services.analysis import analyze_with_streams
 from app.services.analysis.classifier import Classification, compose_headline
-from app.services.coach.service import get_or_generate_coach_report
+from app.services.coach.service import (
+    get_active_report_row,
+    get_or_generate_coach_report,
+)
 from app.services.notifications import (
     Notification,
     build_coach_notification,
@@ -63,11 +64,9 @@ async def process_new_activity(
         return None
 
     db.refresh(activity)
-    coach_row = (
-        db.query(CoachReport)
-        .filter(CoachReport.activity_id == _coerce_uuid(activity.id))
-        .first()
-    )
+    # Read the *active*-version row: prior versions may be retained alongside it,
+    # so a version-unaware query could gate notification on the wrong report.
+    coach_row = get_active_report_row(db, activity.id)
     if coach_row is None or coach_row.is_fallback:
         logger.info(
             "Skipping notification for activity %s: report is fallback or missing",
@@ -147,9 +146,3 @@ def process_new_activity_job(
         )
     finally:
         db.close()
-
-
-def _coerce_uuid(value) -> uuid.UUID:
-    if isinstance(value, uuid.UUID):
-        return value
-    return uuid.UUID(str(value))
