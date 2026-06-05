@@ -111,6 +111,16 @@ def _legacy_full_pack() -> dict:
                 "hr_drift": {"direction": "declining", "magnitude_pct": -3.0, "slope": -0.2, "n": 5},
             },
         },
+        "perceived_effort": {
+            "rpe": 6,
+            "effort_axis": "tempo",
+            "effort_score": 3.0,
+            "divergence": -1,
+            "divergence_direction": "felt_easier",
+            "hr_confounded": False,
+            "recommended_weighting": "balanced",
+            "pain_trend": {"abstained": False, "sample_count": 5, "direction": "stable", "magnitude_pct": 0.0, "slope": 0.0},
+        },
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,
@@ -199,6 +209,16 @@ def _legacy_sparse_pack() -> dict:
         "longitudinal": {
             "prior_reports": [],
             "baseline_trend": None,
+        },
+        "perceived_effort": {
+            "rpe": None,
+            "effort_axis": None,
+            "effort_score": None,
+            "divergence": None,
+            "divergence_direction": None,
+            "hr_confounded": False,
+            "recommended_weighting": "hr_only",
+            "pain_trend": None,
         },
         "safety_rules": {
             "never_diagnose": True,

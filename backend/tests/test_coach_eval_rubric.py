@@ -83,6 +83,11 @@ _DEFAULT_PACK_DICT = {
         "previous_28d": {"activity_count": 0, "total_distance_m": 0, "total_moving_time_s": 0, "total_effort": 0.0},
     },
     "longitudinal": {"prior_reports": [], "baseline_trend": None},
+    "perceived_effort": {
+        "rpe": None, "effort_axis": "easy", "effort_score": 3.0,
+        "divergence": None, "divergence_direction": None,
+        "hr_confounded": False, "recommended_weighting": "hr_only", "pain_trend": None,
+    },
     "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
 }
 
@@ -236,6 +241,18 @@ class TestAbstainedOnThinTrend:
 
     def test_no_trend_claim_when_abstaining_passes(self):
         result = assert_abstained_on_thin_trend(_make_content(), _make_pack())
+        assert result.status is AssertionStatus.PASS
+
+    def test_comparative_question_is_not_a_trend_claim(self):
+        # Real-data finding: "compared to your recent session" inside a QUESTION
+        # is not an asserted trend, so an abstaining bucket must still PASS.
+        content = _make_content(
+            questions=[CoachQuestion(
+                question="How did this tempo effort feel compared to your recent interval session?",
+                reason="To calibrate RPE against the data.",
+            )],
+        )
+        result = assert_abstained_on_thin_trend(content, _make_pack())
         assert result.status is AssertionStatus.PASS
 
 

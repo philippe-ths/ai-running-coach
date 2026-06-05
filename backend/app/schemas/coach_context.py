@@ -159,6 +159,31 @@ class LongitudinalContext(BaseModel):
     baseline_trend: Optional[BaselineTrendDelta]
 
 
+class PerceivedEffortContext(BaseModel):
+    """M6 perceived-vs-measured effort: the gap between what the runner felt
+    (RPE) and what HR showed, plus a pain-score trend.
+
+    `divergence` is a signed 1-5-band gap (positive = felt harder than HR
+    showed); `recommended_weighting` is "rpe_over_hr" when an HR confounder fired
+    (RPE survives HR distortion), else "balanced", or "hr_only" with no RPE.
+    `pain_trend` is None (no data), an abstention marker (too few samples), or a
+    direction+slope trend dict scoped to this run's pain location; never a
+    diagnosis. All RPE/pain fields degrade to None/empty when
+    no CheckIn exists. `effort_score` is the raw TRIMP-like load, carried for
+    context only — divergence is computed against the `effort_axis` intensity.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    rpe: Optional[int]
+    effort_axis: Optional[str]
+    effort_score: Optional[float]
+    divergence: Optional[int]
+    divergence_direction: Optional[str]
+    hr_confounded: bool
+    recommended_weighting: str
+    pain_trend: Optional[Dict[str, Any]]
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -168,6 +193,7 @@ class CoachContextPack(BaseModel):
     profile: ProfileContext
     recent_training_summary: RecentTrainingSummary
     longitudinal: LongitudinalContext
+    perceived_effort: PerceivedEffortContext
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:

@@ -90,9 +90,27 @@ SYSTEM_PROMPT_V2 = SYSTEM_PROMPT_V1 + """
     The re-derived DerivedMetric for THIS run remains the primary ground truth; longitudinal context is contrast, not a substitute for it."""
 
 
+# ---------------------------------------------------------------------------
+# v3 (M6) — adds the perceived-effort discipline (rule 17): weight RPE over HR
+# when a confounder fired, surface the perception-vs-physiology gap, and trend
+# pain without diagnosing. Output JSON schema is unchanged from v1/v2, so
+# SCHEMA_VERSION stays 1.2; only the prompt_id advances (the M0 seam). v1 and v2
+# are kept byte-stable so their cached reports remain reproducible.
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT_V3 = SYSTEM_PROMPT_V2 + """
+
+17. PERCEIVED EFFORT (RPE vs HR): The "perceived_effort" section compares what the runner felt against what HR showed. This app holds both sides, and the gap is signal.
+    - "recommended_weighting" tells you which intensity read to trust: "rpe_over_hr" means an HR confounder fired (see discount_signals), so lead your intensity judgement with the runner's RPE — it survives the HR distortion — and treat the HR-based intensity as discounted. "balanced" means both agree; weigh them together. "hr_only" means no RPE was logged; reason from HR and consider asking for an RPE next time.
+    - "divergence" / "divergence_direction" capture the perception-physiology gap. When it reads "felt_harder", acknowledge the run felt harder than the HR suggested (and vice versa for "felt_easier"); do not flatten the runner's experience into the HR number.
+    - "pain_trend" is the shape of recent pain scores for THIS pain location, never a diagnosis. If "abstained" is true or it is absent, do NOT assert a pain trend. If present, you MAY note the direction (pain easing or building) and, only on a building pattern, gently suggest easing off or a professional assessment as a non-diagnostic nudge — never name a condition or diagnose. Acute severity for this single run is handled by rule 3 (pain_score), not here.
+    - All of this degrades silently: when rpe is null, simply reason from HR without inventing a perceived effort."""
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
+    "coach_report_v3": SYSTEM_PROMPT_V3,
 }
 
 # ---------------------------------------------------------------------------
