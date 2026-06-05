@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Float, Integer, ForeignKey, DateTime, Uuid
+from sqlalchemy import String, Float, Integer, ForeignKey, DateTime, JSON, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -28,6 +28,12 @@ class RunnerBaseline(Base):
     typical_weekly_distance_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     typical_weekly_run_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     typical_efficiency: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # M2 trend substrate: context-bucketed per-run signal trends keyed by
+    # "{effort}|{terrain}|{temp_band}". Each bucket either abstains (too few
+    # samples) or carries efficiency-factor and hr-drift trend dicts. Nullable
+    # and backward-safe: rows written by older code simply leave it NULL.
+    bucketed_trends: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     computed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     sample_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
