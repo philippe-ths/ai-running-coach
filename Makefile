@@ -1,4 +1,4 @@
-.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local
+.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest
 
 # Prefer the project venv interpreter when it exists, fall back to bare python.
 # Path is relative to backend/ since the targets cd there first. CI has no
@@ -32,3 +32,18 @@ seed-local:
 	TOK="$$(tr -d '[:space:]' < $$HOME/.railway_token)" && \
 	SRC="$$(RAILWAY_TOKEN="$$TOK" railway variables --service Postgres --kv | grep '^DATABASE_PUBLIC_URL=' | cut -d= -f2-)" && \
 	SEED_SOURCE_URL="$$SRC" $(BACKEND_PY) scripts/seed_from_prod.py $(SEED_ARGS)
+
+# Offline coach-report eval harness (M5) — THE GATE for the learning milestones.
+# Scores the coach reports in the local DB against the deterministic rubric and
+# prints a repeatable scorecard. Seed real data first: `make seed-local`. Pass
+# extra flags via EVAL_ARGS, e.g.:
+#   make eval EVAL_ARGS="--output before.json"
+#   make eval EVAL_ARGS="--compare before.json"          # flag regressions
+#   make eval EVAL_ARGS="--regenerate --activities 20"   # needs ANTHROPIC_API_KEY
+eval:
+	cd backend && $(BACKEND_PY) -m scripts.eval_coach_reports $(EVAL_ARGS)
+
+# Validate the harness itself against its synthetic good/bad fixtures. No DB and
+# no API key required, so this is safe to run in CI.
+eval-selftest:
+	cd backend && $(BACKEND_PY) -m scripts.eval_coach_reports --self-test
