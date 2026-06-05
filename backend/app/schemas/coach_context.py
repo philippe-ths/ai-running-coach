@@ -112,6 +112,53 @@ class SafetyRules(BaseModel):
     no_invented_facts: bool
 
 
+class PriorReportDigest(BaseModel):
+    """A token-bounded digest of one prior CoachReport (M4).
+
+    Carries only the fields the next report needs to advance the narrative:
+    when it was, its verdict label, its single strongest claim, and the
+    next-steps it recommended. Deliberately excludes the full body
+    (key_takeaways, thesis, risks, questions, evidence) so the pack does not
+    grow with history.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    activity_date: str
+    headline: Optional[str]
+    lead_argument: Optional[str]
+    next_steps: List[str]
+
+
+class BaselineTrendDelta(BaseModel):
+    """The RunnerBaseline (M2) trend for THIS activity's context bucket.
+
+    Surfaces the like-for-like longitudinal trend (effort | terrain |
+    temperature band) so the coach can ground a trend claim instead of
+    fabricating one. Only present when the matching bucket has enough samples
+    to have stopped abstaining.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    bucket: str
+    sample_count: int
+    efficiency_factor: Optional[Dict[str, Any]]
+    hr_drift: Optional[Dict[str, Any]]
+
+
+class LongitudinalContext(BaseModel):
+    """M4 longitudinal contrast: the runner's own recent history.
+
+    `prior_reports` is the digest of the last 1-2 reports (most recent first);
+    `baseline_trend` is the M2 trend matching this activity's context bucket,
+    or None when no comparable trend exists yet. Both empty/None for a runner's
+    first ever activity.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    prior_reports: List[PriorReportDigest]
+    baseline_trend: Optional[BaselineTrendDelta]
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -120,6 +167,7 @@ class CoachContextPack(BaseModel):
     check_in: CheckInContext
     profile: ProfileContext
     recent_training_summary: RecentTrainingSummary
+    longitudinal: LongitudinalContext
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:

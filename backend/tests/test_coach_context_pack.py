@@ -95,6 +95,22 @@ def _legacy_full_pack() -> dict:
                 "total_effort": 41.0,
             },
         },
+        "longitudinal": {
+            "prior_reports": [
+                {
+                    "activity_date": "2026-02-12T10:00:00+00:00",
+                    "headline": "Solid aerobic long run",
+                    "lead_argument": "Aerobic durability is holding across the long run.",
+                    "next_steps": ["Add a tempo segment (15 min at threshold)"],
+                }
+            ],
+            "baseline_trend": {
+                "bucket": "easy|flat|cool",
+                "sample_count": 5,
+                "efficiency_factor": {"direction": "improving", "magnitude_pct": 4.1, "slope": 0.01, "n": 5},
+                "hr_drift": {"direction": "declining", "magnitude_pct": -3.0, "slope": -0.2, "n": 5},
+            },
+        },
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,
@@ -179,6 +195,10 @@ def _legacy_sparse_pack() -> dict:
                 "total_moving_time_s": 0,
                 "total_effort": 0.0,
             },
+        },
+        "longitudinal": {
+            "prior_reports": [],
+            "baseline_trend": None,
         },
         "safety_rules": {
             "never_diagnose": True,

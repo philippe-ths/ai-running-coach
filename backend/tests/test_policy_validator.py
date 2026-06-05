@@ -52,6 +52,7 @@ _DEFAULT_PACK_DICT = {
         "last_28d": {"activity_count": 0, "total_distance_m": 0, "total_moving_time_s": 0, "total_effort": 0.0},
         "previous_28d": {"activity_count": 0, "total_distance_m": 0, "total_moving_time_s": 0, "total_effort": 0.0},
     },
+    "longitudinal": {"prior_reports": [], "baseline_trend": None},
     "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
 }
 

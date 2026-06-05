@@ -72,8 +72,27 @@ CONSTRAINTS:
 - questions: 0 to 4 items (only if confidence < high or data is missing)"""
 
 
+# ---------------------------------------------------------------------------
+# v2 (M4) — adds longitudinal-contrast discipline (rule 16). The output JSON
+# schema is unchanged from v1, so SCHEMA_VERSION stays 1.2; only the prompt_id
+# advances, which is enough to make the versioned cache regenerate and retain
+# v1 history (the M0 seam). v1 is kept byte-stable so cached v1 reports remain
+# reproducible.
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT_V2 = SYSTEM_PROMPT_V1 + """
+
+16. LONGITUDINAL CONTRAST: The "longitudinal" section of the context carries this runner's own recent history. "longitudinal.prior_reports" is a digest of the last 1-2 reports you wrote (each with its date, headline, lead_argument, and the next_steps you recommended). "longitudinal.baseline_trend" is the runner's trend for THIS run's context bucket (effort + terrain + temperature band), present only when enough comparable sessions exist. Use this to ADVANCE THE NARRATIVE, DO NOT RESTATE IT:
+    - Reference what you said last time and whether things moved ("HR drift is down from your long run last Tuesday"), rather than repeating a prior lead_argument verbatim.
+    - Note whether the runner appears to have acted on your prior next_step, but do not assume — the executed axes (metrics) are the truth about what happened.
+    - Ground any trend or "improving/declining over time" claim ONLY in longitudinal.baseline_trend (its direction + magnitude_pct). If baseline_trend is absent, do NOT assert a multi-session trend — analyse this run on its own.
+    - When prior_reports is empty (first sessions), simply analyse this run without longitudinal references.
+    The re-derived DerivedMetric for THIS run remains the primary ground truth; longitudinal context is contrast, not a substitute for it."""
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
+    "coach_report_v2": SYSTEM_PROMPT_V2,
 }
 
 # ---------------------------------------------------------------------------
