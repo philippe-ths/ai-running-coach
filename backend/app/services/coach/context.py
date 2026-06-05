@@ -197,7 +197,13 @@ def _prior_report_digests(db: Session, activity: Activity) -> list[PriorReportDi
             Activity.start_date < activity.start_date,
             CoachReport.is_fallback == False,  # noqa: E712
         )
-        .order_by(Activity.start_date.desc(), CoachReport.created_at.desc())
+        # created_at picks the latest version per activity; id is a stable
+        # final tiebreaker so a same-instant tie is deterministic.
+        .order_by(
+            Activity.start_date.desc(),
+            CoachReport.created_at.desc(),
+            CoachReport.id.desc(),
+        )
         .limit(_PRIOR_REPORT_SCAN_LIMIT)
         .all()
     )
@@ -228,8 +234,10 @@ def _digest_from_report(report: Dict[str, Any], start_date) -> PriorReportDigest
     for step in (report.get("next_steps") or []):
         if not isinstance(step, dict):
             continue
-        action = (step.get("action") or "").strip()
-        details = (step.get("details") or "").strip()
+        # Coerce to str defensively: the write path validates these as strings,
+        # but a hand-edited or future-shape row must not raise here.
+        action = str(step.get("action") or "").strip()
+        details = str(step.get("details") or "").strip()
         if action and details:
             next_steps.append(f"{action} ({details})")
         elif action:

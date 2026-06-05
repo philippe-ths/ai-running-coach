@@ -71,7 +71,8 @@ def _metrics(db, activity, **overrides):
 
 
 def _report(db, activity, *, lead_text, next_action, takeaway_marker,
-            headline="Solid run", is_fallback=False):
+            headline="Solid run", is_fallback=False,
+            prompt_id="coach_report_v2", created_at=None):
     """Store a CoachReport with a distinctive lead_argument, next_step and a
     takeaway_marker that lives ONLY in the (non-digest) body."""
     content = {
@@ -83,15 +84,19 @@ def _report(db, activity, *, lead_text, next_action, takeaway_marker,
         "risks": [],
         "questions": [],
     }
+    kwargs = {}
+    if created_at is not None:
+        kwargs["created_at"] = created_at
     r = CoachReport(
         id=uuid.uuid4(),
         activity_id=activity.id,
-        prompt_id="coach_report_v2",
+        prompt_id=prompt_id,
         schema_version="1.2",
         report=content,
         meta={},
         context_pack={},
         is_fallback=is_fallback,
+        **kwargs,
     )
     db.add(r)
     db.flush()
@@ -136,7 +141,11 @@ def test_pack_digest_excludes_full_report_body(db):
     _metrics(db, current)
 
     pack = build_context_pack(db, current)
-    serialized = pack.model_dump_json()
+    # Assert on the EXACT surface service.py sends to the LLM (to_serializable_dict
+    # -> json.dumps), not model_dump_json, so the token bound is checked where it
+    # actually matters.
+    import json
+    serialized = json.dumps(pack.to_serializable_dict(), default=str)
 
     assert "Lead survives" in serialized          # digest is present
     assert "BODY_ONLY_MARKER" not in serialized    # full body is not
@@ -160,6 +169,30 @@ def test_pack_caps_prior_reports_at_two_most_recent(db):
     leads = [d.lead_argument for d in pack.longitudinal.prior_reports]
     assert len(leads) == 2
     assert leads == ["lead 2", "lead 1"]  # most recent first, oldest dropped
+
+
+def test_pack_picks_latest_version_when_activity_has_several_reports(db):
+    """An activity can hold several versioned reports (different prompt_id). The
+    digest must carry the newest one (by created_at), not an older version."""
+    user_id = _user(db)
+    base = datetime(2026, 3, 1, 8, 0, tzinfo=timezone.utc)
+
+    prior = _activity(db, user_id, base)
+    _metrics(db, prior)
+    _report(db, prior, lead_text="old v1 lead", next_action="x", takeaway_marker="OLD",
+            prompt_id="coach_report_v1",
+            created_at=datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc))
+    _report(db, prior, lead_text="new v2 lead", next_action="y", takeaway_marker="NEW",
+            prompt_id="coach_report_v2",
+            created_at=datetime(2026, 3, 2, 9, 0, tzinfo=timezone.utc))
+
+    current = _activity(db, user_id, base + timedelta(days=5))
+    _metrics(db, current)
+
+    pack = build_context_pack(db, current)
+
+    assert len(pack.longitudinal.prior_reports) == 1
+    assert pack.longitudinal.prior_reports[0].lead_argument == "new v2 lead"
 
 
 def test_pack_excludes_fallback_and_future_reports(db):
@@ -283,4 +316,6 @@ def test_active_prompt_has_anti_restate_instruction():
 def test_v1_prompt_unchanged_has_no_longitudinal_rule():
     """The retained v1 prompt must stay byte-stable so cached v1 reports remain
     reproducible (the M0 versioning seam)."""
-    assert "advance the narrative" not in PROMPT_VERSIONS["coach_report_v1"].lower()
+    v1 = PROMPT_VERSIONS["coach_report_v1"]
+    assert "advance the narrative" not in v1.lower()
+    assert "16. LONGITUDINAL" not in v1
