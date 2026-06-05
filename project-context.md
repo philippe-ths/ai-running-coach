@@ -14,7 +14,7 @@ An `ActivityStream` holds per-sample time-series data (HR, pace, cadence, power)
 A `DerivedMetric` row attaches one set of computed signals to one `Activity` (activity class, effort score, pace variability, HR drift, time-in-zones, stops, efficiency, intervals, flags, confidence, risk, discount signals).
 A `CheckIn` captures subjective post-run input from the user against an `Activity`.
 A `CoachReport` is the cached structured LLM analysis for an `Activity`, keyed by `(activity_id, prompt_id, schema_version)` so a prompt/schema change retains prior-version reports instead of overwriting them; `CoachChatMessage` rows form a follow-up conversation against that activity.
-A `RunnerBaseline` stores rolling baselines used for comparison and drift detection.
+A `RunnerBaseline` (one row per user) stores rolling baselines used for comparison and drift detection: per-user scalar typicals plus a `bucketed_trends` JSON map of EF and HR-drift trends bucketed by `effort|terrain|temperature-band`, computed by `services/analysis/baseline.py` and recomputed at the end of `analyze`; a bucket abstains until it has `MIN_SAMPLES_FOR_TREND` (4) like-for-like samples.
 
 ## Scope
 
@@ -96,7 +96,7 @@ Data flow: Strava API → strava_ingestion → Activity/ActivityStream rows → 
 `backend/app/models/` holds one ORM model per file (`activity`, `activity_stream`, `checkin`, `coach_chat_message`, `coach_report`, `derived_metric`, `runner_baseline`, `strava_account`, `user`, `user_profile`) with a barrel `__init__.py`.
 `backend/app/schemas/` holds Pydantic request/response schemas, one file per domain (`activity`, `chat`, `checkin`, `coach`, `detail`, `profile`, `sync`, `trends`, `user`).
 `backend/app/services/strava_ingestion/` holds the Strava port + adapters (`port.py`, `http_adapter.py`, `in_memory_adapter.py`) and the ingestion module (`ingestion.py`) that persists activities and streams.
-`backend/app/services/analysis/` is the metrics pipeline (`_orchestrator.py` composes `smoothing.py`, `metrics.py`, `classifier.py`, `splits.py`, `intervals.py`, `stops.py`, `flags.py`, `risk.py`, `discount_signals.py`, `workout_matching.py`, `_training_context.py`); the public surface is `analyze` and `analyze_with_streams`.
+`backend/app/services/analysis/` is the metrics pipeline (`_orchestrator.py` composes `smoothing.py`, `metrics.py`, `classifier.py`, `splits.py`, `intervals.py`, `stops.py`, `flags.py`, `risk.py`, `discount_signals.py`, `workout_matching.py`, `_training_context.py`); the public surface is `analyze` and `analyze_with_streams`. `baseline.py` is the M2 RunnerBaseline trend substrate (pure bucketing/trend helpers plus a `recompute_runner_baseline` persistence service that `analyze` calls at the end, guarded so a baseline failure never breaks analysis).
 `backend/app/services/coach/` owns the LLM coach (`context.py`, `prompts.py`, `llm.py`, `validator.py`, `service.py`, `chat.py`).
 `backend/app/services/notifications/` owns the notifier port + adapters (`port.py`, `telegram_adapter.py`, `smtp_adapter.py`, `in_memory_adapter.py`, `noop_adapter.py`), the channel selection + composer (`__init__.py`), and the per-channel templates (`email_template.py`, `telegram_template.py`).
 `backend/app/services/trends.py` produces aggregated trend data; `backend/app/services/units/cadence.py` normalises cadence units; `backend/app/services/activity_queries.py` holds shared activity-query helpers.

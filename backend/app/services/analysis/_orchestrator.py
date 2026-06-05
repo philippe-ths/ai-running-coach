@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -10,6 +11,8 @@ from app.services.analysis.flags import generate_flags
 from app.services.analysis.intervals import detect_intervals
 from app.services.analysis.risk import compute_risk_score
 from app.services.analysis.workout_matching import match_planned_to_detected, build_interval_kpis
+
+logger = logging.getLogger(__name__)
 
 def _extract_planned_workout(check_in) -> dict | None:
     """
@@ -245,4 +248,15 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
 
     db.commit()
     db.refresh(dm)
+
+    # 11. Recompute the runner baseline trend substrate (M2). Runs after the
+    # DerivedMetric commit so the just-analysed activity is included. Wrapped so
+    # a baseline failure never breaks analysis — the baseline is a derived
+    # convenience, not part of the activity's own analysis contract.
+    try:
+        from app.services.analysis.baseline import recompute_runner_baseline
+        recompute_runner_baseline(db, activity.user_id)
+    except Exception:  # noqa: BLE001 — baseline is best-effort, must not break analyze
+        logger.exception("runner baseline recompute failed for user %s", activity.user_id)
+
     return dm
