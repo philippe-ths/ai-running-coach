@@ -30,7 +30,7 @@ export default async function ActivityDetail({ params }: { params: { id: string 
         <div className="flex justify-between items-start">
             <div>
                 <h1 className="text-3xl font-bold text-gray-900">{activity.name}</h1>
-                <div className="flex gap-4 mt-2 text-gray-600 items-center">
+                <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 text-gray-600 items-center">
                     <span>{format(new Date(activity.start_date), 'PPPP p')}</span>
                     <span>{formatDistanceKm(activity.distance_m)}</span>
                     {activity.metrics?.headline && (
