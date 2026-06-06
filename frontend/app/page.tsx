@@ -1,7 +1,6 @@
 import { fetchFromAPI } from '@/lib/api';
 import ActivityList from '@/components/ActivityList';
 import SyncButton from '@/components/SyncButton';
-import Link from 'next/link';
 
 // Force dynamic since we fetch user data (no static cache for dashboard)
 export const dynamic = 'force-dynamic';
@@ -29,19 +28,13 @@ export default async function Dashboard() {
 
   return (
     <div className="space-y-8">
-      <header className="flex justify-between items-start">
+      <header className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-start">
         <div>
             <h1 className="text-3xl font-bold text-gray-900">Weekly Summary</h1>
             <p className="text-gray-600 mt-1">Here is what is happening this week.</p>
         </div>
-        <div className="flex gap-3">
+        <div className="shrink-0">
             <SyncButton />
-            <Link href="/trends" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
-                Trends
-            </Link>
-            <Link href="/profile" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
-                Edit Profile
-            </Link>
         </div>
       </header>
 

@@ -91,7 +91,7 @@ export default function TrendsPage() {
             Track your progress over time.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <ActivityTypeFilter
             available={availableTypes}
             selected={selectedTypes}
@@ -119,7 +119,7 @@ export default function TrendsPage() {
 
       {data && (
         <div className="space-y-6">
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-white p-4 rounded-lg border shadow-sm">
               <div className="text-sm text-gray-500">Total Distance</div>
               <div className="text-2xl font-bold">
