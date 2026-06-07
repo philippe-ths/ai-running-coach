@@ -252,6 +252,22 @@ class BelievedFactsContext(BaseModel):
     facts: List[BelievedFact]
 
 
+class CalibrationContext(BaseModel):
+    """M9 self-calibrating correction + non-diagnostic referral.
+
+    `hr_drift` reads this run's HR drift against the runner's OWN typical drift
+    for these conditions when enough comparable history exists (`calibrated`
+    true), else carries the labeled population heuristic fallback. `referral` is
+    a non-diagnostic clinician nudge for a computable red-flag pattern, or None;
+    it is templated, pipeline-owned, and never names a condition or diagnoses.
+    Neither overrides the re-derived DerivedMetric.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    hr_drift: Dict[str, Any]
+    referral: Optional[Dict[str, Any]]
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -264,6 +280,7 @@ class CoachContextPack(BaseModel):
     perceived_effort: PerceivedEffortContext
     adherence: AdherenceContext
     believed_facts: BelievedFactsContext
+    calibration: CalibrationContext
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:

@@ -69,14 +69,38 @@ _MED_DIRECTIVE_PATTERN = re.compile(
 # the most common overreach. "depression" is included despite a rare
 # elevation-"depression" terrain phrasing, because asserting a mood disorder is
 # the higher-cost miss.
-_CONDITION_TERMS = (
-    r"anemi[ac]|anaemi[ac]|overtraining syndrome|red-?s|"
+#
+# The musculoskeletal/overload block was added in M9: the non-diagnostic referral
+# nudge fires on pain/fatigue patterns, which is exactly the context that invites
+# an LLM to name a running injury ("this is probably shin splints"). M9 extends
+# the M0 medical-scope rule to backstop those names, since the referral leans on
+# this gate. Bare "burnout"/"overtraining" are safe here because a claim only
+# trips with an assertion verb in front (_HEALTH_CLAIM_PATTERN), so coaching like
+# "avoid overtraining" does not match.
+# Unambiguous clinical/injury terms (no benign running sense). Safe to match even
+# after a bare copula or modal ("this is / could be a stress fracture").
+_CONDITION_TERMS_SAFE = (
+    r"anemi[ac]|anaemi[ac]|overtraining(?: syndrome)?|red-?s|"
     r"relative energy deficiency|hypothyroid\w*|hyperthyroid\w*|"
     r"thyroid (?:disorder|condition|disease)|arrhythmias?|"
     r"atrial fibrillation|a-?fib|myocarditis|cardiomyopathy|"
-    r"heart (?:disease|condition)|hypertension|high blood pressure|asthma|"
-    r"iron deficiency|low ferritin|diabet(?:es|ic)|depress(?:ion|ed)"
+    r"heart (?:disease|condition)|hypertension|iron deficiency|low ferritin|"
+    r"diabet(?:es|ic)|"
+    # M9: common running injuries / overload conditions
+    r"stress fracture|stress reaction|stress injur(?:y|ies)|"
+    r"tendin(?:itis|opathy|osis)|tendonitis|shin splints|"
+    r"plantar fasciitis|fasciitis|iliotibial band|it band syndrome|"
+    r"patellofemoral|runner'?s knee|bursitis|sciatica|burnout|"
+    r"compartment syndrome|labral tear|meniscus tear|"
+    r"torn (?:meniscus|labrum|acl|ligament|muscle)"
 )
+
+# Terms with a benign running sense ("HR is depressed", "high blood pressure
+# zones", "asthma-friendly"): only flagged after an explicit assertion verb, not
+# a bare copula, to keep precision.
+_CONDITION_TERMS_AMBIGUOUS = r"high blood pressure|asthma|depress(?:ion|ed)"
+
+_CONDITION_TERMS = _CONDITION_TERMS_SAFE + r"|" + _CONDITION_TERMS_AMBIGUOUS
 
 # A condition term asserted (not merely named) about the runner: an assertion
 # verb immediately followed by the condition, with an optional article/qualifier.
@@ -86,6 +110,16 @@ _HEALTH_CLAIM_PATTERN = re.compile(
     r"consistent with|points? to)\s+"
     r"(?:a |an |the |some |possible |likely |early |signs? of |chronic )?"
     r"(?:" + _CONDITION_TERMS + r")\b",
+    re.IGNORECASE,
+)
+
+# Speculative naming ("this is / could be / might be / looks like a stress
+# fracture") — how an LLM names a condition while "not diagnosing". Only the
+# unambiguous terms, since a bare copula is common in running prose.
+_SPECULATIVE_CLAIM_PATTERN = re.compile(
+    r"\b(?:is|are|could be|might be|may be|looks like|sounds like)\s+"
+    r"(?:a |an |the |probably |likely |possibly |a possible |an early |early )*"
+    r"(?:" + _CONDITION_TERMS_SAFE + r")\b",
     re.IGNORECASE,
 )
 
@@ -101,11 +135,12 @@ _NEGATION_PATTERN = re.compile(
 
 def _has_asserted_health_claim(text: str) -> bool:
     """True if a clinical condition is asserted about the runner and not negated."""
-    for match in _HEALTH_CLAIM_PATTERN.finditer(text):
-        window = text[max(0, match.start() - 40):match.start()]
-        if _NEGATION_PATTERN.search(window):
-            continue  # "no signs of overtraining syndrome" — reassurance, not a claim
-        return True
+    for pattern in (_HEALTH_CLAIM_PATTERN, _SPECULATIVE_CLAIM_PATTERN):
+        for match in pattern.finditer(text):
+            window = text[max(0, match.start() - 40):match.start()]
+            if _NEGATION_PATTERN.search(window):
+                continue  # "no signs of overtraining syndrome" — reassurance, not a claim
+            return True
     return False
 
 

@@ -94,3 +94,13 @@ _Avoid_: treating a belief as ground truth, or as a memory of raw runs; it is a 
 ## CoachingContext
 
 The durable, user-scoped store of `Belief` rows (one row per belief, identity `(user, kind, key)`). Written after each non-fallback `Coach report generation` (the belief write-back) and read into every later context pack with confidence/recency tags. The persistent-context half of the moat: the read-back layer that makes confound-correction and adherence awareness fire automatically on later runs instead of being re-derived from nothing each time. Distinct from `RunnerBaseline` (numeric rolling norms) and from `Activity analysis` (this run's re-derived metrics, which always override it).
+
+## Calibrated correction
+
+Reading a run's signal against the runner's OWN typical value for the same conditions rather than a population rule of thumb: "your HR drift was 12%, vs your typical ~5% for these conditions" instead of "drift over 5% means fatigue". Computed at read time from the runner's prior comparable runs in the same `effort|terrain|temperature-band` bucket. It abstains to a LABELED population heuristic until enough comparable history accrues, so a confident personal claim never outruns the evidence. It refines interpretation and never overrides the re-derived `Activity analysis`.
+_Avoid_: stating a population threshold as if it were this runner's established norm before the baseline is sufficient.
+
+## Referral nudge
+
+A deterministic, pipeline-owned suggestion to consider a healthcare professional, fired only on a computable red-flag pattern (several strain signals together; pain persisting across runs) and surfaced as a non-diagnostic prompt. It is the permitted form of the medical-scope boundary: it never names a condition, uses a diagnosis verb, or asserts what a pattern means, and its text is written to pass the deterministic policy validator (which still governs it). It abstains rather than ever fabricating a health concern. This keeps the product inside the general-wellness lane.
+_Avoid_: treating the referral nudge as a diagnosis, a screening result, or a clinical claim; it is a general "worth getting this looked at" prompt, nothing more.

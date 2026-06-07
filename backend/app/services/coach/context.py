@@ -21,11 +21,13 @@ from app.services.analysis.baseline import bucket_key
 from app.services.analysis.classifier import Classification, compose_headline  # noqa: F401
 from app.services.coach.adherence import CandidateActivity, build_adherence
 from app.services.coach.belief_store import build_believed_facts
+from app.services.coach.calibration import assess_referral, calibrate_drift
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.schemas.coach_context import (
     ActivityContext,
     AdherenceContext,
     BaselineTrendDelta,
+    CalibrationContext,
     CheckInContext,
     CoachContextPack,
     LongitudinalContext,
@@ -53,6 +55,16 @@ _MAX_PRIOR_REPORTS = 2
 # (a few rows per activity at most), so 50 rows comfortably covers the two most
 # recent distinct activities while keeping the read bounded as history grows.
 _PRIOR_REPORT_SCAN_LIMIT = 50
+
+# Bound on prior activities scanned to find same-bucket comparables for the M9
+# HR-drift calibration. Comfortably covers a recreational runner's recent history
+# in any one context bucket while keeping the read bounded.
+_CALIBRATION_SCAN_LIMIT = 60
+
+# Recency window for the M9 persistent-pain referral: notable pain must recur
+# WITHIN this many days to count as sustained, so old unrelated niggles do not
+# accumulate into a false "persistent pain" referral (~6 weeks, a training block).
+_PERSISTENT_PAIN_WINDOW_DAYS = 42
 
 # Bound on subsequent activities scanned for the M7 adherence verdict (between
 # the source report and this run, oldest-first). A report is generated per
@@ -203,6 +215,7 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
         ),
         adherence=_build_adherence_context(db, activity),
         believed_facts=build_believed_facts(db, activity),
+        calibration=_build_calibration_context(db, activity),
         safety_rules=SafetyRules(
             never_diagnose=True,
             pain_severe_threshold=7,
@@ -482,6 +495,84 @@ def _detect_pushback(db: Session, source_activity_id) -> bool:
 
     blob = " ".join(texts).lower()
     return any(phrase in blob for phrase in _PUSHBACK_PHRASES)
+
+
+def _build_calibration_context(db: Session, activity: Activity) -> CalibrationContext:
+    """Assemble the M9 calibration section: individualise this run's HR-drift
+    reading against the runner's own typical drift for these conditions, and a
+    non-diagnostic referral nudge for any computable red-flag pattern. Both are
+    computed at read time (the baseline is recomputed after the pipeline) and
+    degrade cleanly. Neither overrides the re-derived DerivedMetric."""
+    metrics = activity.metrics
+    observed_drift = metrics.hr_drift if metrics else None
+    comparable_drifts = _comparable_bucket_drifts(db, activity) if metrics else []
+    hr_drift = calibrate_drift(observed_drift, comparable_drifts)
+
+    referral = assess_referral(
+        flags=metrics.flags if metrics else [],
+        pain_scores=_recent_pain_scores_any(db, activity),
+    )
+    return CalibrationContext(hr_drift=hr_drift, referral=referral)
+
+
+def _comparable_bucket_drifts(db: Session, activity: Activity) -> list[float]:
+    """HR-drift values from this runner's PRIOR runs in the same context bucket
+    (effort | terrain | temp-band), the like-for-like set the personal expected
+    drift is computed from. Bounded scan; reads existing rows only."""
+    metrics = activity.metrics
+    if metrics is None:
+        return []
+    this_temp = (activity.raw_summary or {}).get("average_temp")
+    this_bucket = bucket_key(metrics.effort, metrics.is_hilly, this_temp)
+
+    rows = (
+        db.query(Activity)
+        .options(joinedload(Activity.metrics))
+        .filter(
+            Activity.user_id == activity.user_id,
+            Activity.id != activity.id,
+            Activity.is_deleted == False,  # noqa: E712
+            Activity.start_date < activity.start_date,
+        )
+        # id breaks start_date ties so the scanned set is deterministic at the
+        # scan-limit boundary (matches the other prior-activity scans in this file).
+        .order_by(Activity.start_date.desc(), Activity.id.desc())
+        .limit(_CALIBRATION_SCAN_LIMIT)
+        .all()
+    )
+    drifts: list[float] = []
+    for act in rows:
+        m = act.metrics
+        if m is None or m.hr_drift is None:
+            continue
+        temp = (act.raw_summary or {}).get("average_temp")
+        if bucket_key(m.effort, m.is_hilly, temp) == this_bucket:
+            drifts.append(m.hr_drift)
+    return drifts
+
+
+def _recent_pain_scores_any(db: Session, activity: Activity) -> list[int]:
+    """Pain scores for this runner across ALL locations within a recent WINDOW
+    (the referral persistence check is about sustained pain in general, not one
+    injury). The window matters: without it, three unrelated niggles spread over
+    a year would read as 'persistent' and fire a false referral. Reads existing
+    rows only; bounded scan."""
+    window_start = activity.start_date - timedelta(days=_PERSISTENT_PAIN_WINDOW_DAYS)
+    rows = (
+        db.query(CheckIn.pain_score)
+        .join(Activity, CheckIn.activity_id == Activity.id)
+        .filter(
+            Activity.user_id == activity.user_id,
+            Activity.is_deleted == False,  # noqa: E712
+            Activity.start_date <= activity.start_date,
+            Activity.start_date >= window_start,
+            CheckIn.pain_score.isnot(None),
+        )
+        .order_by(Activity.start_date.desc(), Activity.id.desc())
+        .limit(_PAIN_HISTORY_SCAN_LIMIT)
+        .all()
+    )
+    return [p for (p,) in rows]
 
 
 def hash_context_pack(pack: Dict[str, Any]) -> str:

@@ -60,6 +60,7 @@ _DEFAULT_PACK_DICT = {
     },
     "adherence": {"prior_report_date": None, "outcomes": []},
     "believed_facts": {"facts": []},
+    "calibration": {"hr_drift": {"calibrated": False, "observed_drift_pct": None, "basis": "n/a"}, "referral": None},
     "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
 }
 
@@ -544,3 +545,57 @@ class TestMedicalScopeRule:
         )
         violations = validate_policy(content, _make_pack())
         assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_m9_referral_nudges_pass_medical_scope(self):
+        """The deterministic M9 referral nudges must survive rule 5 if the model
+        surfaces them verbatim (no diagnosis verb, condition, or dose)."""
+        from app.services.coach.calibration import _NUDGES
+
+        for nudge in _NUDGES.values():
+            content = _make_content(
+                key_takeaways=[
+                    CoachTakeaway(text=nudge, evidence=[{"field": "calibration.referral", "value": "pattern"}]),
+                    CoachTakeaway(text="Solid aerobic effort.", evidence=[{"field": "metrics.effort_score", "value": 3.0}]),
+                ],
+            )
+            violations = validate_policy(content, _make_pack())
+            assert "medical_overreach" not in [v.rule for v in violations], nudge
+
+    def test_m9_referral_turned_into_diagnosis_is_rejected(self):
+        """A referral that overreaches into a diagnosis is still caught by rule 5."""
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="This pattern means you have overtraining syndrome; see a doctor.",
+                              evidence=[{"field": "calibration.referral", "value": "pattern"}]),
+                CoachTakeaway(text="Solid aerobic effort.", evidence=[{"field": "metrics.effort_score", "value": 3.0}]),
+            ],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" in [v.rule for v in violations]
+
+    def test_m9_widened_conditions_catch_running_injuries(self):
+        """M9 extended rule 5 to backstop the running injuries a referral most
+        invites the model to name (previously uncaught)."""
+        for claim in (
+            "This is probably a stress fracture; get it checked.",
+            "That pattern is a sign of shin splints.",
+            "You likely have plantar fasciitis.",
+            "This is consistent with IT band syndrome.",
+            "These are signs of burnout.",
+        ):
+            content = _make_content(
+                key_takeaways=[
+                    CoachTakeaway(text=claim, evidence=[{"field": "calibration.referral", "value": "x"}]),
+                    CoachTakeaway(text="Solid effort.", evidence=[{"field": "metrics.effort_score", "value": 3.0}]),
+                ],
+            )
+            violations = validate_policy(content, _make_pack())
+            assert "medical_overreach" in [v.rule for v in violations], claim
+
+    def test_m9_avoid_overtraining_still_permitted(self):
+        """Coaching language ('avoid overtraining') is not an asserted claim."""
+        content = _make_content(
+            next_steps=[CoachNextStep(action="Recover", details="Add an easy week to avoid overtraining.", why="Adaptation.")],
+        )
+        violations = validate_policy(content, _make_pack())
+        assert "medical_overreach" not in [v.rule for v in violations]
