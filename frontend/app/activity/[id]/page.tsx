@@ -28,9 +28,9 @@ export default async function ActivityDetail({ params }: { params: { id: string 
 
       <header className="border-b pb-4">
         <div className="flex justify-between items-start">
-            <div>
-                <h1 className="text-3xl font-bold text-gray-900">{activity.name}</h1>
-                <div className="flex gap-4 mt-2 text-gray-600 items-center">
+            <div className="min-w-0">
+                <h1 className="text-3xl font-bold text-gray-900 break-words">{activity.name}</h1>
+                <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 text-gray-600 items-center">
                     <span>{format(new Date(activity.start_date), 'PPPP p')}</span>
                     <span>{formatDistanceKm(activity.distance_m)}</span>
                     {activity.metrics?.headline && (
@@ -44,10 +44,10 @@ export default async function ActivityDetail({ params }: { params: { id: string 
         </div>
       </header>
 
-      <div className="grid md:grid-cols-3 gap-6">
-        
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+
         {/* Main Content */}
-        <div className="md:col-span-2 space-y-6">
+        <div className="md:col-span-2 space-y-6 min-w-0">
 
           {/* Activity Context Panel: Check-In & Type */}
           <CheckInForm 
@@ -92,7 +92,7 @@ export default async function ActivityDetail({ params }: { params: { id: string 
         </div>
 
         {/* Sidebar: Check-In & Stats */}
-        <div className="space-y-6">
+        <div className="space-y-6 min-w-0">
            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
               <h3 className="font-semibold text-gray-700 mb-3">Metrics</h3>
               <dl className="space-y-2 text-sm">
