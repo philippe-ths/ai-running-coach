@@ -145,8 +145,10 @@ class TestPerceivedEffortInPack:
 
 
 class TestPromptVersioning:
-    def test_v3_is_active_default(self):
-        assert settings.COACH_PROMPT_ID == "coach_report_v3"
+    def test_v4_is_active_default(self):
+        # M7 flipped the active prompt to v4; v3 remains registered and
+        # byte-stable for its cached reports.
+        assert settings.COACH_PROMPT_ID == "coach_report_v4"
 
     def test_v3_adds_perceived_effort_rule(self):
         v3 = PROMPT_VERSIONS["coach_report_v3"]

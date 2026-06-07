@@ -11,16 +11,19 @@ from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models import Activity, RunnerBaseline, UserProfile
 from app.models.checkin import CheckIn
+from app.models.coach_chat_message import CoachChatMessage
 from app.models.coach_report import CoachReport
 from app.services.analysis.baseline import bucket_key
 from app.services.analysis.classifier import Classification, compose_headline  # noqa: F401
+from app.services.coach.adherence import CandidateActivity, build_adherence
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.schemas.coach_context import (
     ActivityContext,
+    AdherenceContext,
     BaselineTrendDelta,
     CheckInContext,
     CoachContextPack,
@@ -49,6 +52,30 @@ _MAX_PRIOR_REPORTS = 2
 # (a few rows per activity at most), so 50 rows comfortably covers the two most
 # recent distinct activities while keeping the read bounded as history grows.
 _PRIOR_REPORT_SCAN_LIMIT = 50
+
+# Bound on subsequent activities scanned for the M7 adherence verdict (between
+# the source report and this run, oldest-first). A report is generated per
+# coached activity, so this window is normally 1-2 runs; the cap only guards the
+# degenerate case of a long gap with no intervening reports. Taken oldest-first
+# so "the next comparable run" is judged correctly.
+_ADHERENCE_CANDIDATE_SCAN_LIMIT = 30
+
+# Curated phrases that signal the runner explicitly pushed back on the prior
+# report's advice (in a check-in note or a chat reply on that activity). A
+# disputed outcome is treated as settled and the prompt says nothing about it,
+# so a false positive only SUPPRESSES an adherence note (the safe direction); it
+# never fabricates a "you were wrong" exchange. Known blind spot (deterministic
+# v1, mirroring the M5 discipline): pushback phrased outside this list is missed,
+# so a wrong implicit label can survive — bounded by the advisory, non-accusatory
+# framing of rule 18 and the comparable/opportunity gates upstream.
+_PUSHBACK_PHRASES = (
+    "that was off", "that's off", "thats off", "was off", "way off",
+    "that's wrong", "thats wrong", "is wrong", "was wrong", "were wrong",
+    "not right", "not accurate",
+    "inaccurate", "incorrect", "disagree", "didn't feel", "did not feel",
+    "felt wrong", "that's not right", "thats not right", "not how it felt",
+    "doesn't match", "wasn't easy", "wasn't right", "you're wrong",
+)
 
 
 def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
@@ -173,6 +200,7 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
             discount_signals=metrics.discount_signals if metrics else None,
             pain_scores=_recent_pain_scores(db, activity),
         ),
+        adherence=_build_adherence_context(db, activity),
         safety_rules=SafetyRules(
             never_diagnose=True,
             pain_severe_threshold=7,
@@ -329,6 +357,129 @@ def _matching_baseline_trend(
         efficiency_factor=bucket.get("efficiency_factor"),
         hr_drift=bucket.get("hr_drift"),
     )
+
+
+def _build_adherence_context(db: Session, activity: Activity) -> AdherenceContext:
+    """Assemble the M7 adherence section: did the runner act on the LAST report's
+    next_steps?
+
+    Compute-on-demand (no durable store, the M4/M6 pattern): re-derive the labels
+    each run from the most recent prior non-fallback report's next_steps and the
+    subsequent comparable activities' already-stored DerivedMetrics. Degrades to
+    empty when there is no prior report. All judging lives in the pure
+    `adherence` module; this function only gathers rows.
+    """
+    prior = _most_recent_prior_report(db, activity)
+    if prior is None:
+        return AdherenceContext(prior_report_date=None, outcomes=[])
+    report, source_id, source_start_date = prior
+
+    next_steps = [s for s in (report.get("next_steps") or []) if isinstance(s, dict)]
+    if not next_steps:
+        return AdherenceContext(prior_report_date=None, outcomes=[])
+
+    candidates = _adherence_candidates(db, activity, source_start_date)
+    pushback = _detect_pushback(db, source_id)
+
+    return build_adherence(
+        prior_report_date=source_start_date.isoformat() if source_start_date else None,
+        prior_next_steps=next_steps,
+        candidates=candidates,
+        pushback=pushback,
+    )
+
+
+def _most_recent_prior_report(db: Session, activity: Activity):
+    """The single most recent non-fallback report before this run, as
+    (report_dict, source_activity_id, source_start_date), or None."""
+    row = (
+        db.query(CoachReport, Activity.id, Activity.start_date)
+        .join(Activity, CoachReport.activity_id == Activity.id)
+        .filter(
+            Activity.user_id == activity.user_id,
+            Activity.id != activity.id,
+            Activity.is_deleted == False,  # noqa: E712
+            Activity.start_date < activity.start_date,
+            CoachReport.is_fallback == False,  # noqa: E712
+        )
+        .order_by(
+            Activity.start_date.desc(),
+            CoachReport.created_at.desc(),
+            CoachReport.id.desc(),
+        )
+        .first()
+    )
+    if row is None:
+        return None
+    report, source_id, source_start_date = row
+    return (report.report or {}), source_id, source_start_date
+
+
+def _adherence_candidates(
+    db: Session, activity: Activity, source_start_date
+) -> list[CandidateActivity]:
+    """Subsequent analysed activities between the source report and this run
+    (inclusive of this run), oldest-first, each projected to the facts the
+    adherence verdict needs. Unanalysed runs (no DerivedMetric) are excluded so
+    they never pollute a window verdict."""
+    rows = (
+        db.query(Activity)
+        # Eager-load metrics: it is read for every row below, so a joinedload
+        # avoids an N+1 lazy-select per candidate on this per-report build.
+        .options(joinedload(Activity.metrics))
+        .filter(
+            Activity.user_id == activity.user_id,
+            Activity.is_deleted == False,  # noqa: E712
+            Activity.start_date > source_start_date,
+            Activity.start_date <= activity.start_date,
+        )
+        .order_by(Activity.start_date.asc(), Activity.id.asc())
+        .limit(_ADHERENCE_CANDIDATE_SCAN_LIMIT)
+        .all()
+    )
+    candidates: list[CandidateActivity] = []
+    for act in rows:
+        metrics = act.metrics
+        if metrics is None:
+            continue  # unanalysed -> not a fair comparable
+        candidates.append(
+            CandidateActivity(
+                date=act.start_date.isoformat(),
+                effort=metrics.effort,
+                duration_class=metrics.duration_class,
+                structure=metrics.structure,
+                is_race=metrics.is_race,
+                confidence=metrics.confidence,
+                user_intent=act.user_intent,
+            )
+        )
+    return candidates
+
+
+def _detect_pushback(db: Session, source_activity_id) -> bool:
+    """Did the runner explicitly push back on the source report's advice? Scans
+    that activity's check-in note and its user chat replies for a dispute
+    phrase. Conservative: only an explicit signal flips an implicit label."""
+    texts: list[str] = []
+
+    check_in = (
+        db.query(CheckIn).filter(CheckIn.activity_id == source_activity_id).first()
+    )
+    if check_in and check_in.notes:
+        texts.append(check_in.notes)
+
+    chat_rows = (
+        db.query(CoachChatMessage.content)
+        .filter(
+            CoachChatMessage.activity_id == source_activity_id,
+            CoachChatMessage.role == "user",
+        )
+        .all()
+    )
+    texts.extend(content for (content,) in chat_rows if content)
+
+    blob = " ".join(texts).lower()
+    return any(phrase in blob for phrase in _PUSHBACK_PHRASES)
 
 
 def hash_context_pack(pack: Dict[str, Any]) -> str:

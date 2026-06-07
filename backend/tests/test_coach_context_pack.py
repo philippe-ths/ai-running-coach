@@ -121,6 +121,19 @@ def _legacy_full_pack() -> dict:
             "recommended_weighting": "balanced",
             "pain_trend": {"abstained": False, "sample_count": 5, "direction": "stable", "magnitude_pct": 0.0, "slope": 0.0},
         },
+        "adherence": {
+            "prior_report_date": "2026-02-12T10:00:00+00:00",
+            "outcomes": [
+                {
+                    "prior_action": "Add a tempo segment",
+                    "theme": "add_quality",
+                    "label": "acted_on",
+                    "comparable_activity_date": "2026-02-14T10:00:00+00:00",
+                    "basis": "a quality session followed on 2026-02-14 (tempo effort)",
+                    "overridden": False,
+                }
+            ],
+        },
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,
@@ -219,6 +232,10 @@ def _legacy_sparse_pack() -> dict:
             "hr_confounded": False,
             "recommended_weighting": "hr_only",
             "pain_trend": None,
+        },
+        "adherence": {
+            "prior_report_date": None,
+            "outcomes": [],
         },
         "safety_rules": {
             "never_diagnose": True,

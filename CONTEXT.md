@@ -74,3 +74,14 @@ What the runner meant a session to be (`user_intent`), as opposed to what the `A
 
 How hard a session felt to the runner, captured as `CheckIn.rpe` (a Borg-style 1-10 rating), as opposed to `Effort`, which is the intensity measured from heart rate. The two can legitimately disagree, and that gap is coaching signal, not error: when a confounder suppresses heart rate (heat, for example) a run can feel hard while `Effort` reads easy. The coach weights perceived effort above the heart-rate read when a `discount_signals` confounder fired, because perception survives the distortion. This mirrors the `Stated intent` vs measured-axes gap, moved from intent-vs-execution to perception-vs-physiology.
 _Avoid_: treating RPE as a synonym for `Effort`; they are the subjective and measured sides of the same question.
+
+## Adherence
+
+Whether the runner appears to have acted on the coach's prior advice, judged from their own subsequent runs at zero extra effort. The unit is the `Next-step outcome`: for each `next_step` the last report emitted, the runner's next comparable activity is labelled `acted-on`, `ignored`, or `contradicted` by re-deriving from its `Activity analysis`. Adherence is advisory and never a compliance score or a moral judgement: the coach uses it to advance the relationship (acknowledge follow-through, gently revisit a miss), never to scold.
+
+A label fires only on a comparable, non-noisy run. "Comparable" means the subsequent run is a fair test of that advice: easy-discipline advice is judged against the next run that was not a race, a detected interval session, or a declared workout (a clearly-deliberate hard effort is never counted against easy advice), and the strong `contradicted` verdict is only asserted when the runner's `Stated intent` for that run was explicitly easy, so an unlabelled run that came out hard is softened to `ignored` (it may have been a deliberate session) rather than treated as defiance. A low-confidence `DerivedMetric` is noise and abstains; a window theme abstains until the runner has had enough comparable runs to fairly call a miss. Adherence is contrast about past advice and never overrides the re-derived `DerivedMetric`, which remains the ground truth about what happened today.
+_Avoid_: framing adherence as compliance, obedience, or a score; it is a coaching observation, not a verdict on the runner.
+
+## Disputed
+
+The `Next-step outcome` label when the runner has explicitly pushed back on the prior advice (a `CheckIn` note or a chat reply saying it was off). Explicit feedback beats the noisy implicit read: a disputed outcome is not non-adherence but a legitimate correction the coach takes the runner's word on and adapts to. Mirrors the `Stated intent` precedent that the runner's stated meaning overrides what the data alone would imply.

@@ -184,6 +184,44 @@ class PerceivedEffortContext(BaseModel):
     pain_trend: Optional[Dict[str, Any]]
 
 
+class NextStepOutcome(BaseModel):
+    """M7 adherence: whether one prior-report next_step appears to have landed.
+
+    Derived deterministically from the runner's subsequent comparable activity
+    (its re-derived DerivedMetric), so it costs the runner nothing. Advisory and
+    auditable, never a compliance score: `label` is one of "acted_on",
+    "ignored", "contradicted", or "disputed" (the runner explicitly pushed back
+    on the prior advice, so `overridden` is true and the implicit read is moot).
+    `basis` is a short human-readable evidence string the validator-style audit
+    can read; `comparable_activity_date` anchors which run it was judged against.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    prior_action: str
+    theme: str
+    label: str
+    comparable_activity_date: Optional[str]
+    basis: str
+    overridden: bool
+
+
+class AdherenceContext(BaseModel):
+    """M7 adherence learning loop: did the runner act on the LAST report's advice?
+
+    Re-derived each run from already-stored prior reports + subsequent
+    Activity/DerivedMetric rows (compute-on-demand, no durable store; M8 owns the
+    gated belief store). `prior_report_date` is the date of the source report's
+    activity. `outcomes` carries only next_steps that mapped to a recognised
+    theme AND had a comparable, non-noisy subsequent run to judge against;
+    everything else abstains and is simply absent, so an empty list means "no
+    adherence signal to report" and the coach says nothing about it.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    prior_report_date: Optional[str]
+    outcomes: List[NextStepOutcome]
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -194,6 +232,7 @@ class CoachContextPack(BaseModel):
     recent_training_summary: RecentTrainingSummary
     longitudinal: LongitudinalContext
     perceived_effort: PerceivedEffortContext
+    adherence: AdherenceContext
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
