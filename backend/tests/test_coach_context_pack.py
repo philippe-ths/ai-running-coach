@@ -145,6 +145,18 @@ def _legacy_full_pack() -> dict:
                 }
             ],
         },
+        "calibration": {
+            "hr_drift": {
+                "calibrated": True,
+                "expected_drift_pct": 5.5,
+                "observed_drift_pct": 9.0,
+                "delta_pct": 3.5,
+                "comparison": "above",
+                "sample_count": 6,
+                "basis": "typical drift ~5.5% across 6 comparable runs",
+            },
+            "referral": None,
+        },
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,
@@ -250,6 +262,10 @@ def _legacy_sparse_pack() -> dict:
         },
         "believed_facts": {
             "facts": [],
+        },
+        "calibration": {
+            "hr_drift": {"calibrated": False, "observed_drift_pct": None, "basis": "n/a"},
+            "referral": None,
         },
         "safety_rules": {
             "never_diagnose": True,

@@ -145,12 +145,29 @@ SYSTEM_PROMPT_V5 = SYSTEM_PROMPT_V4 + """
     - When "facts" is empty, simply reason from this run; invent no beliefs."""
 
 
+# ---------------------------------------------------------------------------
+# v6 (M9) — adds the self-calibrating-correction + non-diagnostic-referral
+# discipline (rule 20): read HR drift against the runner's own norm when
+# calibrated (labeled heuristic otherwise), and relay a clinician referral nudge
+# as a non-diagnostic suggestion. Output JSON schema is unchanged from v1-v5, so
+# SCHEMA_VERSION stays 1.2; only the prompt_id advances (the M0 seam). v1-v5 are
+# kept byte-stable so their cached reports remain reproducible.
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT_V6 = SYSTEM_PROMPT_V5 + """
+
+20. CALIBRATED CORRECTION + REFERRAL: The "calibration" section individualises this run and carries the safety referral.
+    - "calibration.hr_drift": when "calibrated" is true, read the drift against THIS runner's own norm, not a population rule ("your drift was X%, vs your typical ~Y% for these conditions"); use "comparison" (above/below/in_line) to judge whether today is actually anomalous FOR THEM. BUT if "personal_norm_elevated" is true, that personal norm itself sits above the general guideline, so "in_line" means "usual for you, but still on the high side" — do NOT reassure that it is fine. When "calibrated" is false, you may use the general "heuristic_threshold_pct" guideline but LABEL it as a rule of thumb ("as a general guide..."), never as this runner's established norm, because the personal baseline is still thin. This refines, and never overrides, the run's re-derived metrics and discount_signals.
+    - "calibration.referral": when present, the pipeline has detected a red-flag PATTERN (e.g. several strain signals together, or pain persisting across runs). Relay its "nudge" as a gentle, NON-DIAGNOSTIC suggestion to consider a healthcare professional. You MUST NOT name a condition, use a diagnosis verb, claim what the pattern "means" or "is a sign of", or alarm the runner. Keep it brief and matter-of-fact. When "referral" is null, say nothing medical of this kind. This stays strictly inside the general-wellness lane (rule 5 still governs)."""
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
     "coach_report_v3": SYSTEM_PROMPT_V3,
     "coach_report_v4": SYSTEM_PROMPT_V4,
     "coach_report_v5": SYSTEM_PROMPT_V5,
+    "coach_report_v6": SYSTEM_PROMPT_V6,
 }
 
 # ---------------------------------------------------------------------------
