@@ -20,6 +20,7 @@ from app.models.coach_report import CoachReport
 from app.services.analysis.baseline import bucket_key
 from app.services.analysis.classifier import Classification, compose_headline  # noqa: F401
 from app.services.coach.adherence import CandidateActivity, build_adherence
+from app.services.coach.belief_store import build_believed_facts
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.schemas.coach_context import (
     ActivityContext,
@@ -201,6 +202,7 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
             pain_scores=_recent_pain_scores(db, activity),
         ),
         adherence=_build_adherence_context(db, activity),
+        believed_facts=build_believed_facts(db, activity),
         safety_rules=SafetyRules(
             never_diagnose=True,
             pain_severe_threshold=7,

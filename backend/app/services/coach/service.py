@@ -22,6 +22,7 @@ from app.models import Activity
 from app.models.coach_report import CoachReport
 from app.schemas.coach import CoachReportContent, CoachReportDebug, CoachReportMeta, CoachReportRead
 from app.schemas.coach_context import CoachContextPack
+from app.services.coach.belief_store import write_back_beliefs
 from app.services.coach.context import build_context_pack
 from app.services.coach.llm import AnthropicClient
 from app.services.analysis.classifier import Classification, playbook_key
@@ -176,6 +177,12 @@ async def get_or_generate_coach_report(
             return _to_read(winner)
         raise
     db.refresh(db_report)
+
+    # M8 belief write-back: a successful report feeds the durable belief store the
+    # next report reads. Skipped for fallbacks (no real analysis to learn from);
+    # best-effort inside, so it never breaks report generation.
+    if not is_fallback:
+        write_back_beliefs(db, activity, pack)
 
     return _to_read(db_report)
 

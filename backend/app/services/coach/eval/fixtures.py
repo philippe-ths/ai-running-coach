@@ -50,6 +50,7 @@ _BASE_PACK = {
         "hr_confounded": False, "recommended_weighting": "hr_only", "pain_trend": None,
     },
     "adherence": {"prior_report_date": None, "outcomes": []},
+    "believed_facts": {"facts": []},
     "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
 }
 
