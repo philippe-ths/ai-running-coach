@@ -85,3 +85,12 @@ _Avoid_: framing adherence as compliance, obedience, or a score; it is a coachin
 ## Disputed
 
 The `Next-step outcome` label when the runner has explicitly pushed back on the prior advice (a `CheckIn` note or a chat reply saying it was off). Explicit feedback beats the noisy implicit read: a disputed outcome is not non-adherence but a legitimate correction the coach takes the runner's word on and adapts to. Mirrors the `Stated intent` precedent that the runner's stated meaning overrides what the data alone would imply.
+
+## Belief
+
+A durable, per-runner fact the coaching relationship has learned and the coach carries forward: a confirmed HR confound ("this runner's HR reads inflated in heat"), an `Adherence` tendency ("responds to easy-day discipline"). Beliefs are what turn the `CoachReport` history from a pile of artifacts into a runner-model. They are **deterministically derived** from the pipeline's own signals (`discount_signals`, adherence outcomes), never free LLM text, so they stay auditable. Each belief lives in the `CoachingContext` store, written through gates (a single observation is not yet a belief; observations reinforce, and an opposing observation resolves the belief's direction in place rather than stacking a contradiction), and ages out by a TTL tier unless reinforced. Every retrieved belief carries `confidence` and recency tags so the coach hedges stale or thin ones. A belief is **prior context, never an override**: when a belief and this run's re-derived `Activity analysis` conflict, today's measured data wins.
+_Avoid_: treating a belief as ground truth, or as a memory of raw runs; it is a gated, decaying generalisation the current run can always correct.
+
+## CoachingContext
+
+The durable, user-scoped store of `Belief` rows (one row per belief, identity `(user, kind, key)`). Written after each non-fallback `Coach report generation` (the belief write-back) and read into every later context pack with confidence/recency tags. The persistent-context half of the moat: the read-back layer that makes confound-correction and adherence awareness fire automatically on later runs instead of being re-derived from nothing each time. Distinct from `RunnerBaseline` (numeric rolling norms) and from `Activity analysis` (this run's re-derived metrics, which always override it).

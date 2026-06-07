@@ -134,6 +134,17 @@ def _legacy_full_pack() -> dict:
                 }
             ],
         },
+        "believed_facts": {
+            "facts": [
+                {
+                    "kind": "hr_confound",
+                    "statement": "This runner's heart rate tends to read inflated in the heat.",
+                    "confidence": "high",
+                    "observed_count": 4,
+                    "last_seen_days_ago": 6,
+                }
+            ],
+        },
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,
@@ -236,6 +247,9 @@ def _legacy_sparse_pack() -> dict:
         "adherence": {
             "prior_report_date": None,
             "outcomes": [],
+        },
+        "believed_facts": {
+            "facts": [],
         },
         "safety_rules": {
             "never_diagnose": True,

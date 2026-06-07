@@ -222,6 +222,36 @@ class AdherenceContext(BaseModel):
     outcomes: List[NextStepOutcome]
 
 
+class BelievedFact(BaseModel):
+    """One durable belief retrieved from the M8 CoachingContext store.
+
+    Carries the human-readable `statement` the coach applies, plus the
+    confidence/recency tags it must hedge against: `confidence` (low/medium/high,
+    grows with independent observations), `observed_count`, and
+    `last_seen_days_ago`. A belief is contrast/prior context only and never
+    overrides this run's re-derived DerivedMetric.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str
+    statement: str
+    confidence: str
+    observed_count: int
+    last_seen_days_ago: int
+
+
+class BelievedFactsContext(BaseModel):
+    """M8 belief store retrieval: the runner-model accumulated from prior reports.
+
+    `facts` holds the active, non-decayed, quality-cleared beliefs (HR confounds,
+    adherence patterns) most-confident-first, bounded. Empty for a runner with no
+    accumulated beliefs yet (the coach then has no priors to apply).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    facts: List[BelievedFact]
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -233,6 +263,7 @@ class CoachContextPack(BaseModel):
     longitudinal: LongitudinalContext
     perceived_effort: PerceivedEffortContext
     adherence: AdherenceContext
+    believed_facts: BelievedFactsContext
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
