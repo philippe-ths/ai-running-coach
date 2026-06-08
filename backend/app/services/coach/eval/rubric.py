@@ -1,6 +1,6 @@
 """The coach-report eval rubric (M5) — the oracle for coach reports.
 
-Five deterministic assertions, authored from the M5 success criteria, each
+Six deterministic assertions (five M5 + one M10 adherence-framing), each
 returning PASS / FAIL / NOT_APPLICABLE plus a human-readable reason and small
 JSON-serialisable evidence. A report is scored from its own ``CoachReportContent``
 plus its ``CoachContextPack`` only, so scoring is self-contained and repeatable.
@@ -14,6 +14,9 @@ The assertions:
                                narrative instead of restating it.
   5. abstained_on_thin_trend — no like-for-like trend claim when the matching
                                RunnerBaseline bucket is still abstaining.
+  6. framed_for_adherence    — (M10) next_steps are not confined to themes the
+                               runner demonstrably ignores when a decisive
+                               preference profile exists.
 
 Assertions 2, 4 and 5 inspect free text with documented keyword / overlap
 heuristics; they are the deterministic floor, not a semantic judge. The
@@ -330,6 +333,56 @@ def assert_abstained_on_thin_trend(content: CoachReportContent, pack: CoachConte
     )
 
 
+# --- assertion 6: framed for adherence (M10) ---------------------------------
+
+def assert_framed_for_adherence(content: CoachReportContent, pack: CoachContextPack) -> AssertionResult:
+    """M10: when the runner has a decisive preference profile, the report's
+    next_steps should not consist EXCLUSIVELY of advice in themes the runner
+    demonstrably ignores while offering nothing in a theme they act on. This is
+    the conservative deterministic floor: it fails only the clear anti-pattern
+    (stacking only ignored-theme advice), never legitimate variation, and it
+    abstains when there is no decisive profile or no themed next_step to read.
+    Classifying next_steps reuses the M7 adherence theme classifier."""
+    from app.services.coach.adherence import _classify  # reuse the M7 theme classifier
+
+    profile = getattr(pack, "preference_profile", None)
+    themes = profile.themes if profile else []
+    acts_on = {t.theme for t in themes if t.tendency == "acts_on"}
+    ignores = {t.theme for t in themes if t.tendency == "ignores"}
+    if not acts_on and not ignores:
+        return AssertionResult(
+            "framed_for_adherence", AssertionStatus.NOT_APPLICABLE,
+            "No decisive preference profile to frame toward.",
+        )
+
+    classified = [
+        theme.name for step in content.next_steps
+        if (theme := _classify({"action": step.action, "details": step.details}))
+    ]
+    if not classified:
+        return AssertionResult(
+            "framed_for_adherence", AssertionStatus.NOT_APPLICABLE,
+            "No next_step classifies into a known theme; nothing to assess.",
+            {"acts_on": sorted(acts_on), "ignores": sorted(ignores)},
+        )
+
+    leaned_acts_on = any(theme in acts_on for theme in classified)
+    all_ignored = all(theme in ignores for theme in classified)
+    if all_ignored and not leaned_acts_on:
+        return AssertionResult(
+            "framed_for_adherence", AssertionStatus.FAIL,
+            "Every classifiable next_step is in a theme this runner demonstrably "
+            f"ignores ({sorted(set(classified))}) with nothing in a theme they act on "
+            f"({sorted(acts_on)}); the advice is framed away from what lands.",
+            {"classified": classified, "acts_on": sorted(acts_on), "ignores": sorted(ignores)},
+        )
+    return AssertionResult(
+        "framed_for_adherence", AssertionStatus.PASS,
+        "Next_steps lean toward, or at least are not confined to, advice this runner acts on.",
+        {"classified": classified, "acts_on": sorted(acts_on), "ignores": sorted(ignores)},
+    )
+
+
 # --- the rubric ---------------------------------------------------------------
 
 ASSERTIONS: List[Callable[[CoachReportContent, CoachContextPack], AssertionResult]] = [
@@ -338,6 +391,7 @@ ASSERTIONS: List[Callable[[CoachReportContent, CoachContextPack], AssertionResul
     assert_no_medical_overreach,
     assert_advanced_not_parroted,
     assert_abstained_on_thin_trend,
+    assert_framed_for_adherence,
 ]
 
 

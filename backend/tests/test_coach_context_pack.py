@@ -157,6 +157,11 @@ def _legacy_full_pack() -> dict:
             },
             "referral": None,
         },
+        "preference_profile": {
+            "themes": [
+                {"theme": "easy_discipline", "tendency": "acts_on", "acted": 5, "total": 6},
+            ],
+        },
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,
@@ -267,6 +272,7 @@ def _legacy_sparse_pack() -> dict:
             "hr_drift": {"calibrated": False, "observed_drift_pct": None, "basis": "n/a"},
             "referral": None,
         },
+        "preference_profile": {"themes": []},
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,

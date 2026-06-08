@@ -91,6 +91,7 @@ _DEFAULT_PACK_DICT = {
     "adherence": {"prior_report_date": None, "outcomes": []},
     "believed_facts": {"facts": []},
     "calibration": {"hr_drift": {"calibrated": False, "observed_drift_pct": None, "basis": "n/a"}, "referral": None},
+    "preference_profile": {"themes": []},
     "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
 }
 
@@ -375,3 +376,39 @@ class TestKnownBlindSpots:
         )
         result = assert_no_medical_overreach(content, _make_pack())
         assert result.status is AssertionStatus.PASS  # blind spot inherited from validator rule 5
+
+
+class TestFramedForAdherence:
+    def _content(self, steps):
+        return _make_content(next_steps=steps)
+
+    def test_not_applicable_without_profile(self):
+        from app.services.coach.eval.rubric import assert_framed_for_adherence
+        content = self._content([CoachNextStep(action="Add a tempo run", details="20 min", why="x")])
+        r = assert_framed_for_adherence(content, _make_pack())  # empty profile
+        assert r.status.value == "not_applicable"
+
+    def test_passes_when_leans_on_acts_on_theme(self):
+        from app.services.coach.eval.rubric import assert_framed_for_adherence
+        content = self._content([CoachNextStep(action="Add a tempo run", details="20 min", why="x")])
+        pack = _make_pack(preference_profile={"themes": [
+            {"theme": "add_quality", "tendency": "acts_on", "acted": 4, "total": 5},
+        ]})
+        assert assert_framed_for_adherence(content, pack).status.value == "pass"
+
+    def test_fails_when_only_ignored_theme(self):
+        from app.services.coach.eval.rubric import assert_framed_for_adherence
+        content = self._content([CoachNextStep(action="Add a long run", details="build endurance", why="x")])
+        pack = _make_pack(preference_profile={"themes": [
+            {"theme": "easy_discipline", "tendency": "acts_on", "acted": 5, "total": 6},
+            {"theme": "add_long_run", "tendency": "ignores", "acted": 0, "total": 4},
+        ]})
+        assert assert_framed_for_adherence(content, pack).status.value == "fail"
+
+    def test_not_applicable_when_no_step_classifies(self):
+        from app.services.coach.eval.rubric import assert_framed_for_adherence
+        content = self._content([CoachNextStep(action="Stay hydrated", details="drink water", why="x")])
+        pack = _make_pack(preference_profile={"themes": [
+            {"theme": "add_long_run", "tendency": "ignores", "acted": 0, "total": 4},
+        ]})
+        assert assert_framed_for_adherence(content, pack).status.value == "not_applicable"
