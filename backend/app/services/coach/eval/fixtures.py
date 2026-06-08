@@ -52,6 +52,7 @@ _BASE_PACK = {
     "adherence": {"prior_report_date": None, "outcomes": []},
     "believed_facts": {"facts": []},
     "calibration": {"hr_drift": {"calibrated": False, "observed_drift_pct": None, "basis": "n/a"}, "referral": None},
+    "preference_profile": {"themes": []},
     "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
 }
 
@@ -67,7 +68,7 @@ _PRIOR_DIGEST = {
     "activity_date": "2026-02-08T10:00:00+00:00",
     "headline": "Tempo run",
     "lead_argument": "You held threshold pace for the full 20 minutes.",
-    "next_steps": ["Recover with two easy runs before the next quality session."],
+    "next_steps": ["Add a long run to build endurance."],
 }
 
 
@@ -89,13 +90,17 @@ def known_good_report() -> Tuple[CoachReportContent, CoachContextPack]:
             CoachTakeaway(text="Comfortable aerobic effort throughout."),
             CoachTakeaway(text="The drift is a heat artefact, not accumulating fatigue."),
         ],
-        next_steps=[CoachNextStep(action="Long run", details="90 min easy on Sunday", why="Build aerobic base")],
+        next_steps=[CoachNextStep(action="Add a tempo segment", details="20 minutes at threshold pace", why="A quality stimulus you respond to")],
         risks=[],
         questions=[],
     )
     pack = _pack(
         metrics={"discount_signals": _HEAT_DISCOUNT},
         longitudinal={"prior_reports": [_PRIOR_DIGEST], "baseline_trend": None},
+        # M10: runner acts on quality-session advice, and the report leans into it.
+        preference_profile={"themes": [
+            {"theme": "add_quality", "tendency": "acts_on", "acted": 4, "total": 5},
+        ]},
     )
     return content, pack
 
@@ -109,8 +114,8 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
         lead_argument=CoachTakeaway(text="You held threshold pace for the full 20 minutes."),  # (4) parrots prior lead
         key_takeaways=[CoachTakeaway(text="I would diagnose this as chronic fatigue.")],  # (3) medical overreach
         next_steps=[CoachNextStep(
-            action="Recover",
-            details="Recover with two easy runs before the next quality session.",  # (4) parrots prior next-step
+            action="Add a long run",
+            details="add a long run to build endurance with a 2 hour effort",  # (4) parrots prior next-step
             why="Push through it",
         )],
         risks=[],
@@ -119,5 +124,10 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
     pack = _pack(
         metrics={"discount_signals": _HEAT_DISCOUNT},  # (2) confound fired, report ignores it
         longitudinal={"prior_reports": [_PRIOR_DIGEST], "baseline_trend": None},  # abstaining bucket
+        # (6) the one next_step is in a theme the runner IGNORES, none in an acts-on theme
+        preference_profile={"themes": [
+            {"theme": "easy_discipline", "tendency": "acts_on", "acted": 5, "total": 6},
+            {"theme": "add_long_run", "tendency": "ignores", "acted": 0, "total": 4},
+        ]},
     )
     return content, pack

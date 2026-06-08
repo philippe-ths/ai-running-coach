@@ -126,10 +126,10 @@ def test_no_referral_when_clean(db):
 
 class TestPromptVersioning:
     def test_v6_is_active_default(self):
-        assert settings.COACH_PROMPT_ID == "coach_report_v6"
+        assert settings.COACH_PROMPT_ID == "coach_report_v7"
 
     def test_v6_adds_calibration_rule(self):
-        v6 = PROMPT_VERSIONS["coach_report_v6"]
+        v6 = PROMPT_VERSIONS["coach_report_v7"]
         assert "CALIBRATED CORRECTION" in v6
         assert "20." in v6
         assert "non-diagnostic" in v6.lower()
@@ -140,7 +140,7 @@ class TestPromptVersioning:
 
     def test_v6_extends_v5(self):
         v5 = PROMPT_VERSIONS["coach_report_v5"]
-        v6 = PROMPT_VERSIONS["coach_report_v6"]
+        v6 = PROMPT_VERSIONS["coach_report_v7"]
         assert v6 != v5
         assert v6.startswith(v5)
 

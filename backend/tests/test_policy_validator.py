@@ -61,6 +61,7 @@ _DEFAULT_PACK_DICT = {
     "adherence": {"prior_report_date": None, "outcomes": []},
     "believed_facts": {"facts": []},
     "calibration": {"hr_drift": {"calibrated": False, "observed_drift_pct": None, "basis": "n/a"}, "referral": None},
+    "preference_profile": {"themes": []},
     "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
 }
 

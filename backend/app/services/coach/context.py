@@ -20,9 +20,10 @@ from app.models.coach_report import CoachReport
 from app.services.analysis.baseline import bucket_key
 from app.services.analysis.classifier import Classification, compose_headline  # noqa: F401
 from app.services.coach.adherence import CandidateActivity, build_adherence
-from app.services.coach.belief_store import build_believed_facts
+from app.services.coach.belief_store import build_believed_facts, retrieve_beliefs
 from app.services.coach.calibration import assess_referral, calibrate_drift
 from app.services.coach.perceived_effort import build_perceived_effort
+from app.services.coach.preference import build_preference_profile
 from app.schemas.coach_context import (
     ActivityContext,
     AdherenceContext,
@@ -216,6 +217,7 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
         adherence=_build_adherence_context(db, activity),
         believed_facts=build_believed_facts(db, activity),
         calibration=_build_calibration_context(db, activity),
+        preference_profile=_build_preference_profile(db, activity),
         safety_rules=SafetyRules(
             never_diagnose=True,
             pain_severe_threshold=7,
@@ -573,6 +575,18 @@ def _recent_pain_scores_any(db: Session, activity: Activity) -> list[int]:
         .all()
     )
     return [p for (p,) in rows]
+
+
+def _build_preference_profile(db: Session, activity: Activity):
+    """Assemble the M10 preference profile from the runner's accumulated
+    adherence_pattern beliefs (M8). Reuses the belief retrieval (active,
+    non-decayed, quality-cleared), so a stale or thin adherence record yields an
+    empty profile and the coach simply has no preference to lean on."""
+    beliefs = [
+        b for b in retrieve_beliefs(db, activity.user_id)
+        if b.kind == "adherence_pattern"
+    ]
+    return build_preference_profile(beliefs)
 
 
 def hash_context_pack(pack: Dict[str, Any]) -> str:

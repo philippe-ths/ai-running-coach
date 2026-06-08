@@ -268,6 +268,31 @@ class CalibrationContext(BaseModel):
     referral: Optional[Dict[str, Any]]
 
 
+class PreferenceTheme(BaseModel):
+    """One advice theme in the M10 preference profile, with the runner's measured
+    tendency to act on it (`acts_on` / `mixed` / `ignores`) and the acted/total
+    counts it was derived from."""
+    model_config = ConfigDict(extra="forbid")
+
+    theme: str
+    tendency: str
+    acted: int
+    total: int
+
+
+class PreferenceProfile(BaseModel):
+    """M10 per-runner preference profile: which kinds of advice this runner
+    demonstrably acts on, derived from the accumulated M7/M8 adherence record (so
+    it already reflects explicit pushback, which never reinforced those beliefs).
+    The coach uses it to RERANK and FRAME next_steps toward what lands, never to
+    override the re-derived DerivedMetric or fabricate advice. Empty `themes` for a
+    runner without enough adherence history yet.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    themes: List[PreferenceTheme]
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -281,6 +306,7 @@ class CoachContextPack(BaseModel):
     adherence: AdherenceContext
     believed_facts: BelievedFactsContext
     calibration: CalibrationContext
+    preference_profile: PreferenceProfile
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:

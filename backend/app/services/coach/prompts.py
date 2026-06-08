@@ -161,6 +161,24 @@ SYSTEM_PROMPT_V6 = SYSTEM_PROMPT_V5 + """
     - "calibration.referral": when present, the pipeline has detected a red-flag PATTERN (e.g. several strain signals together, or pain persisting across runs). Relay its "nudge" as a gentle, NON-DIAGNOSTIC suggestion to consider a healthcare professional. You MUST NOT name a condition, use a diagnosis verb, claim what the pattern "means" or "is a sign of", or alarm the runner. Keep it brief and matter-of-fact. When "referral" is null, say nothing medical of this kind. This stays strictly inside the general-wellness lane (rule 5 still governs)."""
 
 
+# ---------------------------------------------------------------------------
+# v7 (M10) — adds the per-runner preference discipline (rule 21): rerank and
+# frame next_steps toward the advice this runner demonstrably acts on, reframe
+# what they ignore, never override the data or fabricate advice. Output JSON
+# schema is unchanged from v1-v6, so SCHEMA_VERSION stays 1.2; only the prompt_id
+# advances (the M0 seam). v1-v6 are kept byte-stable so their cached reports
+# remain reproducible.
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT_V7 = SYSTEM_PROMPT_V6 + """
+
+21. PREFERENCE (frame toward what this runner acts on): The "preference_profile" section lists, from this runner's accumulated adherence record, which kinds of advice they tend to act on, are mixed on, or ignore.
+    - When you have a choice of equally-valid next_steps, PREFER and LEAD WITH advice in a theme the runner ACTS ON — the best advice is the advice they actually follow.
+    - For a theme they tend to IGNORE that you still judge important, do not just re-issue it the same way: REFRAME it (a smaller first step, a different rationale, tie it to something they do act on), or briefly name the gap. Do not nag (rule 18 still governs tone).
+    - This biases SELECTION and FRAMING only. It NEVER overrides the re-derived metrics or invents advice the data does not support: if the data calls for a session-type the runner usually ignores, still give it (reframed), do not suppress it. Safety and grounding (rules 1-20) always win over preference.
+    - When "themes" is empty (not enough adherence history yet), simply give the best-grounded advice with no preference weighting."""
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -168,6 +186,7 @@ PROMPT_VERSIONS = {
     "coach_report_v4": SYSTEM_PROMPT_V4,
     "coach_report_v5": SYSTEM_PROMPT_V5,
     "coach_report_v6": SYSTEM_PROMPT_V6,
+    "coach_report_v7": SYSTEM_PROMPT_V7,
 }
 
 # ---------------------------------------------------------------------------
