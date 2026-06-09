@@ -10,6 +10,14 @@ from typing import Optional
 
 HEAT_TEMP_C = 25.0
 
+# A confounder only warrants discounting the HR drift when the drift is actually
+# elevated. Below this, there is nothing to discount, so the stage abstains rather
+# than handing the coach a contradictory "discount this drift as fatigue"
+# instruction on a run whose drift is negligible (#176). Mirrors the fatigue
+# threshold in flags.py (drift > 5% -> fatigue_possible) and the M9 population
+# guideline (calibration.POPULATION_DRIFT_THRESHOLD_PCT).
+ELEVATED_DRIFT_THRESHOLD_PCT = 5.0
+
 
 def compute_discount_signals(
     average_temp: Optional[float],
@@ -29,6 +37,13 @@ def compute_discount_signals(
     """
     if hr_drift is None:
         return None  # nothing to discount
+
+    # Magnitude gate (#176): a confounder is only worth discounting when the drift
+    # is actually elevated. On a run whose drift sits at or below the threshold
+    # there is nothing to discount, so abstain rather than emit a discount (or a
+    # temperature-caution) instruction the coach's own low-drift read contradicts.
+    if hr_drift <= ELEVATED_DRIFT_THRESHOLD_PCT:
+        return None
 
     # Strava sends average_temp as a number, but guard a stray non-numeric value
     # rather than raising mid-pipeline. An unusable value degrades to "unknown"
