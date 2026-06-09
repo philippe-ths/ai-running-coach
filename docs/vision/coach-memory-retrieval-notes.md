@@ -1,6 +1,6 @@
 # Memory and Data Retrieval System: design inputs (Phase 1 / A2)
 
-Status: design input captured 2026-06-09, not yet a settled design. This is the starting point for a fresh session that will design the coach's memory-and-data-retrieval system (milestone A2 in `coach-north-star.md`). Nothing here is decided beyond what the "Settled so far" section marks.
+Status: **superseded 2026-06-09 by `coach-memory-retrieval-design.md`**, which holds the settled A2 design. This doc is kept only for provenance: it captured the raw design inputs and the owner's verbatim thought-dump before the decisions were made. For what A2 builds to, read the design doc, `docs/adr/0008-coach-memory-is-a-four-layer-pull-model.md`, and `docs/coach-memory-retrieval-brief.md`.
 
 ## How to run the next session (owner preference)
 
