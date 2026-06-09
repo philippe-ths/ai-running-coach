@@ -107,12 +107,20 @@ def known_good_report() -> Tuple[CoachReportContent, CoachContextPack]:
 
 def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
     """A report that violates every rubric dimension: no headline, ignores a fired
-    confound, medical overreach, parrots the prior report, claims an ungrounded trend."""
+    confound, medical overreach, parrots the prior report, claims an ungrounded
+    trend, frames advice away from what the runner acts on, and narrates the
+    cumulative load number as an intensity verdict (#168)."""
     content = CoachReportContent(
         headline=None,  # (1) no lead verdict
         thesis="Your fitness has clearly been trending upward over the past few weeks.",  # (5) ungrounded trend
         lead_argument=CoachTakeaway(text="You held threshold pace for the full 20 minutes."),  # (4) parrots prior lead
-        key_takeaways=[CoachTakeaway(text="I would diagnose this as chronic fatigue.")],  # (3) medical overreach
+        key_takeaways=[
+            CoachTakeaway(text="I would diagnose this as chronic fatigue."),  # (3) medical overreach
+            CoachTakeaway(  # (7) load number narrated as an intensity verdict (#168)
+                text="An effort score of 265.6 confirms this stayed in true recovery "
+                "territory, well below moderate intensity thresholds.",
+            ),
+        ],
         next_steps=[CoachNextStep(
             action="Add a long run",
             details="add a long run to build endurance with a 2 hour effort",  # (4) parrots prior next-step

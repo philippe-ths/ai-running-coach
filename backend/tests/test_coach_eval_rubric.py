@@ -22,6 +22,7 @@ from app.services.coach.eval.rubric import (
     assert_advanced_not_parroted,
     assert_discounted_inflated_hr,
     assert_led_with_headline,
+    assert_load_not_framed_as_intensity,
     assert_no_medical_overreach,
     score_report,
 )
@@ -412,3 +413,94 @@ class TestFramedForAdherence:
             {"theme": "add_long_run", "tendency": "ignores", "acted": 0, "total": 4},
         ]})
         assert assert_framed_for_adherence(content, pack).status.value == "not_applicable"
+
+
+# --- assertion 7: cumulative load not framed as intensity (#168) -------------
+
+class TestLoadNotFramedAsIntensity:
+    """#168: effort_score is a TRIMP-like cumulative training LOAD that grows with
+    duration, never an intensity reading (intensity is the separate HR-derived
+    `effort` axis). The report must not narrate the load number as an intensity
+    verdict ("effort score ... confirms recovery territory, below moderate
+    intensity thresholds")."""
+
+    def test_no_effort_score_in_prose_is_not_applicable(self):
+        # The default content cites effort_score only as machine-readable evidence,
+        # never naming it in prose, so there is nothing to misframe.
+        result = assert_load_not_framed_as_intensity(_make_content(), _make_pack())
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_effort_score_framed_as_intensity_fails(self):
+        # The exact #168 failure: the load number narrated as an intensity verdict.
+        content = _make_content(
+            lead_argument=CoachTakeaway(
+                text="An effort score of 265.6 confirms this stayed in true recovery "
+                "territory, well below moderate intensity thresholds.",
+            ),
+        )
+        result = assert_load_not_framed_as_intensity(content, _make_pack())
+        assert result.status is AssertionStatus.FAIL
+
+    def test_effort_score_framed_as_load_passes(self):
+        # effort_score correctly narrated as accumulated load; intensity sourced
+        # from the effort axis, no intensity-verdict phrasing tied to the score.
+        content = _make_content(
+            lead_argument=CoachTakeaway(
+                text="Your effort stayed easy. The effort score of 265.6 reflects "
+                "accumulated load from the long duration.",
+            ),
+        )
+        result = assert_load_not_framed_as_intensity(content, _make_pack())
+        assert result.status is AssertionStatus.PASS
+
+    def test_explicit_load_not_intensity_disclaimer_passes(self):
+        # A sentence may name an intensity phrase to DISTINGUISH the load number
+        # from it; the not-intensity disclaimer in the same sentence clears it.
+        content = _make_content(
+            lead_argument=CoachTakeaway(
+                text="The effort score is a cumulative load number, not an intensity "
+                "reading, so it does not place you below moderate intensity.",
+            ),
+        )
+        result = assert_load_not_framed_as_intensity(content, _make_pack())
+        assert result.status is AssertionStatus.PASS
+
+    def test_misframing_in_takeaway_fails(self):
+        # The misframe is caught wherever it is asserted, not only the lead.
+        content = _make_content(
+            key_takeaways=[CoachTakeaway(
+                text="The effort score puts this run in recovery territory.",
+            )],
+        )
+        result = assert_load_not_framed_as_intensity(content, _make_pack())
+        assert result.status is AssertionStatus.FAIL
+
+
+# --- prompt v8 versioning (#168) ---------------------------------------------
+
+class TestPromptVersioningV8:
+    """#168 ships the load-vs-intensity discipline as a new prompt version (rule
+    22), additive over v7 so cached v1-v7 reports stay reproducible."""
+
+    def test_v8_is_active_default(self):
+        from app.core.config import settings
+        assert settings.COACH_PROMPT_ID == "coach_report_v8"
+
+    def test_v8_adds_load_not_intensity_rule(self):
+        from app.services.coach.prompts import PROMPT_VERSIONS
+        v8 = PROMPT_VERSIONS["coach_report_v8"]
+        assert "22." in v8
+        assert "LOAD, NOT INTENSITY" in v8
+        assert "effort_score" in v8
+
+    def test_v7_stays_byte_stable(self):
+        from app.services.coach.prompts import PROMPT_VERSIONS, SYSTEM_PROMPT_V7
+        assert PROMPT_VERSIONS["coach_report_v7"] == SYSTEM_PROMPT_V7
+        assert "LOAD, NOT INTENSITY" not in PROMPT_VERSIONS["coach_report_v7"]
+
+    def test_v8_extends_v7(self):
+        from app.services.coach.prompts import PROMPT_VERSIONS
+        v7 = PROMPT_VERSIONS["coach_report_v7"]
+        v8 = PROMPT_VERSIONS["coach_report_v8"]
+        assert v8 != v7
+        assert v8.startswith(v7)

@@ -154,7 +154,7 @@ export default function TrendsPage() {
               />
             </div>
             <div className="bg-white p-4 rounded-lg border shadow-sm">
-              <div className="text-sm text-gray-500">Total Suffer Score</div>
+              <div className="text-sm text-gray-500">Total Load</div>
               <div className="text-2xl font-bold">
                 {Math.round(data.summary.total_suffer_score).toLocaleString()}
               </div>

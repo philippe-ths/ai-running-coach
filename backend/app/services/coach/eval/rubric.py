@@ -1,9 +1,10 @@
 """The coach-report eval rubric (M5) — the oracle for coach reports.
 
-Six deterministic assertions (five M5 + one M10 adherence-framing), each
-returning PASS / FAIL / NOT_APPLICABLE plus a human-readable reason and small
-JSON-serialisable evidence. A report is scored from its own ``CoachReportContent``
-plus its ``CoachContextPack`` only, so scoring is self-contained and repeatable.
+Seven deterministic assertions (five M5 + one M10 adherence-framing + one #168
+load-vs-intensity framing), each returning PASS / FAIL / NOT_APPLICABLE plus a
+human-readable reason and small JSON-serialisable evidence. A report is scored
+from its own ``CoachReportContent`` plus its ``CoachContextPack`` only, so scoring
+is self-contained and repeatable.
 
 The assertions:
   1. led_with_headline      — the report opens with a headline verdict.
@@ -17,8 +18,11 @@ The assertions:
   6. framed_for_adherence    — (M10) next_steps are not confined to themes the
                                runner demonstrably ignores when a decisive
                                preference profile exists.
+  7. load_not_framed_as_intensity — (#168) the cumulative effort_score load number
+                               is not narrated as an intensity verdict; intensity
+                               comes from the HR-derived effort axis / RPE.
 
-Assertions 2, 4 and 5 inspect free text with documented keyword / overlap
+Assertions 2, 4, 5 and 7 inspect free text with documented keyword / overlap
 heuristics; they are the deterministic floor, not a semantic judge. The
 NOT_APPLICABLE branch matters: a report is never failed for a dimension that
 does not apply to it (no confound fired, no prior report to advance).
@@ -383,6 +387,78 @@ def assert_framed_for_adherence(content: CoachReportContent, pack: CoachContextP
     )
 
 
+# --- assertion 7: cumulative load not framed as intensity (#168) -------------
+
+# effort_score is a TRIMP-like cumulative training LOAD (minutes x HR-ratio^3),
+# so it grows with duration; it is NOT an intensity reading (intensity is the
+# separate HR-derived `effort` axis). This assertion catches the #168 failure
+# where the coach narrates the load number as an intensity verdict.
+_LOAD_REF_TERMS = ["effort score", "effort_score"]
+
+# Phrases that only make sense if a number is being read as an INTENSITY verdict.
+# Bare "effort"/"intensity" are excluded deliberately — the project legitimately
+# uses "easy effort"/"moderate effort" as RPE language — so the floor anchors on
+# an explicit load reference co-occurring with one of these in the SAME sentence.
+_INTENSITY_VERDICT_TERMS = [
+    "intensity threshold", "moderate intensity", "recovery territory",
+    "intensity level", "low intensity", "high intensity",
+    "below moderate", "above moderate", "easy intensity", "hard intensity",
+    "intensity zone",
+]
+
+# A sentence that ties the load number to a verdict phrase is cleared when it
+# ALSO disclaims the intensity reading — that is the report correctly separating
+# load from intensity (rule 22), not misframing it.
+_NOT_INTENSITY_DISCLAIMERS = [
+    "not intensity", "not an intensity", "not a measure of intensity",
+    "not the intensity", "rather than intensity", "not how hard",
+    "not how intense", "isn't intensity", "is not intensity", "not a hardness",
+]
+
+# Split on the whitespace that FOLLOWS a sentence terminator (or a newline), so a
+# decimal in the load value ("effort score of 265.6") is not split mid-sentence.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def assert_load_not_framed_as_intensity(content: CoachReportContent, pack: CoachContextPack) -> AssertionResult:
+    # Scan ASSERTED claims only (not questions): the failure is asserting the load
+    # number AS intensity, never asking about it.
+    text = _assertive_text(content)
+    if not any(term in text for term in _LOAD_REF_TERMS):
+        return AssertionResult(
+            "load_not_framed_as_intensity", AssertionStatus.NOT_APPLICABLE,
+            "Report does not narrate the effort/suffer score in prose; nothing to misframe.",
+        )
+
+    offending: List[Dict[str, Any]] = []
+    for sentence in _SENTENCE_SPLIT_RE.split(text):
+        if not any(term in sentence for term in _LOAD_REF_TERMS):
+            continue
+        verdicts = [t for t in _INTENSITY_VERDICT_TERMS if t in sentence]
+        if not verdicts:
+            continue
+        if any(d in sentence for d in _NOT_INTENSITY_DISCLAIMERS):
+            continue  # report explicitly distinguishes load from intensity
+        offending.append({"sentence": sentence.strip(), "verdicts": verdicts})
+
+    # Deterministic floor: it fires only on an explicit load reference sitting in
+    # the same sentence as an intensity-verdict phrase. A misframe split across
+    # sentences, or phrased outside these verdict terms, is a documented blind
+    # spot (see docs/testing/coach-report-eval.md), not a false negative to chase.
+    if offending:
+        return AssertionResult(
+            "load_not_framed_as_intensity", AssertionStatus.FAIL,
+            "The effort score is a cumulative training-load number that grows with "
+            f"duration, but the report frames it as an intensity verdict ({offending[0]['verdicts']}); "
+            "intensity must come from the effort axis / RPE, not the load number.",
+            {"offending": offending},
+        )
+    return AssertionResult(
+        "load_not_framed_as_intensity", AssertionStatus.PASS,
+        "The report references the load number without framing it as an intensity verdict.",
+    )
+
+
 # --- the rubric ---------------------------------------------------------------
 
 ASSERTIONS: List[Callable[[CoachReportContent, CoachContextPack], AssertionResult]] = [
@@ -392,6 +468,7 @@ ASSERTIONS: List[Callable[[CoachReportContent, CoachContextPack], AssertionResul
     assert_advanced_not_parroted,
     assert_abstained_on_thin_trend,
     assert_framed_for_adherence,
+    assert_load_not_framed_as_intensity,
 ]
 
 

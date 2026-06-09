@@ -245,9 +245,9 @@ def test_pack_unanalysed_intervening_run_is_skipped(db):
 
 class TestPromptVersioning:
     def test_v4_is_active_default(self):
-        # M8 flipped the active prompt to v5; v4 remains registered and
-        # byte-stable for its cached reports.
-        assert settings.COACH_PROMPT_ID == "coach_report_v7"
+        # The active default has since advanced (#168 -> v8); v4 remains
+        # registered and byte-stable for its cached reports.
+        assert settings.COACH_PROMPT_ID == "coach_report_v8"
 
     def test_v4_adds_adherence_rule(self):
         v4 = PROMPT_VERSIONS["coach_report_v4"]
