@@ -14,8 +14,13 @@ _Avoid_: equating "exchange" with "report"; a report is one shape an exchange ca
 
 ## Working context
 
-The bounded set of information assembled into the prompt for one `Exchange`: the relationship's narrative summary plus this event's headline facts, kept deliberately lean. It is not the whole of what the coach can know: the coach pulls deeper detail from the raw store on demand (retrieval) rather than receiving a fixed, pre-decided pack. Distinct from `Durable memory` (what persists across exchanges) and the raw store (the append-only source of truth, never loaded wholesale). The thing context engineering protects: small by default, deep on demand.
+The bounded set of information assembled into the prompt for one `Exchange`: a lean `B baseline` always present (the relationship's narrative summary, this run's measured facts, the relevant deterministic facts, the last exchange's digest) plus a trigger-scoped focus payload about whatever the exchange is anchored to, kept deliberately lean. It is a **view, not a store**: assembled per turn from the raw store, the `Processed artifacts` layer, and `Durable memory`, with deeper detail pulled on demand (retrieval) rather than received as a fixed, pre-decided pack. Distinct from `Durable memory` (what persists across exchanges) and the raw store (the append-only source of truth, never loaded wholesale). The thing context engineering protects: small by default, deep on demand.
 _Avoid_: equating working context with "everything we know about the runner"; it is the lean slice assembled for one turn, not the memory itself.
+
+## Processed artifacts
+
+The layer of pre-digested, retrievable records derived from the raw store on ingestion, the moment data lands, so that retrieval later is cheap (the "do the work on ingestion" principle, attributed to Karpathy's LLM knowledge bases). Holds the per-run measured facts (`DerivedMetric`), the consolidated stream view (a small downsampled HR/pace/grade/cadence snapshot of one activity), the digest of each past `Exchange` (headline, lead argument, commitments), and the deterministic signals extracted from user responses (RPE-vs-HR divergence, pain trend, pushback). Distinct from the raw store (it is derived, not truth), from `Durable memory` (it is per-event detail, not cross-exchange generalisation), and from `Working context` (it is stored, not assembled fresh per turn). `Working context` pulls from it on demand; raw streams themselves never enter context, only their processed view does.
+_Avoid_: treating a processed artifact as ground truth that overrides a re-derived `DerivedMetric`, or loading it wholesale; it is a retrieval-shaped convenience over the raw store, pulled only when the turn needs it.
 
 ## Durable memory
 
