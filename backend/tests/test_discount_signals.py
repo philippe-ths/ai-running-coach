@@ -65,3 +65,44 @@ def test_heat_only_high_confidence():
         "This HR drift is likely inflated by heat; "
         "discount it as a fatigue signal."
     )
+
+
+# --- #176: a confounder only warrants discounting when the drift is elevated ---
+
+def test_low_drift_with_confounder_returns_none():
+    # #176: a confounder is present (terrain) but the drift is negligible, so
+    # there is nothing to discount. The stage must NOT hand the coach a "discount
+    # this drift" instruction it would then contradict ("drift was just 0.8%").
+    result = compute_discount_signals(
+        average_temp=15.0, is_hilly=True, hr_drift=0.8, stimulant_use=False
+    )
+    assert result is None
+
+
+def test_low_drift_unknown_temp_returns_none():
+    # #176: a negligible drift needs no "treat cautiously" caution either, even
+    # when temperature is unknown — there is nothing to be cautious about.
+    result = compute_discount_signals(
+        average_temp=None, is_hilly=False, hr_drift=0.8, stimulant_use=False
+    )
+    assert result is None
+
+
+def test_drift_at_threshold_with_confounder_returns_none():
+    # Boundary: 5.0% is NOT elevated (flags.py marks fatigue only on drift > 5%),
+    # so a confounder at exactly the threshold still has nothing to discount.
+    result = compute_discount_signals(
+        average_temp=15.0, is_hilly=True, hr_drift=5.0, stimulant_use=False
+    )
+    assert result is None
+
+
+def test_elevated_drift_with_confounder_still_fires():
+    # The gate must not over-suppress: a drift above the threshold with a
+    # confounder still produces the discount annotation.
+    result = compute_discount_signals(
+        average_temp=15.0, is_hilly=True, hr_drift=6.0, stimulant_use=False
+    )
+    assert result is not None
+    assert result["likely_inflated_by"] == ["terrain"]
+    assert result["hr_drift_pct"] == 6.0

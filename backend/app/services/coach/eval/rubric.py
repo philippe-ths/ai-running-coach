@@ -37,6 +37,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.schemas.coach import CoachReportContent
 from app.schemas.coach_context import CoachContextPack
+from app.services.analysis.discount_signals import ELEVATED_DRIFT_THRESHOLD_PCT
 from app.services.coach.validator import _extract_all_text, validate_policy
 
 
@@ -196,6 +197,19 @@ def assert_discounted_inflated_hr(content: CoachReportContent, pack: CoachContex
             "discounted_inflated_hr", AssertionStatus.NOT_APPLICABLE,
             "No concrete discount signal fired for this activity.",
             {"likely_inflated_by": inflators},
+        )
+
+    # #176: a confounder is only worth discounting when the drift is actually
+    # elevated. A stored signal carrying a non-elevated drift (e.g. an older pack
+    # written before the source gate) has nothing to discount, so the coach must
+    # not be penalised for declining to. The source stage now abstains in this
+    # case, so this mainly guards historical packs and keeps eval and stage aligned.
+    drift_pct = signal.get("hr_drift_pct") if isinstance(signal, dict) else None
+    if drift_pct is not None and drift_pct <= ELEVATED_DRIFT_THRESHOLD_PCT:
+        return AssertionResult(
+            "discounted_inflated_hr", AssertionStatus.NOT_APPLICABLE,
+            "A confounder is present but the HR drift was not elevated; nothing to discount.",
+            {"likely_inflated_by": inflators, "hr_drift_pct": drift_pct},
         )
 
     text = _report_text(content)
