@@ -131,7 +131,7 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                 )}
                 {activity.raw_summary?.suffer_score && (
                     <div className="flex justify-between">
-                        <dt className="text-gray-500">Suffer Score</dt>
+                        <dt className="text-gray-500">Strava Suffer Score</dt>
                         <dd className="font-medium">{activity.raw_summary.suffer_score}</dd>
                     </div>
                 )}

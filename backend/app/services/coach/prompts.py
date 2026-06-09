@@ -179,6 +179,23 @@ SYSTEM_PROMPT_V7 = SYSTEM_PROMPT_V6 + """
     - When "themes" is empty (not enough adherence history yet), simply give the best-grounded advice with no preference weighting."""
 
 
+# ---------------------------------------------------------------------------
+# v8 (#168) — adds the load-vs-intensity discipline (rule 22): the effort_score
+# is a cumulative TRIMP-like TRAINING-LOAD number that grows with duration, never
+# an intensity verdict; intensity comes from the HR-derived effort axis / RPE.
+# Output JSON schema is unchanged from v1-v7, so SCHEMA_VERSION stays 1.2; only
+# the prompt_id advances (the M0 seam). v1-v7 are kept byte-stable so their cached
+# reports remain reproducible.
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT_V8 = SYSTEM_PROMPT_V7 + """
+
+22. EFFORT SCORE IS LOAD, NOT INTENSITY: "metrics.effort_score" — and "perceived_effort.effort_score", and the "total_effort" fields under "recent_training_summary" — is a cumulative, TRIMP-like TRAINING-LOAD number. It grows with how LONG the activity was as well as how hard, so a long easy run legitimately scores HIGHER than a short hard one. It is NOT an intensity reading and there are NO intensity thresholds on its scale.
+    - NEVER describe effort_score as an intensity level, and NEVER compare it to "moderate/recovery/easy/hard intensity" or to an "intensity threshold". A sentence like "an effort score of 265 confirms this stayed below moderate intensity" is WRONG: that number reflects accumulated load, not intensity.
+    - Source the intensity verdict ONLY from the "metrics.effort" axis (recovery|easy|moderate|tempo|hard, derived from HR) and RPE (rules 10 and 17), never from effort_score.
+    - Treat effort_score as accumulated training cost: a high value means a lot of total work, often just a long duration, not that the run was hard. When you cite it, frame it as load ("a big training-load day, mostly from the duration"). A high effort_score on a long or easy run is EXPECTED, not a red flag."""
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -187,6 +204,7 @@ PROMPT_VERSIONS = {
     "coach_report_v5": SYSTEM_PROMPT_V5,
     "coach_report_v6": SYSTEM_PROMPT_V6,
     "coach_report_v7": SYSTEM_PROMPT_V7,
+    "coach_report_v8": SYSTEM_PROMPT_V8,
 }
 
 # ---------------------------------------------------------------------------
@@ -225,7 +243,7 @@ EASY RUN FOCUS:
 - Comment on cadence and efficiency trends if available.
 - Note recovery signals (lower HR at same pace = improving fitness).
 - Keep the analysis brief — easy runs should be unremarkable.
-- If effort_score is high for an easy run, flag this gently.
+- If avg HR or the effort axis reads harder than easy, flag this gently (a high effort_score alone is just accumulated load, often from duration, not a sign it was too hard).
 """,
     "Tempo": """
 TEMPO RUN FOCUS:

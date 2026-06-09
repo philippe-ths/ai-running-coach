@@ -23,13 +23,16 @@ export default function SufferScoreChart({ data, granularity }: Props) {
     label: formatDateLabel(d.date ?? d.week_start),
   }));
 
-  const title = `Suffer Score per ${granularity === "daily" ? "Day" : "Week"}`;
+  const title = `Accumulated Load per ${granularity === "daily" ? "Day" : "Week"}`;
 
   return (
     <div className="bg-white rounded-lg border shadow-sm p-5">
-      <h3 className="text-sm font-semibold text-gray-700 mb-4">
+      <h3 className="text-sm font-semibold text-gray-700 mb-1">
         {title}
       </h3>
+      <p className="text-xs text-gray-400 mb-4">
+        Accumulates with both duration and intensity. Not a measure of how hard you ran.
+      </p>
       {chartData.length === 0 ? (
         <p className="text-gray-400 text-sm py-8 text-center">
           No data for this range.
@@ -51,7 +54,7 @@ export default function SufferScoreChart({ data, granularity }: Props) {
               width={40}
             />
             <Tooltip
-              formatter={(value: number | undefined) => [value ?? 0, "Suffer Score"]}
+              formatter={(value: number | undefined) => [value ?? 0, "Accumulated Load"]}
               labelFormatter={(label) => label}
             />
             <Bar
