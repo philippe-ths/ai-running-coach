@@ -80,7 +80,7 @@ export default function ActivityTypeFilter({
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
+        <div className="absolute left-0 mt-1 w-48 max-w-[calc(100vw-2rem)] bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
           <button
             onClick={selectAll}
             className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 ${
