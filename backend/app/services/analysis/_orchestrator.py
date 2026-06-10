@@ -68,8 +68,13 @@ def compute_confidence(activity, streams_dict, check_in, interval_structure=None
     if not check_in:
         reasons.append("no_user_checkin")
 
-    # Interval-specific sanity checks
-    if workout_match:
+    # Interval-specific sanity checks. These reasons (no_intervals_detected,
+    # rep variability, match mismatch) only describe an interval session, so
+    # they must not lower the overall confidence of a non-interval activity
+    # (#169). The orchestrator nulls interval_structure when the structure axis
+    # did not resolve to intervals, so its presence is the "is interval session"
+    # gate; without it, workout_match's reasons stay confined to workout_match.
+    if interval_structure and workout_match:
         match_reasons = workout_match.get("confidence_reasons", [])
         for r in match_reasons:
             if r not in reasons:

@@ -61,3 +61,60 @@ def test_stream_sourced_structure_still_penalised():
     assert "work_time_implausibly_high" in reasons
     assert "no_warmup_detected" in reasons
     assert level == "medium"  # one critical hit
+
+
+# --- #169: interval-detection signals must not leak into the overall
+# confidence of a non-interval activity. When the structure axis did not
+# resolve to intervals, the orchestrator nulls interval_structure before this
+# call, so workout_match still reports "no_intervals_detected" but it must not
+# merge into the activity-level reasons.
+
+def test_non_interval_activity_does_not_carry_no_intervals_detected():
+    # A steady run: no interval structure, but match_planned_to_detected still
+    # produced its "no_intervals_detected" reason. It must not leak through.
+    workout_match = {
+        "confidence_reasons": ["no_intervals_detected"],
+        "match_score": None,
+    }
+
+    level, reasons = compute_confidence(
+        _activity(), _full_streams(), check_in=SimpleNamespace(),
+        interval_structure=None, workout_match=workout_match,
+    )
+
+    assert "no_intervals_detected" not in reasons
+
+
+def test_non_interval_activity_with_complete_data_stays_high():
+    # Otherwise-complete continuous activity (HR + GPS streams + check-in): the
+    # only thing that could drop it from high is the leaked interval reason.
+    workout_match = {
+        "confidence_reasons": ["no_intervals_detected"],
+        "match_score": None,
+    }
+
+    level, reasons = compute_confidence(
+        _activity(), _full_streams(), check_in=SimpleNamespace(),
+        interval_structure=None, workout_match=workout_match,
+    )
+
+    assert reasons == []
+    assert level == "high"
+
+
+def test_interval_session_still_merges_its_reasons():
+    # When the activity IS an interval session, the workout-match reasons and
+    # the match-score mismatch check still flow into overall confidence.
+    interval_structure = {"summary": {"total_work_time_s": 600}, "warmup_duration_s": 120}
+    workout_match = {
+        "confidence_reasons": ["high_rep_distance_variability"],
+        "match_score": 0.5,  # < 0.7 -> interval_structure_mismatch
+    }
+
+    level, reasons = compute_confidence(
+        _activity(), _full_streams(), check_in=SimpleNamespace(),
+        interval_structure=interval_structure, workout_match=workout_match,
+    )
+
+    assert "high_rep_distance_variability" in reasons
+    assert "interval_structure_mismatch" in reasons
