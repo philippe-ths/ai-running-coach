@@ -24,6 +24,7 @@ from app.schemas.coach import CoachReportContent, CoachReportDebug, CoachReportM
 from app.schemas.coach_context import CoachContextPack
 from app.services.coach.belief_store import write_back_beliefs
 from app.services.coach.context import build_context_pack
+from app.services.coach.digest import build_report_digest
 from app.services.coach.llm import AnthropicClient
 from app.services.analysis.classifier import Classification, playbook_key
 from app.services.coach.prompts import PROMPT_VERSIONS, build_system_prompt
@@ -154,6 +155,22 @@ async def get_or_generate_coach_report(
         policy_violations=policy_violations,
     )
 
+    # A2a: persist the exchange digest alongside the report so later exchanges
+    # retrieve it instead of re-projecting from the full report JSON. Skipped for
+    # fallbacks (the M4 longitudinal read excludes them anyway). Guarded so a
+    # digest hiccup never blocks report storage — the digest is a derived
+    # convenience, the report is the record.
+    report_digest = None
+    if not is_fallback:
+        try:
+            report_digest = build_report_digest(
+                content.model_dump(), activity.start_date
+            ).model_dump()
+        except Exception:  # noqa: BLE001 — digest is a derived convenience
+            logger.exception(
+                "exchange digest projection failed for activity %s", activity_uuid
+            )
+
     # Store (version columns mirror meta so the cache can key on them)
     db_report = CoachReport(
         activity_id=activity_uuid,
@@ -164,6 +181,7 @@ async def get_or_generate_coach_report(
         context_pack=pack_dict,
         raw_llm_response=raw_response,
         is_fallback=is_fallback,
+        digest=report_digest,
     )
     db.add(db_report)
     try:

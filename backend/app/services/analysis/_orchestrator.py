@@ -253,6 +253,14 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
         stimulant_use=profile.stimulant_use if profile else None,
     )
 
+    # 9.6 Consolidated stream view (A2a processed-artifacts layer) — a small,
+    # downsampled, aligned HR/pace/grade/cadence snapshot derived from the same
+    # streams_dict. Stored on the DerivedMetric so retrieval is cheap; re-derived
+    # every analysis (self-heals on re-sync/backfill), a convenience view that
+    # never overrides the re-derived metrics. Degrades to None without streams.
+    from app.services.analysis.stream_view import build_stream_view
+    metrics_data["stream_view"] = build_stream_view(streams_dict)
+
     # 10. Upsert DerivedMetric
     existing_dm = db.query(DerivedMetric).filter(DerivedMetric.activity_id == activity.id).first()
 

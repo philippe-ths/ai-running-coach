@@ -36,6 +36,12 @@ class CoachReport(Base):
     context_pack: Mapped[dict] = mapped_column(JSON)
     raw_llm_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Exchange digest (A2a): the token-bounded projection of this report
+    # (activity_date, headline, lead_argument, next-steps/commitments), stored so
+    # later exchanges retrieve it instead of re-projecting from the full report
+    # JSON. Nullable: null for fallback reports and for rows written before A2a.
+    digest: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
     is_fallback: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false", default=False
     )
