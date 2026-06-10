@@ -1,8 +1,7 @@
 {
   "confidence": "medium",
   "confidence_reasons": [
-    "no_gps_data",
-    "no_intervals_detected"
+    "no_gps_data"
   ],
   "duration_class": "standard",
   "efficiency_analysis": {
