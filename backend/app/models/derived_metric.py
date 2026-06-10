@@ -44,6 +44,12 @@ class DerivedMetric(Base):
     training_context: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     discount_signals: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
+    # Consolidated stream view (A2a): a small downsampled aligned HR/pace/grade/
+    # cadence snapshot, produced during analysis. Deferred so the common path
+    # (loading metrics for a report) stays lean — the view is pulled only when an
+    # activity is the subject of an exchange (design doc § 4, the pull principle).
+    stream_view: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, deferred=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), onupdate=func.now(), server_default=func.now()

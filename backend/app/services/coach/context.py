@@ -22,6 +22,7 @@ from app.services.analysis.classifier import Classification, compose_headline  #
 from app.services.coach.adherence import CandidateActivity, build_adherence
 from app.services.coach.belief_store import build_believed_facts, retrieve_beliefs
 from app.services.coach.calibration import assess_referral, calibrate_drift
+from app.services.coach.digest import build_report_digest
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.preference import build_preference_profile
 from app.schemas.coach_context import (
@@ -309,34 +310,12 @@ def _prior_report_digests(db: Session, activity: Activity) -> list[PriorReportDi
 
 
 def _digest_from_report(report: Dict[str, Any], start_date) -> PriorReportDigest:
-    """Project a stored report dict down to its longitudinal digest fields."""
-    lead = report.get("lead_argument")
-    if isinstance(lead, dict):
-        lead_text = lead.get("text")
-    elif isinstance(lead, str):
-        lead_text = lead
-    else:
-        lead_text = None
+    """Project a stored report dict down to its longitudinal digest fields.
 
-    next_steps: list[str] = []
-    for step in (report.get("next_steps") or []):
-        if not isinstance(step, dict):
-            continue
-        # Coerce to str defensively: the write path validates these as strings,
-        # but a hand-edited or future-shape row must not raise here.
-        action = str(step.get("action") or "").strip()
-        details = str(step.get("details") or "").strip()
-        if action and details:
-            next_steps.append(f"{action} ({details})")
-        elif action:
-            next_steps.append(action)
-
-    return PriorReportDigest(
-        activity_date=start_date.isoformat() if start_date else "",
-        headline=report.get("headline"),
-        lead_argument=lead_text,
-        next_steps=next_steps,
-    )
+    Delegates to the shared projection (A2a) so the read-time digest stays
+    byte-equal to the stored CoachReport.digest artifact.
+    """
+    return build_report_digest(report, start_date)
 
 
 def _matching_baseline_trend(
