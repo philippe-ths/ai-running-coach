@@ -15,7 +15,7 @@ LLM-judge is the documented upgrade path, not a v1 requirement.
 
 Each report is scored independently from its own `report` content plus its
 stored `context_pack` (no cross-row joins, no re-read of mutable analysis
-state), so the score is order-independent and byte-stable. Seven assertions,
+state), so the score is order-independent and byte-stable. Eight assertions,
 each PASS / FAIL / NOT_APPLICABLE:
 
 | Assertion | Asks | NOT_APPLICABLE when |
@@ -27,8 +27,9 @@ each PASS / FAIL / NOT_APPLICABLE:
 | `abstained_on_thin_trend` | When the matching `RunnerBaseline` bucket is still abstaining (`longitudinal.baseline_trend is None`), did the report avoid asserting a like-for-like trend? | never (PASS when grounded or correctly silent) |
 | `framed_for_adherence` | (M10) When the runner has a decisive preference profile, are the `next_steps` not confined to themes they demonstrably ignore while offering nothing in a theme they act on? | no decisive profile, or no `next_step` classifies into a known theme |
 | `load_not_framed_as_intensity` | (#168) Is the cumulative `effort_score` load number not narrated as an intensity verdict? It grows with duration, so intensity must come from the HR-derived `effort` axis / RPE, never from the load number. | the report does not narrate the effort score in prose |
+| `coached_not_caveated` | (#171) When per-rep interval data is present (`interval_structure`), does the report coach it instead of leading with a low detection-confidence caveat, and avoid advising the lap button when the laps were recorded (`source == "recorded_laps"`)? | no per-rep data; or detection confidence is high and the structure is not recorded-lap sourced |
 
-Assertions 2, 4, 5 and 7 inspect free text with documented keyword / overlap
+Assertions 2, 4, 5, 7 and 8 inspect free text with documented keyword / overlap
 heuristics (see `app/services/coach/eval/rubric.py`). They are the deterministic
 floor, not a semantic judge; the parrot-overlap threshold is the single tunable
 constant.
@@ -60,6 +61,13 @@ target and are pinned by tests in `TestKnownBlindSpots` so they stay visible:
   A misframe split across two sentences, or phrased outside the verdict-term list,
   PASSES. The prompt-side rule 22 (`coach_report_v8`) is the actual fix; this
   assertion is the regression floor, not a complete guard.
+- **Caveat-led framing outside the keyword list escapes** (`coached_not_caveated`).
+  The check fails only when the **lead** (headline / thesis / lead_argument) carries
+  an explicit uncaptured/unreliable phrase, or a `lap button` mention co-occurs with
+  recorded-lap structure. A session framed as uncaptured through paraphrase, or a
+  bounded caveat that nonetheless dominates the report's tone, PASSES. The prompt-side
+  rule 23 (`coach_report_v9`) is the actual fix; this assertion is the regression
+  floor, not a semantic judge of whether the report truly led with the rep data.
 - **Regression detection is rubric-sensitive.** `--compare` flags drops in the
   dimensions the rubric can see. A prompt change that introduces a failure mode
   the rubric is blind to (e.g. semantic parroting) will not move the score.

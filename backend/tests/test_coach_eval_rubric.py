@@ -20,6 +20,7 @@ from app.services.coach.eval.rubric import (
     AssertionStatus,
     assert_abstained_on_thin_trend,
     assert_advanced_not_parroted,
+    assert_coached_not_caveated,
     assert_discounted_inflated_hr,
     assert_led_with_headline,
     assert_load_not_framed_as_intensity,
@@ -488,15 +489,134 @@ class TestLoadNotFramedAsIntensity:
         assert result.status is AssertionStatus.FAIL
 
 
+# --- assertion 8: coached the available data, not the detection caveat (#171) -
+
+# A clean interval session with per-rep data present. The stream-heuristic path
+# can still return low detection_confidence (structure couldn't be matched to a
+# uniform plan) even though every rep's effort/recovery is captured.
+_LOW_CONF_INTERVAL_STRUCTURE = {
+    "warmup_duration_s": 600,
+    "cooldown_duration_s": 300,
+    "work_segments": [
+        {"duration_s": 48, "avg_speed_mps": 4.2},
+        {"duration_s": 49, "avg_speed_mps": 4.1},
+        {"duration_s": 47, "avg_speed_mps": 4.2},
+    ],
+    "rest_segments": [{"duration_s": 60}, {"duration_s": 60}],
+    "summary": {"rep_count": 3, "avg_work_duration_s": 48},
+}
+_LOW_CONF_MATCH = {"detection_confidence": "low", "match_score": 0.4}
+
+# Same per-rep data, but sourced from the runner's own recorded Strava laps
+# (#170): authoritative structure, so detection_confidence is "high".
+_RECORDED_LAPS_STRUCTURE = {**_LOW_CONF_INTERVAL_STRUCTURE, "source": "recorded_laps"}
+_RECORDED_LAPS_MATCH = {"detection_confidence": "high", "match_score": 1.0}
+
+
+class TestCoachedNotCaveated:
+    """#171: when per-rep interval data is present, the report must coach it and
+    express low *detection* confidence as a bounded caveat about exact structure,
+    not as the headline/thesis, and must never advise an action the runner already
+    took (suggesting the lap button when the laps were recorded)."""
+
+    def test_no_interval_data_is_not_applicable(self):
+        # Continuous run, no interval structure: nothing to over-caveat.
+        result = assert_coached_not_caveated(_make_content(), _make_pack())
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_high_confidence_stream_detection_is_not_applicable(self):
+        # Per-rep data with high (non-lap) detection confidence: no caveat pressure
+        # and no recorded laps, so the assertion has nothing to judge.
+        pack = _make_pack(metrics={
+            "interval_structure": _LOW_CONF_INTERVAL_STRUCTURE,
+            "workout_match": {"detection_confidence": "high", "match_score": 0.9},
+        })
+        result = assert_coached_not_caveated(_make_content(), pack)
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_caveat_led_lead_on_low_confidence_fails(self):
+        # The #171 anti-pattern: the lead frames the session as undetected/unreliable
+        # even though every rep is present.
+        content = _make_content(
+            headline="Intervals not consistently detected",
+            thesis="The session structure could not be reliably detected from your data.",
+            lead_argument=CoachTakeaway(text="Interval detection was unreliable this run."),
+        )
+        pack = _make_pack(metrics={
+            "interval_structure": _LOW_CONF_INTERVAL_STRUCTURE,
+            "workout_match": _LOW_CONF_MATCH,
+        })
+        result = assert_coached_not_caveated(content, pack)
+        assert result.status is AssertionStatus.FAIL
+
+    def test_coaches_rep_data_on_low_confidence_passes(self):
+        # Leads with the available per-rep analysis; the structure caveat, if any,
+        # is bounded and not the headline/thesis.
+        content = _make_content(
+            headline="Solid rep session",
+            thesis="Your three reps held an even ~48s effort with clean recovery between them.",
+            lead_argument=CoachTakeaway(text="Rep pace held steady across all three efforts."),
+        )
+        pack = _make_pack(metrics={
+            "interval_structure": _LOW_CONF_INTERVAL_STRUCTURE,
+            "workout_match": _LOW_CONF_MATCH,
+        })
+        result = assert_coached_not_caveated(content, pack)
+        assert result.status is AssertionStatus.PASS
+
+    def test_bounded_caveat_outside_the_lead_passes(self):
+        # A bounded caveat about exact structure in a takeaway (not the lead) is
+        # exactly the behaviour #171 wants, so it must not fail.
+        content = _make_content(
+            headline="Solid rep session",
+            thesis="Three even reps with good recovery.",
+            lead_argument=CoachTakeaway(text="Rep pace held steady across all three efforts."),
+            key_takeaways=[CoachTakeaway(
+                text="The exact rep boundaries are approximate, but the efforts themselves are clear.",
+            )],
+        )
+        pack = _make_pack(metrics={
+            "interval_structure": _LOW_CONF_INTERVAL_STRUCTURE,
+            "workout_match": _LOW_CONF_MATCH,
+        })
+        result = assert_coached_not_caveated(content, pack)
+        assert result.status is AssertionStatus.PASS
+
+    def test_advises_lap_button_when_laps_recorded_fails(self):
+        # AC#3: never advise an action already taken. The laps WERE recorded
+        # (source=recorded_laps), so telling the runner to use the lap button is wrong.
+        content = _make_content(
+            next_steps=[CoachNextStep(
+                action="Use the lap button",
+                details="Press the lap button at each rep so the structure is captured",
+                why="It will make detection cleaner next time",
+            )],
+        )
+        pack = _make_pack(metrics={
+            "interval_structure": _RECORDED_LAPS_STRUCTURE,
+            "workout_match": _RECORDED_LAPS_MATCH,
+        })
+        result = assert_coached_not_caveated(content, pack)
+        assert result.status is AssertionStatus.FAIL
+
+    def test_recorded_laps_coached_without_lap_button_advice_passes(self):
+        content = _make_content(
+            headline="Clean lap-marked reps",
+            lead_argument=CoachTakeaway(text="Your recorded laps show three even reps."),
+        )
+        pack = _make_pack(metrics={
+            "interval_structure": _RECORDED_LAPS_STRUCTURE,
+            "workout_match": _RECORDED_LAPS_MATCH,
+        })
+        result = assert_coached_not_caveated(content, pack)
+        assert result.status is AssertionStatus.PASS
+
+
 # --- prompt v8 versioning (#168) ---------------------------------------------
 
 class TestPromptVersioningV8:
     """#168 ships the load-vs-intensity discipline as a new prompt version (rule
     22), additive over v7 so cached v1-v7 reports stay reproducible."""
-
-    def test_v8_is_active_default(self):
-        from app.core.config import settings
-        assert settings.COACH_PROMPT_ID == "coach_report_v8"
 
     def test_v8_adds_load_not_intensity_rule(self):
         from app.services.coach.prompts import PROMPT_VERSIONS
@@ -516,3 +636,52 @@ class TestPromptVersioningV8:
         v8 = PROMPT_VERSIONS["coach_report_v8"]
         assert v8 != v7
         assert v8.startswith(v7)
+
+
+# --- prompt v9 versioning (#171) ---------------------------------------------
+
+class TestPromptVersioningV9:
+    """#171 ships the coach-the-available-data discipline as a new prompt version
+    (rule 23), additive over v8 so cached v1-v8 reports stay reproducible."""
+
+    def test_v9_is_active_default(self):
+        from app.core.config import settings
+        assert settings.COACH_PROMPT_ID == "coach_report_v9"
+
+    def test_v9_adds_coach_the_data_rule(self):
+        from app.services.coach.prompts import PROMPT_VERSIONS
+        v9 = PROMPT_VERSIONS["coach_report_v9"]
+        assert "23." in v9
+        assert "COACH THE AVAILABLE DATA" in v9
+        assert "recorded_laps" in v9
+
+    def test_v8_stays_byte_stable(self):
+        from app.services.coach.prompts import PROMPT_VERSIONS, SYSTEM_PROMPT_V8
+        assert PROMPT_VERSIONS["coach_report_v8"] == SYSTEM_PROMPT_V8
+        assert "COACH THE AVAILABLE DATA" not in PROMPT_VERSIONS["coach_report_v8"]
+
+    def test_v9_extends_v8(self):
+        from app.services.coach.prompts import PROMPT_VERSIONS
+        v8 = PROMPT_VERSIONS["coach_report_v8"]
+        v9 = PROMPT_VERSIONS["coach_report_v9"]
+        assert v9 != v8
+        assert v9.startswith(v8)
+
+
+# --- interval playbook reframe (#171) ----------------------------------------
+
+class TestIntervalPlaybookReframe:
+    """The shared Intervals playbook is appended after the numbered rules, so it
+    must align with rule 23: lead with the rep data, never headline the session as
+    unreliable, and never advise the lap button when laps were recorded."""
+
+    def test_playbook_no_longer_calls_detection_unreliable(self):
+        from app.services.coach.prompts import ACTIVITY_PLAYBOOKS
+        playbook = ACTIVITY_PLAYBOOKS["Intervals"]
+        assert "detection was unreliable" not in playbook.lower()
+
+    def test_playbook_leads_with_rep_data_and_guards_recorded_laps(self):
+        from app.services.coach.prompts import ACTIVITY_PLAYBOOKS
+        playbook = ACTIVITY_PLAYBOOKS["Intervals"]
+        assert "recorded_laps" in playbook
+        assert "never suggest using the lap button" in playbook.lower()
