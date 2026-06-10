@@ -28,11 +28,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from statistics import median
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -43,6 +43,16 @@ logger = logging.getLogger(__name__)
 # Open-question threshold from the brief: a bucket needs at least this many
 # samples before a trend is trustworthy enough to emit. Owner-tunable.
 MIN_SAMPLES_FOR_TREND = 4
+
+# #167 — the recompute scans only this rolling window of history, measured back
+# from the runner's most recent activity, so per-activity cost stays roughly flat
+# as a multi-season (or multi-year) history accumulates instead of growing with
+# it. 26 weeks ~= a half-season: long enough to be a stable rolling baseline and
+# to leave a normal single-runner history fully in-window (so its outputs are
+# unchanged), short enough to bound the scan to a constant ceiling of recent
+# activities. Owner-tunable; the baseline math over the in-window samples is
+# untouched, only out-of-window history ages out.
+BASELINE_COMPARISON_WINDOW_DAYS = 182
 
 # A magnitude smaller than this (in percent) reads as "no real change".
 _STABLE_PCT = 2.0
@@ -304,11 +314,28 @@ def recompute_runner_baseline(db: Session, user_id) -> Optional[RunnerBaseline]:
     if not isinstance(user_id, uuid.UUID):
         user_id = uuid.UUID(str(user_id))
 
+    # Anchor the rolling comparison window on the runner's most recent activity
+    # (not wall-clock), so the bound is deterministic, a returning runner's window
+    # tracks their own data, and a history clustered entirely in the past is not
+    # wrongly emptied. This is a cheap server-side aggregate — no row
+    # materialization, no metrics join — so it does not reintroduce the O(history)
+    # cost the window removes (#167).
+    latest = db.execute(
+        select(func.max(Activity.start_date))
+        .where(Activity.user_id == user_id)
+        .where(Activity.is_deleted == False)  # noqa: E712
+    ).scalar()
+    if latest is None:
+        return None
+
+    window_start = latest - timedelta(days=BASELINE_COMPARISON_WINDOW_DAYS)
+
     stmt = (
         select(Activity)
         .options(selectinload(Activity.metrics))
         .where(Activity.user_id == user_id)
         .where(Activity.is_deleted == False)  # noqa: E712
+        .where(Activity.start_date >= window_start)
         .order_by(Activity.start_date.asc())
     )
     activities = db.execute(stmt).scalars().all()
