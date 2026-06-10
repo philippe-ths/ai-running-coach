@@ -278,14 +278,20 @@ _MIN_LAPS_FOR_PATTERN = 3
 
 
 def _lap_speed(lap: dict) -> Optional[float]:
-    """Average speed of a lap (m/s), from the recorded field or distance/time."""
+    """Average speed of a lap (m/s), from the recorded field or distance/time.
+
+    A genuinely-recorded zero speed (a standing/autopaused recovery lap: the
+    runner stood still and pressed lap) is real data, not a missing value, so it
+    returns 0.0 rather than None. None means the lap carries no usable speed
+    *and* no usable distance/time (a truly unreadable lap).
+    """
     speed = lap.get("average_speed")
-    if speed is not None and speed > 0:
-        return float(speed)
+    if speed is not None:
+        return max(float(speed), 0.0)
     distance = lap.get("distance")
     elapsed = lap.get("elapsed_time") or lap.get("moving_time")
-    if distance and elapsed and elapsed > 0:
-        return float(distance) / float(elapsed)
+    if distance is not None and elapsed and elapsed > 0:
+        return max(float(distance) / float(elapsed), 0.0)
     return None
 
 
@@ -319,7 +325,12 @@ def _split_laps_work_rest(speeds: List[float]) -> Optional[List[bool]]:
 
     slow_mean = sum(slow) / len(slow)
     fast_mean = sum(fast) / len(fast)
-    if slow_mean <= 0 or fast_mean < slow_mean * _MIN_CLUSTER_SEPARATION:
+    if fast_mean <= 0:
+        return None
+    # A standing-rest cluster (slow_mean == 0) is the strongest possible
+    # work/rest signal, so it is accepted on a positive fast cluster alone; the
+    # ratio gate only applies when the slow cluster is itself moving.
+    if slow_mean > 0 and fast_mean < slow_mean * _MIN_CLUSTER_SEPARATION:
         return None
 
     threshold = ordered[split_at]  # first speed in the fast cluster
@@ -352,9 +363,11 @@ def detect_intervals_from_laps(raw_summary: Optional[dict]) -> Optional[dict]:
         return None
 
     speeds = [_lap_speed(lap) for lap in laps]
-    if any(s is None or s <= 0 for s in speeds):
+    # Abort only on a truly unreadable lap (no speed and no distance/time). A
+    # zero-speed standing-rest lap is usable data and is kept (read as rest).
+    if any(s is None for s in speeds):
         return None
-    durations = [int(lap.get("elapsed_time") or 0) for lap in laps]
+    durations = [int(lap.get("elapsed_time") or lap.get("moving_time") or 0) for lap in laps]
 
     work_mask = _split_laps_work_rest([s for s in speeds])  # type: ignore[arg-type]
     if work_mask is None:

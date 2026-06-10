@@ -79,7 +79,12 @@ def compute_confidence(activity, streams_dict, check_in, interval_structure=None
         if match_score is not None and match_score < 0.7:
             reasons.append("interval_structure_mismatch")
 
-    if interval_structure:
+    # These are stream-detection sanity checks: they only make sense when the
+    # structure was *inferred* from the velocity stream. Recorded laps are the
+    # runner's own ground-truth segmentation (#170), so "implausibly high" work
+    # time is just a long session the runner marked, and a missing warmup means
+    # they genuinely started at rep 1 — neither is a confidence deficiency.
+    if interval_structure and interval_structure.get("source") != "recorded_laps":
         summary = interval_structure.get("summary", {})
         # Check for implausible total work time (> 45 min of hard running)
         total_work = summary.get("total_work_time_s", 0)

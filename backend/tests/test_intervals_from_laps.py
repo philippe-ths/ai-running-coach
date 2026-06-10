@@ -9,7 +9,31 @@ uniform reps + recoveries) is synthetic test setup reproducing the #170 bug scen
 fabricated oversized reps and dropped the warmup).
 """
 
-from app.services.analysis.intervals import detect_intervals_from_laps
+from app.services.analysis.intervals import (
+    _lap_speed,
+    _split_laps_work_rest,
+    detect_intervals_from_laps,
+)
+
+
+def _standing_rest_lap(lap_index: int, elapsed: int = 60):
+    """A standing/autopaused recovery lap: zero speed, zero distance, real time.
+
+    Cannot use _lap() because it derives elapsed from distance/speed (0/0).
+    """
+    return {
+        "lap_index": lap_index,
+        "split": lap_index,
+        "name": f"Lap {lap_index}",
+        "distance": 0.0,
+        "elapsed_time": elapsed,
+        "moving_time": 0,
+        "average_speed": 0.0,
+        "average_heartrate": 150.0,
+        "max_heartrate": 160.0,
+        "pace_zone": 0,
+        "resource_state": 2,
+    }
 
 
 def _lap(
@@ -253,9 +277,12 @@ class TestLapDetectionEdgeCases:
         assert result["summary"]["rep_count"] == 3
         assert result["warmup_duration_s"] is None
 
-    def test_faded_final_rep_at_work_hr_is_kept(self):
+    def test_faded_final_rep_at_work_pace_is_kept(self):
         # A final rep that fades (slower + longer) is a real rep, not a
-        # cooldown -- it must stay in the work set.
+        # cooldown -- it must stay in the work set. Classification is by speed:
+        # the 3.9 rep stays in the fast cluster because the 2.0->3.9 gap (1.9)
+        # is the largest, beating 3.9->4.5 (0.6). HR is display-only, not read
+        # for work/rest classification.
         laps = [
             _lap(1, 400, 4.5, average_heartrate=176.0, max_heartrate=185.0),
             _lap(2, 200, 2.0, average_heartrate=150.0, max_heartrate=160.0),
@@ -263,7 +290,7 @@ class TestLapDetectionEdgeCases:
             _lap(4, 200, 2.0, average_heartrate=150.0, max_heartrate=160.0),
             _lap(5, 400, 4.5, average_heartrate=179.0, max_heartrate=187.0),
             _lap(6, 200, 2.0, average_heartrate=150.0, max_heartrate=160.0),
-            _lap(7, 700, 3.9, average_heartrate=180.0, max_heartrate=188.0),  # faded but hard
+            _lap(7, 700, 3.9, average_heartrate=180.0, max_heartrate=188.0),  # faded but still fast
         ]
         result = detect_intervals_from_laps({"laps": laps})
 
@@ -271,9 +298,11 @@ class TestLapDetectionEdgeCases:
         assert result["summary"]["rep_count"] == 4
         assert result["cooldown_duration_s"] is None
 
-    def test_long_slow_opening_rep_at_work_hr_is_kept(self):
+    def test_long_slow_opening_rep_at_work_pace_is_kept(self):
         # A mixed session (long tempo rep + short fast reps): the opening tempo
-        # rep is slower but at work HR, so it is a real rep, not a warmup.
+        # rep is slower than the short reps but still sits in the fast speed
+        # cluster (4.0 vs recovery 2.0), so it is a real rep, not a warmup.
+        # Classification is speed-only; HR values are display-only.
         laps = [
             _lap(1, 2000, 4.0, average_heartrate=175.0, max_heartrate=183.0),  # tempo opening rep
             _lap(2, 200, 2.0, average_heartrate=150.0, max_heartrate=160.0),
@@ -372,3 +401,79 @@ class TestKnownLimitationBriskWarmup:
         assert result["summary"]["rep_count"] == 4  # 2 real reps + warmup + cooldown
         assert result["warmup_duration_s"] is None
         assert result["cooldown_duration_s"] is None
+
+
+class TestStandingRestRecoveries:
+    """A track session with standing (zero-speed) recoveries is the canonical
+    recorded-laps interval session. A zero-speed rest lap is the strongest
+    work/rest signal, not unusable data, so it must NOT abort the lap path
+    (#170 adversarial-review finding F2)."""
+
+    def test_standing_rest_session_is_detected(self):
+        # 3 reps separated by standing recoveries (runner stood still, lapped).
+        laps = [
+            _lap(1, 400, 5.0, average_heartrate=178.0, max_heartrate=186.0),
+            _standing_rest_lap(2),
+            _lap(3, 400, 5.0, average_heartrate=179.0, max_heartrate=187.0),
+            _standing_rest_lap(4),
+            _lap(5, 400, 5.0, average_heartrate=180.0, max_heartrate=188.0),
+        ]
+        result = detect_intervals_from_laps({"laps": laps})
+
+        assert result is not None
+        assert result["source"] == "recorded_laps"
+        assert result["summary"]["rep_count"] == 3
+        # Both standing recoveries are read as rest segments.
+        assert len(result["rest_segments"]) == 2
+        # Recorded standing-rest duration is preserved (60s each).
+        assert result["rest_segments"][0]["duration_s"] == 60
+
+    def test_single_zero_speed_lap_does_not_abort_detection(self):
+        # Regression: one zero-speed recovery used to return None for the WHOLE
+        # session (the all-or-nothing speed guard), falling back to streams.
+        laps = [
+            _lap(1, 400, 5.0),
+            _standing_rest_lap(2),
+            _lap(3, 400, 5.0),
+            _lap(4, 200, 2.0),
+            _lap(5, 400, 5.0),
+        ]
+        assert detect_intervals_from_laps({"laps": laps}) is not None
+
+
+class TestLapSpeedAndSeparationGuard:
+    """Direct coverage for the changed lap helpers (#170 finding F5):
+    _lap_speed's fallbacks and the _MIN_CLUSTER_SEPARATION rejection that no
+    test previously pinned (it survived mutation to 1.0)."""
+
+    def test_lap_speed_reads_recorded_field(self):
+        assert _lap_speed({"average_speed": 4.5}) == 4.5
+
+    def test_lap_speed_falls_back_to_distance_over_time(self):
+        # No average_speed: compute from distance/elapsed_time.
+        assert _lap_speed({"distance": 400.0, "elapsed_time": 100}) == 4.0
+
+    def test_lap_speed_falls_back_to_moving_time(self):
+        # No average_speed and no elapsed_time: use moving_time.
+        assert _lap_speed({"distance": 400.0, "moving_time": 80}) == 5.0
+
+    def test_lap_speed_zero_is_data_not_missing(self):
+        # A genuinely-recorded standing rest is 0.0, not None.
+        assert _lap_speed({"average_speed": 0.0, "distance": 0.0, "elapsed_time": 60}) == 0.0
+
+    def test_lap_speed_unreadable_lap_is_none(self):
+        assert _lap_speed({}) is None
+        assert _lap_speed({"distance": 400.0}) is None  # no time
+
+    def test_separation_guard_rejects_insufficient_ratio(self):
+        # fast/slow ratio 3.6/3.0 = 1.2 < 1.3: not a real work/rest split.
+        assert _split_laps_work_rest([3.0, 3.0, 3.6, 3.6]) is None
+
+    def test_separation_guard_accepts_clear_ratio(self):
+        # fast/slow ratio 4.2/3.0 = 1.4 >= 1.3: a real work/rest split.
+        assert _split_laps_work_rest([3.0, 3.0, 4.2, 4.2]) == [False, False, True, True]
+
+    def test_separation_guard_accepts_standing_rest_cluster(self):
+        # slow cluster is all standing rest (mean 0): accepted on a positive
+        # fast cluster alone, the ratio gate does not apply.
+        assert _split_laps_work_rest([0.0, 0.0, 5.0, 5.0]) == [False, False, True, True]

@@ -123,3 +123,60 @@ def test_recorded_laps_drive_interval_structure(db):
     assert dm.interval_structure["warmup_duration_s"] is not None
     # Ground-truth structure -> high detection confidence (was capped at medium/low).
     assert dm.workout_match["detection_confidence"] == "high"
+
+
+def test_stream_fallback_when_no_usable_laps(db):
+    """AC#4: with no usable recorded laps, analyze() falls back to the stream
+    heuristic. The structure is still produced, but from the stream source
+    (no source="recorded_laps" marker)."""
+    user_id = uuid.UUID("00000000-0000-0000-0000-0000000002aa")
+    act_id = uuid.UUID("00000000-0000-0000-0000-0000000002ab")
+    db.add(User(id=user_id, email="streamfallback@example.com"))
+    db.add(
+        UserProfile(
+            user_id=user_id,
+            goal_type="5k",
+            experience_level="intermediate",
+            weekly_days_available=4,
+            current_weekly_km=40,
+            max_hr=190,
+            max_hr_source="user_entered",
+        )
+    )
+    db.flush()
+
+    vel, hr, dist = _streams(reps=6)
+    n = len(vel)
+    act = Activity(
+        id=act_id,
+        user_id=user_id,
+        strava_activity_id=987654322,
+        name="Track 6x400 (no laps)",
+        type="Run",
+        start_date=datetime(2026, 5, 2, 7, 0, tzinfo=timezone.utc),
+        distance_m=5000,
+        moving_time_s=n,
+        elapsed_time_s=n,
+        elev_gain_m=10.0,
+        avg_hr=160.0,
+        max_hr=185.0,
+        avg_cadence=170.0,
+        average_speed_mps=3.3,
+        user_intent="Intervals",
+        raw_summary={},  # no recorded laps -> lap path abstains
+    )
+    db.add(act)
+    db.flush()
+    db.add(ActivityStream(activity_id=act.id, stream_type="velocity_smooth", data=vel))
+    db.add(ActivityStream(activity_id=act.id, stream_type="heartrate", data=hr))
+    db.add(ActivityStream(activity_id=act.id, stream_type="time", data=list(range(n))))
+    db.add(ActivityStream(activity_id=act.id, stream_type="distance", data=dist))
+    db.commit()
+
+    dm = analyze(db, act.id)
+
+    assert dm is not None
+    assert dm.structure == "intervals", f"expected intervals, got {dm.structure}"
+    assert dm.interval_structure is not None
+    # Came from the stream heuristic, not recorded laps.
+    assert dm.interval_structure.get("source") is None
