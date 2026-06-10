@@ -1,9 +1,11 @@
 """A2a: the exchange digest projection (build_report_digest).
 
-Characterises the EXACT projection the M4 longitudinal digest has always used
-(context._digest_from_report), so the stored artifact is provably equal to the
-recomputed one. context._digest_from_report now delegates here, and
-test_longitudinal_context.py remains the behaviour-preserving guard.
+Characterises the EXACT projection the M4 longitudinal digest has always used, so
+the stored artifact is provably equal to the recomputed one. Since A2b the
+read-time digest is resolved by the retrieval seam (retrieval._resolve_digest),
+which prefers the stored artifact and falls back to this projection;
+test_longitudinal_context.py and test_retrieval.py remain the behaviour-preserving
+guards.
 """
 
 from datetime import datetime, timezone
@@ -76,9 +78,13 @@ def test_empty_report_is_safe():
     assert d.activity_date == ""
 
 
-def test_matches_context_digest_projection():
-    """The stored artifact must equal what the in-memory M4 digest produces."""
-    from app.services.coach.context import _digest_from_report
+def test_seam_resolution_matches_shared_projection():
+    """The read-time digest the retrieval seam produces for a row WITHOUT a stored
+    artifact (a pre-A2a row) equals this shared projection — the invariant the M4
+    longitudinal read has always upheld, now owned by retrieval._resolve_digest."""
+    from types import SimpleNamespace
+
+    from app.services.coach.retrieval import _resolve_digest
 
     report = {
         "headline": "Recovery day",
@@ -90,4 +96,6 @@ def test_matches_context_digest_projection():
         ],
     }
     start = datetime(2026, 4, 2, 7, 30, tzinfo=timezone.utc)
-    assert build_report_digest(report, start).model_dump() == _digest_from_report(report, start).model_dump()
+    # A row with no stored digest re-projects via build_report_digest.
+    row = SimpleNamespace(digest=None, report=report)
+    assert _resolve_digest(row, start).model_dump() == build_report_digest(report, start).model_dump()
