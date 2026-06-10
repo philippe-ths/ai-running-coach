@@ -22,6 +22,22 @@ export function formatDuration(seconds: number): string {
   return `${m} min`;
 }
 
+/**
+ * Format a split duration as "m:ss" (e.g. "5:00", "4:59").
+ *
+ * Splits are short and near a round interval, so flooring to whole minutes
+ * (formatDuration) misleadingly renders a 5:00 split as "4 min" / hides the
+ * remainder of a partial split. The seconds precision keeps the value honest
+ * and consistent with the "Splits (5 min)" title (#174).
+ */
+export function formatSplitDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  // A rounded-up 60 s belongs to the next minute.
+  if (s === 60) return `${m + 1}:00`;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 /** Format metres to km with two decimal places. */
 export function formatDistanceKm(metres: number): string {
   return `${(metres / 1000).toFixed(2)} km`;

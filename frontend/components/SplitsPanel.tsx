@@ -1,6 +1,6 @@
 import React from 'react';
 import { Split } from '@/lib/types/activity';
-import { formatPace, formatDistanceKm, formatDuration } from '@/lib/format';
+import { formatPace, formatDistanceKm, formatSplitDuration } from '@/lib/format';
 
 interface SplitsPanelProps {
   splits?: Split[];
@@ -72,7 +72,7 @@ export function SplitsPanel({ splits }: SplitsPanelProps) {
                 )}
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                   {isTimeBased
-                    ? formatDuration(split.elapsed_time)
+                    ? formatSplitDuration(split.elapsed_time)
                     : split.distance != null
                       ? formatPace(split.distance, split.elapsed_time)
                       : '-'}
