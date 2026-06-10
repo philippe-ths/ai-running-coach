@@ -17,7 +17,9 @@ from the input is None rather than an array, so the reader sees a predictable
 shape):
     n_points       int   downsampled length (== len of every channel array)
     source_n       int   aligned raw length the view was built from
-    time_s         [int] bucket-representative time, seconds, strictly increasing
+    time_s         [int] bucket-representative time, seconds, monotonic non-decreasing
+                   (strictly increasing for the usual integer-second Strava stream;
+                   sub-second input at a low point count may round adjacent buckets equal)
     hr             [int|None] | None         bucket-mean heart rate, bpm
     pace_s_per_km  [int|None] | None         derived from velocity, None when stopped
     grade_pct      [float|None] | None       bucket-mean grade, percent

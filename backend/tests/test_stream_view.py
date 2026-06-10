@@ -68,6 +68,18 @@ def test_time_axis_is_strictly_increasing():
     assert all(ts[i] < ts[i + 1] for i in range(len(ts) - 1))
 
 
+def test_subsecond_time_stays_monotonic_non_decreasing():
+    # Sub-second sampling at a low point count can round adjacent bucket times to
+    # equal integer seconds. The guaranteed contract is non-decreasing (never
+    # reversed); strict increase holds only for the usual integer-second stream.
+    n = 10
+    streams = {"time": [i * 0.1 for i in range(n)], "heartrate": [150] * n}
+    view = build_stream_view(streams)
+    assert view is not None
+    ts = view["time_s"]
+    assert all(ts[i] <= ts[i + 1] for i in range(len(ts) - 1))
+
+
 def test_ragged_channel_lengths_are_trimmed_to_common_min():
     # Strava channels are stored independently and are NOT guaranteed equal
     # length. The producer must trim to the common min before downsampling.
