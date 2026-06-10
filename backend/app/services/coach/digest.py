@@ -8,7 +8,8 @@ the digest does not grow with history.
 
 This is THE projection. Two callers share it so the stored digest is byte-equal
 to the recomputed one:
-  - the read-time M4 longitudinal builder (context._digest_from_report), and
+  - the read-time retrieval seam (retrieval._resolve_digest), which prefers the
+    stored digest and falls back to this projection for pre-A2a rows, and
   - the write-time persistence on CoachReport.digest (service.py).
 
 Pure function: a report dict + the source activity's start_date in, a

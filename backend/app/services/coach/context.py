@@ -3,10 +3,20 @@ Context pack builder — assembles all facts the LLM needs into a typed pack.
 
 No computation happens here. This module only gathers and shapes existing data
 from the database (activity, metrics, check-in, profile, trends).
+
+A2b reframes the assembly as a *working context* (CONTEXT.md): a lean
+`B baseline` always present plus a trigger-scoped `focus payload` pulled for the
+subject activity. `build_context_pack` composes the two into the flat
+`CoachContextPack` the LLM, validator, cache, and eval gate consume — byte-for-
+byte identical to the prior one-pass builder, so this is an internal restructure
+with no behaviour change. Deeper per-activity detail (the consolidated stream
+view) is reachable through the retrieval seam on demand, not forced into the
+default pack.
 """
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Dict, Optional
 
@@ -22,20 +32,21 @@ from app.services.analysis.classifier import Classification, compose_headline  #
 from app.services.coach.adherence import CandidateActivity, build_adherence
 from app.services.coach.belief_store import build_believed_facts, retrieve_beliefs
 from app.services.coach.calibration import assess_referral, calibrate_drift
-from app.services.coach.digest import build_report_digest
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.preference import build_preference_profile
+from app.services.coach.retrieval import fetch_prior_digests, fetch_stream_view
 from app.schemas.coach_context import (
     ActivityContext,
     AdherenceContext,
     BaselineTrendDelta,
+    BelievedFactsContext,
     CalibrationContext,
     CheckInContext,
     CoachContextPack,
     LongitudinalContext,
     MetricsContext,
     PerceivedEffortContext,
-    PriorReportDigest,
+    PreferenceProfile,
     ProfileContext,
     RecentTrainingSummary,
     SafetyRules,
@@ -47,16 +58,6 @@ from app.services.units.cadence import normalize_cadence_spm
 # Defensive cap on prior check-ins scanned for the pain trend. Pain check-ins are
 # sparse, so this comfortably covers the recent history the trend needs.
 _PAIN_HISTORY_SCAN_LIMIT = 50
-
-# Bound on how many prior reports the longitudinal digest carries into the pack.
-# The brief asks for "the last 1-2 reports"; two is enough to advance the
-# narrative while keeping the pack from growing with history (M4 token bound).
-_MAX_PRIOR_REPORTS = 2
-
-# Defensive cap on rows scanned to find those reports. Reports are version-keyed
-# (a few rows per activity at most), so 50 rows comfortably covers the two most
-# recent distinct activities while keeping the read bounded as history grows.
-_PRIOR_REPORT_SCAN_LIMIT = 50
 
 # Bound on prior activities scanned to find same-bucket comparables for the M9
 # HR-drift calibration. Comfortably covers a recreational runner's recent history
@@ -93,15 +94,112 @@ _PUSHBACK_PHRASES = (
 )
 
 
+# --- Working context: B baseline + focus payload (A2b) ----------------------
+# The assembled view, lean by default. These are internal assembly types; the
+# emitted artifact stays the flat CoachContextPack that build_context_pack
+# flattens them into.
+
+
+@dataclass(frozen=True)
+class BBaseline:
+    """The always-present relationship slice for one exchange: the runner's
+    profile and recent-load rollups, the last exchange's digest + matching
+    baseline trend, this run's subjective signals, the deterministic durable
+    facts (adherence, beliefs, calibration, preference), and the safety rules."""
+
+    profile: ProfileContext
+    recent_training_summary: RecentTrainingSummary
+    longitudinal: LongitudinalContext
+    perceived_effort: PerceivedEffortContext
+    adherence: AdherenceContext
+    believed_facts: BelievedFactsContext
+    calibration: CalibrationContext
+    preference_profile: PreferenceProfile
+    safety_rules: SafetyRules
+
+
+@dataclass(frozen=True)
+class FocusPayload:
+    """The trigger-scoped detail of the subject activity: its own measured facts
+    and check-in. `stream_view` is the deep, pull-on-demand artifact — None on the
+    default report path (so the deferred column is never loaded), populated only
+    when an exchange deep-dives the subject."""
+
+    activity: ActivityContext
+    metrics: MetricsContext
+    check_in: CheckInContext
+    stream_view: Optional[dict] = None
+
+
+@dataclass(frozen=True)
+class WorkingContext:
+    """The lean view assembled per exchange (a view, not a store): a B baseline
+    always present plus the subject's focus payload."""
+
+    b_baseline: BBaseline
+    focus: FocusPayload
+
+
 def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
-    """Assemble all facts the LLM needs. No computation, just data gathering."""
-    metrics = activity.metrics
-    check_in = getattr(activity, "check_in", None)
-    profile: Optional[UserProfile] = (
-        db.query(UserProfile)
-        .filter(UserProfile.user_id == activity.user_id)
-        .first()
+    """Assemble all facts the LLM needs. No computation, just data gathering.
+
+    Composes the working context (B baseline + the subject's focus payload) into
+    the flat CoachContextPack. Byte-identical to the prior one-pass builder.
+    """
+    wc = assemble_working_context(db, activity)
+    b, f = wc.b_baseline, wc.focus
+    return CoachContextPack(
+        activity=f.activity,
+        metrics=f.metrics,
+        check_in=f.check_in,
+        profile=b.profile,
+        recent_training_summary=b.recent_training_summary,
+        longitudinal=b.longitudinal,
+        perceived_effort=b.perceived_effort,
+        adherence=b.adherence,
+        believed_facts=b.believed_facts,
+        calibration=b.calibration,
+        preference_profile=b.preference_profile,
+        safety_rules=b.safety_rules,
     )
+
+
+def assemble_working_context(
+    db: Session, activity: Activity, *, deep: bool = False
+) -> WorkingContext:
+    """Assemble the lean working context for an exchange anchored to `activity`.
+
+    Loads the runner's profile once and shares it across both halves. `deep` pulls
+    the subject's consolidated stream view into the focus payload; the default
+    post-activity exchange leaves it out (lean by default, deep on demand).
+    """
+    profile = _load_profile(db, activity.user_id)
+    return WorkingContext(
+        b_baseline=build_b_baseline(db, activity, profile=profile),
+        focus=build_focus_payload(db, activity, profile=profile, deep=deep),
+    )
+
+
+def build_focus_payload(
+    db: Session,
+    subject: Activity,
+    *,
+    profile: Optional[UserProfile] = None,
+    deep: bool = False,
+) -> FocusPayload:
+    """The subject activity's own detail, assembled on demand.
+
+    Works for ANY subject activity, not only the current run, so a conversation
+    can deep-dive a specific past activity (the memory half of subject
+    resolution). When `deep`, also pulls the consolidated stream view through the
+    retrieval seam; otherwise `stream_view` stays None and the deferred
+    DerivedMetric.stream_view column is never loaded, keeping the default build
+    lean (A2a).
+    """
+    metrics = subject.metrics
+    check_in = getattr(subject, "check_in", None)
+    if profile is None:
+        profile = _load_profile(db, subject.user_id)
 
     # Zone calibration: only true if user explicitly set max_hr with a known source
     has_explicit_max_hr = bool(
@@ -116,47 +214,26 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
     else:
         zones_basis = "uncalibrated"
 
-    # Recent training summary relative to this activity's date
-    activity_date = activity.start_date.date()
-
-    facts_7d = _query_activity_facts(
-        db, activity_date - timedelta(days=7), activity_date
-    )
-    facts_28d = _query_activity_facts(
-        db, activity_date - timedelta(days=28), activity_date
-    )
-    facts_prev_28d = _query_activity_facts(
-        db, activity_date - timedelta(days=56), activity_date - timedelta(days=28)
-    )
-
-    def _summarize(facts) -> TrainingPeriodSummary:
-        return TrainingPeriodSummary(
-            activity_count=len(facts),
-            total_distance_m=sum(f.distance_m for f in facts),
-            total_moving_time_s=sum(f.moving_time_s for f in facts),
-            total_effort=round(sum(f.effort_score or 0 for f in facts), 1),
-        )
-
     # Training context: intensity distribution and recency signals (persisted
     # by the analysis pipeline on DerivedMetric).
     training_context = metrics.training_context if metrics else None
 
-    return CoachContextPack(
+    return FocusPayload(
         activity=ActivityContext(
-            date=activity.start_date.isoformat(),
-            name=activity.name,
-            type=activity.user_intent or activity.type,
-            distance_m=activity.distance_m,
-            moving_time_s=activity.moving_time_s,
-            avg_hr=activity.avg_hr,
-            max_hr=activity.max_hr,
+            date=subject.start_date.isoformat(),
+            name=subject.name,
+            type=subject.user_intent or subject.type,
+            distance_m=subject.distance_m,
+            moving_time_s=subject.moving_time_s,
+            avg_hr=subject.avg_hr,
+            max_hr=subject.max_hr,
             avg_cadence=normalize_cadence_spm(
-                activity.user_intent or activity.type, activity.avg_cadence
+                subject.user_intent or subject.type, subject.avg_cadence
             ),
-            elev_gain_m=activity.elev_gain_m,
+            elev_gain_m=subject.elev_gain_m,
         ),
         metrics=MetricsContext(
-            headline=compose_headline(activity, Classification.from_metrics(metrics)),
+            headline=compose_headline(subject, Classification.from_metrics(metrics)),
             effort=metrics.effort if metrics else None,
             duration_class=metrics.duration_class if metrics else None,
             structure=metrics.structure if metrics else None,
@@ -193,6 +270,35 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
             sleep_quality=check_in.sleep_quality if check_in else None,
             notes=check_in.notes if check_in else None,
         ),
+        stream_view=fetch_stream_view(db, subject.id) if deep else None,
+    )
+
+
+def build_b_baseline(
+    db: Session, activity: Activity, *, profile: Optional[UserProfile] = None
+) -> BBaseline:
+    """The always-present relationship slice for an exchange anchored to
+    `activity`. Lean by design: rollups and digests, not deep per-activity detail
+    (that lives in the focus payload). Each section reads existing rows only and
+    degrades cleanly to empty/None."""
+    metrics = activity.metrics
+    check_in = getattr(activity, "check_in", None)
+    if profile is None:
+        profile = _load_profile(db, activity.user_id)
+
+    # Recent training summary relative to this activity's date
+    activity_date = activity.start_date.date()
+    facts_7d = _query_activity_facts(
+        db, activity_date - timedelta(days=7), activity_date
+    )
+    facts_28d = _query_activity_facts(
+        db, activity_date - timedelta(days=28), activity_date
+    )
+    facts_prev_28d = _query_activity_facts(
+        db, activity_date - timedelta(days=56), activity_date - timedelta(days=28)
+    )
+
+    return BBaseline(
         profile=ProfileContext(
             goal_type=profile.goal_type if profile else None,
             experience_level=profile.experience_level if profile else None,
@@ -203,9 +309,9 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
             current_weekly_km=profile.current_weekly_km if profile else None,
         ),
         recent_training_summary=RecentTrainingSummary(
-            last_7d=_summarize(facts_7d),
-            last_28d=_summarize(facts_28d),
-            previous_28d=_summarize(facts_prev_28d),
+            last_7d=_summarize_period(facts_7d),
+            last_28d=_summarize_period(facts_28d),
+            previous_28d=_summarize_period(facts_prev_28d),
         ),
         longitudinal=_build_longitudinal_context(db, activity),
         perceived_effort=build_perceived_effort(
@@ -227,15 +333,36 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
     )
 
 
+def _load_profile(db: Session, user_id) -> Optional[UserProfile]:
+    """The runner's profile, or None. A relationship-level fact shared across the
+    B baseline (profile section) and the focus payload (zone calibration)."""
+    return (
+        db.query(UserProfile)
+        .filter(UserProfile.user_id == user_id)
+        .first()
+    )
+
+
+def _summarize_period(facts) -> TrainingPeriodSummary:
+    return TrainingPeriodSummary(
+        activity_count=len(facts),
+        total_distance_m=sum(f.distance_m for f in facts),
+        total_moving_time_s=sum(f.moving_time_s for f in facts),
+        total_effort=round(sum(f.effort_score or 0 for f in facts), 1),
+    )
+
+
 def _build_longitudinal_context(db: Session, activity: Activity) -> LongitudinalContext:
     """Assemble the M4 longitudinal contrast: a digest of the runner's last 1-2
     reports plus the M2 baseline trend matching this activity's context bucket.
 
-    Reads existing rows only; computes nothing new. Both halves degrade to
-    empty/None (no prior reports, no comparable trend) without failing.
+    The prior-report digests are pulled through the retrieval seam (A2b), which
+    reads A2a's stored CoachReport.digest artifact (falling back to re-projection
+    for pre-A2a rows). Both halves degrade to empty/None (no prior reports, no
+    comparable trend) without failing.
     """
     return LongitudinalContext(
-        prior_reports=_prior_report_digests(db, activity),
+        prior_reports=fetch_prior_digests(db, activity),
         baseline_trend=_matching_baseline_trend(db, activity),
     )
 
@@ -266,56 +393,6 @@ def _recent_pain_scores(db: Session, activity: Activity) -> list[int]:
         .all()
     )
     return [pain for pain, _ in reversed(rows)]  # return oldest-first
-
-
-def _prior_report_digests(db: Session, activity: Activity) -> list[PriorReportDigest]:
-    """Digest of the runner's most recent non-fallback reports before this run.
-
-    Returns at most `_MAX_PRIOR_REPORTS` entries, most recent first, one per
-    activity (the latest report when an activity has several versioned rows).
-    Only the lead_argument and next-step actions are carried, never the full
-    report body — that is the M4 token bound.
-    """
-    rows = (
-        db.query(CoachReport, Activity.start_date)
-        .join(Activity, CoachReport.activity_id == Activity.id)
-        .filter(
-            Activity.user_id == activity.user_id,
-            Activity.id != activity.id,
-            Activity.is_deleted == False,  # noqa: E712
-            Activity.start_date < activity.start_date,
-            CoachReport.is_fallback == False,  # noqa: E712
-        )
-        # created_at picks the latest version per activity; id is a stable
-        # final tiebreaker so a same-instant tie is deterministic.
-        .order_by(
-            Activity.start_date.desc(),
-            CoachReport.created_at.desc(),
-            CoachReport.id.desc(),
-        )
-        .limit(_PRIOR_REPORT_SCAN_LIMIT)
-        .all()
-    )
-
-    digests: list[PriorReportDigest] = []
-    seen: set = set()
-    for report, start_date in rows:
-        if report.activity_id in seen:
-            continue  # keep only the latest report per prior activity
-        seen.add(report.activity_id)
-        digests.append(_digest_from_report(report.report or {}, start_date))
-        if len(digests) >= _MAX_PRIOR_REPORTS:
-            break
-    return digests
-
-
-def _digest_from_report(report: Dict[str, Any], start_date) -> PriorReportDigest:
-    """Project a stored report dict down to its longitudinal digest fields.
-
-    Delegates to the shared projection (A2a) so the read-time digest stays
-    byte-equal to the stored CoachReport.digest artifact.
-    """
-    return build_report_digest(report, start_date)
 
 
 def _matching_baseline_trend(
