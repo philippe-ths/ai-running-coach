@@ -19,7 +19,11 @@ from app.models import Activity, DerivedMetric, User
 from app.models.coach_report import CoachReport
 from app.schemas.coach_context import PriorReportDigest
 from app.services.coach.digest import build_report_digest
-from app.services.coach.retrieval import fetch_prior_digests, fetch_stream_view
+from app.services.coach.retrieval import (
+    fetch_prior_commitments,
+    fetch_prior_digests,
+    fetch_stream_view,
+)
 
 
 def _user(db) -> uuid.UUID:
@@ -217,3 +221,59 @@ def test_fetch_prior_digests_empty_when_no_prior(db):
     user_id = _user(db)
     current = _activity(db, user_id, day=5)
     assert fetch_prior_digests(db, current) == []
+
+
+# --- fetch_prior_commitments (A2d M7 read) ---------------------------------
+
+
+def test_fetch_prior_commitments_returns_structured_next_steps(db):
+    """The M7 read pulls the prior exchange's commitments as STRUCTURED dicts
+    (action/details/why), not the flattened display strings the digest carries,
+    because the adherence theme classifier reads action+details."""
+    user_id = _user(db)
+    prior = _activity(db, user_id, day=1)
+    current = _activity(db, user_id, day=5)
+    body = _report_body("Prior advice run")
+    _add_report(db, prior, body=body, store_digest=True)
+
+    out = fetch_prior_commitments(db, current)
+    assert out is not None
+    assert out.source_activity_id == prior.id
+    assert out.source_start_date.isoformat().startswith("2026-05-01T08:00:00")
+    assert out.next_steps == body["next_steps"]  # structured dicts, unflattened
+    assert out.next_steps[0]["action"] == "Add a tempo segment"
+
+
+def test_fetch_prior_commitments_none_when_no_prior(db):
+    user_id = _user(db)
+    current = _activity(db, user_id, day=5)
+    assert fetch_prior_commitments(db, current) is None
+
+
+def test_fetch_prior_commitments_excludes_self_and_fallback(db):
+    user_id = _user(db)
+    prior = _activity(db, user_id, day=1)
+    current = _activity(db, user_id, day=5)
+    _add_report(db, prior, body=_report_body("Prior"), store_digest=True)
+    _add_report(db, current, store_digest=True)  # self -> excluded
+    fallback_act = _activity(db, user_id, day=3)
+    _add_report(db, fallback_act, store_digest=False, is_fallback=True)  # excluded
+
+    out = fetch_prior_commitments(db, current)
+    assert out is not None
+    assert out.source_activity_id == prior.id  # not self, not the fallback
+
+
+def test_fetch_prior_commitments_picks_most_recent_prior(db):
+    """When several prior reports exist, the M7 read judges against the LATEST
+    exchange's commitments (newest-first, the single most recent)."""
+    user_id = _user(db)
+    current = _activity(db, user_id, day=20)
+    older = _activity(db, user_id, day=2)
+    newer = _activity(db, user_id, day=10)
+    _add_report(db, older, body=_report_body("Older"), store_digest=True)
+    _add_report(db, newer, body=_report_body("Newer"), store_digest=True)
+
+    out = fetch_prior_commitments(db, current)
+    assert out is not None
+    assert out.source_activity_id == newer.id
