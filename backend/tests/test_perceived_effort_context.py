@@ -148,7 +148,7 @@ class TestPromptVersioning:
     def test_v4_is_active_default(self):
         # The active prompt has since advanced (M7->v4 ... #168->v8); v3 remains
         # registered and byte-stable for its cached reports.
-        assert settings.COACH_PROMPT_ID == "coach_report_v9"
+        assert settings.COACH_PROMPT_ID == "coach_report_v10"
 
     def test_v3_adds_perceived_effort_rule(self):
         v3 = PROMPT_VERSIONS["coach_report_v3"]

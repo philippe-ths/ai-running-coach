@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Coach AI
     ANTHROPIC_API_KEY: str = ""
     COACH_MODEL_ID: str = "claude-sonnet-4-6"
-    COACH_PROMPT_ID: str = "coach_report_v9"
+    COACH_PROMPT_ID: str = "coach_report_v10"
 
     # Coach-report notifications. Channel selection (see
     # app/services/notifications/__init__.py): Telegram when

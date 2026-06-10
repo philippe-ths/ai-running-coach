@@ -23,6 +23,7 @@ from app.models.coach_report import CoachReport
 from app.schemas.coach import CoachReportContent, CoachReportDebug, CoachReportMeta, CoachReportRead
 from app.schemas.coach_context import CoachContextPack
 from app.services.coach.belief_store import write_back_beliefs
+from app.services.coach.consolidation import enqueue_consolidation
 from app.services.coach.context import build_context_pack
 from app.services.coach.digest import build_report_digest
 from app.services.coach.llm import AnthropicClient
@@ -201,6 +202,14 @@ async def get_or_generate_coach_report(
     # best-effort inside, so it never breaks report generation.
     if not is_fallback:
         write_back_beliefs(db, activity, pack)
+        # A2c: re-ground the durable-memory narrative in the background. Enqueued
+        # (never awaited) at this same exchange boundary so the user-facing report
+        # has already returned by the time the Haiku consolidation runs — the turn
+        # never blocks on it. No sentinel needed: consolidation is an idempotent
+        # rewrite of the single per-user narrative row, so a force-regeneration
+        # re-enqueue is harmless (unlike the belief double-count the sentinel above
+        # guards). Best-effort enqueue; a Redis hiccup never breaks report storage.
+        enqueue_consolidation(activity.user_id)
 
     return _to_read(db_report)
 

@@ -133,6 +133,32 @@ _NEGATION_PATTERN = re.compile(
 )
 
 
+# --- Rule 6: narrative-is-not-evidence boundary (A2c) ----------------------
+# The durable-memory narrative is voice only (ADR 0008): it can never be the
+# cited source of a factual claim. The pack carries it under the `narrative`
+# section, so any evidence ref whose field path points there is the LLM grounding
+# a claim on the story. Deliberately narrow — it matches ONLY the narrative path,
+# never legitimate evidence — so it cannot cause the false-positive fallbacks a
+# broad rule would. This is the code half of the authority boundary that rule 24
+# states in the prompt.
+_NARRATIVE_FIELD_PATTERN = re.compile(r"^\s*narrative(?:\.|\[|\s*$)", re.IGNORECASE)
+
+
+def _collect_evidence_fields(content: CoachReportContent) -> List[str]:
+    """Every evidence `field` path the report cites, across the lead argument,
+    key takeaways, and next steps."""
+    fields: List[str] = []
+    if content.lead_argument is not None and content.lead_argument.evidence:
+        fields.extend(e.field for e in content.lead_argument.evidence)
+    for t in content.key_takeaways:
+        if getattr(t, "evidence", None):
+            fields.extend(e.field for e in t.evidence)
+    for s in content.next_steps:
+        if getattr(s, "evidence", None):
+            fields.extend(e.field for e in s.evidence)
+    return [f for f in fields if isinstance(f, str)]
+
+
 def _has_asserted_health_claim(text: str) -> bool:
     """True if a clinical condition is asserted about the runner and not negated."""
     for pattern in (_HEALTH_CLAIM_PATTERN, _SPECULATIVE_CLAIM_PATTERN):
@@ -249,6 +275,28 @@ def validate_policy(
                 "You MAY interpret and correct a metric (e.g. 'discount this HR drift, "
                 "it was hot, so it overstates fatigue') and you MAY suggest seeing a "
                 "clinician as a non-diagnostic nudge. Rephrase to remove the overreach."
+            ),
+        ))
+
+    # Rule 6: the durable-memory narrative is voice only — never cite it as fact.
+    narrative_fields = [
+        f for f in _collect_evidence_fields(content)
+        if _NARRATIVE_FIELD_PATTERN.match(f)
+    ]
+    if narrative_fields:
+        violations.append(PolicyViolation(
+            rule="narrative_cited_as_fact",
+            detail=(
+                "Evidence cites the relationship narrative as a factual source: "
+                f"{narrative_fields}. The narrative is voice only and can never "
+                "ground a claim."
+            ),
+            fix_instruction=(
+                "Remove every evidence reference whose field path is under "
+                "'narrative'. The narrative is the relationship's voice, never a "
+                "fact: re-ground each affected claim in this run's metrics or the "
+                "deterministic facts, or drop the claim. The narrative may shape "
+                "your tone but must never be cited as evidence."
             ),
         ))
 

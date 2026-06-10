@@ -107,6 +107,47 @@ def fetch_prior_digests(
     return digests
 
 
+def fetch_recent_user_digests(
+    db: Session, user_id, *, limit: int = 5
+) -> List[PriorReportDigest]:
+    """Pull the digests of a runner's most recent non-fallback exchanges,
+    user-scoped (not anchored to one activity) — the recent-history input the A2c
+    Consolidation job re-grounds the narrative from.
+
+    Like `fetch_prior_digests` but keyed on `user_id` and inclusive of the latest
+    exchange, so consolidation triggered by an exchange sees that exchange. Most
+    recent first, one digest per activity, capped at `limit`. Empty for a runner
+    with no non-fallback reports yet (the job then has nothing to consolidate).
+    """
+    rows = (
+        db.query(CoachReport, Activity.start_date)
+        .join(Activity, CoachReport.activity_id == Activity.id)
+        .filter(
+            Activity.user_id == _as_uuid(user_id),
+            Activity.is_deleted == False,  # noqa: E712
+            CoachReport.is_fallback == False,  # noqa: E712
+        )
+        .order_by(
+            Activity.start_date.desc(),
+            CoachReport.created_at.desc(),
+            CoachReport.id.desc(),
+        )
+        .limit(_PRIOR_DIGEST_SCAN_LIMIT)
+        .all()
+    )
+
+    digests: List[PriorReportDigest] = []
+    seen: set = set()
+    for report, start_date in rows:
+        if report.activity_id in seen:
+            continue  # keep only the latest report per activity
+        seen.add(report.activity_id)
+        digests.append(_resolve_digest(report, start_date))
+        if len(digests) >= limit:
+            break
+    return digests
+
+
 def _resolve_digest(report: CoachReport, start_date) -> PriorReportDigest:
     """Prefer the stored A2a digest; fall back to re-projecting the report body.
 

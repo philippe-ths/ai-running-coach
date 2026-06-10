@@ -293,6 +293,30 @@ class PreferenceProfile(BaseModel):
     themes: List[PreferenceTheme]
 
 
+class NarrativeContext(BaseModel):
+    """A2c durable-memory NARRATIVE: the bounded per-runner relationship story.
+
+    VOICE ONLY. This is the LLM-written half of durable memory (ADR 0008) — the
+    arc of the coaching relationship so far, the tone that lands, the open
+    threads — re-grounded from the deterministic facts by a background
+    Consolidation job. The authority boundary is absolute and mirrors the belief
+    rule: the narrative can never override a re-derived `DerivedMetric` or a
+    deterministic fact, and can never be the cited source of a factual claim. It
+    is colour, not data.
+
+    `narrative` is None until the Consolidation job has written one (the first
+    exchange for a runner has no narrative yet, exactly as a new runner has no
+    beliefs). The provenance tags let the coach hedge a thin or stale story:
+    `source_report_count` is how many exchanges it was grounded from, and
+    `last_updated_days_ago` is how long before this run it was last re-grounded.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    narrative: Optional[str] = None
+    source_report_count: Optional[int] = None
+    last_updated_days_ago: Optional[int] = None
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -307,6 +331,11 @@ class CoachContextPack(BaseModel):
     believed_facts: BelievedFactsContext
     calibration: CalibrationContext
     preference_profile: PreferenceProfile
+    # A2c durable-memory narrative (voice only; never overrides today's data).
+    # Defaulted so the many call sites that build a pack without a narrative (the
+    # first exchange, every test fixture) stay valid; build_b_baseline populates
+    # it from the stored CoachNarrative row when one exists.
+    narrative: NarrativeContext = NarrativeContext()
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
