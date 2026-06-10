@@ -1,10 +1,10 @@
 """The coach-report eval rubric (M5) — the oracle for coach reports.
 
-Seven deterministic assertions (five M5 + one M10 adherence-framing + one #168
-load-vs-intensity framing), each returning PASS / FAIL / NOT_APPLICABLE plus a
-human-readable reason and small JSON-serialisable evidence. A report is scored
-from its own ``CoachReportContent`` plus its ``CoachContextPack`` only, so scoring
-is self-contained and repeatable.
+Eight deterministic assertions (five M5 + one M10 adherence-framing + one #168
+load-vs-intensity framing + one #171 coach-the-data framing), each returning
+PASS / FAIL / NOT_APPLICABLE plus a human-readable reason and small
+JSON-serialisable evidence. A report is scored from its own ``CoachReportContent``
+plus its ``CoachContextPack`` only, so scoring is self-contained and repeatable.
 
 The assertions:
   1. led_with_headline      — the report opens with a headline verdict.
@@ -21,8 +21,12 @@ The assertions:
   7. load_not_framed_as_intensity — (#168) the cumulative effort_score load number
                                is not narrated as an intensity verdict; intensity
                                comes from the HR-derived effort axis / RPE.
+  8. coached_not_caveated    — (#171) when per-rep interval data is present, the
+                               report coaches it instead of leading with a low
+                               detection-confidence caveat, and never advises an
+                               action the runner already took (the lap button).
 
-Assertions 2, 4, 5 and 7 inspect free text with documented keyword / overlap
+Assertions 2, 4, 5, 7 and 8 inspect free text with documented keyword / overlap
 heuristics; they are the deterministic floor, not a semantic judge. The
 NOT_APPLICABLE branch matters: a report is never failed for a dimension that
 does not apply to it (no confound fired, no prior report to advance).
@@ -473,6 +477,106 @@ def assert_load_not_framed_as_intensity(content: CoachReportContent, pack: Coach
     )
 
 
+# --- assertion 8: coached the available data, not the detection caveat (#171) -
+
+# Phrases that, in the LEAD (headline / thesis / lead_argument), frame the whole
+# session as undetected, unreliable, or uncaptured. Low *detection* confidence
+# means the structure could not be matched to a clean uniform plan; it does NOT
+# mean the per-rep data is missing. Leading with this language is the #171 defect.
+# Scanned in the lead only: a bounded structure caveat in a takeaway is allowed.
+_UNCAPTURED_LEAD_TERMS = [
+    "not consistently detected", "not reliably detected", "not clearly detected",
+    "could not be detected", "couldn't be detected", "were not detected",
+    "weren't detected", "no intervals detected", "not detected",
+    "could not be captured", "couldn't be captured", "was not captured",
+    "wasn't captured", "were not captured", "weren't captured", "not captured",
+    "uncaptured", "not reliable", "unreliable", "could not be identified",
+    "couldn't be identified", "not properly recorded", "data quality issue",
+]
+
+# Advising the lap button. AC#3: never advise an action the runner already took,
+# so this is a failure when the structure came from the runner's own recorded laps.
+_LAP_ADVICE_TERMS = ["lap button", "lap-button"]
+
+
+def _lead_text(content: CoachReportContent) -> str:
+    """The report's LEADING claims only, lower-cased: headline, thesis and lead
+    argument. A caveat is a #171 defect when it leads here; a bounded caveat in a
+    takeaway or question is allowed, so those are deliberately excluded."""
+    parts: List[str] = []
+    if content.headline:
+        parts.append(content.headline)
+    if content.thesis:
+        parts.append(content.thesis)
+    if content.lead_argument is not None:
+        parts.append(content.lead_argument.text)
+    return " ".join(parts).lower()
+
+
+def assert_coached_not_caveated(content: CoachReportContent, pack: CoachContextPack) -> AssertionResult:
+    structure = pack.metrics.interval_structure
+    match = pack.metrics.workout_match
+    # Per-rep data is present when a structure with at least one work segment (or a
+    # positive rep_count) exists; that is the analysis the coach must lead with.
+    work_segments = structure.get("work_segments") if isinstance(structure, dict) else None
+    summary = structure.get("summary") if isinstance(structure, dict) else None
+    rep_count = summary.get("rep_count") if isinstance(summary, dict) else None
+    per_rep_present = bool(work_segments) or bool(rep_count)
+    if not per_rep_present:
+        return AssertionResult(
+            "coached_not_caveated", AssertionStatus.NOT_APPLICABLE,
+            "No per-rep interval data is present, so there is no available analysis to over-caveat.",
+        )
+
+    confidence = match.get("detection_confidence") if isinstance(match, dict) else None
+    source = structure.get("source") if isinstance(structure, dict) else None
+    # Applies only where the #171 pressure exists: low/medium detection confidence
+    # (the model is tempted to declare the session uncaptured) OR recorded laps (the
+    # model could wrongly tell the runner to use a lap button they already used).
+    if confidence not in ("low", "medium") and source != "recorded_laps":
+        return AssertionResult(
+            "coached_not_caveated", AssertionStatus.NOT_APPLICABLE,
+            "Detection confidence is not low/medium and the structure is not recorded-lap sourced; "
+            "no over-caveat pressure to assess.",
+            {"detection_confidence": confidence, "source": source},
+        )
+
+    full_text = _report_text(content)
+    # AC#3: advising the lap button when the laps were recorded is advising an
+    # action already taken.
+    if source == "recorded_laps":
+        lap_advice = [t for t in _LAP_ADVICE_TERMS if t in full_text]
+        if lap_advice:
+            return AssertionResult(
+                "coached_not_caveated", AssertionStatus.FAIL,
+                "The structure came from the runner's own recorded laps, but the report advises "
+                f"using the lap button ({lap_advice}) — an action they already took.",
+                {"source": source, "lap_advice": lap_advice},
+            )
+
+    # AC#1/#2: low detection confidence must be a bounded caveat, not the headline
+    # or thesis. Failing only when the *lead* frames the session as uncaptured keeps
+    # this a conservative floor: a bounded caveat in a takeaway passes.
+    if confidence in ("low", "medium"):
+        lead = _lead_text(content)
+        caveat_led = [t for t in _UNCAPTURED_LEAD_TERMS if t in lead]
+        if caveat_led:
+            return AssertionResult(
+                "coached_not_caveated", AssertionStatus.FAIL,
+                "Detection confidence is low but per-rep data is present, and the report leads with "
+                f"a data-quality caveat ({caveat_led}) instead of coaching the available rep data; "
+                "low detection confidence is a bounded caveat about exact structure, not the headline.",
+                {"detection_confidence": confidence, "caveat_in_lead": caveat_led},
+            )
+
+    return AssertionResult(
+        "coached_not_caveated", AssertionStatus.PASS,
+        "Per-rep data is present and the report coaches it rather than leading with a detection "
+        "caveat or advising an action already taken.",
+        {"detection_confidence": confidence, "source": source},
+    )
+
+
 # --- the rubric ---------------------------------------------------------------
 
 ASSERTIONS: List[Callable[[CoachReportContent, CoachContextPack], AssertionResult]] = [
@@ -483,6 +587,7 @@ ASSERTIONS: List[Callable[[CoachReportContent, CoachContextPack], AssertionResul
     assert_abstained_on_thin_trend,
     assert_framed_for_adherence,
     assert_load_not_framed_as_intensity,
+    assert_coached_not_caveated,
 ]
 
 

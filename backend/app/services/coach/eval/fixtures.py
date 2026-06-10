@@ -71,6 +71,21 @@ _PRIOR_DIGEST = {
     "next_steps": ["Add a long run to build endurance."],
 }
 
+# An interval session whose per-rep data is fully present, but whose structure the
+# stream heuristic could only match at LOW detection confidence. The #171 failure
+# is to lead with that low-confidence caveat instead of coaching the rep data.
+_LOW_CONF_INTERVAL_STRUCTURE = {
+    "warmup_duration_s": 600,
+    "work_segments": [
+        {"duration_s": 48, "avg_speed_mps": 4.2},
+        {"duration_s": 49, "avg_speed_mps": 4.1},
+        {"duration_s": 47, "avg_speed_mps": 4.2},
+    ],
+    "rest_segments": [{"duration_s": 60}, {"duration_s": 60}],
+    "summary": {"rep_count": 3, "avg_work_duration_s": 48},
+}
+_LOW_CONF_MATCH = {"detection_confidence": "low", "match_score": 0.4}
+
 
 def _pack(**section_overrides) -> CoachContextPack:
     pack = {k: dict(v) if isinstance(v, dict) else v for k, v in _BASE_PACK.items()}
@@ -108,11 +123,14 @@ def known_good_report() -> Tuple[CoachReportContent, CoachContextPack]:
 def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
     """A report that violates every rubric dimension: no headline, ignores a fired
     confound, medical overreach, parrots the prior report, claims an ungrounded
-    trend, frames advice away from what the runner acts on, and narrates the
-    cumulative load number as an intensity verdict (#168)."""
+    trend, frames advice away from what the runner acts on, narrates the cumulative
+    load number as an intensity verdict (#168), and leads with a low detection-
+    confidence caveat instead of coaching the present per-rep data (#171)."""
     content = CoachReportContent(
         headline=None,  # (1) no lead verdict
-        thesis="Your fitness has clearly been trending upward over the past few weeks.",  # (5) ungrounded trend
+        # (5) ungrounded trend AND (8) leads with a low-confidence detection caveat
+        thesis="Your fitness has clearly been trending upward over the past few weeks, "
+        "but the intervals were not consistently detected so this session is unreliable.",
         lead_argument=CoachTakeaway(text="You held threshold pace for the full 20 minutes."),  # (4) parrots prior lead
         key_takeaways=[
             CoachTakeaway(text="I would diagnose this as chronic fatigue."),  # (3) medical overreach
@@ -130,7 +148,13 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
         questions=[],
     )
     pack = _pack(
-        metrics={"discount_signals": _HEAT_DISCOUNT},  # (2) confound fired, report ignores it
+        metrics={
+            "discount_signals": _HEAT_DISCOUNT,  # (2) confound fired, report ignores it
+            # (8) per-rep data present at low detection confidence: the report should
+            # coach it, not lead with the caveat it leads with above.
+            "interval_structure": _LOW_CONF_INTERVAL_STRUCTURE,
+            "workout_match": _LOW_CONF_MATCH,
+        },
         longitudinal={"prior_reports": [_PRIOR_DIGEST], "baseline_trend": None},  # abstaining bucket
         # (6) the one next_step is in a theme the runner IGNORES, none in an acts-on theme
         preference_profile={"themes": [

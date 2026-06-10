@@ -196,6 +196,26 @@ SYSTEM_PROMPT_V8 = SYSTEM_PROMPT_V7 + """
     - Treat effort_score as accumulated training cost: a high value means a lot of total work, often just a long duration, not that the run was hard. When you cite it, frame it as load ("a big training-load day, mostly from the duration"). A high effort_score on a long or easy run is EXPECTED, not a red flag."""
 
 
+# ---------------------------------------------------------------------------
+# v9 (#171) — adds the coach-the-available-data discipline (rule 23): when per-rep
+# interval data is present, lead with that analysis; a low interval DETECTION
+# confidence is a bounded caveat about exact structure, never the headline/thesis,
+# and is never grounds to declare the session uncaptured or to advise an action
+# the runner already took (the lap button when laps were recorded). Output JSON
+# schema is unchanged from v1-v8, so SCHEMA_VERSION stays 1.2; only the prompt_id
+# advances (the M0 seam). v1-v8 are kept byte-stable so their cached reports remain
+# reproducible.
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT_V9 = SYSTEM_PROMPT_V8 + """
+
+23. COACH THE AVAILABLE DATA, DON'T HEADLINE THE DETECTION CAVEAT: A LOW or MEDIUM "metrics.workout_match.detection_confidence" means the structure could not be matched to a clean, uniform workout — it does NOT mean the rep data is missing or wrong. When "metrics.interval_structure" carries per-rep data (work_segments / summary.rep_count), that per-rep analysis is present and real.
+    - LEAD with the analysis you DO have: the rep efforts, work/rest balance, recovery between reps, and any fade across the session (see "metrics.interval_kpis"). Do not characterise the session as "uncaptured", "unreliable", "not detected", or "not recorded" in the headline, thesis, or lead_argument when the per-rep data is present.
+    - Express low detection confidence as a BOUNDED, secondary caveat about the EXACT structure only ("the precise rep boundaries are approximate"), never as the thesis or the reason to withhold coaching. This does not relax rule 13's guard: still do NOT assert specific rep COUNTS or distances as executed under low confidence — coach the efforts you can see without claiming an exact "Nx" structure.
+    - NEVER advise an action the runner already took. If "metrics.interval_structure.source" is "recorded_laps", the runner already pressed the lap button — do NOT suggest using it. Read those recorded laps as the authoritative structure.
+    - When no interval_structure or per-rep data is present, rule 13 and the interval playbook still govern: keep the analysis high-level and note the data gap plainly."""
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -205,6 +225,7 @@ PROMPT_VERSIONS = {
     "coach_report_v6": SYSTEM_PROMPT_V6,
     "coach_report_v7": SYSTEM_PROMPT_V7,
     "coach_report_v8": SYSTEM_PROMPT_V8,
+    "coach_report_v9": SYSTEM_PROMPT_V9,
 }
 
 # ---------------------------------------------------------------------------
@@ -215,10 +236,10 @@ PROMPT_VERSIONS = {
 ACTIVITY_PLAYBOOKS = {
     "Intervals": """
 INTERVAL SESSION FOCUS:
-- ALWAYS check metrics.workout_match FIRST before discussing intervals:
-  - If detection_confidence is "low": say interval detection was unreliable, suggest lap button or track.
-  - If detection_confidence is "medium": qualify all interval stats with "approximately".
+- ALWAYS check metrics.workout_match before stating structure, but LEAD with the rep data you have (metrics.interval_structure / interval_kpis), not with the detection caveat:
+  - If detection_confidence is "low" or "medium": still coach the present per-rep efforts, recovery and fade; qualify only the EXACT structure ("the precise rep boundaries are approximate") and do NOT assert specific rep counts/distances as executed. Do NOT headline the session as undetected/unreliable when per-rep data is present.
   - Only state rep counts/distances as fact if detection_confidence is "high".
+  - If metrics.interval_structure.source is "recorded_laps", the runner already marked their laps — read those as the authoritative structure and never suggest using the lap button.
 - PREFERRED INTERVAL KPIs (from metrics.interval_kpis):
   - rep_pace_consistency_cv: lower = more consistent pacing across reps.
   - recovery_quality_per_60s: HR drop per 60s of recovery. Higher = better recovery.
