@@ -46,7 +46,7 @@ def _build_report(*, headline: str = "Easy", confidence: str = "medium") -> Coac
         ),
         meta=CoachReportMeta(
             confidence=confidence,
-            model_id="claude-sonnet-4-20250514",
+            model_id="claude-sonnet-4-6",
             prompt_id="coach_report_v1",
             schema_version="1.1",
             input_hash="abc123",
