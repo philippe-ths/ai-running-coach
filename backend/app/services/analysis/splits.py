@@ -327,7 +327,17 @@ def _compute_time_split_metrics(
     watts_stream,
 ) -> Dict[str, Any]:
     t_start = time_stream[start_idx]
-    t_end = time_stream[end_idx - 1] if end_idx > 0 else 0
+    # The split covers samples [start_idx, end_idx); its duration runs up to the
+    # boundary sample (the first sample past the interval mark), which is shared
+    # as the start of the next split. Using end_idx - 1 here excluded that
+    # boundary, so each full split spanned one sample-interval short of the
+    # target and consecutive splits left an unaccounted gap (#174). For the
+    # final partial split end_idx == len(time_stream), so fall back to the last
+    # sample.
+    if end_idx < len(time_stream):
+        t_end = time_stream[end_idx]
+    else:
+        t_end = time_stream[-1]
     time_diff = t_end - t_start
     if time_diff <= 0:
         time_diff = 1
