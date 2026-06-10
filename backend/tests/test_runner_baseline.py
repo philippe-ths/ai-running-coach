@@ -371,3 +371,110 @@ def test_compute_trend_zero_first_value_uses_slope_not_stable():
     # hr_drift rising from 0 is a worsening (lower is better)
     worse = compute_trend([0.0, 1.0, 2.0, 3.0], higher_is_better=False)
     assert worse["direction"] == "declining"
+
+
+# ---------------------------------------------------------------------------
+# #167 — bound the recompute scan to a rolling comparison window
+#
+# Oracle: the captured behaviour of the existing recompute over the in-window
+# samples. The window changes which activities are *included* (out-of-window
+# history ages out), never the math over the included samples — so a history
+# that fits entirely within the window is byte-for-byte unchanged.
+# ---------------------------------------------------------------------------
+
+from app.services.analysis.baseline import BASELINE_COMPARISON_WINDOW_DAYS
+
+
+def _seed_activity_on(db, user, start_date, *, hr, effort, ef_avg=1.2,
+                      dist_m=5000, time_s=1500, speed=3.0, hr_drift=2.0):
+    """Seed one analysed activity at an explicit datetime (the day-of-January
+    helpers above can't express out-of-window spans)."""
+    act = Activity(
+        user_id=user.id,
+        strava_activity_id=int(start_date.timestamp()),
+        start_date=start_date,
+        type="Run",
+        name="Run",
+        distance_m=dist_m,
+        moving_time_s=time_s,
+        elapsed_time_s=time_s,
+        elev_gain_m=0.0,
+        avg_hr=hr,
+        average_speed_mps=speed,
+        raw_summary={"average_temp": 15.0},
+    )
+    db.add(act)
+    db.commit()
+    db.refresh(act)
+    dm = DerivedMetric(
+        activity_id=act.id,
+        effort=effort,
+        effort_score=10.0,
+        confidence="high",
+        is_hilly=False,
+        hr_drift=hr_drift,
+        efficiency_analysis={"average": ef_avg},
+    )
+    db.add(dm)
+    db.commit()
+    return act
+
+
+def test_baseline_comparison_window_constant_is_182_days():
+    assert BASELINE_COMPARISON_WINDOW_DAYS == 182
+
+
+def test_recompute_excludes_activities_older_than_window(db):
+    """An activity older than the comparison window (measured back from the
+    latest run) does not contribute to the baseline — the rolling-window bound."""
+    user = _seed_user(db)
+    anchor = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    # Recent in-window easy runs: HR 160/150/140 -> median 150.
+    for offset, hr in [(0, 160), (10, 150), (20, 140)]:
+        _seed_activity_on(db, user, anchor - timedelta(days=offset), hr=hr, effort="easy")
+    # An old run well outside the window whose extreme HR WOULD move the median
+    # if it were (wrongly) counted.
+    _seed_activity_on(
+        db, user, anchor - timedelta(days=200), hr=999, effort="easy"
+    )
+
+    row = recompute_runner_baseline(db, user.id)
+
+    # Only the 3 in-window runs count.
+    assert row.sample_count == 3
+    assert row.typical_easy_hr == 150.0
+
+
+def test_recompute_window_anchors_on_latest_activity_not_now(db):
+    """The window is relative to the runner's most recent activity, so a history
+    sitting entirely years in the past but clustered within the window still
+    counts — it is a rolling window over their data, not a wall-clock cutoff."""
+    user = _seed_user(db)
+    old_anchor = datetime(2024, 3, 1, tzinfo=timezone.utc)  # years before "now"
+    for offset, hr in [(0, 160), (10, 150), (20, 140)]:
+        _seed_activity_on(db, user, old_anchor - timedelta(days=offset), hr=hr, effort="easy")
+
+    row = recompute_runner_baseline(db, user.id)
+
+    assert row.sample_count == 3
+    assert row.typical_easy_hr == 150.0
+
+
+def test_recompute_in_window_history_is_unchanged(db):
+    """Characterization: when every activity falls within the window, the
+    baseline is exactly what the unbounded recompute produced (scalars + the
+    emitted trend), proving the window only changes inclusion, not the math."""
+    user = _seed_user(db)
+    anchor = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    # 4 easy/flat/cool runs within the window -> trend emitted (>= MIN_SAMPLES).
+    for offset, hr in [(30, 140), (20, 145), (10, 150), (0, 155)]:
+        _seed_activity_on(db, user, anchor - timedelta(days=offset), hr=hr, effort="easy")
+
+    row = recompute_runner_baseline(db, user.id)
+
+    bucket = "easy|flat|cool"
+    assert row.sample_count == 4
+    assert row.bucketed_trends[bucket]["sample_count"] == 4
+    assert row.bucketed_trends[bucket]["abstained"] is False
+    # median HR of [140,145,150,155] = 147.5
+    assert row.typical_easy_hr == 147.5
