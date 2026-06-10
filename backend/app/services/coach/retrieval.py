@@ -3,9 +3,11 @@
 The coach's working context is lean by default; this module is the seam that
 fetches deeper, pre-digested detail only when a turn needs it (CONTEXT.md,
 `Working context`: "small by default, deep on demand"). It reads the A2a
-processed-artifacts layer — the consolidated stream view on `DerivedMetric` and
-the exchange digests on `CoachReport` — never the raw store. Raw streams never
-enter context; only their downsampled view does.
+processed-artifacts layer — the consolidated stream view on `DerivedMetric`, the
+exchange digests on `CoachReport`, and the stored exchange record itself
+(`CoachReport.report`, for the M7 commitments that need their structured
+next_steps) — never the raw store. Raw streams never enter context; only their
+downsampled view does.
 
 Every read degrades cleanly to None / an empty list, so a missing artifact never
 breaks an exchange. Nothing here re-derives or overrides a `DerivedMetric`: the
@@ -15,7 +17,9 @@ seam only retrieves what ingestion already stored.
 from __future__ import annotations
 
 import uuid
-from typing import List, Optional
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session, undefer
 
@@ -105,6 +109,66 @@ def fetch_prior_digests(
         if len(digests) >= limit:
             break
     return digests
+
+
+@dataclass(frozen=True)
+class PriorCommitments:
+    """The most recent prior exchange's machine-readable commitments — the M7
+    adherence read, pulled through the seam from the stored exchange record
+    (CoachReport.report).
+
+    The structured `next_steps` stay dicts (the A2d hard constraint: commitments
+    stay machine-readable for the learning loop, since the M7 theme classifier
+    reads their `action`/`details` fields). The source activity ref lets the
+    caller scope the comparable-run window and the pushback scan. Carries ONLY the
+    commitments + source ref, not the full report body, so the loop no longer
+    holds the whole exchange in hand just to read its next_steps.
+    """
+
+    source_activity_id: uuid.UUID
+    source_start_date: datetime
+    next_steps: List[Dict[str, Any]]
+
+
+def fetch_prior_commitments(db: Session, activity: Activity) -> Optional[PriorCommitments]:
+    """Pull the single most recent prior non-fallback exchange's commitments —
+    the input the M7 adherence loop judges the runner's later runs against.
+
+    Reads the structured `next_steps` from the stored exchange record
+    (`CoachReport.report`), the machine-readable commitments the brief requires the
+    loop to keep. Selection matches `fetch_prior_digests`'s single-most-recent
+    case exactly (exclude self, exclude soft-deleted, exclude fallback, strictly
+    before this run, newest exchange then latest version). Returns None when the
+    runner has no prior non-fallback report — the adherence section then degrades
+    to empty.
+    """
+    row = (
+        db.query(CoachReport, Activity.id, Activity.start_date)
+        .join(Activity, CoachReport.activity_id == Activity.id)
+        .filter(
+            Activity.user_id == activity.user_id,
+            Activity.id != activity.id,
+            Activity.is_deleted == False,  # noqa: E712
+            Activity.start_date < activity.start_date,
+            CoachReport.is_fallback == False,  # noqa: E712
+        )
+        .order_by(
+            Activity.start_date.desc(),
+            CoachReport.created_at.desc(),
+            CoachReport.id.desc(),
+        )
+        .first()
+    )
+    if row is None:
+        return None
+    report, source_id, source_start_date = row
+    body = report.report or {}
+    next_steps = [s for s in (body.get("next_steps") or []) if isinstance(s, dict)]
+    return PriorCommitments(
+        source_activity_id=source_id,
+        source_start_date=source_start_date,
+        next_steps=next_steps,
+    )
 
 
 def fetch_recent_user_digests(

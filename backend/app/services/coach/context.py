@@ -26,7 +26,6 @@ from sqlalchemy.orm import Session, joinedload
 from app.models import Activity, RunnerBaseline, UserProfile
 from app.models.checkin import CheckIn
 from app.models.coach_chat_message import CoachChatMessage
-from app.models.coach_report import CoachReport
 from app.services.analysis.baseline import bucket_key
 from app.services.analysis.classifier import Classification, compose_headline  # noqa: F401
 from app.services.coach.adherence import CandidateActivity, build_adherence
@@ -35,7 +34,11 @@ from app.services.coach.calibration import assess_referral, calibrate_drift
 from app.services.coach.narrative_store import build_narrative_context
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.preference import build_preference_profile
-from app.services.coach.retrieval import fetch_prior_digests, fetch_stream_view
+from app.services.coach.retrieval import (
+    fetch_prior_commitments,
+    fetch_prior_digests,
+    fetch_stream_view,
+)
 from app.schemas.coach_context import (
     ActivityContext,
     AdherenceContext,
@@ -444,54 +447,28 @@ def _build_adherence_context(db: Session, activity: Activity) -> AdherenceContex
 
     Compute-on-demand (no durable store, the M4/M6 pattern): re-derive the labels
     each run from the most recent prior non-fallback report's next_steps and the
-    subsequent comparable activities' already-stored DerivedMetrics. Degrades to
-    empty when there is no prior report. All judging lives in the pure
-    `adherence` module; this function only gathers rows.
+    subsequent comparable activities' already-stored DerivedMetrics. The prior
+    commitments are pulled through the retrieval seam (A2d), which reads the
+    structured next_steps from the stored exchange record instead of this builder
+    re-querying and carrying the full report body. Degrades to empty when there is
+    no prior report. All judging lives in the pure `adherence` module; this
+    function only gathers rows.
     """
-    prior = _most_recent_prior_report(db, activity)
-    if prior is None:
-        return AdherenceContext(prior_report_date=None, outcomes=[])
-    report, source_id, source_start_date = prior
-
-    next_steps = [s for s in (report.get("next_steps") or []) if isinstance(s, dict)]
-    if not next_steps:
+    prior = fetch_prior_commitments(db, activity)
+    if prior is None or not prior.next_steps:
         return AdherenceContext(prior_report_date=None, outcomes=[])
 
-    candidates = _adherence_candidates(db, activity, source_start_date)
-    pushback = _detect_pushback(db, source_id)
+    candidates = _adherence_candidates(db, activity, prior.source_start_date)
+    pushback = _detect_pushback(db, prior.source_activity_id)
 
     return build_adherence(
-        prior_report_date=source_start_date.isoformat() if source_start_date else None,
-        prior_next_steps=next_steps,
+        prior_report_date=(
+            prior.source_start_date.isoformat() if prior.source_start_date else None
+        ),
+        prior_next_steps=prior.next_steps,
         candidates=candidates,
         pushback=pushback,
     )
-
-
-def _most_recent_prior_report(db: Session, activity: Activity):
-    """The single most recent non-fallback report before this run, as
-    (report_dict, source_activity_id, source_start_date), or None."""
-    row = (
-        db.query(CoachReport, Activity.id, Activity.start_date)
-        .join(Activity, CoachReport.activity_id == Activity.id)
-        .filter(
-            Activity.user_id == activity.user_id,
-            Activity.id != activity.id,
-            Activity.is_deleted == False,  # noqa: E712
-            Activity.start_date < activity.start_date,
-            CoachReport.is_fallback == False,  # noqa: E712
-        )
-        .order_by(
-            Activity.start_date.desc(),
-            CoachReport.created_at.desc(),
-            CoachReport.id.desc(),
-        )
-        .first()
-    )
-    if row is None:
-        return None
-    report, source_id, source_start_date = row
-    return (report.report or {}), source_id, source_start_date
 
 
 def _adherence_candidates(
