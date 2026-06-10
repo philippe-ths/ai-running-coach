@@ -32,6 +32,7 @@ from app.services.analysis.classifier import Classification, compose_headline  #
 from app.services.coach.adherence import CandidateActivity, build_adherence
 from app.services.coach.belief_store import build_believed_facts, retrieve_beliefs
 from app.services.coach.calibration import assess_referral, calibrate_drift
+from app.services.coach.narrative_store import build_narrative_context
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.preference import build_preference_profile
 from app.services.coach.retrieval import fetch_prior_digests, fetch_stream_view
@@ -45,6 +46,7 @@ from app.schemas.coach_context import (
     CoachContextPack,
     LongitudinalContext,
     MetricsContext,
+    NarrativeContext,
     PerceivedEffortContext,
     PreferenceProfile,
     ProfileContext,
@@ -103,9 +105,10 @@ _PUSHBACK_PHRASES = (
 @dataclass(frozen=True)
 class BBaseline:
     """The always-present relationship slice for one exchange: the runner's
-    profile and recent-load rollups, the last exchange's digest + matching
-    baseline trend, this run's subjective signals, the deterministic durable
-    facts (adherence, beliefs, calibration, preference), and the safety rules."""
+    profile and recent-load rollups, the durable-memory narrative (voice), the
+    last exchange's digest + matching baseline trend, this run's subjective
+    signals, the deterministic durable facts (adherence, beliefs, calibration,
+    preference), and the safety rules."""
 
     profile: ProfileContext
     recent_training_summary: RecentTrainingSummary
@@ -115,6 +118,7 @@ class BBaseline:
     believed_facts: BelievedFactsContext
     calibration: CalibrationContext
     preference_profile: PreferenceProfile
+    narrative: NarrativeContext
     safety_rules: SafetyRules
 
 
@@ -160,6 +164,7 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
         believed_facts=b.believed_facts,
         calibration=b.calibration,
         preference_profile=b.preference_profile,
+        narrative=b.narrative,
         safety_rules=b.safety_rules,
     )
 
@@ -325,6 +330,7 @@ def build_b_baseline(
         believed_facts=build_believed_facts(db, activity),
         calibration=_build_calibration_context(db, activity),
         preference_profile=_build_preference_profile(db, activity),
+        narrative=build_narrative_context(db, activity),
         safety_rules=SafetyRules(
             never_diagnose=True,
             pain_severe_threshold=7,

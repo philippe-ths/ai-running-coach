@@ -75,6 +75,18 @@ class AnthropicClient:
         assert last_exc is not None
         raise last_exc
 
+    async def generate_text(
+        self, system: str, user: str, max_tokens: int = 512
+    ) -> str:
+        """Generate a free-text (prose) completion.
+
+        Same transport, retry, and timeout behaviour as `generate_json`; the only
+        difference is intent — the caller expects prose, not JSON, so there is no
+        parsing downstream. Used by the A2c Consolidation job to write the
+        relationship narrative on the cheap Haiku tier.
+        """
+        return await self.generate_json(system=system, user=user, max_tokens=max_tokens)
+
     async def stream_chat(
         self,
         system: str,

@@ -16,6 +16,7 @@ from app.models.user_profile import UserProfile  # noqa: F401
 from app.models.checkin import CheckIn  # noqa: F401
 from app.models.coach_report import CoachReport  # noqa: F401
 from app.models.coach_chat_message import CoachChatMessage  # noqa: F401
+from app.models.coach_narrative import CoachNarrative  # noqa: F401
 from app.models.runner_baseline import RunnerBaseline  # noqa: F401
 from app.models.coaching_context import CoachingContext  # noqa: F401
 
@@ -30,6 +31,7 @@ __all__ = [
     "CheckIn",
     "CoachReport",
     "CoachChatMessage",
+    "CoachNarrative",
     "RunnerBaseline",
     "CoachingContext",
 ]

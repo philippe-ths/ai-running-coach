@@ -196,7 +196,7 @@ def test_loop_closes_through_context_pack(db):
 class TestPromptVersioning:
     def test_v5_is_active_default(self):
         # Active default has since advanced (#168 -> v8); v7 stays byte-stable.
-        assert settings.COACH_PROMPT_ID == "coach_report_v9"
+        assert settings.COACH_PROMPT_ID == "coach_report_v10"
 
     def test_v5_adds_believed_facts_rule(self):
         v5 = PROMPT_VERSIONS["coach_report_v5"]

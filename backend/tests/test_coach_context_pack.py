@@ -162,6 +162,11 @@ def _legacy_full_pack() -> dict:
                 {"theme": "easy_discipline", "tendency": "acts_on", "acted": 5, "total": 6},
             ],
         },
+        "narrative": {
+            "narrative": "Steady, consistency-driven runner who responds to easy-day discipline.",
+            "source_report_count": 3,
+            "last_updated_days_ago": 2,
+        },
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,
@@ -273,6 +278,11 @@ def _legacy_sparse_pack() -> dict:
             "referral": None,
         },
         "preference_profile": {"themes": []},
+        "narrative": {
+            "narrative": None,
+            "source_report_count": None,
+            "last_updated_days_ago": None,
+        },
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,
