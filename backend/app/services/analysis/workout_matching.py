@@ -86,7 +86,25 @@ def match_planned_to_detected(
     # Without a planned workout, confidence depends on detection quality alone
     if not planned_workout:
         result["confidence_reasons"].append("no_planned_workout")
-        # Base detection confidence on consistency
+        if interval_structure.get("source") == "recorded_laps":
+            # The runner's own lap marks are ground-truth structure: detection
+            # is certain even when the reps varied. Rep-to-rep consistency is
+            # reported separately via consistency_score and does not lower this.
+            # Variability across reps (a ladder/pyramid/fartlek) is the runner's
+            # actual workout, not detection uncertainty, so those reasons must not
+            # propagate to lower the activity-level confidence downstream.
+            result["confidence_reasons"] = [
+                r
+                for r in result["confidence_reasons"]
+                if "variability" not in r and "outlier" not in r
+            ]
+            # The recorded laps are a perfect de-facto plan, so match_score is 1.0
+            # -- this keeps the prompt's "high AND match_score >= 0.8" gate and
+            # the deterministic validator consistent for the lap-sourced case.
+            result["match_score"] = 1.0
+            result["detection_confidence"] = "high"
+            return result
+        # Stream-derived structure: base detection confidence on consistency.
         consistency = summary.get("consistency_score", "unknown")
         if consistency == "high" and not any(
             "outlier" in r for r in result["confidence_reasons"]

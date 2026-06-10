@@ -1,13 +1,29 @@
 """
 Interval session structure detection.
 
-Detects work/rest segments from velocity stream data so the coach can
-discuss rep consistency, recovery quality, and work-to-rest ratios.
+Two sources, same output contract:
+
+  - `detect_intervals_from_laps` reads the runner's recorded Strava laps
+    (their own lap-button marks) and treats them as the authoritative
+    interval structure. This is preferred when present: the lap boundaries
+    are ground truth, so reps, warmup, and recovery are exact rather than
+    re-segmented (#170).
+  - `detect_intervals` infers work/rest segments from the velocity stream by
+    a smoothing + bimodal-threshold heuristic. This is the fallback used when
+    no usable recorded laps are available.
+
+Both return the same `interval_structure` dict so every downstream consumer
+(workout matching, KPIs, confidence, the coach pack) is source-agnostic.
 """
 
 from typing import Dict, List, Optional
 
 import numpy as np
+
+# Minimum fast/slow cluster separation for a speed split to be a real
+# work/rest pattern rather than noise (fast cluster mean >= 1.3x slow).
+# Shared by the stream heuristic and the lap-based splitter.
+_MIN_CLUSTER_SEPARATION = 1.3
 
 
 def detect_intervals(
@@ -117,7 +133,21 @@ def detect_intervals(
             ),
         })
 
-    # Summary statistics
+    return {
+        "warmup_duration_s": warmup_duration,
+        "cooldown_duration_s": cooldown_duration,
+        "work_segments": work_details,
+        "rest_segments": rest_details,
+        "summary": _summarize(work_details, rest_details),
+    }
+
+
+def _summarize(work_details: List[dict], rest_details: List[dict]) -> dict:
+    """Build the interval summary block from work/rest segment lists.
+
+    Shared by the stream heuristic and the lap-based detector so both sources
+    produce the identical summary contract.
+    """
     work_durations = [w["duration_s"] for w in work_details]
     work_speeds = [w["avg_speed_mps"] for w in work_details]
     rest_durations = [r["duration_s"] for r in rest_details]
@@ -129,7 +159,7 @@ def detect_intervals(
     work_dur_cv = _cv_percent(work_durations)
     work_speed_cv = _cv_percent(work_speeds)
 
-    summary = {
+    return {
         "total_work_time_s": total_work,
         "total_rest_time_s": total_rest,
         "work_to_rest_ratio": round(total_work / total_rest, 2) if total_rest > 0 else None,
@@ -141,14 +171,6 @@ def detect_intervals(
         "avg_rest_duration_s": round(np.mean(rest_durations)) if rest_durations else None,
         "avg_hr_recovery_bpm": round(float(np.mean(hr_recoveries)), 1) if hr_recoveries else None,
         "consistency_score": _consistency_label(work_dur_cv, work_speed_cv),
-    }
-
-    return {
-        "warmup_duration_s": warmup_duration,
-        "cooldown_duration_s": cooldown_duration,
-        "work_segments": work_details,
-        "rest_segments": rest_details,
-        "summary": summary,
     }
 
 
@@ -182,8 +204,8 @@ def _bimodal_threshold(speeds: np.ndarray) -> Optional[float]:
         return None
     low_mean = float(np.mean(low))
     high_mean = float(np.mean(high))
-    # Require at least 30% speed difference between clusters
-    if high_mean < low_mean * 1.3:
+    # Require meaningful speed difference between clusters
+    if high_mean < low_mean * _MIN_CLUSTER_SEPARATION:
         return None
 
     return threshold
@@ -244,3 +266,186 @@ def _consistency_label(dur_cv: Optional[float], speed_cv: Optional[float]) -> st
         return "medium"
     else:
         return "low"
+
+
+# ---------------------------------------------------------------------------
+# Lap-based interval structure (#170): use the runner's recorded laps as the
+# authoritative segmentation instead of re-deriving it from the velocity stream.
+# ---------------------------------------------------------------------------
+
+# Need at least two work laps plus one slow lap to read a work/rest pattern.
+_MIN_LAPS_FOR_PATTERN = 3
+
+
+def _lap_speed(lap: dict) -> Optional[float]:
+    """Average speed of a lap (m/s), from the recorded field or distance/time.
+
+    A genuinely-recorded zero speed (a standing/autopaused recovery lap: the
+    runner stood still and pressed lap) is real data, not a missing value, so it
+    returns 0.0 rather than None. None means the lap carries no usable speed
+    *and* no usable distance/time (a truly unreadable lap).
+    """
+    speed = lap.get("average_speed")
+    if speed is not None:
+        return max(float(speed), 0.0)
+    distance = lap.get("distance")
+    elapsed = lap.get("elapsed_time") or lap.get("moving_time")
+    if distance is not None and elapsed and elapsed > 0:
+        return max(float(distance) / float(elapsed), 0.0)
+    return None
+
+
+def _split_laps_work_rest(speeds: List[float]) -> Optional[List[bool]]:
+    """Classify each lap as work (fast) or rest (slow) by speed.
+
+    Splits the laps at the largest gap in their sorted speeds and accepts the
+    split only when the fast cluster is clearly faster than the slow cluster
+    (>= `_MIN_CLUSTER_SEPARATION`) and there are at least two work laps and one
+    slow lap. Returns a per-lap work mask, or None when the laps show no
+    work/rest pattern (e.g. uniform auto-distance laps, a steady run).
+    """
+    n = len(speeds)
+    if n < _MIN_LAPS_FOR_PATTERN:
+        return None
+
+    ordered = sorted(speeds)
+    best_gap = 0.0
+    split_at: Optional[int] = None
+    for i in range(1, n):
+        gap = ordered[i] - ordered[i - 1]
+        if gap > best_gap:
+            best_gap = gap
+            split_at = i
+    if split_at is None:
+        return None
+
+    slow, fast = ordered[:split_at], ordered[split_at:]
+    if len(fast) < 2 or len(slow) < 1:
+        return None
+
+    slow_mean = sum(slow) / len(slow)
+    fast_mean = sum(fast) / len(fast)
+    if fast_mean <= 0:
+        return None
+    # A standing-rest cluster (slow_mean == 0) is the strongest possible
+    # work/rest signal, so it is accepted on a positive fast cluster alone; the
+    # ratio gate only applies when the slow cluster is itself moving.
+    if slow_mean > 0 and fast_mean < slow_mean * _MIN_CLUSTER_SEPARATION:
+        return None
+
+    threshold = ordered[split_at]  # first speed in the fast cluster
+    return [s >= threshold for s in speeds]
+
+
+def detect_intervals_from_laps(raw_summary: Optional[dict]) -> Optional[dict]:
+    """Build interval structure from the runner's recorded Strava laps.
+
+    Returns the same dict contract as `detect_intervals` (plus a
+    ``source="recorded_laps"`` marker) when the laps reveal a work/rest
+    pattern, otherwise None so the caller can fall back to stream detection.
+
+    The recorded laps are the runner's own segmentation, so unlike the stream
+    heuristic there is no smoothing, no minimum-duration floor, and no 120s
+    warmup floor: a short recorded warmup or short reps are reported as marked.
+
+    Known limitation: a warmup/cooldown lap paced close to rep pace lands in
+    the work cluster and is counted as a rep (an easy-paced warmup/cooldown is
+    detected correctly). Separating a brisk warmup from a slow rep by lap
+    stats alone is under-determined: every heuristic tried (speed/HR ratio
+    tests against interior reps) misfiled some legitimate session shape (a
+    faded final rep, a long tempo rep, a cut-down progression, a pyramid), so
+    the laps are reported as the runner marked them rather than second-guessed.
+    """
+    if not raw_summary:
+        return None
+    laps = raw_summary.get("laps")
+    if not isinstance(laps, list) or len(laps) < _MIN_LAPS_FOR_PATTERN:
+        return None
+
+    speeds = [_lap_speed(lap) for lap in laps]
+    # Abort only on a truly unreadable lap (no speed and no distance/time). A
+    # zero-speed standing-rest lap is usable data and is kept (read as rest).
+    if any(s is None for s in speeds):
+        return None
+    durations = [int(lap.get("elapsed_time") or lap.get("moving_time") or 0) for lap in laps]
+
+    work_mask = _split_laps_work_rest([s for s in speeds])  # type: ignore[arg-type]
+    if work_mask is None:
+        return None
+
+    work_indices = [i for i, is_work in enumerate(work_mask) if is_work]
+    if len(work_indices) < 2:
+        return None
+    first_work, last_work = work_indices[0], work_indices[-1]
+    work_set = set(work_indices)
+
+    # Require at least one recovery (non-work) lap BETWEEN reps. A contiguous
+    # block of fast laps with no interleaved recovery is a fast finish or a
+    # progression run, not an interval session -> fall back to stream detection.
+    if not any(i not in work_set for i in range(first_work + 1, last_work)):
+        return None
+
+    # Start offset (seconds from activity start) for each lap.
+    starts: List[int] = []
+    acc = 0
+    for d in durations:
+        starts.append(acc)
+        acc += d
+
+    work_details = []
+    for seg_num, i in enumerate(work_indices, start=1):
+        lap = laps[i]
+        avg_hr = lap.get("average_heartrate")
+        peak_hr = lap.get("max_heartrate")
+        distance = lap.get("distance")
+        work_details.append({
+            "segment_number": seg_num,
+            "start_time_s": starts[i],
+            "duration_s": durations[i],
+            "distance_m": round(float(distance), 1) if distance is not None else None,
+            "avg_speed_mps": round(float(speeds[i]), 2),
+            "avg_hr": round(float(avg_hr), 1) if avg_hr is not None else None,
+            "peak_hr": round(float(peak_hr), 1) if peak_hr is not None else None,
+        })
+
+    # Rest segments: recovery laps that fall between the first and last work lap.
+    rest_details = []
+    for i in range(first_work + 1, last_work):
+        if i in work_set:
+            continue
+        lap = laps[i]
+        avg_hr = lap.get("average_heartrate")
+        avg_rest_hr = round(float(avg_hr), 1) if avg_hr is not None else None
+        prev_peak_hr = None
+        for j in range(i - 1, -1, -1):
+            if j in work_set:
+                prev_peak_hr = laps[j].get("max_heartrate")
+                break
+        rest_details.append({
+            "segment_number": len(rest_details) + 1,
+            "duration_s": durations[i],
+            "avg_hr": avg_rest_hr,
+            "hr_recovery_bpm": (
+                round(float(prev_peak_hr) - avg_rest_hr, 1)
+                if prev_peak_hr is not None and avg_rest_hr is not None
+                else None
+            ),
+        })
+
+    warmup_duration = (
+        sum(durations[i] for i in range(first_work)) if first_work > 0 else None
+    )
+    cooldown_duration = (
+        sum(durations[i] for i in range(last_work + 1, len(laps)))
+        if last_work < len(laps) - 1
+        else None
+    )
+
+    return {
+        "warmup_duration_s": warmup_duration,
+        "cooldown_duration_s": cooldown_duration,
+        "work_segments": work_details,
+        "rest_segments": rest_details,
+        "summary": _summarize(work_details, rest_details),
+        "source": "recorded_laps",
+    }

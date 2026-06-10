@@ -141,6 +141,45 @@ class TestMatchPlannedToDetected:
         result = match_planned_to_detected(structure, None)
         assert result["detection_confidence"] == "low"
 
+    def test_detection_confidence_recorded_laps_high(self):
+        """Recorded laps are ground-truth structure -> high detection confidence (#170)."""
+        structure = _make_interval_structure(reps=6)
+        structure["source"] = "recorded_laps"
+        result = match_planned_to_detected(structure, None)
+        assert result["detection_confidence"] == "high"
+
+    def test_detection_confidence_recorded_laps_high_even_with_variable_reps(self):
+        """Detection is certain from laps even when the reps themselves varied;
+        consistency is a separate signal and does not lower detection confidence."""
+        structure = _make_interval_structure(reps=5)
+        structure["source"] = "recorded_laps"
+        structure["summary"]["consistency_score"] = "low"
+        result = match_planned_to_detected(structure, None)
+        assert result["detection_confidence"] == "high"
+
+    def test_recorded_laps_variability_not_a_confidence_reason(self):
+        """A recorded-laps ladder varies by design; that variability is the
+        runner's workout, not detection uncertainty, so it must not leak as a
+        confidence-lowering reason (#170 review finding)."""
+        structure = _make_interval_structure(reps=4, distance_per_rep=400)
+        structure["source"] = "recorded_laps"
+        structure["work_segments"][1]["distance_m"] = 800.0
+        structure["work_segments"][2]["distance_m"] = 200.0
+        result = match_planned_to_detected(structure, None)
+        reasons = result["confidence_reasons"]
+        assert not any("variability" in r for r in reasons), reasons
+        assert not any("outlier" in r for r in reasons), reasons
+
+    def test_recorded_laps_sets_match_score(self):
+        """Recorded laps are the runner's own segmentation -- a perfect de-facto
+        plan -- so match_score is set, keeping the prompt's high+match_score gate
+        consistent with the validator (#170 review finding)."""
+        structure = _make_interval_structure(reps=6)
+        structure["source"] = "recorded_laps"
+        result = match_planned_to_detected(structure, None)
+        assert result["match_score"] == 1.0
+        assert result["detection_confidence"] == "high"
+
 
 class TestBuildIntervalKPIs:
     def test_basic_kpis(self):

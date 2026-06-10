@@ -56,6 +56,21 @@ def upsert_activity(db: Session, raw: dict, user_id) -> Activity:
     stmt = select(Activity).where(Activity.strava_activity_id == raw["id"])
     existing = db.execute(stmt).scalars().first()
 
+    # Preserve recorded laps across a lap-less re-sync. The detail endpoint
+    # (webhook/polling, ingest_activity_by_id) returns the runner's `laps`;
+    # the summary list endpoint (manual sync, backfill) does not. Without this,
+    # a routine "Sync Now" would overwrite an activity's recorded laps with a
+    # lap-less payload and re-analysis would silently downgrade its lap-sourced
+    # interval structure back to the stream heuristic (#170). A fresh payload
+    # that does carry laps still wins (the detail re-fetch is authoritative).
+    if (
+        existing
+        and not raw.get("laps")
+        and isinstance(existing.raw_summary, dict)
+        and existing.raw_summary.get("laps")
+    ):
+        raw = {**raw, "laps": existing.raw_summary["laps"]}
+
     activity_data = {
         "user_id": user_id,
         "strava_activity_id": raw["id"],

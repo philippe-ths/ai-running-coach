@@ -8,7 +8,7 @@ from app.models import Activity, DerivedMetric, CheckIn, ActivityStream, StravaA
 from app.services.analysis.metrics import compute_derived_metrics_data
 from app.services.analysis.classifier import classify_activity
 from app.services.analysis.flags import generate_flags
-from app.services.analysis.intervals import detect_intervals
+from app.services.analysis.intervals import detect_intervals, detect_intervals_from_laps
 from app.services.analysis.risk import compute_risk_score
 from app.services.analysis.workout_matching import match_planned_to_detected, build_interval_kpis
 
@@ -79,7 +79,12 @@ def compute_confidence(activity, streams_dict, check_in, interval_structure=None
         if match_score is not None and match_score < 0.7:
             reasons.append("interval_structure_mismatch")
 
-    if interval_structure:
+    # These are stream-detection sanity checks: they only make sense when the
+    # structure was *inferred* from the velocity stream. Recorded laps are the
+    # runner's own ground-truth segmentation (#170), so "implausibly high" work
+    # time is just a long session the runner marked, and a missing warmup means
+    # they genuinely started at rep 1 — neither is a confidence deficiency.
+    if interval_structure and interval_structure.get("source") != "recorded_laps":
         summary = interval_structure.get("summary", {})
         # Check for implausible total work time (> 45 min of hard running)
         total_work = summary.get("total_work_time_s", 0)
@@ -143,11 +148,19 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     # 5. Compute metrics
     metrics_data = compute_derived_metrics_data(activity, streams_dict, max_hr=max_hr)
 
-    # 6. Classify into orthogonal axes (ADR 0007). Probe interval structure from
-    # the streams first so the structure axis is data-driven; detect_intervals
-    # returning a structure is the "repeated work/rest" half of the predicate
-    # (the other half, genuine pace variability, is applied in the classifier).
-    interval_structure = detect_intervals(streams_dict, "Intervals") if streams_dict else None
+    # 6. Classify into orthogonal axes (ADR 0007). Probe interval structure so
+    # the structure axis is data-driven; a probed structure is the "repeated
+    # work/rest" half of the predicate (the other half, genuine pace
+    # variability, is applied in the classifier).
+    #
+    # Prefer the runner's recorded laps (their own lap-button marks) as the
+    # authoritative segmentation; fall back to the stream heuristic only when no
+    # usable laps are present (#170). The stream re-segmentation can smear short
+    # reps, drop a recorded warmup, and fabricate rep variability that the
+    # recorded laps do not contain.
+    lap_structure = detect_intervals_from_laps(activity.raw_summary)
+    stream_structure = detect_intervals(streams_dict, "Intervals") if streams_dict else None
+    interval_structure = lap_structure or stream_structure
     classification = classify_activity(
         activity, history,
         time_in_zones=metrics_data.get("time_in_zones"),
