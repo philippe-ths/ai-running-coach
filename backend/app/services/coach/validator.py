@@ -363,8 +363,15 @@ def validate_policy(
 def _extract_message_text(report: CoachMessageReport) -> str:
     """Concatenate the prose message and every tail text field for pattern
     matching. Tappable-option labels are included: they render to the runner, so
-    medical/zone language hiding in a chip label is still policed."""
+    medical/zone language hiding in a chip label is still policed.
+
+    A4: the opener's prose lands in `opener_message` (with `message` empty), so it
+    is included here — the opener is policed by validate_message_policy exactly as
+    the fuller turn (AC3). A fuller-turn row carries the preserved opener_message
+    too, so its opener half is re-policed at fuller time, which is harmless."""
     parts: List[str] = [report.message]
+    if report.opener_message:
+        parts.append(report.opener_message)
     if report.headline:
         parts.append(report.headline)
     for s in report.next_steps:

@@ -63,13 +63,24 @@ class CoachMessageReport(BaseModel):
 
     `tail_degraded` records that the model produced a real message but no usable
     tail (the inherent skip-the-tail failure mode under tool_choice=auto): the
-    message is still the product, and the loop abstains on the empty next_steps."""
+    message is still the product, and the loop abstains on the empty next_steps.
+
+    A4 two-stage Exchange: the opener (stage one) writes its brief prose into
+    `opener_message` and leaves `message` empty; the fuller turn (stage two) fills
+    `message` + the tail in place, preserving `opener_message`. An opener-only row
+    is therefore `opener_message` set AND `message` empty (the in-band signal the
+    eval harness and the frontend read). `schedule_fuller_turn` is the opener LLM's
+    judgment of whether the run warrants a fuller turn; the deterministic safety
+    override (a red-flag run) forces it true in the job regardless. Both fields
+    default so legacy and fuller-only rows validate unchanged."""
     message: str
     headline: Optional[str] = None
     next_steps: List[CoachNextStep] = Field(default_factory=list, max_length=3)
     risks: List[CoachRisk] = Field(default_factory=list)
     questions: List[CoachMessageQuestion] = Field(default_factory=list, max_length=4)
     tail_degraded: bool = False
+    opener_message: Optional[str] = None
+    schedule_fuller_turn: bool = False
 
 
 class CoachReportMeta(BaseModel):

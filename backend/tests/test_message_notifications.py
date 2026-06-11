@@ -98,3 +98,56 @@ class TestTelegramMessageRender:
         )
         assert len(body) <= 4096
         assert "open the app" in body
+
+
+def _opener_read(opener_message: str) -> CoachReportRead:
+    """An opener-state row: opener_message set, message empty (fuller not landed)."""
+    report = CoachMessageReport(message="", opener_message=opener_message)
+    meta = CoachReportMeta(
+        confidence="medium", model_id="claude-sonnet-4-6", prompt_id="coach_message_v2",
+        schema_version="2.0", input_hash="abc", generated_at=datetime.now(timezone.utc),
+    )
+    return CoachReportRead(
+        id=uuid4(), activity_id=uuid4(), report=report, meta=meta,
+        debug=CoachReportDebug(context_pack={}, system_prompt="", raw_llm_response=None),
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+class TestOpenerStageRender:
+    """A4 D8: stage='opener' renders opener_message + the reply-invite line, not
+    the (empty) fuller message."""
+
+    def test_telegram_opener_renders_opener_prose_and_invite(self):
+        from app.services.notifications._prose import OPENER_REPLY_LINE
+
+        read = _opener_read("Nice work getting that one in!")
+        _, body, url = render_coach_report_telegram(
+            report=read, headline="Easy Run", distance_m=5000,
+            app_base_url="https://app.example.com", stage="opener",
+        )
+        assert "Nice work getting that one in!" in body
+        assert OPENER_REPLY_LINE in body
+        assert url.endswith(f"/activity/{read.activity_id}")
+
+    def test_email_opener_renders_opener_prose(self):
+        from app.services.notifications._prose import OPENER_REPLY_LINE
+
+        read = _opener_read("Quick reaction: solid steady effort.")
+        _, html, text = render_coach_report_email(
+            report=read, headline="Easy Run", distance_m=5000,
+            app_base_url="https://app.example.com", stage="opener",
+        )
+        assert "Quick reaction: solid steady effort." in html
+        assert "Quick reaction: solid steady effort." in text
+        assert OPENER_REPLY_LINE in text
+
+    def test_fuller_stage_default_unchanged_for_message_rows(self):
+        # The default stage stays 'fuller' and renders message (not opener_message),
+        # so every existing caller is byte-stable.
+        read = _message_read("The fuller breakdown is here.")
+        _, body, _ = render_coach_report_telegram(
+            report=read, headline="Easy Run", distance_m=5000,
+            app_base_url="https://app.example.com",
+        )
+        assert body == "The fuller breakdown is here."

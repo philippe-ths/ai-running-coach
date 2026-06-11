@@ -15,7 +15,7 @@ import hashlib
 import json
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ActivityContext(BaseModel):
@@ -317,6 +317,72 @@ class NarrativeContext(BaseModel):
     last_updated_days_ago: Optional[int] = None
 
 
+class NoveltyContext(BaseModel):
+    """A4 salience substrate — the deterministic novelty signal.
+
+    `first_of_kind` lists which axes of THIS run are first-of-their-kind in the
+    runner's analysed history (e.g. "first_interval_session", "first_long_run",
+    "first_race", "first_hilly_run"), computed read-time against the full
+    `is_deleted == False` history. `has_history` is False until the runner has
+    enough prior analysed runs for novelty to be meaningful (a cold-start runner's
+    first runs are trivially "first of everything", so the signal abstains rather
+    than flagging them all). Advisory input to the opener LLM's depth judgment,
+    never a force. Salience is NOT intensity or load (CONTEXT.md): novelty keys on
+    axis-novelty only, never on effort_score magnitude.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    first_of_kind: List[str] = Field(default_factory=list)
+    has_history: bool = False
+
+
+class SafetyOverride(BaseModel):
+    """A4 salience substrate — the deterministic safety override.
+
+    A red-flag pattern (the same predicate as the M9 referral nudge:
+    `illness_or_extreme_fatigue` in flags, or sustained notable pain) forces a
+    non-silent opener and a scheduled fuller turn regardless of the LLM's
+    judgment — the model can never decide to stay quiet on a safety signal.
+    `force_fuller` is the authority bit the opener job's scheduling reads;
+    `reasons` are the matched red-flag strings. Abstains (force_fuller False,
+    reasons empty) when no red flag is present.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    force_fuller: bool = False
+    reasons: List[str] = Field(default_factory=list)
+
+
+class SalienceContext(BaseModel):
+    """A4 salience facts assembled into the (lean) opener context and the fuller
+    pack: the deterministic novelty signal plus the deterministic safety override.
+
+    Salience is HYBRID (ADR 0010): these deterministic facts — plus the existing
+    baseline/flag/adherence signals already in the pack — feed the opener LLM's
+    judgment of depth, tone, and whether to deepen; the safety override is the
+    only deterministic force. There is no monolithic salience score.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    novelty: NoveltyContext = Field(default_factory=NoveltyContext)
+    safety_override: SafetyOverride = Field(default_factory=SafetyOverride)
+
+
+class ContinuityContext(BaseModel):
+    """A4 fuller-turn continuity: what the opener already said and any reply.
+
+    `opener_message` is the stage-one prose (so the fuller turn ADVANCES it
+    rather than restating); `reply` is a chat reply the runner sent after the
+    opener (the check-in, if any, is already in `check_in`). Both empty for the
+    opener stage and for a single-shot exchange, so the fuller-mode prompt simply
+    has no prior turn to build on.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    opener_message: Optional[str] = None
+    reply: Optional[str] = None
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -336,6 +402,14 @@ class CoachContextPack(BaseModel):
     # first exchange, every test fixture) stay valid; build_b_baseline populates
     # it from the stored CoachNarrative row when one exists.
     narrative: NarrativeContext = NarrativeContext()
+    # A4 salience substrate: novelty + safety override. Defaulted (empty) so every
+    # pre-A4 fixture and the legacy/single-shot paths stay valid; the opener and
+    # fuller builders populate it. Adding it changes the pack fingerprint, so v2
+    # reports regenerate — the same intentional shape-change A2c made for narrative.
+    salience: SalienceContext = Field(default_factory=SalienceContext)
+    # A4 fuller-turn continuity (opener prose + any reply). Defaulted (empty) for
+    # the opener stage and single-shot exchanges; only the fuller path populates it.
+    continuity: ContinuityContext = Field(default_factory=ContinuityContext)
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:

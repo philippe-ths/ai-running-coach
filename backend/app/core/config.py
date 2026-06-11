@@ -72,6 +72,17 @@ class Settings(BaseSettings):
     BACKFILL_BATCH_SIZE: int = 20
     BACKFILL_BATCH_PAUSE_SECONDS: int = 300
 
+    # Two-stage Exchange cadence (A4, ADR 0010). The opener fires immediately on a
+    # finished activity; the conditional fuller turn fires on the runner's reply or
+    # this timer, whichever is first. Only the two-stage prompt (coach_message_v2)
+    # uses these; under a single-shot prompt the pipeline ignores them (AC8).
+    EXCHANGE_STAGE2_DELAY_SECONDS: int = 10800  # 3h fuller-turn timer fallback
+    # How long after the opener a reply (a check-in or chat) still belongs to the
+    # open exchange and triggers the fuller turn early. A reply on an activity whose
+    # opener is older than this never spins up a fresh exchange (AC4). 24h: a
+    # same-day reply lands the fuller turn; a check-in on a stale run does not.
+    EXCHANGE_REPLY_WINDOW_SECONDS: int = 86400
+
     # Phase 1 deployment: throwaway basic auth in front of /api/*.
     # Both must be set for the middleware to enforce; either empty disables it.
     # TODO(phase-2): remove when session auth lands.

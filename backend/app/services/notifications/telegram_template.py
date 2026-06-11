@@ -2,6 +2,7 @@ from app.schemas.coach import CoachReportRead
 from app.services.notifications._prose import (
     TELEGRAM_BODY_LIMIT,
     is_message_report,
+    opener_body,
     truncate_at_paragraph,
 )
 
@@ -12,12 +13,17 @@ def render_coach_report_telegram(
     headline: str,
     distance_m: int,
     app_base_url: str,
+    stage: str = "fuller",
 ) -> tuple[str, str, str]:
     """Render title + plain-text body + activity URL for a Telegram message.
 
     The body is plain text (no markup); the Telegram adapter owns wire-format
     concerns (HTML escaping, the title in bold, the link). The URL is returned
     separately so the adapter can attach it out of band rather than inline.
+
+    `stage` ("fuller" default, or "opener" for the A4 stage-one notification)
+    selects which prose to render: the fuller `message` or the opener_message plus
+    the reply-invite line. Default keeps every existing caller byte-stable.
     """
     distance_km = round((distance_m or 0) / 1000.0, 1)
     confidence = report.meta.confidence
@@ -35,7 +41,8 @@ def render_coach_report_telegram(
     # message itself, truncated at a paragraph boundary under the 4096 limit. The
     # structured tail (chips, next steps) lives in the app, not the notification.
     if is_message_report(content):
-        body = truncate_at_paragraph(content.message, TELEGRAM_BODY_LIMIT)
+        prose = opener_body(content) if stage == "opener" else content.message
+        body = truncate_at_paragraph(prose, TELEGRAM_BODY_LIMIT)
         return title, body, activity_url
 
     lines: list[str] = ["Key takeaways:"]

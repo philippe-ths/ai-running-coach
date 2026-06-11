@@ -24,10 +24,12 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session, undefer
 
 from app.models import Activity
+from app.models.coach_chat_message import CoachChatMessage
 from app.models.coach_report import CoachReport
 from app.models.derived_metric import DerivedMetric
 from app.schemas.coach_context import PriorReportDigest
 from app.services.coach.digest import build_report_digest
+from app.services.coach.output_contract import is_opener_only
 
 # The working context carries the last 1-2 exchanges (design doc § 4 — "the last
 # exchange's digest"). Two advances the prior narrative while keeping the pack
@@ -104,6 +106,12 @@ def fetch_prior_digests(
     for report, start_date in rows:
         if report.activity_id in seen:
             continue  # keep only the latest report per prior activity
+        if is_opener_only(report.report):
+            # A4: an opener-only row is an incomplete exchange (the fuller turn
+            # never landed). It carries no digest and an empty message, so it must
+            # not feed the longitudinal memory — skip it. `seen` is NOT marked, so
+            # an earlier COMPLETE exchange on the same activity is still considered.
+            continue
         seen.add(report.activity_id)
         digests.append(_resolve_digest(report, start_date))
         if len(digests) >= limit:
@@ -142,7 +150,7 @@ def fetch_prior_commitments(db: Session, activity: Activity) -> Optional[PriorCo
     runner has no prior non-fallback report — the adherence section then degrades
     to empty.
     """
-    row = (
+    rows = (
         db.query(CoachReport, Activity.id, Activity.start_date)
         .join(Activity, CoachReport.activity_id == Activity.id)
         .filter(
@@ -157,18 +165,22 @@ def fetch_prior_commitments(db: Session, activity: Activity) -> Optional[PriorCo
             CoachReport.created_at.desc(),
             CoachReport.id.desc(),
         )
-        .first()
+        .limit(_PRIOR_DIGEST_SCAN_LIMIT)
+        .all()
     )
-    if row is None:
-        return None
-    report, source_id, source_start_date = row
-    body = report.report or {}
-    next_steps = [s for s in (body.get("next_steps") or []) if isinstance(s, dict)]
-    return PriorCommitments(
-        source_activity_id=source_id,
-        source_start_date=source_start_date,
-        next_steps=next_steps,
-    )
+    for report, source_id, source_start_date in rows:
+        # A4: skip opener-only rows — an incomplete exchange carries no commitments
+        # and must not shadow an earlier COMPLETE exchange's next_steps.
+        if is_opener_only(report.report):
+            continue
+        body = report.report or {}
+        next_steps = [s for s in (body.get("next_steps") or []) if isinstance(s, dict)]
+        return PriorCommitments(
+            source_activity_id=source_id,
+            source_start_date=source_start_date,
+            next_steps=next_steps,
+        )
+    return None
 
 
 def fetch_recent_user_digests(
@@ -205,11 +217,33 @@ def fetch_recent_user_digests(
     for report, start_date in rows:
         if report.activity_id in seen:
             continue  # keep only the latest report per activity
+        if is_opener_only(report.report):
+            continue  # A4: incomplete exchange, not a consolidation input
         seen.add(report.activity_id)
         digests.append(_resolve_digest(report, start_date))
         if len(digests) >= limit:
             break
     return digests
+
+
+def fetch_latest_user_reply(db: Session, activity_id) -> Optional[str]:
+    """The text of the runner's most recent chat reply on this activity, or None.
+
+    A4 fuller-turn continuity: a `CoachChatMessage` (role="user") the runner sent
+    after the opener is the reply the fuller turn folds in. The check-in, if any,
+    already rides the pack's `check_in`; this carries the chat half. Returns the
+    latest user message text, or None when the runner sent no chat reply.
+    """
+    row = (
+        db.query(CoachChatMessage.content)
+        .filter(
+            CoachChatMessage.activity_id == _as_uuid(activity_id),
+            CoachChatMessage.role == "user",
+        )
+        .order_by(CoachChatMessage.created_at.desc(), CoachChatMessage.id.desc())
+        .first()
+    )
+    return row[0] if row and row[0] else None
 
 
 def _resolve_digest(report: CoachReport, start_date) -> PriorReportDigest:

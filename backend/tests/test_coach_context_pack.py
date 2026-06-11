@@ -167,6 +167,14 @@ def _legacy_full_pack() -> dict:
             "source_report_count": 3,
             "last_updated_days_ago": 2,
         },
+        "salience": {
+            "novelty": {"first_of_kind": ["first_interval_session"], "has_history": True},
+            "safety_override": {"force_fuller": False, "reasons": []},
+        },
+        "continuity": {
+            "opener_message": "Nice session — give me a sec for the full breakdown.",
+            "reply": "felt easy",
+        },
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,
@@ -283,6 +291,11 @@ def _legacy_sparse_pack() -> dict:
             "source_report_count": None,
             "last_updated_days_ago": None,
         },
+        "salience": {
+            "novelty": {"first_of_kind": [], "has_history": False},
+            "safety_override": {"force_fuller": False, "reasons": []},
+        },
+        "continuity": {"opener_message": None, "reply": None},
         "safety_rules": {
             "never_diagnose": True,
             "pain_severe_threshold": 7,

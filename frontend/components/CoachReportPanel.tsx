@@ -1,9 +1,15 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Markdown from 'react-markdown';
-import { CoachReport, isMessageReport } from '@/lib/types';
+import { CoachReport, isMessageReport, isOpenerOnly } from '@/lib/types';
 import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2, RefreshCw } from 'lucide-react';
+
+// While an exchange is in its opener-only state (A4), the fuller turn lands later
+// server-side (on the runner's reply or a ~3h timer). The panel re-checks for it
+// at this interval, bounded by the attempt cap so it never polls forever.
+const OPENER_POLL_INTERVAL_MS = 30000;
+const OPENER_POLL_MAX_ATTEMPTS = 40;
 
 // Public env var inlined at build time. Set NEXT_PUBLIC_SHOW_DEBUG_PANEL=true
 // (or "1") on the build environment to expose the LLM-input/output panel.
@@ -52,6 +58,30 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
     if (!hasMetrics) return;
     fetchReport(false);
   }, [hasMetrics, fetchReport]);
+
+  // A4: while the loaded report is opener-only (the fuller turn has not landed),
+  // poll for the fuller turn so it appears without a manual reload. Bounded by an
+  // attempt cap that survives re-renders (the ref does not reset), so a fuller
+  // that never arrives stops polling rather than looping forever.
+  const pollAttempts = useRef(0);
+  useEffect(() => {
+    if (status !== 'loaded' || !report || !isOpenerOnly(report.report)) return;
+    if (pollAttempts.current >= OPENER_POLL_MAX_ATTEMPTS) return;
+    const id = setTimeout(async () => {
+      pollAttempts.current += 1;
+      try {
+        const res = await fetch(
+          `/api/activities/${activityId}/coach-report?generate=false&force=false`,
+        );
+        if (res.ok) {
+          setReport((await res.json()) as CoachReport);
+        }
+      } catch {
+        // keep waiting; a transient failure should not stop the poll
+      }
+    }, OPENER_POLL_INTERVAL_MS);
+    return () => clearTimeout(id);
+  }, [status, report, activityId]);
 
   if (!hasMetrics) return null;
 
@@ -115,25 +145,55 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
     <div className="space-y-4">
       {isMessageReport(body) ? (
         <>
-          {/* Prose message — the product */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-blue-600" />
-                Coach Analysis
-              </h2>
-              {reRunButton}
-            </div>
-            {body.headline && (
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">{body.headline}</h3>
-            )}
-            <div className="prose prose-sm prose-gray max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
-              <Markdown>{body.message}</Markdown>
-            </div>
-          </div>
+          {/* A4: a two-stage Exchange renders as a two-line thread — the opener's
+              immediate reaction, then the fuller turn once it lands. A single-shot
+              message (no opener_message) renders just the fuller turn, unchanged. */}
+          {(() => {
+            const hasOpener = Boolean(body.opener_message);
+            const hasFuller = (body.message ?? '').trim().length > 0;
+            return (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-blue-600" />
+                    Coach Analysis
+                  </h2>
+                  {reRunButton}
+                </div>
 
-          {/* Next steps (tail affordances) */}
-          {body.next_steps.length > 0 && (
+                {/* Opener turn (stage one) */}
+                {hasOpener && (
+                  <div className="prose prose-sm prose-gray max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
+                    <Markdown>{body.opener_message as string}</Markdown>
+                  </div>
+                )}
+
+                {/* Awaiting the fuller turn (opener-only state) */}
+                {hasOpener && !hasFuller && (
+                  <p className="mt-3 text-sm text-gray-500 flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Putting together the full breakdown…
+                  </p>
+                )}
+
+                {/* Fuller turn (stage two) */}
+                {hasFuller && (
+                  <>
+                    {hasOpener && <hr className="my-4 border-gray-100" />}
+                    {body.headline && (
+                      <h3 className="text-lg font-semibold text-gray-900 mb-2">{body.headline}</h3>
+                    )}
+                    <div className="prose prose-sm prose-gray max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
+                      <Markdown>{body.message}</Markdown>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Next steps (tail affordances) — fuller turn only */}
+          {(body.message ?? '').trim().length > 0 && body.next_steps.length > 0 && (
             <div className="space-y-2">
               {body.next_steps.map((step, i) => (
                 <div key={i} className="bg-green-50 rounded-lg border border-green-200 p-4">

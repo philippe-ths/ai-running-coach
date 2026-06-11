@@ -135,6 +135,14 @@ carries a `tail_degraded` count (operational health: a real message with no usab
 tail), and `make eval-selftest` validates a good + deliberately-bad fixture for
 **each** shape (`known_good_message_report` / `deliberately_bad_message_report`).
 
+Under the A4 two-stage Exchange (ADR 0010) the harness scores the **fuller turn
+only**: an opener-only row (an `opener_message` with an empty `message`, the fuller
+turn not yet landed) is a not-yet-complete exchange and is skipped before scoring,
+counted in the scorecard's `skipped_opener_only` field (operational health, like
+`skipped_fallback`, not a rubric assertion). The skip keys on the row's own report
+JSON (`is_opener_only`), preserving the harness's self-containment — no coupling to
+the Activity notification sentinels.
+
 The prose lexical floors are re-baselined for prose at cutover: the parrot-overlap
 and trend/load/caveat keyword lists are unchanged, but the prose surfaces they scan
 are larger, so the realistic-paraphrase blind spots above are wider for the message

@@ -28,7 +28,7 @@ from app.schemas.coach import (
     CoachReportMeta,
     CoachReportRead,
 )
-from app.schemas.coach_context import CoachContextPack
+from app.schemas.coach_context import CoachContextPack, ContinuityContext
 from app.services.coach.belief_store import write_back_beliefs
 from app.services.coach.consolidation import enqueue_consolidation
 from app.services.coach.context import build_context_pack
@@ -37,6 +37,8 @@ from app.services.coach.llm import AnthropicClient
 from app.services.coach.output_contract import (
     RECORD_COACH_TAIL_TOOL,
     EmptyMessageError,
+    is_opener_only,
+    merge_opener,
     merge_report,
     parse_blocks,
 )
@@ -44,8 +46,10 @@ from app.services.analysis.classifier import Classification, playbook_key
 from app.services.coach.prompts import (
     MESSAGE_PROMPT_PREFIX,
     PROMPT_VERSIONS,
+    TWO_STAGE_PROMPT_ID,
     build_system_prompt,
 )
+from app.services.coach.retrieval import fetch_latest_user_reply
 from app.services.coach.validator import (
     PolicyViolation,
     validate_message_policy,
@@ -67,6 +71,12 @@ SCHEMA_VERSION_BY_FAMILY = {
 # Token budget for the A3 message call (thinking tokens count against it).
 _MESSAGE_MAX_TOKENS = 8192
 
+# Token budget for the A4 OPENER call. The opener is a brief reaction + a small
+# tail, but adaptive-thinking tokens count against max_tokens too, so this leaves
+# headroom for the private reasoning while keeping the opener materially lighter
+# than the fuller turn. Tunable.
+_OPENER_MAX_TOKENS = 2048
+
 # Token budget for the legacy structured JSON report. Was 1024, which truncated
 # under claude-sonnet-4-6 (more verbose JSON than the retired model) — the report
 # hit stop_reason=max_tokens mid-object and the partial/fenced text failed to
@@ -86,6 +96,22 @@ _FALLBACK_MESSAGE = (
     "are recorded — take a look at the activity detail for the flags, splits and "
     "zones, and I'll pick this up properly on your next run."
 )
+
+# Templated fallback prose for the A4 opener (LLM/parse/transport failure): a
+# brief, non-committal reaction that keeps the exchange alive (the fuller turn can
+# still follow). Lands in opener_message, message stays empty.
+_FALLBACK_OPENER_MESSAGE = (
+    "Nice work getting that run in. I'll take a proper look and follow up shortly."
+)
+
+
+def is_two_stage_prompt(prompt_id: str) -> bool:
+    """True when the active prompt drives the A4 two-stage Exchange cadence.
+
+    The cadence (opener -> conditional fuller) is gated here, not unconditionally,
+    so flipping COACH_PROMPT_ID back to coach_message_v1 or a coach_report_v* id
+    serves the prior single-shot path with zero code change (AC8 rollback)."""
+    return prompt_id == TWO_STAGE_PROMPT_ID
 
 
 def active_schema_version(prompt_id: str) -> str:
@@ -132,6 +158,15 @@ async def get_or_generate_coach_report(
     prior-version reports are always retained, so regeneration is never
     destructive to history.
     """
+    # A4: under the two-stage prompt, an on-demand request (the UI's generate /
+    # force) wants the COMPLETE report now — which is the fuller turn. The opener
+    # -> conditional-fuller cadence itself is driven by the pipeline jobs, not this
+    # entry point. Under any single-shot prompt (coach_message_v1, coach_report_v*)
+    # this delegation is skipped and the prior single-shot behaviour is preserved
+    # exactly (AC8 rollback).
+    if is_two_stage_prompt(settings.COACH_PROMPT_ID):
+        return await generate_fuller(db, activity_id, force=force)
+
     activity_uuid = _coerce_uuid(activity_id)
 
     # Check cache (active version only)
@@ -172,12 +207,212 @@ async def get_or_generate_coach_report(
     else:
         outcome = await _generate_structured(client, system_prompt, user_message, pack)
 
-    # Monitoring (A3): one greppable WARNING per stored degraded tail — a real prose
-    # message produced but no usable structured tail (the loop abstains on it). This
-    # is the single chokepoint covering every degrade path, so it surfaces the
-    # `tail_degraded` rate in prod logs / Sentry without a batch job; the eval
-    # scorecard's tail_degraded counter is the complementary batch view.
+    read = _persist_report(
+        db,
+        activity=activity,
+        prompt_id=prompt_id,
+        schema_version=schema_version,
+        pack=pack,
+        pack_dict=pack_dict,
+        input_hash=input_hash,
+        outcome=outcome,
+        existing=None,
+        fire_learning_loop=True,
+    )
+    return read
+
+
+@dataclass
+class OpenerResult:
+    """The result of generating an A4 opener (stage one).
+
+    `report` is the stored opener-state row (read shape). `schedule_fuller_turn`
+    is the exchange's depth decision the opener job consumes to decide whether to
+    schedule stage two: the opener LLM's own judgment OR-ed with the deterministic
+    safety override (a red-flag run always earns a fuller turn). `is_fallback` is
+    True when the opener LLM/parse failed and a templated opener was stored.
+    """
+
+    report: Optional[CoachReportRead]
+    schedule_fuller_turn: bool
+    is_fallback: bool
+
+
+async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResult]:
+    """A4 stage one: a lightweight opener for a freshly-analysed activity.
+
+    Builds the (salience-bearing) context pack, runs the opener-mode prose call,
+    stores an opener-state CoachReport row (opener_message set, message empty, no
+    digest, no learning-loop write-back — the opener is pre-input and carries
+    none), and returns the schedule decision. Idempotent: if an active row already
+    exists it is returned without a fresh LLM call. Returns None when the activity
+    has no metrics (nothing to react to).
+    """
+    activity_uuid = _coerce_uuid(activity_id)
+    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
+    if not activity or not activity.metrics:
+        return None
+
+    prompt_id = settings.COACH_PROMPT_ID
+    schema_version = active_schema_version(prompt_id)
+    pack = build_context_pack(db, activity)
+
+    existing = get_active_report_row(db, activity_uuid)
+    if existing is not None:
+        # Idempotent re-entry: the opener (or a later fuller) is already written.
+        # Do not re-LLM; recompute the schedule decision from the stored bit + the
+        # deterministic safety override, and recover with a fuller turn if the
+        # stored opener was a fallback.
+        schedule = existing.is_fallback or \
+            bool((existing.report or {}).get("schedule_fuller_turn")) or \
+            pack.salience.safety_override.force_fuller
+        return OpenerResult(
+            report=_to_read(existing),
+            schedule_fuller_turn=schedule,
+            is_fallback=existing.is_fallback,
+        )
+
+    input_hash = pack.fingerprint()
+    pack_dict = pack.to_serializable_dict()
+    # The opener is a brief reaction, not a playbook-driven analysis (mode="opener"
+    # ignores the playbook), so the system prompt is the lean opener form.
+    system_prompt = build_system_prompt(prompt_id, mode="opener")
+    user_message = json.dumps(pack_dict, default=str)
+    client = AnthropicClient(
+        api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
+    )
+    outcome = await _generate_message(
+        client, system_prompt, user_message, pack, is_opener=True
+    )
+
+    read = _persist_report(
+        db,
+        activity=activity,
+        prompt_id=prompt_id,
+        schema_version=schema_version,
+        pack=pack,
+        pack_dict=pack_dict,
+        input_hash=input_hash,
+        outcome=outcome,
+        existing=None,
+        fire_learning_loop=False,  # the opener writes nothing to durable memory
+    )
+    # Hybrid salience: the opener LLM's judgment OR the deterministic safety
+    # override (the model can never stay quiet on a red-flag run). A fallback
+    # opener (the LLM hiccuped) ALSO schedules a fuller turn, so the substantive
+    # coaching can still recover on the retried fuller call rather than the
+    # exchange silently producing nothing.
+    schedule = outcome.is_fallback or \
+        bool(outcome.report_dump.get("schedule_fuller_turn")) or \
+        pack.salience.safety_override.force_fuller
+    return OpenerResult(report=read, schedule_fuller_turn=schedule, is_fallback=outcome.is_fallback)
+
+
+async def generate_fuller(
+    db: Session, activity_id: str, *, force: bool = False
+) -> Optional[CoachReportRead]:
+    """A4 stage two (also the on-demand path under the two-stage prompt): the deep
+    prose coaching turn.
+
+    Reads the opener prose (from the same evolving row) and any chat reply as
+    continuity, builds the full context pack, runs the fuller-mode prose call, and
+    writes the result onto the SAME coach_reports row IN PLACE when an opener-state
+    row exists (preserving the opener prose so both halves survive), else inserts a
+    fresh row. Fires the learning-loop write-back + Consolidation on completion
+    (non-fallback only). A complete (fuller) row is returned from cache unless
+    `force`. Returns None when the activity has no metrics.
+    """
+    activity_uuid = _coerce_uuid(activity_id)
+
+    existing = get_active_report_row(db, activity_uuid)
+    # Capture the opener prose BEFORE any force-delete, so a force-regenerate of a
+    # complete two-line row still preserves the opener half of the thread (the
+    # brief's "preserving both halves" survives force too).
+    opener_prose = (existing.report or {}).get("opener_message") if existing else None
+    if force and existing is not None:
+        # A manual regenerate produces a fresh complete report; prior versions are
+        # untouched (force replaces only the active-version row).
+        db.delete(existing)
+        db.commit()
+        existing = None
+    if existing is not None and not is_opener_only(existing.report):
+        # A complete fuller turn is already cached for this version.
+        return _to_read(existing)
+
+    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
+    if not activity or not activity.metrics:
+        return None
+
+    # Continuity: the opener prose this exchange already sent (preserved above,
+    # so it survives a force-delete) + any chat reply since (the check-in already
+    # rides the pack).
+    continuity = ContinuityContext(
+        opener_message=opener_prose,
+        reply=fetch_latest_user_reply(db, activity_uuid),
+    )
+
+    prompt_id = settings.COACH_PROMPT_ID
+    schema_version = active_schema_version(prompt_id)
+    pack = build_context_pack(db, activity, continuity=continuity)
+    input_hash = pack.fingerprint()
+    pack_dict = pack.to_serializable_dict()
+    classification = Classification.from_metrics(activity.metrics)
+    system_prompt = build_system_prompt(
+        prompt_id, playbook_key(activity, classification), mode="fuller"
+    )
+    user_message = json.dumps(pack_dict, default=str)
+    client = AnthropicClient(
+        api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
+    )
+    outcome = await _generate_message(client, system_prompt, user_message, pack)
+
+    # Preserve the opener prose on the evolving row — the fuller LLM does not emit
+    # opener_message, so carry it forward so the two-line thread (opener + fuller)
+    # survives in storage and on the frontend.
+    if opener_prose:
+        outcome.report_dump["opener_message"] = opener_prose
+
+    return _persist_report(
+        db,
+        activity=activity,
+        prompt_id=prompt_id,
+        schema_version=schema_version,
+        pack=pack,
+        pack_dict=pack_dict,
+        input_hash=input_hash,
+        outcome=outcome,
+        existing=existing,  # in-place update of the opener row, or None -> insert
+        fire_learning_loop=True,
+    )
+
+
+def _persist_report(
+    db: Session,
+    *,
+    activity: Activity,
+    prompt_id: str,
+    schema_version: str,
+    pack: CoachContextPack,
+    pack_dict: dict,
+    input_hash: str,
+    outcome: "_GenOutcome",
+    existing: Optional[CoachReport],
+    fire_learning_loop: bool,
+) -> Optional[CoachReportRead]:
+    """Build the meta + digest, persist the report (in-place UPDATE of `existing`
+    or a fresh INSERT), and optionally fire the learning loop. Shared by the
+    single-shot path, the opener, and the fuller turn so storage is identical.
+
+    The digest is stored only for a COMPLETE non-fallback report — an opener-only
+    row (is_opener_only) and any fallback carry no digest, so they never feed the
+    M4/M7 prior-exchange reads. The learning loop fires only on a clean store of a
+    non-fallback report and only when the caller asked for it (the opener never
+    does). On an INSERT race the row that landed first wins and the loop is skipped.
+    """
+    activity_uuid = activity.id
+
     if outcome.tail_degraded:
+        # Monitoring (A3): one greppable WARNING per stored degraded tail.
         logger.warning(
             "coach_tail_degraded: stored a prose message with a degraded tail "
             "(activity=%s, prompt=%s); the learning loop abstains on this report",
@@ -196,14 +431,10 @@ async def get_or_generate_coach_report(
         tail_degraded=outcome.tail_degraded,
     )
 
-    # A2a: persist the exchange digest alongside the report so later exchanges
-    # retrieve it instead of re-projecting from the full report JSON. Skipped for
-    # fallbacks (the M4 longitudinal read excludes them anyway). Guarded so a
-    # digest hiccup never blocks report storage — the digest is a derived
-    # convenience, the report is the record. build_report_digest handles both the
-    # structured and the prose-message shapes (ADR 0009).
+    # A2a digest: only for a complete non-fallback report (not an opener-only row,
+    # not a fallback). Guarded so a digest hiccup never blocks storage.
     report_digest = None
-    if not outcome.is_fallback:
+    if not outcome.is_fallback and not is_opener_only(outcome.report_dump):
         try:
             report_digest = build_report_digest(
                 outcome.report_dump, activity.start_date
@@ -213,46 +444,66 @@ async def get_or_generate_coach_report(
                 "exchange digest projection failed for activity %s", activity_uuid
             )
 
-    # Store (version columns mirror meta so the cache can key on them)
-    db_report = CoachReport(
-        activity_id=activity_uuid,
-        prompt_id=prompt_id,
-        schema_version=schema_version,
-        report=outcome.report_dump,
-        meta=meta.model_dump(mode="json"),
-        context_pack=pack_dict,
-        raw_llm_response=outcome.raw_response,
-        is_fallback=outcome.is_fallback,
-        digest=report_digest,
-    )
-    db.add(db_report)
-    try:
+    if existing is not None:
+        # A4 in-place UPDATE: the fuller turn fills the opener's evolving row. The
+        # cache identity (activity_id, prompt_id, schema_version) is unchanged — it
+        # is the same physical row — so the M0 versioned cache is preserved.
+        existing.report = outcome.report_dump
+        existing.meta = meta.model_dump(mode="json")
+        existing.context_pack = pack_dict
+        existing.raw_llm_response = outcome.raw_response
+        existing.is_fallback = outcome.is_fallback
+        existing.digest = report_digest
+        db.add(existing)
         db.commit()
-    except IntegrityError:
-        # A concurrent request generated the active-version row first (the delete
-        # -> LLM -> insert window is not atomic). Yield to the row that landed.
-        db.rollback()
-        winner = get_active_report_row(db, activity_uuid)
-        if winner is not None:
-            return _to_read(winner)
-        raise
-    db.refresh(db_report)
+        db.refresh(existing)
+        row = existing
+    else:
+        db_report = CoachReport(
+            activity_id=activity_uuid,
+            prompt_id=prompt_id,
+            schema_version=schema_version,
+            report=outcome.report_dump,
+            meta=meta.model_dump(mode="json"),
+            context_pack=pack_dict,
+            raw_llm_response=outcome.raw_response,
+            is_fallback=outcome.is_fallback,
+            digest=report_digest,
+        )
+        db.add(db_report)
+        try:
+            db.commit()
+        except IntegrityError:
+            # A concurrent request generated the active-version row first. Yield to
+            # the row that landed (and do NOT fire the learning loop — the winner's
+            # generation owns it).
+            db.rollback()
+            winner = get_active_report_row(db, activity_uuid)
+            if winner is not None:
+                return _to_read(winner)
+            raise
+        db.refresh(db_report)
+        row = db_report
 
-    # M8 belief write-back: a successful report feeds the durable belief store the
-    # next report reads. Skipped for fallbacks (no real analysis to learn from);
-    # best-effort inside, so it never breaks report generation.
-    if not outcome.is_fallback:
-        write_back_beliefs(db, activity, pack)
-        # A2c: re-ground the durable-memory narrative in the background. Enqueued
-        # (never awaited) at this same exchange boundary so the user-facing report
-        # has already returned by the time the Haiku consolidation runs — the turn
-        # never blocks on it. No sentinel needed: consolidation is an idempotent
-        # rewrite of the single per-user narrative row, so a force-regeneration
-        # re-enqueue is harmless (unlike the belief double-count the sentinel above
-        # guards). Best-effort enqueue; a Redis hiccup never breaks report storage.
-        enqueue_consolidation(activity.user_id)
+    if fire_learning_loop and not outcome.is_fallback:
+        _fire_learning_loop(db, activity, pack)
 
-    return _to_read(db_report)
+    return _to_read(row)
+
+
+def _fire_learning_loop(db: Session, activity: Activity, pack: CoachContextPack) -> None:
+    """The M4-M10 durable-memory write-back, fired on completion of a COMPLETE
+    non-fallback report (the single-shot report, or the A4 fuller turn — never the
+    opener, which is pre-input and carries none).
+
+    M8 belief write-back feeds the durable belief store the next report reads
+    (best-effort inside, self-guarded by `beliefs_written_at` so a re-read or
+    force never double-counts). A2c consolidation re-grounds the narrative in the
+    background — enqueued, never awaited, so the turn never blocks; idempotent, so
+    no sentinel is needed.
+    """
+    write_back_beliefs(db, activity, pack)
+    enqueue_consolidation(activity.user_id)
 
 
 @dataclass
@@ -367,12 +618,32 @@ def _serialize_blocks(content_blocks: list) -> str:
         return ""
 
 
-async def _call_message(client: AnthropicClient, system_prompt: str, user_message: str):
+async def _call_message(
+    client: AnthropicClient,
+    system_prompt: str,
+    user_message: str,
+    *,
+    max_tokens: int = _MESSAGE_MAX_TOKENS,
+):
     return await client.generate_coach_message(
         system=system_prompt,
         user=user_message,
         tools=[RECORD_COACH_TAIL_TOOL],
-        max_tokens=_MESSAGE_MAX_TOKENS,
+        max_tokens=max_tokens,
+    )
+
+
+def _opener_fallback_outcome() -> "_GenOutcome":
+    """A4 opener fallback: a templated brief reaction in opener_message (message
+    empty), a degraded tail, no schedule judgment. The deterministic safety
+    override still drives scheduling on a red-flag run."""
+    return _GenOutcome(
+        report_dump=CoachMessageReport(
+            message="", opener_message=_FALLBACK_OPENER_MESSAGE, tail_degraded=True,
+        ).model_dump(),
+        raw_response="",
+        is_fallback=True,
+        tail_degraded=True,
     )
 
 
@@ -381,10 +652,18 @@ async def _generate_message(
     system_prompt: str,
     user_message: str,
     pack: CoachContextPack,
+    *,
+    is_opener: bool = False,
 ) -> _GenOutcome:
-    """The A3 prose-message path: one adaptive-thinking call producing prose + a
-    tool tail, with stop_reason-aware retries, the policy gate over message+tail,
-    and degrade-not-withhold semantics (ADR 0009).
+    """The prose-message path: one adaptive-thinking call producing prose + a tool
+    tail, with stop_reason-aware retries, the policy gate over message+tail, and
+    degrade-not-withhold semantics (ADR 0009).
+
+    `is_opener` selects the A4 opener variant: a shorter max_tokens, the
+    opener merge (prose -> opener_message, message empty), and the opener fallback.
+    The stop_reason / retry / policy / medical-overreach-forces-fallback discipline
+    is identical for both stages, so the opener is policed exactly as the fuller
+    turn (AC3).
 
     stop_reason handling: `refusal` -> templated fallback; `max_tokens` -> one
     re-attempt before degrading to whatever arrived; `end_turn` with no tail ->
@@ -392,14 +671,19 @@ async def _generate_message(
     medical-overreach violation forces a fallback (the one strengthening over the
     structured path), since prose renders verbatim.
     """
+    max_tokens = _OPENER_MAX_TOKENS if is_opener else _MESSAGE_MAX_TOKENS
+    merge = merge_opener if is_opener else merge_report
+    fallback = _opener_fallback_outcome if is_opener else _message_fallback_outcome
     try:
-        result = await _call_message(client, system_prompt, user_message)
+        result = await _call_message(client, system_prompt, user_message, max_tokens=max_tokens)
         if result.stop_reason == "refusal":
             logger.warning("coach message refused; storing fallback")
-            return _message_fallback_outcome()
+            return fallback()
         if result.stop_reason == "max_tokens":
             logger.info("coach message truncated (max_tokens); retrying once")
-            retried = await _call_message(client, system_prompt, user_message)
+            retried = await _call_message(
+                client, system_prompt, user_message, max_tokens=max_tokens
+            )
             if retried.stop_reason != "refusal":
                 result = retried
 
@@ -409,19 +693,21 @@ async def _generate_message(
         if parsed.tail is None and result.stop_reason == "end_turn":
             logger.info("coach message skipped the tail tool; one corrective retry")
             nudge = f"{user_message}\n\n{_TAIL_REMINDER}"
-            result2 = await _call_message(client, system_prompt, nudge)
+            result2 = await _call_message(
+                client, system_prompt, nudge, max_tokens=max_tokens
+            )
             parsed2 = parse_blocks(result2.content_blocks)
             if parsed2.tail is not None and parsed2.message.strip():
                 parsed, result = parsed2, result2
 
         raw_response = _serialize_blocks(result.content_blocks)
-        report = merge_report(parsed)
+        report = merge(parsed)
     except EmptyMessageError:
         logger.warning("coach response carried no prose message; storing fallback")
-        return _message_fallback_outcome()
+        return fallback()
     except anthropic.APIError as e:
         logger.error("coach message transport error: %s", e)
-        return _message_fallback_outcome()
+        return fallback()
 
     violations = validate_message_policy(report, pack)
     if violations:
@@ -430,14 +716,21 @@ async def _generate_message(
             [v.rule for v in violations],
         )
         report, remaining = await _retry_message_with_fixes(
-            client, system_prompt, user_message, pack, violations, report
+            client, system_prompt, user_message, pack, violations, report,
+            is_opener=is_opener,
         )
         if remaining:
             # ADR 0009: medical overreach surviving the retry forces a fallback,
-            # because the prose renders verbatim to the runner.
+            # because the prose renders verbatim to the runner. Use the
+            # STAGE-CORRECT fallback (the variable bound above), so an opener
+            # overreach yields an opener-shaped fallback (message empty,
+            # opener_message set) that stays opener-only — otherwise the
+            # safety-forced fuller turn would cache-hit a non-opener-only fallback
+            # and never regenerate, silently defeating the safety floor on exactly
+            # the red-flag runs that trip rule 5.
             if any(v.rule == "medical_overreach" for v in remaining):
                 logger.warning("medical overreach survived retry; forcing fallback")
-                return _message_fallback_outcome()
+                return fallback()
             logger.warning(
                 "Message policy violations persisted after retry: %s",
                 [v.rule for v in remaining],
@@ -465,11 +758,16 @@ async def _retry_message_with_fixes(
     pack: CoachContextPack,
     violations: List[PolicyViolation],
     prior: CoachMessageReport,
+    *,
+    is_opener: bool = False,
 ) -> tuple[CoachMessageReport, List[PolicyViolation]]:
     """Re-prompt once with fix instructions for the message-policy violations.
     Returns (report, remaining_violations). If the retry produces nothing usable,
     the prior report and its violations are kept (so a surviving overreach still
-    forces the fallback upstream)."""
+    forces the fallback upstream). `is_opener` keeps the opener's merge + token
+    budget on the retry too."""
+    max_tokens = _OPENER_MAX_TOKENS if is_opener else _MESSAGE_MAX_TOKENS
+    merge = merge_opener if is_opener else merge_report
     fix_instructions = "\n".join(
         f"- {v.rule}: {v.fix_instruction}" for v in violations
     )
@@ -479,10 +777,12 @@ async def _retry_message_with_fixes(
         f"{fix_instructions}\n\nOriginal context:\n{original_user_message}"
     )
     try:
-        result = await _call_message(client, system_prompt, retry_message)
+        result = await _call_message(
+            client, system_prompt, retry_message, max_tokens=max_tokens
+        )
         if result.stop_reason == "refusal":
             return prior, validate_message_policy(prior, pack)
-        report = merge_report(parse_blocks(result.content_blocks))
+        report = merge(parse_blocks(result.content_blocks))
     except (EmptyMessageError, anthropic.APIError) as e:
         logger.error("Coach message retry error: %s", e)
         return prior, validate_message_policy(prior, pack)

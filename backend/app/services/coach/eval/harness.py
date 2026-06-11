@@ -30,6 +30,7 @@ from app.services.coach.eval.rubric import (
     ReportScore,
     score_report,
 )
+from app.services.coach.output_contract import is_opener_only
 from app.services.coach.service import active_schema_version
 
 
@@ -57,6 +58,10 @@ class Scorecard:
     # no usable structured tail). Operational health, not a rubric assertion: a
     # rising count means the tail call is failing even when the coaching is fine.
     tail_degraded: int = 0
+    # A4: how many rows were skipped as not-yet-complete opener-only exchanges (the
+    # fuller turn never landed). The harness scores the fuller turn only; an
+    # opener row has no message to score. Operational health, not a rubric assertion.
+    skipped_opener_only: int = 0
 
     def assertion_summary(self) -> Dict[str, Dict[str, Any]]:
         summary: Dict[str, Dict[str, Any]] = {}
@@ -93,6 +98,7 @@ class Scorecard:
         return {
             "reports_scored": len(self.report_scores),
             "skipped_fallback": self.skipped_fallback,
+            "skipped_opener_only": self.skipped_opener_only,
             "tail_degraded": self.tail_degraded,
             "errors": self.errors,
             "overall_pass_rate": self.overall_pass_rate,
@@ -131,11 +137,20 @@ def score_db_reports(
 
     scores: List[ReportScore] = []
     skipped_fallback = 0
+    skipped_opener_only = 0
     tail_degraded = 0
     errors: List[Dict[str, Any]] = []
     for row in rows:
         if row.is_fallback and not include_fallback:
             skipped_fallback += 1
+            continue
+        # A4: an opener-only row is a not-yet-complete exchange (the fuller turn
+        # never landed). The rubric scores the fuller-turn message; skip it BEFORE
+        # parse/score so an empty message never reaches the assertions. In-band
+        # signal only (the row's own report), preserving the harness's
+        # self-containment — no Activity-sentinel coupling.
+        if is_opener_only(row.report):
+            skipped_opener_only += 1
             continue
         try:
             # Parse (drifted/corrupt pack) and score (a pathological assertion)
@@ -161,6 +176,7 @@ def score_db_reports(
     return Scorecard(
         report_scores=scores,
         skipped_fallback=skipped_fallback,
+        skipped_opener_only=skipped_opener_only,
         tail_degraded=tail_degraded,
         errors=errors,
     )

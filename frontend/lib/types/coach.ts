@@ -65,6 +65,10 @@ export interface CoachMessageQuestion {
 
 // A3 (ADR 0009): the prose-message output (schema 2.0). `message` is the product;
 // the rest is the thin structured tail (affordances + memory hooks only).
+// A4 (ADR 0010): a two-stage Exchange rides one evolving report. `opener_message`
+// holds the immediate stage-one reaction; `message` holds the conditional fuller
+// turn. An opener-only row has `opener_message` set and `message` empty (the
+// fuller has not landed yet). `schedule_fuller_turn` is the opener's depth bit.
 export interface CoachMessageReport {
   message: string;
   headline?: string;
@@ -72,6 +76,8 @@ export interface CoachMessageReport {
   risks: CoachRisk[];
   questions: CoachMessageQuestion[];
   tail_degraded: boolean;
+  opener_message?: string | null;
+  schedule_fuller_turn?: boolean;
 }
 
 // The stored report is one of two shapes, keyed by schema-version family. The
@@ -82,6 +88,14 @@ export function isMessageReport(
   body: CoachReportBody,
 ): body is CoachMessageReport {
   return (body as CoachMessageReport).message !== undefined;
+}
+
+// A4: an opener-only message report — the opener prose is present but the fuller
+// turn has not yet filled `message`. The panel renders the opener and waits for
+// the fuller turn (which lands later, server-side).
+export function isOpenerOnly(body: CoachReportBody): boolean {
+  if (!isMessageReport(body)) return false;
+  return Boolean(body.opener_message) && !(body.message ?? "").trim();
 }
 
 export interface CoachReportDebug {

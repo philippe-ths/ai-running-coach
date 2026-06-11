@@ -193,4 +193,10 @@ def create_checkin(
     # 2. Trigger Re-Processing to incorporate user feedback
     analysis.analyze(db, str(activity_id))
 
+    # 3. A4: a check-in is a reply — if the two-stage exchange is still open, fire
+    # the fuller turn early (best-effort; never breaks the check-in write).
+    from app.jobs.process_new_activity import maybe_enqueue_fuller_turn
+
+    maybe_enqueue_fuller_turn(db, activity_id)
+
     return db_obj

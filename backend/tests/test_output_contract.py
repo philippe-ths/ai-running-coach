@@ -10,6 +10,7 @@ from app.services.coach.output_contract import (
     TOOL_NAME,
     EmptyMessageError,
     ParsedBlocks,
+    merge_opener,
     merge_report,
     parse_blocks,
 )
@@ -136,3 +137,70 @@ class TestMergeReport:
         assert report.message == "Kept."
         assert report.headline == "Solid aerobic long run"
         assert report.tail_degraded is False
+
+    def test_schedule_fuller_turn_in_tail_splats_in(self):
+        # A4: the opener's schedule judgment rides the tail splat into the report.
+        tail = dict(_FULL_TAIL, schedule_fuller_turn=True)
+        report = merge_report(ParsedBlocks(message="Kept.", tail=tail))
+        assert report.schedule_fuller_turn is True
+
+
+class TestToolSchemaScheduleBit:
+    def test_schedule_fuller_turn_is_optional_boolean(self):
+        # A4: schedule_fuller_turn is a top-level tail property but NOT required
+        # (opener-only; the fuller turn omits it), like evidence/payload.
+        props = RECORD_COACH_TAIL_TOOL["input_schema"]["properties"]
+        assert props["schedule_fuller_turn"]["type"] == "boolean"
+        assert "schedule_fuller_turn" not in RECORD_COACH_TAIL_TOOL["input_schema"]["required"]
+
+
+_OPENER_TAIL = {
+    "headline": "Quick reaction",
+    "next_steps": [],
+    "risks": [],
+    "questions": [
+        {"question": "How did that feel?", "reason": "Calibrate intensity",
+         "options": [{"id": "rpe", "label": "Rate 1-10", "kind": "rpe"},
+                     {"id": "pain", "label": "Any pain?", "kind": "pain"}]},
+    ],
+    "schedule_fuller_turn": True,
+}
+
+
+class TestMergeOpener:
+    def test_opener_prose_lands_in_opener_message(self):
+        report = merge_opener(ParsedBlocks(message="Nice work out there!", tail=_OPENER_TAIL))
+        assert report.opener_message == "Nice work out there!"
+        assert report.message == ""  # fuller turn fills this later
+        assert report.schedule_fuller_turn is True
+        assert report.questions[0].options[0].kind == "rpe"
+        assert report.tail_degraded is False
+
+    def test_opener_carries_no_commitments(self):
+        # next_steps/risks are never carried from an opener tail — the opener makes
+        # no commitments and contributes nothing to the M7 learning loop.
+        tail = dict(_OPENER_TAIL, next_steps=[
+            {"action": "Add intervals", "details": "x", "why": "y"}
+        ], risks=[{"flag": "high_drift", "explanation": "x", "mitigation": "y"}])
+        report = merge_opener(ParsedBlocks(message="Reaction.", tail=tail))
+        assert report.next_steps == []
+        assert report.risks == []
+
+    def test_opener_empty_prose_refused(self):
+        with pytest.raises(EmptyMessageError):
+            merge_opener(ParsedBlocks(message="  ", tail=_OPENER_TAIL))
+
+    def test_opener_no_tail_degrades_keeps_prose(self):
+        report = merge_opener(ParsedBlocks(message="Reaction only.", tail=None))
+        assert report.opener_message == "Reaction only."
+        assert report.message == ""
+        assert report.tail_degraded is True
+        # A degraded opener tail loses its schedule judgment; defaults to no-fuller
+        # (the safety override is the deterministic backstop).
+        assert report.schedule_fuller_turn is False
+        assert report.questions == []
+
+    def test_opener_defaults_schedule_when_absent(self):
+        tail = {"headline": "h", "next_steps": [], "risks": [], "questions": []}
+        report = merge_opener(ParsedBlocks(message="Reaction.", tail=tail))
+        assert report.schedule_fuller_turn is False
