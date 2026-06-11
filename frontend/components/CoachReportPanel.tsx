@@ -27,6 +27,36 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   const [status, setStatus] = useState<'checking' | 'idle' | 'loading' | 'loaded' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
 
+  // I1a: tappable RPE/pain input. One answer per question; key by question index.
+  // A tap writes a CheckIn (rpe → rpe, pain → pain_score) and the server fires the
+  // fuller turn when the exchange is open. Conversational reply/dispute options are
+  // out of scope here (they belong to I2 chat-as-continuation).
+  const [tapState, setTapState] = useState<Record<number, 'sending' | 'sent' | 'error'>>({});
+  const [chosenOption, setChosenOption] = useState<Record<number, string>>({});
+
+  const handleOptionTap = useCallback(
+    async (qIndex: number, opt: { id: string; kind: string; payload?: unknown }) => {
+      if (opt.kind !== 'rpe' && opt.kind !== 'pain') return;
+      const value = Number(opt.payload);
+      if (!Number.isFinite(value)) return;
+      const field = opt.kind === 'rpe' ? 'rpe' : 'pain_score';
+      setChosenOption((prev) => ({ ...prev, [qIndex]: opt.id }));
+      setTapState((prev) => ({ ...prev, [qIndex]: 'sending' }));
+      try {
+        const res = await fetch(`/api/activities/${activityId}/checkin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [field]: value }),
+        });
+        if (!res.ok) throw new Error(`Failed (${res.status})`);
+        setTapState((prev) => ({ ...prev, [qIndex]: 'sent' }));
+      } catch {
+        setTapState((prev) => ({ ...prev, [qIndex]: 'error' }));
+      }
+    },
+    [activityId],
+  );
+
   const fetchReport = useCallback(async (generateIfMissing: boolean, force = false) => {
     setStatus('loading');
     setErrorMsg('');
@@ -239,15 +269,46 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                       <p className="text-blue-900 text-sm font-medium">{q.question}</p>
                       <p className="text-blue-600 text-xs mt-1 italic">{q.reason}</p>
                       {q.options.length > 0 && (
-                        <div className="flex flex-wrap gap-2 mt-2">
-                          {q.options.map((opt) => (
-                            <span
-                              key={opt.id}
-                              className="inline-flex items-center rounded-full border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700"
-                            >
-                              {opt.label}
-                            </span>
-                          ))}
+                        <div className="flex flex-wrap items-center gap-2 mt-2">
+                          {q.options.map((opt) => {
+                            // I1a delivers RPE/pain taps (the milestone's "quick
+                            // RPE/pain options"); other kinds render as before.
+                            const interactive = opt.kind === 'rpe' || opt.kind === 'pain';
+                            const answered = tapState[i] === 'sent';
+                            const sending = tapState[i] === 'sending';
+                            const isChosen = chosenOption[i] === opt.id;
+                            if (!interactive) {
+                              return (
+                                <span
+                                  key={opt.id}
+                                  className="inline-flex items-center rounded-full border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700"
+                                >
+                                  {opt.label}
+                                </span>
+                              );
+                            }
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                disabled={sending || answered}
+                                onClick={() => handleOptionTap(i, opt)}
+                                className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:cursor-default ${
+                                  isChosen && answered
+                                    ? 'border-green-400 bg-green-100 text-green-800'
+                                    : 'border-blue-300 bg-white text-blue-700 hover:bg-blue-100 disabled:opacity-50'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                          {tapState[i] === 'sent' && (
+                            <span className="text-xs text-green-700">Thanks — got it</span>
+                          )}
+                          {tapState[i] === 'error' && (
+                            <span className="text-xs text-red-600">Couldn’t save — tap to retry</span>
+                          )}
                         </div>
                       )}
                     </div>
