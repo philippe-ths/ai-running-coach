@@ -12,6 +12,11 @@ _Avoid_: treating the coach's output as a standalone per-activity report; the pr
 One coach↔runner turn-or-burst within a `Coaching relationship`, anchored to an event (most often a finished `Activity`, but also a `CheckIn` or a chat reply). The default post-activity exchange is two-stage: an immediate light, input-free opener (a brief human reaction plus tappable `Perceived effort`/pain prompts, never blocking, never nagging for missing data), then a fuller turn triggered by the runner's reply or a timer, whichever comes first, folding in any input that arrived. The coach decides the depth of each stage from whether the event warrants it: silence or a one-liner on an unremarkable run, depth on an interesting one. Every exchange reads from and writes back to the relationship's memory. A `Coach report generation` is one heavyweight form an exchange can take, not a synonym for it.
 _Avoid_: equating "exchange" with "report"; a report is one shape an exchange can take, and many exchanges are light or silent.
 
+## Salience
+
+How much an event (a finished `Activity`, later a `Block`) is worth the coach speaking about, and how strongly: the coach's read of an event's noteworthiness to this `Coaching relationship` right now. It is the axis that drives the two-stage `Exchange` cadence and coach-decided depth: a high-salience event pulls the coach's response up in weight, a low-salience one toward a one-liner or silence (silence is a valid, correct response, not a failure to do work). Salience is the computable proxy for the runner's own expectation of how noteworthy the event was; the coach aims to mirror that expectation, and a divergence between the data-derived salience and the runner's felt importance is itself coaching signal, not error (the same shape as the `Stated intent`-vs-execution and `Perceived effort`-vs-`Effort` gaps). Read from already-computed signals: unusual versus the runner's own baseline, a safety flag, novelty (first of its kind in their history), and relevance to an open thread (prior advice, a tracked pattern). Distinct from `Effort` (how hard, from HR) and `Training load` (cumulative strain): a planned-and-nailed hard session can be low-salience, while a physically light first-ever activity is high.
+_Avoid_: equating salience with intensity or load; an easy or short run can be highly salient (novel, or it breaks a pattern), and a hard run can be unremarkable (exactly as planned).
+
 ## Working context
 
 The bounded set of information assembled into the prompt for one `Exchange`: a lean `B baseline` always present (the relationship's narrative summary, this run's measured facts, the relevant deterministic facts, the last exchange's digest) plus a trigger-scoped focus payload about whatever the exchange is anchored to, kept deliberately lean. It is a **view, not a store**: assembled per turn from the raw store, the `Processed artifacts` layer, and `Durable memory`, with deeper detail pulled on demand (retrieval) rather than received as a fixed, pre-decided pack. Distinct from `Durable memory` (what persists across exchanges) and the raw store (the append-only source of truth, never loaded wholesale). The thing context engineering protects: small by default, deep on demand.
@@ -61,7 +66,7 @@ _Avoid_: letting any lower tier (corpus, materials, user assertions, generic kno
 
 A side-channel delivery of an `Exchange` to the runner — distinct from the in-app artifact. The `CoachReport` is the stored record of that exchange (under A3 / ADR 0009 its product is a human prose `message`, not a structured form; older rows are the legacy structured shape), rendered by the frontend; a notification is one transmission of that message (or a representation of it) to an external channel such as Telegram or email.
 
-A notification is at-most-once per `Activity` per channel. The sentinel for "this activity has been notified" lives on the `Activity` row (see `Notified at`), not on the `CoachReport`, because re-generating a report (e.g., `force=true`) must not re-fire a notification.
+A notification is at-most-once per `Exchange` stage per `Activity` per channel: a two-stage exchange (ADR 0010) sends one opener notification and, if a fuller turn fires, one fuller notification, each deduped by its own sentinel (see `Notified at`). The sentinels live on the `Activity` row, not on the `CoachReport`, because re-generating a report (e.g., `force=true`) must not re-fire a notification.
 
 ## Notifier
 
@@ -69,7 +74,7 @@ The abstraction for sending a notification. Modelled as a port (`NotifierPort`) 
 
 ## Notified at
 
-The single sentinel for notification dedup: a timestamp column on `Activity` indicating that a notification has been successfully sent for that activity. Null means "not yet notified." Set after a successful send; left null on failure so retries can re-send.
+The per-stage sentinels for notification dedup: timestamp columns on `Activity` indicating that a notification has been successfully sent for that activity. A two-stage `Exchange` (ADR 0010) carries one per stage (the opener sentinel and the fuller-turn sentinel); a single-stage exchange uses only the fuller-turn sentinel. Null means "not yet notified" for that stage. Set after a successful send; left null on failure so retries can re-send.
 
 ## Process new activity
 
