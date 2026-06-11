@@ -34,6 +34,44 @@ class CoachQuestion(BaseModel):
     reason: str
 
 
+class TappableOption(BaseModel):
+    """A typed quick-reply affordance attached to a coach question (the I1
+    contract, grafted from the Message-First design). `kind` tells the UI how to
+    handle a tap; `payload` carries any kind-specific value (e.g. an RPE number).
+    A3 renders the label only; inline-keyboard delivery is I1 scope."""
+    id: str
+    label: str
+    kind: Literal["rpe", "pain", "reply", "dispute", "custom"]
+    payload: Optional[Any] = None
+
+
+class CoachMessageQuestion(BaseModel):
+    """A coach question in the prose-message tail. Same question/reason shape as
+    the legacy CoachQuestion (rule 1 polices it identically) plus optional typed
+    tappable options."""
+    question: str
+    reason: str
+    options: List[TappableOption] = Field(default_factory=list)
+
+
+class CoachMessageReport(BaseModel):
+    """The A3 output shape (schema 2.0): a human prose `message` (the product)
+    plus a thin structured tail carrying affordances and memory hooks only. The
+    tail's `next_steps` keep the exact action/details/why/evidence shape the
+    learning loop already consumes (retrieval.fetch_prior_commitments, M7/M8/M10),
+    so the loop survives the cutover by construction.
+
+    `tail_degraded` records that the model produced a real message but no usable
+    tail (the inherent skip-the-tail failure mode under tool_choice=auto): the
+    message is still the product, and the loop abstains on the empty next_steps."""
+    message: str
+    headline: Optional[str] = None
+    next_steps: List[CoachNextStep] = Field(default_factory=list, max_length=3)
+    risks: List[CoachRisk] = Field(default_factory=list)
+    questions: List[CoachMessageQuestion] = Field(default_factory=list, max_length=4)
+    tail_degraded: bool = False
+
+
 class CoachReportMeta(BaseModel):
     confidence: Literal["low", "medium", "high"]
     model_id: str
@@ -92,7 +130,10 @@ class CoachReportDebug(BaseModel):
 class CoachReportRead(BaseModel):
     id: UUID
     activity_id: UUID
-    report: CoachReportContent
+    # The stored report is one of two shapes keyed by schema-version family:
+    # the legacy structured CoachReportContent (1.x) or the A3 prose
+    # CoachMessageReport (2.x). service._to_read validates against the right one.
+    report: Union[CoachMessageReport, CoachReportContent]
     meta: CoachReportMeta
     debug: CoachReportDebug
     created_at: datetime
