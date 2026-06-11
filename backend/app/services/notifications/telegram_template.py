@@ -1,4 +1,9 @@
 from app.schemas.coach import CoachReportRead
+from app.services.notifications._prose import (
+    TELEGRAM_BODY_LIMIT,
+    is_message_report,
+    truncate_at_paragraph,
+)
 
 
 def render_coach_report_telegram(
@@ -25,6 +30,14 @@ def render_coach_report_telegram(
     activity_url = f"{app_base_url.rstrip('/')}/activity/{report.activity_id}"
 
     content = report.report
+
+    # A3 (ADR 0009): the prose message IS the product, so the Telegram body is the
+    # message itself, truncated at a paragraph boundary under the 4096 limit. The
+    # structured tail (chips, next steps) lives in the app, not the notification.
+    if is_message_report(content):
+        body = truncate_at_paragraph(content.message, TELEGRAM_BODY_LIMIT)
+        return title, body, activity_url
+
     lines: list[str] = ["Key takeaways:"]
     for t in content.key_takeaways:
         lines.append(f"• {t.text}")

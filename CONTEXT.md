@@ -59,7 +59,7 @@ _Avoid_: letting any lower tier (corpus, materials, user assertions, generic kno
 
 ## Notification
 
-A side-channel delivery of a `CoachReport` to the runner — distinct from the in-app artifact. The `CoachReport` is the structured analysis stored in the DB and rendered by the frontend; a notification is one transmission of that report (or a representation of it) to an external channel such as email.
+A side-channel delivery of an `Exchange` to the runner — distinct from the in-app artifact. The `CoachReport` is the stored record of that exchange (under A3 / ADR 0009 its product is a human prose `message`, not a structured form; older rows are the legacy structured shape), rendered by the frontend; a notification is one transmission of that message (or a representation of it) to an external channel such as Telegram or email.
 
 A notification is at-most-once per `Activity` per channel. The sentinel for "this activity has been notified" lives on the `Activity` row (see `Notified at`), not on the `CoachReport`, because re-generating a report (e.g., `force=true`) must not re-fire a notification.
 
@@ -89,7 +89,7 @@ The deterministic processing pipeline that takes a persisted `Activity` + its `A
 
 ## Coach report generation
 
-The LLM-driven step that builds a context pack from a `DerivedMetric`, calls Anthropic, validates the response against the schema and the policy validator, and persists a `CoachReport`. Distinct from notification: a report can exist without ever being notified (e.g., older runs, low-confidence runs delivered only on-demand via the UI).
+The LLM-driven step that builds a context pack from a `DerivedMetric`, calls Anthropic, validates the response against the schema and the policy validator, and persists a `CoachReport`. It is one heavyweight form an `Exchange` can take, not the relationship itself. Under A3 (ADR 0009) the generated product is a human prose `message` written before any structure (the thin structured tail carries only affordances and memory hooks); the policy validator polices the full prose plus tail, and the stored `CoachReport` is the exchange record. Distinct from notification: a report can exist without ever being notified (e.g., older runs, low-confidence runs delivered only on-demand via the UI).
 
 ## Activity classification
 
