@@ -8,7 +8,7 @@ stubbed; the scheduler helper is patched (then exercised separately).
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
@@ -18,10 +18,13 @@ from app.jobs import process_new_activity as pna
 from app.jobs.process_new_activity import (
     _run_opener_stage,
     _schedule_fuller_turn,
+    maybe_enqueue_fuller_turn,
     process_fuller_turn,
 )
 from app.models import Activity, DerivedMetric, StravaAccount, User, UserProfile
 from app.services.coach.llm import MessageResult
+from app.services.coach.output_contract import is_opener_only
+from app.services.coach.service import get_active_report_row
 from app.services.notifications import set_notifier
 from app.services.notifications.in_memory_adapter import InMemoryNotifier
 
@@ -212,6 +215,50 @@ async def test_fuller_turn_idempotent_racing_timer_noops(db, configured, notifie
     assert first is not None
     assert second is None  # timer-after-reply is a harmless no-op
     assert len(notifier.sent) == 1  # exactly one fuller notification
+
+
+async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, notifier):
+    # #217: a red-flag run forces a fuller turn. If that forced fuller's LLM call
+    # falls back persistently (both prose attempts empty), the turn must NOT be
+    # silently abandoned: no fuller notification fires, the fuller sentinel stays
+    # null, and the row stays opener-only so a reply re-opens the exchange and the
+    # substantive coaching can still land — the safety floor's guarantee survives.
+    activity = _seed(db, flags=["illness_or_extreme_fatigue"])
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_opener_blocks(schedule=False)))), \
+         patch.object(pna, "_schedule_fuller_turn"):
+        await _run_opener_stage(db=db, activity=activity,
+                                strava_activity_id=activity.strava_activity_id, notifier=notifier)
+    assert len(notifier.sent) == 1  # opener only
+
+    empty = [_tail(headline="x", next_steps=[], risks=[], questions=[])]
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(empty), _result(empty))), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        result = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
+    assert result is None              # a fallback fuller is not notified
+    assert len(notifier.sent) == 1     # still just the opener
+    db.refresh(activity)
+    assert activity.coach_notification_sent_at is None  # sentinel left open for retry
+    row = get_active_report_row(db, activity.id)
+    assert is_opener_only(row.report) is True  # recoverable, not a stuck fallback
+
+    # A reply re-opens the exchange — the recovery path the stuck fallback used to
+    # defeat (the row is opener-only, so maybe_enqueue_fuller_turn re-fires).
+    with patch("app.jobs.process_new_activity.queue", Mock()):
+        assert maybe_enqueue_fuller_turn(db, activity.id) is True
+
+    # And the re-fired fuller now produces and notifies the real substantive turn.
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_fuller_blocks()))), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        recovered = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
+    assert recovered is not None
+    assert len(notifier.sent) == 2
+    db.refresh(activity)
+    assert activity.coach_notification_sent_at is not None
 
 
 async def test_two_notifications_max_opener_then_fuller(db, configured, notifier):
