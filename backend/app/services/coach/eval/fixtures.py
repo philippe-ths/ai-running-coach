@@ -13,7 +13,12 @@ from __future__ import annotations
 
 from typing import Tuple
 
-from app.schemas.coach import CoachNextStep, CoachReportContent, CoachTakeaway
+from app.schemas.coach import (
+    CoachMessageReport,
+    CoachNextStep,
+    CoachReportContent,
+    CoachTakeaway,
+)
 from app.schemas.coach_context import CoachContextPack
 
 _BASE_PACK = {
@@ -157,6 +162,84 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
         },
         longitudinal={"prior_reports": [_PRIOR_DIGEST], "baseline_trend": None},  # abstaining bucket
         # (6) the one next_step is in a theme the runner IGNORES, none in an acts-on theme
+        preference_profile={"themes": [
+            {"theme": "easy_discipline", "tendency": "acts_on", "acted": 5, "total": 6},
+            {"theme": "add_long_run", "tendency": "ignores", "acted": 0, "total": 4},
+        ]},
+    )
+    return content, pack
+
+
+# --- A3 prose-message shape (schema 2.0) -------------------------------------
+# The same inverted-oracle pair for the prose family: the message reuses the same
+# packs as the structured fixtures (those drive the pack-side assertions 2/4/5/6/8),
+# so the only difference is the output shape the rubric extractors branch on.
+
+
+def known_good_message_report() -> Tuple[CoachMessageReport, CoachContextPack]:
+    """A grounded prose message: leads with a verdict, discounts a heat-inflated
+    drift, no medical overreach, advances rather than parrots, no thin-trend claim,
+    and frames toward the quality work this runner acts on."""
+    content = CoachMessageReport(
+        message=(
+            "Easy run, run easy. Your HR drift looks high at 9% but it was 29C out "
+            "there, so discount it as a heat artefact, not accumulating fatigue. The "
+            "effort stayed in the easy band the whole way, which is exactly what this "
+            "session was for."
+        ),
+        headline="Easy run, run easy",
+        next_steps=[CoachNextStep(
+            action="Add a tempo segment",
+            details="a short tempo block when you feel fresh",
+            why="a quality stimulus you respond to",
+        )],
+        risks=[],
+        questions=[],
+    )
+    pack = _pack(
+        metrics={"discount_signals": _HEAT_DISCOUNT},
+        longitudinal={"prior_reports": [_PRIOR_DIGEST], "baseline_trend": None},
+        preference_profile={"themes": [
+            {"theme": "add_quality", "tendency": "acts_on", "acted": 4, "total": 5},
+        ]},
+    )
+    return content, pack
+
+
+def deliberately_bad_message_report() -> Tuple[CoachMessageReport, CoachContextPack]:
+    """A prose message that violates every rubric dimension: no headline label,
+    ignores a fired confound, medical overreach, opens by parroting the prior lead,
+    claims an ungrounded trend, frames advice away from what the runner acts on,
+    narrates the cumulative load number as an intensity verdict (#168), and leads
+    with a low detection-confidence caveat instead of coaching the rep data (#171)."""
+    content = CoachMessageReport(
+        # The opening sentence both (4) parrots the prior lead AND (8) leads with a
+        # detection caveat though per-rep data is present.
+        message=(
+            "You held threshold pace for the full 20 minutes, though the intervals "
+            "were not consistently detected so this session is unreliable. Your "
+            "fitness has clearly been trending upward over the past few weeks. I "
+            "would diagnose this as chronic fatigue. An effort score of 265.6 "
+            "confirms this stayed in true recovery territory, well below moderate "
+            "intensity thresholds."
+        ),
+        headline=None,  # (1) no lead verdict label, tail not degraded
+        next_steps=[CoachNextStep(
+            action="Add a long run",
+            details="add a long run to build endurance with a 2 hour effort",  # (4) parrots prior next-step
+            why="Push through it",
+        )],
+        risks=[],
+        questions=[],
+        tail_degraded=False,
+    )
+    pack = _pack(
+        metrics={
+            "discount_signals": _HEAT_DISCOUNT,  # (2) confound fired, message ignores it
+            "interval_structure": _LOW_CONF_INTERVAL_STRUCTURE,  # (8) per-rep data present
+            "workout_match": _LOW_CONF_MATCH,
+        },
+        longitudinal={"prior_reports": [_PRIOR_DIGEST], "baseline_trend": None},  # abstaining bucket
         preference_profile={"themes": [
             {"theme": "easy_discipline", "tendency": "acts_on", "acted": 5, "total": 6},
             {"theme": "add_long_run", "tendency": "ignores", "acted": 0, "total": 4},

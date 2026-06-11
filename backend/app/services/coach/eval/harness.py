@@ -16,16 +16,30 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.coach_report import CoachReport
-from app.schemas.coach import CoachReportContent
+from app.schemas.coach import CoachMessageReport, CoachReportContent
 from app.schemas.coach_context import CoachContextPack
-from app.services.coach.eval.fixtures import deliberately_bad_report, known_good_report
+from app.services.coach.eval.fixtures import (
+    deliberately_bad_message_report,
+    deliberately_bad_report,
+    known_good_message_report,
+    known_good_report,
+)
 from app.services.coach.eval.rubric import (
     ASSERTIONS,
     AssertionStatus,
     ReportScore,
     score_report,
 )
-from app.services.coach.service import SCHEMA_VERSION
+from app.services.coach.service import active_schema_version
+
+
+def _validate_report(schema_version, report_json):
+    """Parse a stored report against the model for its schema-version family
+    (ADR 0009): the A3 prose CoachMessageReport for 2.x rows, the legacy
+    structured CoachReportContent otherwise."""
+    if str(schema_version or "").startswith("2"):
+        return CoachMessageReport.model_validate(report_json)
+    return CoachReportContent.model_validate(report_json)
 
 
 def _assertion_names() -> List[str]:
@@ -39,6 +53,10 @@ class Scorecard:
     report_scores: List[ReportScore]
     skipped_fallback: int = 0
     errors: List[Dict[str, Any]] = field(default_factory=list)
+    # A3: how many scored reports stored a degraded tail (a real prose message but
+    # no usable structured tail). Operational health, not a rubric assertion: a
+    # rising count means the tail call is failing even when the coaching is fine.
+    tail_degraded: int = 0
 
     def assertion_summary(self) -> Dict[str, Dict[str, Any]]:
         summary: Dict[str, Dict[str, Any]] = {}
@@ -75,6 +93,7 @@ class Scorecard:
         return {
             "reports_scored": len(self.report_scores),
             "skipped_fallback": self.skipped_fallback,
+            "tail_degraded": self.tail_degraded,
             "errors": self.errors,
             "overall_pass_rate": self.overall_pass_rate,
             "assertion_summary": self.assertion_summary(),
@@ -98,7 +117,9 @@ def score_db_reports(
     if prompt_id is None:
         prompt_id = settings.COACH_PROMPT_ID
     if schema_version is None:
-        schema_version = SCHEMA_VERSION
+        # Score whichever family the active prompt selects, so `make eval` follows
+        # the active output shape across the cutover (AC5).
+        schema_version = active_schema_version(prompt_id)
 
     query = db.query(CoachReport)
     if not all_versions:
@@ -110,6 +131,7 @@ def score_db_reports(
 
     scores: List[ReportScore] = []
     skipped_fallback = 0
+    tail_degraded = 0
     errors: List[Dict[str, Any]] = []
     for row in rows:
         if row.is_fallback and not include_fallback:
@@ -118,7 +140,7 @@ def score_db_reports(
         try:
             # Parse (drifted/corrupt pack) and score (a pathological assertion)
             # both guarded: one bad report becomes an error, never a crashed run.
-            content = CoachReportContent.model_validate(row.report)
+            content = _validate_report(row.schema_version, row.report)
             pack = CoachContextPack.model_validate(row.context_pack)
             score = score_report(
                 content, pack,
@@ -132,9 +154,16 @@ def score_db_reports(
             summary = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
             errors.append({"report_id": str(row.id), "error": f"{type(exc).__name__}: {summary}"})
             continue
+        if getattr(content, "tail_degraded", False):
+            tail_degraded += 1
         scores.append(score)
 
-    return Scorecard(report_scores=scores, skipped_fallback=skipped_fallback, errors=errors)
+    return Scorecard(
+        report_scores=scores,
+        skipped_fallback=skipped_fallback,
+        tail_degraded=tail_degraded,
+        errors=errors,
+    )
 
 
 def compare_scorecards(
@@ -191,30 +220,37 @@ def compare_scorecards(
 
 def run_self_test() -> tuple[bool, str]:
     """Validate the harness against its own synthetic fixtures (the brief's
-    deliberately-bad-fails / known-good-passes check). Returns (ok, report)."""
+    deliberately-bad-fails / known-good-passes check), for BOTH output shapes —
+    the legacy structured report and the A3 prose message. Returns (ok, report)."""
     lines: List[str] = []
     ok = True
 
-    good_content, good_pack = known_good_report()
-    good = score_report(good_content, good_pack, report_id="self-test-good")
-    if good.failed_count != 0 or good.applicable_count == 0:
-        ok = False
-        lines.append(
-            f"FAIL known-good fixture: failed={good.failed_count} applicable={good.applicable_count} "
-            f"(expected 0 failed, >0 applicable)"
-        )
-    else:
-        lines.append(f"OK   known-good fixture passes all {good.applicable_count} applicable assertions")
+    for label, good_fn, bad_fn in (
+        ("structured", known_good_report, deliberately_bad_report),
+        ("message", known_good_message_report, deliberately_bad_message_report),
+    ):
+        good_content, good_pack = good_fn()
+        good = score_report(good_content, good_pack, report_id=f"self-test-good-{label}")
+        if good.failed_count != 0 or good.applicable_count == 0:
+            ok = False
+            lines.append(
+                f"FAIL known-good {label} fixture: failed={good.failed_count} "
+                f"applicable={good.applicable_count} (expected 0 failed, >0 applicable)"
+            )
+        else:
+            lines.append(
+                f"OK   known-good {label} fixture passes all {good.applicable_count} applicable assertions"
+            )
 
-    bad_content, bad_pack = deliberately_bad_report()
-    bad = score_report(bad_content, bad_pack, report_id="self-test-bad")
-    failed_names = {a.name for a in bad.assertions if a.status is AssertionStatus.FAIL}
-    expected = set(_assertion_names())
-    missing = expected - failed_names
-    if missing:
-        ok = False
-        lines.append(f"FAIL deliberately-bad fixture did not fail: {sorted(missing)}")
-    else:
-        lines.append(f"OK   deliberately-bad fixture fails all {len(expected)} assertions")
+        bad_content, bad_pack = bad_fn()
+        bad = score_report(bad_content, bad_pack, report_id=f"self-test-bad-{label}")
+        failed_names = {a.name for a in bad.assertions if a.status is AssertionStatus.FAIL}
+        expected = set(_assertion_names())
+        missing = expected - failed_names
+        if missing:
+            ok = False
+            lines.append(f"FAIL deliberately-bad {label} fixture did not fail: {sorted(missing)}")
+        else:
+            lines.append(f"OK   deliberately-bad {label} fixture fails all {len(expected)} assertions")
 
     return ok, "\n".join(lines)

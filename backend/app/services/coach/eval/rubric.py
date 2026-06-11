@@ -37,12 +37,41 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
-from app.schemas.coach import CoachReportContent
+from app.schemas.coach import CoachMessageReport, CoachReportContent
 from app.schemas.coach_context import CoachContextPack
 from app.services.analysis.discount_signals import ELEVATED_DRIFT_THRESHOLD_PCT
-from app.services.coach.validator import _extract_all_text, validate_policy
+from app.services.coach.digest import _first_sentence
+from app.services.coach.validator import (
+    _extract_all_text,
+    _extract_message_text,
+    validate_message_policy,
+    validate_policy,
+)
+
+# The rubric scores both output shapes (ADR 0009): the legacy structured
+# CoachReportContent and the A3 prose CoachMessageReport. The text-extractor and
+# field-accessor helpers below branch on the shape so the eight assertions are
+# written once over a uniform surface.
+ReportLike = Union[CoachReportContent, CoachMessageReport]
+
+
+def _is_message(content: ReportLike) -> bool:
+    return isinstance(content, CoachMessageReport)
+
+
+def _headline(content: ReportLike) -> str:
+    return (content.headline or "").strip()
+
+
+def _lead_argument_text(content: ReportLike) -> Optional[str]:
+    """The report's strongest single claim. For the prose message this is its
+    opening sentence (the verdict the prompt asks it to lead with); for the
+    structured report it is the explicit lead_argument."""
+    if _is_message(content):
+        return _first_sentence(content.message)
+    return content.lead_argument.text if content.lead_argument is not None else None
 
 
 class AssertionStatus(str, Enum):
@@ -111,18 +140,31 @@ class ReportScore:
 
 # --- shared text helpers ------------------------------------------------------
 
-def _report_text(content: CoachReportContent) -> str:
+def _report_text(content: ReportLike) -> str:
     """All scoreable report text, lower-cased. Reuses the production validator's
-    extractor so the eval sees exactly the surface the policy gate polices."""
+    extractor so the eval sees exactly the surface the policy gate polices. For
+    the prose message this is the message + every tail text field."""
+    if _is_message(content):
+        return _extract_message_text(content).lower()
     return _extract_all_text(content).lower()
 
 
-def _assertive_text(content: CoachReportContent) -> str:
-    """The report's ASSERTED claims only, lower-cased: headline, thesis, lead
-    argument, takeaways, next steps and risks — but NOT questions. A question the
-    coach asks ("how did this feel compared to your last session?") is not an
-    assertion, so trend-claim detection must not fire on it."""
+def _assertive_text(content: ReportLike) -> str:
+    """The report's ASSERTED claims only, lower-cased: headline, thesis/message,
+    lead argument, takeaways, next steps and risks — but NOT questions. A question
+    the coach asks ("how did this feel compared to your last session?") is not an
+    assertion, so trend-claim detection must not fire on it. For the prose message
+    the whole message body is assertion (the tail's questions are excluded)."""
     parts: List[str] = []
+    if _is_message(content):
+        parts.append(content.message)
+        if content.headline:
+            parts.append(content.headline)
+        for s in content.next_steps:
+            parts.extend([s.action, s.details, s.why])
+        for r in content.risks:
+            parts.extend([r.explanation, r.mitigation])
+        return " ".join(parts).lower()
     if content.headline:
         parts.append(content.headline)
     if content.thesis:
@@ -161,17 +203,25 @@ def _jaccard(a: set, b: set) -> float:
 
 # --- assertion 1: led with a headline ----------------------------------------
 
-def assert_led_with_headline(content: CoachReportContent, pack: CoachContextPack) -> AssertionResult:
-    headline = (content.headline or "").strip()
+def assert_led_with_headline(content: ReportLike, pack: CoachContextPack) -> AssertionResult:
+    headline = _headline(content)
     if headline:
         return AssertionResult(
             "led_with_headline", AssertionStatus.PASS,
             "Report opens with a headline verdict.",
             {"headline": headline},
         )
+    # For the prose message the headline lives in the tail; a degraded tail has no
+    # headline, but the message itself still led with a verdict, so this dimension
+    # cannot be assessed rather than failed.
+    if _is_message(content) and getattr(content, "tail_degraded", False):
+        return AssertionResult(
+            "led_with_headline", AssertionStatus.NOT_APPLICABLE,
+            "Prose message with a degraded tail carries no headline label to assess.",
+        )
     return AssertionResult(
         "led_with_headline", AssertionStatus.FAIL,
-        "Report has no headline; the grounded reshape (N3) requires a lead verdict.",
+        "Report has no headline; a lead verdict label is required.",
         {"headline": content.headline},
     )
 
@@ -244,10 +294,15 @@ def assert_discounted_inflated_hr(content: CoachReportContent, pack: CoachContex
 
 # --- assertion 3: avoided medical overreach ----------------------------------
 
-def assert_no_medical_overreach(content: CoachReportContent, pack: CoachContextPack) -> AssertionResult:
+def assert_no_medical_overreach(content: ReportLike, pack: CoachContextPack) -> AssertionResult:
     # Reuse the production policy gate verbatim so eval and runtime share one
-    # definition of "medical overreach" (validator rule 5).
-    violations = [v for v in validate_policy(content, pack) if v.rule == "medical_overreach"]
+    # definition of "medical overreach" (validator rule 5), over whichever output
+    # shape this report is.
+    if _is_message(content):
+        gate = validate_message_policy(content, pack)
+    else:
+        gate = validate_policy(content, pack)
+    violations = [v for v in gate if v.rule == "medical_overreach"]
     if not violations:
         return AssertionResult(
             "no_medical_overreach", AssertionStatus.PASS,
@@ -265,12 +320,14 @@ def assert_no_medical_overreach(content: CoachReportContent, pack: CoachContextP
 _PARROT_OVERLAP_THRESHOLD = 0.5  # tunable; the deterministic floor for parroting
 
 
-def _forward_words(content: CoachReportContent) -> set:
+def _forward_words(content: ReportLike) -> set:
     """The substantive forward content of a report: its lead claim and its
-    recommended actions (action + details)."""
+    recommended actions (action + details). The lead claim is the structured
+    lead_argument or, for the prose message, its opening sentence."""
     parts: List[str] = []
-    if content.lead_argument is not None:
-        parts.append(content.lead_argument.text)
+    lead = _lead_argument_text(content)
+    if lead:
+        parts.append(lead)
     for step in content.next_steps:
         parts.append(f"{step.action} {step.details}")
     return _content_words(" ".join(parts))
@@ -499,13 +556,20 @@ _UNCAPTURED_LEAD_TERMS = [
 _LAP_ADVICE_TERMS = ["lap button", "lap-button"]
 
 
-def _lead_text(content: CoachReportContent) -> str:
+def _lead_text(content: ReportLike) -> str:
     """The report's LEADING claims only, lower-cased: headline, thesis and lead
     argument. A caveat is a #171 defect when it leads here; a bounded caveat in a
-    takeaway or question is allowed, so those are deliberately excluded."""
+    takeaway or question is allowed, so those are deliberately excluded. For the
+    prose message the lead is the headline plus the opening sentence (the verdict
+    the prompt asks it to lead with); a caveat deeper in the message is allowed."""
     parts: List[str] = []
     if content.headline:
         parts.append(content.headline)
+    if _is_message(content):
+        opening = _first_sentence(content.message)
+        if opening:
+            parts.append(opening)
+        return " ".join(parts).lower()
     if content.thesis:
         parts.append(content.thesis)
     if content.lead_argument is not None:
@@ -579,7 +643,7 @@ def assert_coached_not_caveated(content: CoachReportContent, pack: CoachContextP
 
 # --- the rubric ---------------------------------------------------------------
 
-ASSERTIONS: List[Callable[[CoachReportContent, CoachContextPack], AssertionResult]] = [
+ASSERTIONS: List[Callable[[ReportLike, CoachContextPack], AssertionResult]] = [
     assert_led_with_headline,
     assert_discounted_inflated_hr,
     assert_no_medical_overreach,
@@ -592,7 +656,7 @@ ASSERTIONS: List[Callable[[CoachReportContent, CoachContextPack], AssertionResul
 
 
 def score_report(
-    content: CoachReportContent,
+    content: ReportLike,
     pack: CoachContextPack,
     *,
     report_id: Optional[str] = None,
