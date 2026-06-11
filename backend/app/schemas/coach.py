@@ -80,6 +80,10 @@ class CoachReportMeta(BaseModel):
     input_hash: str
     generated_at: datetime
     policy_violations: List[str] = Field(default_factory=list)
+    # A3: True when a prose message was produced but its structured tail was
+    # missing/unusable (degrade-not-withhold). False for the legacy structured
+    # family and for a clean message+tail. Defaulted so legacy stored meta validates.
+    tail_degraded: bool = False
 
 
 class CoachReportContent(BaseModel):

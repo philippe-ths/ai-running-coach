@@ -18,9 +18,27 @@ PriorReportDigest out. No DB, no I/O.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Optional
 
 from app.schemas.coach_context import PriorReportDigest
+
+# Split on the whitespace that follows a sentence terminator, so the message's
+# first sentence can be lifted as its lead claim for the digest.
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _first_sentence(message: str) -> Optional[str]:
+    """The first sentence of a prose message, the A3 stand-in for lead_argument.
+
+    The structured report carried an explicit lead_argument; the prose message
+    leads with its verdict in the opening sentence (prompt discipline), so that
+    sentence is the equivalent digest lead. Returns None for an empty message.
+    """
+    text = (message or "").strip()
+    if not text:
+        return None
+    return _SENTENCE_END_RE.split(text, maxsplit=1)[0].strip() or None
 
 
 def build_report_digest(report: Dict[str, Any], activity_start_date) -> PriorReportDigest:
@@ -29,14 +47,25 @@ def build_report_digest(report: Dict[str, Any], activity_start_date) -> PriorRep
     `activity_start_date` is the SOURCE activity's start_date (a join, not a
     report field); a stored digest snapshots it. Strava activity start times are
     immutable, so the snapshot stays equal to the recomputed value.
+
+    Two report shapes feed this one projection (ADR 0009): the legacy structured
+    CoachReportContent (lead_argument + headline + next_steps) and the A3 prose
+    CoachMessageReport (message + headline + tail next_steps). For the prose shape
+    the lead claim is the message's first sentence; both shapes carry headline and
+    next_steps at the same keys, so the emitted PriorReportDigest is shape-identical
+    (AC2). The message shape is detected by the presence of a `message` field.
     """
-    lead = report.get("lead_argument")
-    if isinstance(lead, dict):
-        lead_text = lead.get("text")
-    elif isinstance(lead, str):
-        lead_text = lead
+    message = report.get("message")
+    if isinstance(message, str) and message.strip():
+        lead_text = _first_sentence(message)
     else:
-        lead_text = None
+        lead = report.get("lead_argument")
+        if isinstance(lead, dict):
+            lead_text = lead.get("text")
+        elif isinstance(lead, str):
+            lead_text = lead
+        else:
+            lead_text = None
 
     next_steps: list[str] = []
     for step in (report.get("next_steps") or []):
