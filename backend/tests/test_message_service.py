@@ -239,6 +239,31 @@ class TestMessageServicePath:
         assert "couldn't put together" in stored.report["message"]
 
     @pytest.mark.asyncio
+    async def test_degraded_tail_emits_monitor_warning(self, db, _message_prompt, caplog):
+        """The single greppable monitor signal: a stored degraded tail logs a
+        `coach_tail_degraded` WARNING (visible in prod logs / Sentry)."""
+        import logging
+        activity = _seed_activity_with_metrics(db)
+        blocks = [_text("Good easy run, nothing to flag.")]  # no tail block -> degrades
+        with caplog.at_level(logging.WARNING, logger="app.services.coach.service"):
+            with patch("app.services.coach.service.AnthropicClient", return_value=_message_client(blocks)):
+                await get_or_generate_coach_report(db, str(activity.id))
+        assert any("coach_tail_degraded" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_clean_tail_does_not_emit_monitor_warning(self, db, _message_prompt, caplog):
+        import logging
+        activity = _seed_activity_with_metrics(db)
+        blocks = [
+            _text("Solid steady run. You held the effort well."),
+            _tail(headline="Solid run", next_steps=[], risks=[], questions=[]),
+        ]
+        with caplog.at_level(logging.WARNING, logger="app.services.coach.service"):
+            with patch("app.services.coach.service.AnthropicClient", return_value=_message_client(blocks)):
+                await get_or_generate_coach_report(db, str(activity.id))
+        assert not any("coach_tail_degraded" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
     async def test_message_family_does_not_writeback_on_fallback(self, db, _message_prompt):
         """Fallbacks must not feed the learning loop (no digest stored)."""
         activity = _seed_activity_with_metrics(db)
