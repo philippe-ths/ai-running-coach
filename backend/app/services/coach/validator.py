@@ -170,23 +170,24 @@ def _has_asserted_health_claim(text: str) -> bool:
     return False
 
 
-def validate_policy(
-    content: CoachReportContent,
-    context_pack: CoachContextPack,
-) -> List[PolicyViolation]:
-    """
-    Run deterministic policy checks on LLM output.
-    Returns list of violations (empty = all checks passed).
-    """
-    violations = []
+# --- Shared rule bodies ----------------------------------------------------
+# Each of the six rules is a standalone function over the primitives it needs
+# (a text surface, structured flags/questions/evidence, the relevant pack
+# facts) rather than the CoachReportContent shape. validate_policy below
+# assembles those primitives from a structured report; a future prose entry
+# point assembles the same primitives from the message + tail. The rule logic,
+# violation order, and every detail/fix_instruction string live here once, so
+# both entry points police an identical surface. (A3 step 1: this extraction is
+# behaviour-preserving — validate_policy emits byte-identical violations.)
 
-    # Rule 1: If all check_in fields are null and questions is empty → must ask questions
-    check_in = context_pack.check_in
+
+def check_missing_questions(check_in, num_questions: int) -> List[PolicyViolation]:
+    """Rule 1: a null check-in with no questions must prompt for input."""
     all_null = all(
         getattr(check_in, field) is None for field in type(check_in).model_fields
     )
-    if all_null and len(content.questions) == 0:
-        violations.append(PolicyViolation(
+    if all_null and num_questions == 0:
+        return [PolicyViolation(
             rule="missing_questions_for_null_checkin",
             detail="All check_in fields are null but no questions were generated",
             fix_instruction=(
@@ -194,14 +195,16 @@ def validate_policy(
                 "runner felt during the session. Example: 'How did you feel during "
                 "the session?' with reason 'No check-in data available'."
             ),
-        ))
+        )]
+    return []
 
-    # Rule 2: If zones_calibrated=false and output mentions Z1/Z2/Z3/Z4/Z5
-    if not context_pack.metrics.zones_calibrated:
-        full_text = _extract_all_text(content)
+
+def check_uncalibrated_zones(zones_calibrated: bool, full_text: str) -> List[PolicyViolation]:
+    """Rule 2: no Z1-Z5 references when the runner's zones are not calibrated."""
+    if not zones_calibrated:
         zone_pattern = re.compile(r"\bZ[1-5]\b")
         if zone_pattern.search(full_text):
-            violations.append(PolicyViolation(
+            return [PolicyViolation(
                 rule="uncalibrated_zone_reference",
                 detail="Output references HR zones but zones_calibrated is false",
                 fix_instruction=(
@@ -210,51 +213,57 @@ def validate_policy(
                     "effort' (RPE 4-5), 'comfortably hard' (RPE 6-7), 'hard "
                     "threshold effort' (RPE 8), 'maximum effort' (RPE 9-10)."
                 ),
-            ))
+            )]
+    return []
 
-    # Rule 3: If risk references a flag not in the flags array
-    valid_flags = set(context_pack.metrics.flags)
-    for risk in content.risks:
-        if risk.flag not in valid_flags:
+
+def check_invalid_risk_flags(valid_flags: set, risk_flags: List[str]) -> List[PolicyViolation]:
+    """Rule 3: every risk must reference a flag present in the metrics flags."""
+    violations: List[PolicyViolation] = []
+    for flag in risk_flags:
+        if flag not in valid_flags:
             violations.append(PolicyViolation(
                 rule="invalid_risk_flag",
-                detail=f"Risk references flag '{risk.flag}' not in flags array {valid_flags}",
+                detail=f"Risk references flag '{flag}' not in flags array {valid_flags}",
                 fix_instruction=(
-                    f"Remove the risk entry for '{risk.flag}' or only reference "
+                    f"Remove the risk entry for '{flag}' or only reference "
                     f"flags from: {sorted(valid_flags)}"
                 ),
             ))
+    return violations
 
-    # Rule 4: If detection_confidence < high and LLM claims specific interval execution
-    workout_match = context_pack.metrics.workout_match
-    if workout_match:
-        det_conf = workout_match.get("detection_confidence", "low")
-        match_score = workout_match.get("match_score")
-        low_confidence = det_conf == "low" or (
-            match_score is not None and match_score < 0.7
-        )
-        if low_confidence:
-            full_text = _extract_all_text(content)
-            for pattern in _INTERVAL_CLAIM_PATTERNS:
-                if pattern.search(full_text):
-                    violations.append(PolicyViolation(
-                        rule="ungated_interval_claim",
-                        detail=(
-                            f"LLM claims specific interval execution but "
-                            f"detection_confidence={det_conf}, match_score={match_score}"
-                        ),
-                        fix_instruction=(
-                            "Detection confidence is low. Do NOT claim specific rep counts, "
-                            "distances, or interval structure as fact. Instead say: "
-                            "'Your data suggests the intervals were not consistently detected. "
-                            "Consider using the lap button or running on a track for better "
-                            "rep-by-rep feedback.' Treat all rep statistics as approximate."
-                        ),
-                    ))
-                    break  # One violation is enough
 
-    # Rule 5: medical-scope boundary — reject medical overreach (plan section 8).
-    full_text = _extract_all_text(content)
+def check_ungated_interval_claim(workout_match, full_text: str) -> List[PolicyViolation]:
+    """Rule 4: no specific interval-execution claims under low detection confidence."""
+    if not workout_match:
+        return []
+    det_conf = workout_match.get("detection_confidence", "low")
+    match_score = workout_match.get("match_score")
+    low_confidence = det_conf == "low" or (
+        match_score is not None and match_score < 0.7
+    )
+    if low_confidence:
+        for pattern in _INTERVAL_CLAIM_PATTERNS:
+            if pattern.search(full_text):
+                return [PolicyViolation(
+                    rule="ungated_interval_claim",
+                    detail=(
+                        f"LLM claims specific interval execution but "
+                        f"detection_confidence={det_conf}, match_score={match_score}"
+                    ),
+                    fix_instruction=(
+                        "Detection confidence is low. Do NOT claim specific rep counts, "
+                        "distances, or interval structure as fact. Instead say: "
+                        "'Your data suggests the intervals were not consistently detected. "
+                        "Consider using the lap button or running on a track for better "
+                        "rep-by-rep feedback.' Treat all rep statistics as approximate."
+                    ),
+                )]  # One violation is enough
+    return []
+
+
+def check_medical_overreach(full_text: str) -> List[PolicyViolation]:
+    """Rule 5: medical-scope boundary — reject medical overreach (plan section 8)."""
     medical_reason = None
     if _DOSE_PATTERN.search(full_text):
         medical_reason = "contains dose advice (a pharmaceutical dose or dosage instruction)"
@@ -265,7 +274,7 @@ def validate_policy(
     elif _has_asserted_health_claim(full_text):
         medical_reason = "asserts a clinical condition about the runner"
     if medical_reason:
-        violations.append(PolicyViolation(
+        return [PolicyViolation(
             rule="medical_overreach",
             detail=f"Output {medical_reason}, which is outside the coaching scope",
             fix_instruction=(
@@ -276,15 +285,17 @@ def validate_policy(
                 "it was hot, so it overstates fatigue') and you MAY suggest seeing a "
                 "clinician as a non-diagnostic nudge. Rephrase to remove the overreach."
             ),
-        ))
+        )]
+    return []
 
-    # Rule 6: the durable-memory narrative is voice only — never cite it as fact.
+
+def check_narrative_evidence(evidence_field_paths: List[str]) -> List[PolicyViolation]:
+    """Rule 6: the durable-memory narrative is voice only — never cited as fact."""
     narrative_fields = [
-        f for f in _collect_evidence_fields(content)
-        if _NARRATIVE_FIELD_PATTERN.match(f)
+        f for f in evidence_field_paths if _NARRATIVE_FIELD_PATTERN.match(f)
     ]
     if narrative_fields:
-        violations.append(PolicyViolation(
+        return [PolicyViolation(
             rule="narrative_cited_as_fact",
             detail=(
                 "Evidence cites the relationship narrative as a factual source: "
@@ -298,7 +309,39 @@ def validate_policy(
                 "deterministic facts, or drop the claim. The narrative may shape "
                 "your tone but must never be cited as evidence."
             ),
-        ))
+        )]
+    return []
+
+
+def validate_policy(
+    content: CoachReportContent,
+    context_pack: CoachContextPack,
+) -> List[PolicyViolation]:
+    """
+    Run deterministic policy checks on structured LLM output.
+    Returns list of violations (empty = all checks passed).
+
+    Assembles the rule primitives from the structured report and delegates each
+    rule to its shared body. The violation order (rules 1-6) and every emitted
+    string are preserved from the prior inline implementation.
+    """
+    full_text = _extract_all_text(content)
+    violations: List[PolicyViolation] = []
+
+    # Rule 1: null check-in with no questions → must ask questions.
+    violations += check_missing_questions(context_pack.check_in, len(content.questions))
+    # Rule 2: uncalibrated zones must not surface Z1-Z5.
+    violations += check_uncalibrated_zones(context_pack.metrics.zones_calibrated, full_text)
+    # Rule 3: risks must reference real flags.
+    violations += check_invalid_risk_flags(
+        set(context_pack.metrics.flags), [risk.flag for risk in content.risks]
+    )
+    # Rule 4: gate specific interval claims on detection confidence.
+    violations += check_ungated_interval_claim(context_pack.metrics.workout_match, full_text)
+    # Rule 5: medical-scope boundary.
+    violations += check_medical_overreach(full_text)
+    # Rule 6: narrative is voice only, never cited evidence.
+    violations += check_narrative_evidence(_collect_evidence_fields(content))
 
     return violations
 

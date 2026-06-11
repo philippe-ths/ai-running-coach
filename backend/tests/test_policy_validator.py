@@ -2,7 +2,15 @@
 
 from app.schemas.coach import CoachReportContent, CoachTakeaway, CoachNextStep, CoachRisk, CoachQuestion
 from app.schemas.coach_context import CoachContextPack
-from app.services.coach.validator import validate_policy
+from app.services.coach.validator import (
+    validate_policy,
+    check_missing_questions,
+    check_uncalibrated_zones,
+    check_invalid_risk_flags,
+    check_ungated_interval_claim,
+    check_medical_overreach,
+    check_narrative_evidence,
+)
 
 
 def _make_content(**overrides):
@@ -600,3 +608,80 @@ class TestMedicalScopeRule:
         )
         violations = validate_policy(content, _make_pack())
         assert "medical_overreach" not in [v.rule for v in violations]
+
+
+class TestSharedRuleBodies:
+    """The six rules are extracted into shared functions over primitives so a
+    future prose entry point can reuse them. These exercise each body directly
+    (the reuse contract); the byte-equivalence of the assembled validate_policy
+    is pinned by the rest of this file's 46 behaviour tests staying green."""
+
+    def _null_check_in(self):
+        return _make_pack(check_in={
+            "rpe": None, "pain_score": None, "pain_location": None,
+            "sleep_quality": None, "notes": None,
+        }).check_in
+
+    def _populated_check_in(self):
+        return _make_pack().check_in  # rpe=6, etc.
+
+    # Rule 1
+    def test_missing_questions_fires_on_null_checkin_no_questions(self):
+        v = check_missing_questions(self._null_check_in(), 0)
+        assert [x.rule for x in v] == ["missing_questions_for_null_checkin"]
+
+    def test_missing_questions_silent_with_questions_present(self):
+        assert check_missing_questions(self._null_check_in(), 2) == []
+
+    def test_missing_questions_silent_when_checkin_populated(self):
+        assert check_missing_questions(self._populated_check_in(), 0) == []
+
+    # Rule 2
+    def test_uncalibrated_zones_fires_on_zone_reference(self):
+        v = check_uncalibrated_zones(False, "You spent time in Z3 today.")
+        assert [x.rule for x in v] == ["uncalibrated_zone_reference"]
+
+    def test_uncalibrated_zones_silent_when_calibrated(self):
+        assert check_uncalibrated_zones(True, "You spent time in Z3 today.") == []
+
+    def test_uncalibrated_zones_silent_without_zone_tokens(self):
+        assert check_uncalibrated_zones(False, "Easy conversational effort.") == []
+
+    # Rule 3
+    def test_invalid_risk_flags_fires_per_unknown_flag(self):
+        v = check_invalid_risk_flags({"hr_drift"}, ["hr_drift", "made_up", "also_fake"])
+        assert [x.rule for x in v] == ["invalid_risk_flag", "invalid_risk_flag"]
+        assert "made_up" in v[0].detail and "also_fake" in v[1].detail
+
+    def test_invalid_risk_flags_silent_when_all_valid(self):
+        assert check_invalid_risk_flags({"hr_drift", "stops"}, ["hr_drift"]) == []
+
+    # Rule 4
+    def test_ungated_interval_claim_fires_on_low_confidence(self):
+        wm = {"detection_confidence": "low", "match_score": None}
+        v = check_ungated_interval_claim(wm, "You ran 8x400m today.")
+        assert [x.rule for x in v] == ["ungated_interval_claim"]
+
+    def test_ungated_interval_claim_silent_on_high_confidence(self):
+        wm = {"detection_confidence": "high", "match_score": 1.0}
+        assert check_ungated_interval_claim(wm, "You ran 8x400m today.") == []
+
+    def test_ungated_interval_claim_silent_without_workout_match(self):
+        assert check_ungated_interval_claim(None, "You ran 8x400m today.") == []
+
+    # Rule 5
+    def test_medical_overreach_fires_on_dose(self):
+        v = check_medical_overreach("Take 200mg of iron daily.")
+        assert [x.rule for x in v] == ["medical_overreach"]
+
+    def test_medical_overreach_silent_on_clean_text(self):
+        assert check_medical_overreach("Nice steady aerobic run.") == []
+
+    # Rule 6
+    def test_narrative_evidence_fires_on_narrative_path(self):
+        v = check_narrative_evidence(["metrics.hr_drift", "narrative.tone"])
+        assert [x.rule for x in v] == ["narrative_cited_as_fact"]
+        assert "narrative.tone" in v[0].detail
+
+    def test_narrative_evidence_silent_on_real_paths(self):
+        assert check_narrative_evidence(["metrics.hr_drift", "training_context.x"]) == []
