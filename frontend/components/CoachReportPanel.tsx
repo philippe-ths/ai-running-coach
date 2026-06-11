@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { CoachReport } from '@/lib/types';
+import Markdown from 'react-markdown';
+import { CoachReport, isMessageReport } from '@/lib/types';
 import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2, RefreshCw } from 'lucide-react';
 
 // Public env var inlined at build time. Set NEXT_PUBLIC_SHOW_DEBUG_PANEL=true
@@ -93,114 +94,200 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
 
   if (!report) return null;
 
-  const { headline, thesis, lead_argument, key_takeaways, next_steps, risks, questions } = report.report;
+  const body = report.report;
   const { confidence, generated_at } = report.meta;
+
+  // A3 (ADR 0009): the prose-message shape (schema 2.0) renders the message as
+  // markdown with tappable-option chips; the legacy structured shape renders the
+  // verdict/takeaway panel below, untouched.
+  const reRunButton = (
+    <button
+      onClick={() => fetchReport(true, true)}
+      className="text-xs text-gray-400 hover:text-blue-600 flex items-center gap-1 transition-colors"
+      title="Re-run coach analysis"
+    >
+      <RefreshCw className="w-3.5 h-3.5" />
+      Re-run
+    </button>
+  );
 
   return (
     <div className="space-y-4">
-      {/* Key Takeaways */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-blue-600" />
-            Coach Analysis
-          </h2>
-          <button
-            onClick={() => fetchReport(true, true)}
-            className="text-xs text-gray-400 hover:text-blue-600 flex items-center gap-1 transition-colors"
-            title="Re-run coach analysis"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            Re-run
-          </button>
-        </div>
-        {headline && (
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">{headline}</h3>
-        )}
-        {thesis && (
-          <p className="text-sm text-gray-700 mb-3 leading-relaxed">{thesis}</p>
-        )}
-        {lead_argument && (
-          <div className="mb-3 bg-blue-50 rounded-lg border border-blue-200 p-4">
-            <div className="flex items-start gap-2">
-              <Sparkles className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-              <p className="text-sm font-medium text-blue-900">{lead_argument.text}</p>
+      {isMessageReport(body) ? (
+        <>
+          {/* Prose message — the product */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-blue-600" />
+                Coach Analysis
+              </h2>
+              {reRunButton}
+            </div>
+            {body.headline && (
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">{body.headline}</h3>
+            )}
+            <div className="prose prose-sm prose-gray max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
+              <Markdown>{body.message}</Markdown>
             </div>
           </div>
-        )}
-        <ul className="space-y-2">
-          {key_takeaways.map((item, i) => {
-            const text = typeof item === 'string' ? item : item.text;
-            return (
-              <li key={i} className="flex gap-2 text-sm text-gray-700">
-                <span className="text-blue-500 mt-0.5 shrink-0">&bull;</span>
-                <span>{text}</span>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
 
-      {/* Next Steps */}
-      <div className="space-y-2">
-        {next_steps.map((step, i) => (
-          <div
-            key={i}
-            className="bg-green-50 rounded-lg border border-green-200 p-4"
-          >
-            <div className="flex items-start gap-2">
-              <ChevronRight className="w-4 h-4 text-green-600 mt-0.5 shrink-0" />
-              <div>
-                <p className="font-medium text-green-900 text-sm">{step.action}</p>
-                <p className="text-green-800 text-sm mt-1">{step.details}</p>
-                <p className="text-green-600 text-xs mt-1 italic">{step.why}</p>
-              </div>
+          {/* Next steps (tail affordances) */}
+          {body.next_steps.length > 0 && (
+            <div className="space-y-2">
+              {body.next_steps.map((step, i) => (
+                <div key={i} className="bg-green-50 rounded-lg border border-green-200 p-4">
+                  <div className="flex items-start gap-2">
+                    <ChevronRight className="w-4 h-4 text-green-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium text-green-900 text-sm">{step.action}</p>
+                      <p className="text-green-800 text-sm mt-1">{step.details}</p>
+                      <p className="text-green-600 text-xs mt-1 italic">{step.why}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
+          )}
+
+          {/* Risks */}
+          {body.risks.length > 0 && (
+            <div className="space-y-2">
+              {body.risks.map((risk, i) => (
+                <div key={i} className="bg-amber-50 rounded-lg border border-amber-200 p-4">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium text-amber-900 text-sm">{risk.flag.replace(/_/g, ' ')}</p>
+                      <p className="text-amber-800 text-sm mt-1">{risk.explanation}</p>
+                      <p className="text-amber-600 text-xs mt-1 italic">{risk.mitigation}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Questions with tappable-option chips (I1 owns tap delivery) */}
+          {body.questions.length > 0 && (
+            <div className="space-y-2">
+              {body.questions.map((q, i) => (
+                <div key={i} className="bg-blue-50 rounded-lg border border-blue-200 p-4">
+                  <div className="flex items-start gap-2">
+                    <HelpCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-blue-900 text-sm font-medium">{q.question}</p>
+                      <p className="text-blue-600 text-xs mt-1 italic">{q.reason}</p>
+                      {q.options.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {q.options.map((opt) => (
+                            <span
+                              key={opt.id}
+                              className="inline-flex items-center rounded-full border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700"
+                            >
+                              {opt.label}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {/* Key Takeaways */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-blue-600" />
+                Coach Analysis
+              </h2>
+              {reRunButton}
+            </div>
+            {body.headline && (
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">{body.headline}</h3>
+            )}
+            {body.thesis && (
+              <p className="text-sm text-gray-700 mb-3 leading-relaxed">{body.thesis}</p>
+            )}
+            {body.lead_argument && (
+              <div className="mb-3 bg-blue-50 rounded-lg border border-blue-200 p-4">
+                <div className="flex items-start gap-2">
+                  <Sparkles className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                  <p className="text-sm font-medium text-blue-900">{body.lead_argument.text}</p>
+                </div>
+              </div>
+            )}
+            <ul className="space-y-2">
+              {body.key_takeaways.map((item, i) => {
+                const text = typeof item === 'string' ? item : item.text;
+                return (
+                  <li key={i} className="flex gap-2 text-sm text-gray-700">
+                    <span className="text-blue-500 mt-0.5 shrink-0">&bull;</span>
+                    <span>{text}</span>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
-        ))}
-      </div>
 
-      {/* Risks */}
-      {risks.length > 0 && (
-        <div className="space-y-2">
-          {risks.map((risk, i) => (
-            <div
-              key={i}
-              className="bg-amber-50 rounded-lg border border-amber-200 p-4"
-            >
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-                <div>
-                  <p className="font-medium text-amber-900 text-sm">
-                    {risk.flag.replace(/_/g, ' ')}
-                  </p>
-                  <p className="text-amber-800 text-sm mt-1">{risk.explanation}</p>
-                  <p className="text-amber-600 text-xs mt-1 italic">{risk.mitigation}</p>
+          {/* Next Steps */}
+          <div className="space-y-2">
+            {body.next_steps.map((step, i) => (
+              <div key={i} className="bg-green-50 rounded-lg border border-green-200 p-4">
+                <div className="flex items-start gap-2">
+                  <ChevronRight className="w-4 h-4 text-green-600 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium text-green-900 text-sm">{step.action}</p>
+                    <p className="text-green-800 text-sm mt-1">{step.details}</p>
+                    <p className="text-green-600 text-xs mt-1 italic">{step.why}</p>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
 
-      {/* Questions */}
-      {questions.length > 0 && (
-        <div className="space-y-2">
-          {questions.map((q, i) => (
-            <div
-              key={i}
-              className="bg-blue-50 rounded-lg border border-blue-200 p-4"
-            >
-              <div className="flex items-start gap-2">
-                <HelpCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-blue-900 text-sm font-medium">{q.question}</p>
-                  <p className="text-blue-600 text-xs mt-1 italic">{q.reason}</p>
+          {/* Risks */}
+          {body.risks.length > 0 && (
+            <div className="space-y-2">
+              {body.risks.map((risk, i) => (
+                <div key={i} className="bg-amber-50 rounded-lg border border-amber-200 p-4">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium text-amber-900 text-sm">
+                        {risk.flag.replace(/_/g, ' ')}
+                      </p>
+                      <p className="text-amber-800 text-sm mt-1">{risk.explanation}</p>
+                      <p className="text-amber-600 text-xs mt-1 italic">{risk.mitigation}</p>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+
+          {/* Questions */}
+          {body.questions.length > 0 && (
+            <div className="space-y-2">
+              {body.questions.map((q, i) => (
+                <div key={i} className="bg-blue-50 rounded-lg border border-blue-200 p-4">
+                  <div className="flex items-start gap-2">
+                    <HelpCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-blue-900 text-sm font-medium">{q.question}</p>
+                      <p className="text-blue-600 text-xs mt-1 italic">{q.reason}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {/* Meta footer */}

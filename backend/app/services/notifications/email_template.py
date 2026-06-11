@@ -1,6 +1,7 @@
 from html import escape
 
 from app.schemas.coach import CoachReportRead
+from app.services.notifications._prose import is_message_report, message_paragraphs
 
 
 def render_coach_report_email(
@@ -32,6 +33,22 @@ def render_coach_report_email(
 
 def _render_html(report, activity_label, distance_km, confidence, activity_url) -> str:
     content = report.report
+    heading_distance = f" · {distance_km}km" if distance_km > 0 else ""
+
+    # A3 (ADR 0009): render the prose message as paragraphs; the message is the
+    # product, the structured tail stays in the app.
+    if is_message_report(content):
+        paragraphs = "".join(
+            f"<p>{escape(p)}</p>" for p in message_paragraphs(content.message)
+        )
+        return (
+            "<!doctype html><html><body style=\"font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:16px;\">"
+            f"<h2>{escape(activity_label)}{heading_distance}</h2>"
+            f"<p style=\"color:#666;\">Confidence: <strong>{escape(confidence)}</strong></p>"
+            f"{paragraphs}"
+            f"<p><a href=\"{escape(activity_url)}\">View in app</a></p>"
+            "</body></html>"
+        )
 
     takeaways_items = "".join(
         f"<li>{escape(t.text)}</li>" for t in content.key_takeaways
@@ -72,7 +89,6 @@ def _render_html(report, activity_label, distance_km, confidence, activity_url) 
         )
         questions_block = f"<h3>Follow-up questions</h3><ul>{questions_items}</ul>"
 
-    heading_distance = f" · {distance_km}km" if distance_km > 0 else ""
     return (
         "<!doctype html><html><body style=\"font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:16px;\">"
         f"<h2>{escape(activity_label)}{heading_distance}</h2>"
@@ -95,6 +111,12 @@ def _render_text(report, activity_label, distance_km, confidence, activity_url) 
         header = f"{activity_label} — {distance_km}km · {confidence} confidence"
     else:
         header = f"{activity_label} — {confidence} confidence"
+
+    # A3 (ADR 0009): the plain-text body is the prose message.
+    if is_message_report(content):
+        lines = [header, "", content.message.strip(), "", f"View in app: {activity_url}"]
+        return "\n".join(lines) + "\n"
+
     lines = [
         header,
         "",

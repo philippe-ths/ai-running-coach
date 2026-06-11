@@ -27,10 +27,15 @@ export type {
   CoachTakeaway,
   CoachReport,
   CoachReportContent,
+  CoachMessageReport,
+  CoachReportBody,
+  CoachMessageQuestion,
+  TappableOption,
   CoachNextStep,
   CoachRisk,
   CoachQuestion,
   CoachReportMeta,
 } from "./types/coach";
+export { isMessageReport } from "./types/coach";
 export type { ChatMessage } from "./types/chat";
 
