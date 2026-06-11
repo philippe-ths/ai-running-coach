@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import List
 
-from app.schemas.coach import CoachReportContent
+from app.schemas.coach import CoachMessageReport, CoachReportContent
 from app.schemas.coach_context import CoachContextPack
 
 
@@ -342,6 +342,82 @@ def validate_policy(
     violations += check_medical_overreach(full_text)
     # Rule 6: narrative is voice only, never cited evidence.
     violations += check_narrative_evidence(_collect_evidence_fields(content))
+
+    return violations
+
+
+# --- A3 prose-message entry point ------------------------------------------
+# validate_message_policy polices the A3 output shape (CoachMessageReport: a
+# human prose `message` + a thin structured tail) using the SAME six shared rule
+# bodies as validate_policy. The only difference is how the primitives are
+# assembled: the text surface is the prose message PLUS every tail text field
+# (headline, next_steps, risks, questions, and tappable-option labels), so the
+# policed surface strictly grows over the structured path — every rendered word
+# the runner can see is policed. The structured primitives (risk flags, question
+# count, evidence paths) come from the tail. The medical-overreach-forces-fallback
+# behaviour (ADR 0009) lives in the service, not here: this returns violations
+# identically to validate_policy; the service decides a surviving overreach is a
+# fallback.
+
+
+def _extract_message_text(report: CoachMessageReport) -> str:
+    """Concatenate the prose message and every tail text field for pattern
+    matching. Tappable-option labels are included: they render to the runner, so
+    medical/zone language hiding in a chip label is still policed."""
+    parts: List[str] = [report.message]
+    if report.headline:
+        parts.append(report.headline)
+    for s in report.next_steps:
+        parts.extend([s.action, s.details, s.why])
+    for r in report.risks:
+        parts.extend([r.explanation, r.mitigation])
+    for q in report.questions:
+        parts.extend([q.question, q.reason])
+        for opt in q.options:
+            parts.append(opt.label)
+    return " ".join(p for p in parts if p)
+
+
+def _collect_message_evidence_fields(report: CoachMessageReport) -> List[str]:
+    """Every evidence `field` path the tail's next_steps cite. The prose message
+    carries no machine-readable evidence refs, so rule 6's checkable surface is
+    the tail's next_step evidence (mirroring the structured path's narrowing
+    documented in ADR 0009)."""
+    fields: List[str] = []
+    for s in report.next_steps:
+        if getattr(s, "evidence", None):
+            fields.extend(e.field for e in s.evidence)
+    return [f for f in fields if isinstance(f, str)]
+
+
+def validate_message_policy(
+    report: CoachMessageReport,
+    context_pack: CoachContextPack,
+) -> List[PolicyViolation]:
+    """Run the six deterministic policy checks on the A3 prose-message output.
+
+    Assembles each rule's primitives from the message + tail and delegates to the
+    same shared rule bodies validate_policy uses, so prose and structured output
+    are policed by one identical rule set. Violation order (rules 1-6) matches
+    validate_policy.
+    """
+    full_text = _extract_message_text(report)
+    violations: List[PolicyViolation] = []
+
+    # Rule 1: null check-in with no questions → must ask questions.
+    violations += check_missing_questions(context_pack.check_in, len(report.questions))
+    # Rule 2: uncalibrated zones must not surface Z1-Z5 (in prose or tail).
+    violations += check_uncalibrated_zones(context_pack.metrics.zones_calibrated, full_text)
+    # Rule 3: risks must reference real flags.
+    violations += check_invalid_risk_flags(
+        set(context_pack.metrics.flags), [risk.flag for risk in report.risks]
+    )
+    # Rule 4: gate specific interval claims on detection confidence (prose + tail).
+    violations += check_ungated_interval_claim(context_pack.metrics.workout_match, full_text)
+    # Rule 5: medical-scope boundary over the full prose + tail surface.
+    violations += check_medical_overreach(full_text)
+    # Rule 6: narrative is voice only, never cited evidence (tail evidence paths).
+    violations += check_narrative_evidence(_collect_message_evidence_fields(report))
 
     return violations
 
