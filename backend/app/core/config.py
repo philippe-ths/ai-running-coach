@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     # instead. Both must be set for the channel to activate.
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+    # Secret for authenticating inbound Telegram callback_query webhooks (I1b,
+    # #220). Set as Telegram's per-webhook `secret_token` at registration and
+    # echoed back in the `X-Telegram-Bot-Api-Secret-Token` header on every
+    # callback; the inbound endpoint rejects a request whose header does not
+    # match (the stronger, secret-ish check, paired with a chat_id match).
+    # Empty disables the secret check (local dev), leaving only the chat_id gate.
+    TELEGRAM_WEBHOOK_SECRET: str = ""
 
     # Email notifications (legacy/local channel; SMTP is unreachable from the
     # Railway worker, kept for local use and Pro-plan deployments).

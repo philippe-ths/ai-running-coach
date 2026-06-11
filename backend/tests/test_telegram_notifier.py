@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from app.services.notifications import Notification, NotifierPort
+from app.services.notifications.port import NotificationAction
 from app.services.notifications.telegram_adapter import TelegramNotifier
 
 
@@ -96,3 +97,66 @@ def test_send_raises_when_api_reports_not_ok():
     ):
         with pytest.raises(RuntimeError, match="chat not found"):
             _notifier().send(_notification())
+
+
+def test_send_without_actions_omits_reply_markup():
+    with patch(
+        "app.services.notifications.telegram_adapter.httpx.post",
+        return_value=_ok_response(),
+    ) as post:
+        _notifier().send(_notification())
+    assert "reply_markup" not in post.call_args.kwargs["json"]
+
+
+def test_send_renders_inline_keyboard_from_actions():
+    notification = Notification(
+        to="42",
+        subject="How did that feel?",
+        html="",
+        text="Quick check-in.",
+        url=None,
+        actions=(
+            NotificationAction(label="RPE 6", token="cb1|rpe|abc|6"),
+            NotificationAction(label="RPE 8", token="cb1|rpe|abc|8"),
+        ),
+    )
+    with patch(
+        "app.services.notifications.telegram_adapter.httpx.post",
+        return_value=_ok_response(),
+    ) as post:
+        _notifier().send(notification)
+
+    markup = post.call_args.kwargs["json"]["reply_markup"]
+    # One button per row, label + opaque token carried as callback_data.
+    assert markup == {
+        "inline_keyboard": [
+            [{"text": "RPE 6", "callback_data": "cb1|rpe|abc|6"}],
+            [{"text": "RPE 8", "callback_data": "cb1|rpe|abc|8"}],
+        ]
+    }
+
+
+def test_answer_callback_posts_to_answer_endpoint():
+    with patch(
+        "app.services.notifications.telegram_adapter.httpx.post",
+        return_value=_ok_response(),
+    ) as post:
+        _notifier().answer_callback("cbq-1", text="Got it — RPE 7 recorded.")
+
+    assert post.call_args.args[0] == (
+        "https://api.telegram.org/bot123:ABC/answerCallbackQuery"
+    )
+    body = post.call_args.kwargs["json"]
+    assert body == {"callback_query_id": "cbq-1", "text": "Got it — RPE 7 recorded."}
+
+
+def test_answer_callback_raises_when_api_reports_not_ok():
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"ok": False, "description": "query is too old"}
+    with patch(
+        "app.services.notifications.telegram_adapter.httpx.post",
+        return_value=response,
+    ):
+        with pytest.raises(RuntimeError, match="query is too old"):
+            _notifier().answer_callback("cbq-1")
