@@ -38,7 +38,21 @@ class Activity(Base):
     raw_summary: Mapped[dict] = mapped_column(JSON, default={})
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # The FULLER-turn notification sentinel (A4): set once the fuller coaching turn
+    # has been notified. Also the fuller job's idempotency guard, so a reply-fired
+    # and a timer-fired fuller run cannot double-send. (Pre-A4 this was the single
+    # coach-report notification sentinel; under a single-shot prompt it keeps that
+    # meaning.) Left null on send failure so the activity stays re-sendable.
     coach_notification_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # The OPENER notification sentinel (A4 two-stage Exchange): set once the
+    # lightweight opener has been notified. Per-stage dedup, mirroring
+    # coach_notification_sent_at — re-generating a report (force=true) never resets
+    # it, so an opener notification fires at most once per activity. Null until the
+    # opener notifies; left null on send failure.
+    opener_notification_sent_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

@@ -182,3 +182,50 @@ class TestValidateMessagePolicy:
         assert "uncalibrated_zone_reference" in rules
         assert "invalid_risk_flag" in rules
         assert "ungated_interval_claim" in rules
+
+
+class TestOpenerProsePoliced:
+    """A4 AC3: an opener-state report (prose in opener_message, message empty) is
+    policed by validate_message_policy EXACTLY as the fuller turn — the opener
+    prose surface must not escape the medical/zone/interval rules."""
+
+    def _opener(self, opener_message: str, **overrides) -> CoachMessageReport:
+        defaults = {
+            "message": "",
+            "opener_message": opener_message,
+            "schedule_fuller_turn": True,
+            "questions": [
+                CoachMessageQuestion(
+                    question="How did that feel?",
+                    reason="Calibrate intensity",
+                    options=[TappableOption(id="rpe", label="Rate 1-10", kind="rpe")],
+                ),
+            ],
+        }
+        defaults.update(overrides)
+        return CoachMessageReport(**defaults)
+
+    def test_medical_overreach_in_opener_prose_fires(self):
+        report = self._opener("Quick reaction — looks like a stress fracture, rest it.")
+        rules = [v.rule for v in validate_message_policy(report, _make_pack())]
+        assert "medical_overreach" in rules
+
+    def test_zone_reference_in_opener_prose_fires_when_uncalibrated(self):
+        report = self._opener("Nice one — keep it in Z2 next time.")
+        pack = _make_pack(metrics={"zones_calibrated": False, "flags": [], "confidence": "high"})
+        rules = [v.rule for v in validate_message_policy(report, pack)]
+        assert "uncalibrated_zone_reference" in rules
+
+    def test_clean_opener_prose_no_violations(self):
+        report = self._opener("Nice work today — give me a moment and I'll dig into the numbers.")
+        assert validate_message_policy(report, _make_pack()) == []
+
+    def test_opener_with_questions_satisfies_rule1_on_null_checkin(self):
+        # The opener emits RPE/pain questions, so rule 1 is satisfied even pre-input.
+        report = self._opener("Solid effort out there.")
+        pack = _make_pack(check_in={
+            "rpe": None, "pain_score": None, "pain_location": None,
+            "sleep_quality": None, "notes": None,
+        })
+        rules = [v.rule for v in validate_message_policy(report, pack)]
+        assert "missing_questions_for_null_checkin" not in rules

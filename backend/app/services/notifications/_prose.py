@@ -50,3 +50,15 @@ def truncate_at_paragraph(text: str, limit: int) -> str:
 def message_paragraphs(message: str) -> list[str]:
     """Split a prose message into non-empty paragraphs (blank-line separated)."""
     return [p.strip() for p in (message or "").split("\n\n") if p.strip()]
+
+
+# The A4 opener's closing line, inviting the runner to reply — which brings the
+# fuller turn sooner. Inline-keyboard tap delivery of the RPE/pain options is I1;
+# for now the opener notification is prose + this plain-text line + the app link.
+OPENER_REPLY_LINE = "Let me know how it felt and I'll follow up with the full breakdown."
+
+
+def opener_body(content: CoachMessageReport) -> str:
+    """The A4 opener notification body: the opener prose + the reply-invite line."""
+    prose = (content.opener_message or "").strip()
+    return f"{prose}\n\n{OPENER_REPLY_LINE}" if prose else OPENER_REPLY_LINE

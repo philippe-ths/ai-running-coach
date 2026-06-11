@@ -67,6 +67,7 @@ def build_coach_notification(
     headline: str,
     distance_m: int,
     app_base_url: str,
+    stage: str = "fuller",
 ) -> Optional[Notification]:
     """Render a coach report into a Notification for the configured channel.
 
@@ -74,6 +75,10 @@ def build_coach_notification(
     "notifications off" (the same skip the email-only path expressed via an
     unset NOTIFY_TO). Keeps the pipeline channel-agnostic: channel knowledge
     lives here next to `get_notifier`.
+
+    `stage` is the A4 Exchange stage ("fuller" default, "opener" for the
+    stage-one notification). Both stages are CoachMessageReport rows, so the stage
+    cannot be sniffed from the report shape — it is passed explicitly by the job.
     """
     from app.core.config import settings
 
@@ -88,6 +93,7 @@ def build_coach_notification(
             headline=headline,
             distance_m=distance_m,
             app_base_url=app_base_url,
+            stage=stage,
         )
         return Notification(
             to=str(settings.TELEGRAM_CHAT_ID),
@@ -106,6 +112,7 @@ def build_coach_notification(
             headline=headline,
             distance_m=distance_m,
             app_base_url=app_base_url,
+            stage=stage,
         )
         return Notification(
             to=settings.NOTIFY_TO,

@@ -23,18 +23,21 @@ from typing import Any, Dict, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Activity, RunnerBaseline, UserProfile
+from app.models import Activity, DerivedMetric, RunnerBaseline, UserProfile
 from app.models.checkin import CheckIn
 from app.models.coach_chat_message import CoachChatMessage
 from app.services.analysis.baseline import bucket_key
 from app.services.analysis.classifier import Classification, compose_headline  # noqa: F401
+from app.services.analysis.novelty import AxisSnapshot, compute_novelty
 from app.services.coach.adherence import CandidateActivity, build_adherence
 from app.services.coach.belief_store import build_believed_facts, retrieve_beliefs
 from app.services.coach.calibration import assess_referral, calibrate_drift
 from app.services.coach.narrative_store import build_narrative_context
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.preference import build_preference_profile
+from app.services.coach.salience import compute_safety_override
 from app.services.coach.retrieval import (
+    fetch_latest_user_reply,
     fetch_prior_commitments,
     fetch_prior_digests,
     fetch_stream_view,
@@ -47,14 +50,18 @@ from app.schemas.coach_context import (
     CalibrationContext,
     CheckInContext,
     CoachContextPack,
+    ContinuityContext,
     LongitudinalContext,
     MetricsContext,
     NarrativeContext,
+    NoveltyContext,
     PerceivedEffortContext,
     PreferenceProfile,
     ProfileContext,
     RecentTrainingSummary,
+    SafetyOverride,
     SafetyRules,
+    SalienceContext,
     TrainingPeriodSummary,
 )
 from app.services.trends import _query_activity_facts
@@ -80,6 +87,14 @@ _PERSISTENT_PAIN_WINDOW_DAYS = 42
 # degenerate case of a long gap with no intervening reports. Taken oldest-first
 # so "the next comparable run" is judged correctly.
 _ADHERENCE_CANDIDATE_SCAN_LIMIT = 30
+
+# Bound on prior analysed activities scanned for the A4 novelty signal. Unlike the
+# recency-scoped scans above, novelty needs EXISTENCE across the runner's WHOLE
+# history (is this the first interval session ever?), so this caps high; a
+# recreational runner stays well under it. Exceeding it could in theory
+# false-positive a "first" on an axis last seen beyond the cap — acceptable, and
+# it mirrors the bounded-scan convention the other reads follow.
+_NOVELTY_HISTORY_SCAN_LIMIT = 1000
 
 # Curated phrases that signal the runner explicitly pushed back on the prior
 # report's advice (in a check-in note or a chat reply on that activity). A
@@ -122,6 +137,7 @@ class BBaseline:
     calibration: CalibrationContext
     preference_profile: PreferenceProfile
     narrative: NarrativeContext
+    salience: SalienceContext
     safety_rules: SafetyRules
 
 
@@ -147,11 +163,19 @@ class WorkingContext:
     focus: FocusPayload
 
 
-def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
+def build_context_pack(
+    db: Session,
+    activity: Activity,
+    *,
+    continuity: Optional[ContinuityContext] = None,
+) -> CoachContextPack:
     """Assemble all facts the LLM needs. No computation, just data gathering.
 
     Composes the working context (B baseline + the subject's focus payload) into
-    the flat CoachContextPack. Byte-identical to the prior one-pass builder.
+    the flat CoachContextPack. `continuity` carries the A4 fuller-turn continuity
+    (the opener prose this exchange already sent + any chat reply); the standard
+    and opener paths leave it empty. The pack now also carries the A4 `salience`
+    section (novelty + safety override), computed in the B baseline.
     """
     wc = assemble_working_context(db, activity)
     b, f = wc.b_baseline, wc.focus
@@ -168,6 +192,8 @@ def build_context_pack(db: Session, activity: Activity) -> CoachContextPack:
         calibration=b.calibration,
         preference_profile=b.preference_profile,
         narrative=b.narrative,
+        salience=b.salience,
+        continuity=continuity or ContinuityContext(),
         safety_rules=b.safety_rules,
     )
 
@@ -334,6 +360,7 @@ def build_b_baseline(
         calibration=_build_calibration_context(db, activity),
         preference_profile=_build_preference_profile(db, activity),
         narrative=build_narrative_context(db, activity),
+        salience=_build_salience_context(db, activity),
         safety_rules=SafetyRules(
             never_diagnose=True,
             pain_severe_threshold=7,
@@ -614,6 +641,61 @@ def _recent_pain_scores_any(db: Session, activity: Activity) -> list[int]:
         .all()
     )
     return [p for (p,) in rows]
+
+
+def _build_salience_context(db: Session, activity: Activity) -> SalienceContext:
+    """Assemble the A4 salience facts: the deterministic novelty signal and the
+    deterministic safety override.
+
+    Both read existing rows only and degrade cleanly. Salience is hybrid (ADR
+    0010): these facts plus the existing baseline/flag/adherence sections feed the
+    opener LLM's depth judgment, and the safety override is the only deterministic
+    force-fuller signal. Neither overrides this run's re-derived DerivedMetric."""
+    metrics = activity.metrics
+    current = AxisSnapshot(
+        structure=metrics.structure if metrics else None,
+        duration_class=metrics.duration_class if metrics else None,
+        is_race=metrics.is_race if metrics else None,
+        is_hilly=metrics.is_hilly if metrics else None,
+    )
+    novelty = compute_novelty(current, _novelty_axis_history(db, activity))
+    override = compute_safety_override(
+        flags=metrics.flags if metrics else [],
+        pain_scores=_recent_pain_scores_any(db, activity),
+    )
+    return SalienceContext(
+        novelty=NoveltyContext(**novelty),
+        safety_override=SafetyOverride(**override),
+    )
+
+
+def _novelty_axis_history(db: Session, activity: Activity) -> list[AxisSnapshot]:
+    """The classification axes of the runner's PRIOR analysed activities (this run
+    excluded), for the novelty first-of-its-kind check. Projects only the four
+    axis columns (cheap), reads existing rows only, bounded by
+    _NOVELTY_HISTORY_SCAN_LIMIT."""
+    rows = (
+        db.query(
+            DerivedMetric.structure,
+            DerivedMetric.duration_class,
+            DerivedMetric.is_race,
+            DerivedMetric.is_hilly,
+        )
+        .join(Activity, DerivedMetric.activity_id == Activity.id)
+        .filter(
+            Activity.user_id == activity.user_id,
+            Activity.id != activity.id,
+            Activity.is_deleted == False,  # noqa: E712
+            Activity.start_date < activity.start_date,
+        )
+        .order_by(Activity.start_date.desc(), Activity.id.desc())
+        .limit(_NOVELTY_HISTORY_SCAN_LIMIT)
+        .all()
+    )
+    return [
+        AxisSnapshot(structure=s, duration_class=d, is_race=r, is_hilly=h)
+        for s, d, r, h in rows
+    ]
 
 
 def _build_preference_profile(db: Session, activity: Activity):

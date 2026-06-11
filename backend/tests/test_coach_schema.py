@@ -235,3 +235,66 @@ def test_single_takeaway_report_is_valid():
         _valid_content(key_takeaways=[{"text": "One strong, well-grounded point."}])
     )
     assert len(content.key_takeaways) == 1
+
+
+# --- A4 two-stage Exchange: opener fields on CoachMessageReport ----------------
+
+
+def test_message_report_defaults_opener_fields():
+    """A legacy/A3 message report (no opener fields) validates with defaults, so
+    coach_message_v1 cached rows still read back unchanged."""
+    from app.schemas.coach import CoachMessageReport
+
+    report = CoachMessageReport.model_validate(
+        {"message": "Solid steady run today.", "tail_degraded": False}
+    )
+    assert report.opener_message is None
+    assert report.schedule_fuller_turn is False
+
+
+def test_opener_only_message_report_validates():
+    """An opener-state row carries opener_message + an empty message; this is the
+    in-band signal the eval harness and frontend use to detect 'fuller not landed'."""
+    from app.schemas.coach import CoachMessageReport
+
+    report = CoachMessageReport.model_validate(
+        {
+            "message": "",
+            "opener_message": "Nice work — quick reaction, full breakdown to follow.",
+            "schedule_fuller_turn": True,
+            "questions": [
+                {
+                    "question": "How did that feel?",
+                    "reason": "Calibrate intensity against RPE.",
+                    "options": [
+                        {"id": "rpe", "label": "Rate effort 1-10", "kind": "rpe"},
+                        {"id": "pain", "label": "Any pain?", "kind": "pain"},
+                    ],
+                }
+            ],
+        }
+    )
+    assert report.message == ""
+    assert report.opener_message.startswith("Nice work")
+    assert report.schedule_fuller_turn is True
+    assert report.questions[0].options[0].kind == "rpe"
+
+
+def test_fuller_report_preserves_opener_message():
+    """A fuller-turn row carries BOTH the preserved opener prose and the fuller
+    message + tail."""
+    from app.schemas.coach import CoachMessageReport
+
+    report = CoachMessageReport.model_validate(
+        {
+            "message": "Aerobically this held up well; drift was 4%.",
+            "opener_message": "Quick reaction: solid effort.",
+            "headline": "Solid aerobic run",
+            "next_steps": [
+                {"action": "Easy day", "details": "30 min", "why": "Recovery"}
+            ],
+        }
+    )
+    assert report.opener_message == "Quick reaction: solid effort."
+    assert report.message.startswith("Aerobically")
+    assert len(report.next_steps) == 1

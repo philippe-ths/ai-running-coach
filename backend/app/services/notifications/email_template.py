@@ -1,7 +1,11 @@
 from html import escape
 
 from app.schemas.coach import CoachReportRead
-from app.services.notifications._prose import is_message_report, message_paragraphs
+from app.services.notifications._prose import (
+    is_message_report,
+    message_paragraphs,
+    opener_body,
+)
 
 
 def render_coach_report_email(
@@ -10,8 +14,13 @@ def render_coach_report_email(
     headline: str,
     distance_m: int,
     app_base_url: str,
+    stage: str = "fuller",
 ) -> tuple[str, str, str]:
-    """Render subject + HTML body + plain-text body for a coach report email."""
+    """Render subject + HTML body + plain-text body for a coach report email.
+
+    `stage` ("fuller" default, or "opener" for the A4 stage-one email) selects the
+    fuller `message` or the opener_message + reply-invite line. Default keeps every
+    existing caller byte-stable."""
     distance_km = round((distance_m or 0) / 1000.0, 1)
     confidence = report.meta.confidence
     activity_label = headline or "Activity"
@@ -26,20 +35,22 @@ def render_coach_report_email(
 
     activity_url = f"{app_base_url.rstrip('/')}/activity/{report.activity_id}"
 
-    html = _render_html(report, activity_label, distance_km, confidence, activity_url)
-    text = _render_text(report, activity_label, distance_km, confidence, activity_url)
+    html = _render_html(report, activity_label, distance_km, confidence, activity_url, stage)
+    text = _render_text(report, activity_label, distance_km, confidence, activity_url, stage)
     return subject, html, text
 
 
-def _render_html(report, activity_label, distance_km, confidence, activity_url) -> str:
+def _render_html(report, activity_label, distance_km, confidence, activity_url, stage="fuller") -> str:
     content = report.report
     heading_distance = f" · {distance_km}km" if distance_km > 0 else ""
 
     # A3 (ADR 0009): render the prose message as paragraphs; the message is the
-    # product, the structured tail stays in the app.
+    # product, the structured tail stays in the app. A4: the opener renders its
+    # opener_message + the reply-invite line instead.
     if is_message_report(content):
+        prose = opener_body(content) if stage == "opener" else content.message
         paragraphs = "".join(
-            f"<p>{escape(p)}</p>" for p in message_paragraphs(content.message)
+            f"<p>{escape(p)}</p>" for p in message_paragraphs(prose)
         )
         return (
             "<!doctype html><html><body style=\"font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:16px;\">"
@@ -104,7 +115,7 @@ def _render_html(report, activity_label, distance_km, confidence, activity_url) 
     )
 
 
-def _render_text(report, activity_label, distance_km, confidence, activity_url) -> str:
+def _render_text(report, activity_label, distance_km, confidence, activity_url, stage="fuller") -> str:
     content = report.report
 
     if distance_km > 0:
@@ -112,9 +123,11 @@ def _render_text(report, activity_label, distance_km, confidence, activity_url) 
     else:
         header = f"{activity_label} — {confidence} confidence"
 
-    # A3 (ADR 0009): the plain-text body is the prose message.
+    # A3 (ADR 0009): the plain-text body is the prose message. A4: the opener
+    # renders its opener_message + the reply-invite line instead.
     if is_message_report(content):
-        lines = [header, "", content.message.strip(), "", f"View in app: {activity_url}"]
+        prose = opener_body(content) if stage == "opener" else content.message.strip()
+        lines = [header, "", prose, "", f"View in app: {activity_url}"]
         return "\n".join(lines) + "\n"
 
     lines = [

@@ -218,6 +218,13 @@ async def stream_chat_response(
     db.add(user_msg)
     db.commit()
 
+    # A4: a chat reply is a reply — if the two-stage exchange is still open, fire
+    # the fuller turn early. Enqueued AFTER the commit so the fuller's continuity
+    # read sees this reply. Best-effort; never breaks the chat stream.
+    from app.jobs.process_new_activity import maybe_enqueue_fuller_turn
+
+    maybe_enqueue_fuller_turn(db, activity_id)
+
     # Load conversation history (including the message we just saved)
     history_rows = (
         db.query(CoachChatMessage)

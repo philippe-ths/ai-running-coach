@@ -41,6 +41,22 @@ class EmptyMessageError(ValueError):
     message; without one there is nothing to store, so the service falls back."""
 
 
+def is_opener_only(report: Any) -> bool:
+    """True if a stored report dict is an A4 OPENER-ONLY row: the opener wrote its
+    prose into `opener_message` and the fuller turn has not yet filled `message`.
+
+    The single in-band completeness signal (no Activity-sentinel coupling), shared
+    by the retrieval seam — which excludes incomplete exchanges from the M4/M7
+    prior-exchange reads so an opener never leaks a thin digest or shadows an
+    earlier complete exchange — and the M5 eval harness, which scores the fuller
+    turn only. A complete message report has a non-empty `message`; a legacy
+    structured report has no `opener_message`, so it is never opener-only.
+    """
+    if not isinstance(report, dict):
+        return False
+    return bool(report.get("opener_message")) and not (report.get("message") or "").strip()
+
+
 # Hand-frozen strict tool schema. additionalProperties:false + required on every
 # object are the strict-subset requirements; no string maxLength (forbidden in
 # the strict subset — the headline bound is a prompt instruction).
@@ -135,6 +151,20 @@ RECORD_COACH_TAIL_TOOL: Dict[str, Any] = {
                     },
                 },
             },
+            # A4 two-stage Exchange (opener mode only). Optional, like evidence/
+            # payload above (not in `required`): the opener LLM sets it to its depth
+            # judgment; the fuller turn omits it. The deterministic safety override
+            # forces a fuller turn regardless, so a missing/false value here is never
+            # the last word on a red-flag run.
+            "schedule_fuller_turn": {
+                "type": "boolean",
+                "description": (
+                    "OPENER MODE ONLY: true if this run warrants a fuller follow-up "
+                    "coaching turn (something substantive to say once the runner has "
+                    "had a moment); false or omitted for an unremarkable run. Ignored "
+                    "in fuller mode."
+                ),
+            },
         },
     },
 }
@@ -202,3 +232,41 @@ def merge_report(parsed: ParsedBlocks) -> CoachMessageReport:
         # A malformed tail must not discard good coaching — degrade instead.
         logger.warning("coach tail failed validation; degrading: %s", exc)
         return CoachMessageReport(message=message, tail_degraded=True)
+
+
+def merge_opener(parsed: ParsedBlocks) -> CoachMessageReport:
+    """Fold an OPENER-stage response into a CoachMessageReport (A4 stage one).
+
+    The opener prose lands in `opener_message`; `message` stays empty (the fuller
+    turn fills it later, preserving the opener). Only the opener-relevant tail
+    fields are carried: `questions` (the RPE/pain prompts) and `schedule_fuller_turn`
+    (the LLM's depth judgment), plus an optional `headline`. `next_steps` and
+    `risks` are deliberately NOT carried — the opener makes no commitments and
+    contributes nothing to the learning loop (which attaches to the fuller turn
+    only), so an opener row can never leak a next_step into the M7 adherence read.
+
+    Degrade-not-withhold, mirroring merge_report: an empty opener prose is refused
+    (EmptyMessageError → the service stores a templated opener fallback); a missing
+    or unusable tail keeps the prose with tail_degraded=True (no RPE/pain prompts,
+    schedule_fuller_turn defaults False — the deterministic safety override is then
+    the only path to a fuller turn, which is the intended conservative default).
+    """
+    prose = parsed.message.strip()
+    if not prose:
+        raise EmptyMessageError("opener carried no prose message")
+
+    if parsed.tail is None:
+        return CoachMessageReport(message="", opener_message=prose, tail_degraded=True)
+
+    try:
+        return CoachMessageReport(
+            message="",
+            opener_message=prose,
+            tail_degraded=False,
+            headline=parsed.tail.get("headline"),
+            questions=parsed.tail.get("questions", []),
+            schedule_fuller_turn=bool(parsed.tail.get("schedule_fuller_turn", False)),
+        )
+    except (ValidationError, TypeError) as exc:
+        logger.warning("opener tail failed validation; degrading: %s", exc)
+        return CoachMessageReport(message="", opener_message=prose, tail_degraded=True)

@@ -277,3 +277,54 @@ def test_fetch_prior_commitments_picks_most_recent_prior(db):
     out = fetch_prior_commitments(db, current)
     assert out is not None
     assert out.source_activity_id == newer.id
+
+
+# --- A4: opener-only rows are incomplete exchanges, excluded from prior reads ---
+
+
+def _opener_only_body() -> dict:
+    """A stored opener-state report: prose in opener_message, message empty, no
+    next_steps (the fuller turn never landed)."""
+    return {
+        "message": "",
+        "opener_message": "Quick reaction — full breakdown to follow.",
+        "schedule_fuller_turn": True,
+        "next_steps": [],
+        "questions": [],
+    }
+
+
+def test_fetch_prior_digests_skips_opener_only_rows(db):
+    """A prior opener-only row (incomplete exchange) must not leak a thin digest
+    into the longitudinal memory, and must not shadow an earlier complete exchange."""
+    user_id = _user(db)
+    current = _activity(db, user_id, day=20)
+    complete = _activity(db, user_id, day=5)
+    opener_only = _activity(db, user_id, day=12)  # more recent, but incomplete
+    _add_report(db, complete, body=_report_body("Real exchange"), store_digest=True)
+    _add_report(db, opener_only, body=_opener_only_body(), store_digest=False,
+                prompt_id="coach_message_v2")
+
+    digests = fetch_prior_digests(db, current)
+    headlines = [d.headline for d in digests]
+    assert "Real exchange" in headlines
+    # the opener-only row contributed no digest
+    assert all(d.activity_date[:10] != opener_only.start_date.date().isoformat()
+               for d in digests)
+
+
+def test_fetch_prior_commitments_skips_opener_only_rows(db):
+    """An opener-only row carries no commitments and must not shadow the earlier
+    complete exchange's next_steps that M7 judges against."""
+    user_id = _user(db)
+    current = _activity(db, user_id, day=20)
+    complete = _activity(db, user_id, day=5)
+    opener_only = _activity(db, user_id, day=12)
+    _add_report(db, complete, body=_report_body("Real exchange"), store_digest=True)
+    _add_report(db, opener_only, body=_opener_only_body(), store_digest=False,
+                prompt_id="coach_message_v2")
+
+    out = fetch_prior_commitments(db, current)
+    assert out is not None
+    assert out.source_activity_id == complete.id
+    assert len(out.next_steps) == 1

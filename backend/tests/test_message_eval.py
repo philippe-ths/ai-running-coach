@@ -88,3 +88,36 @@ class TestHarnessMessageLoader:
         )
         assert card.tail_degraded == 1
         assert card.to_dict()["tail_degraded"] == 1
+
+    def test_opener_only_rows_are_skipped_not_scored(self, db):
+        # A4: an opener-only row (opener_message set, message empty) is a not-yet-
+        # complete exchange — the harness skips it (the rubric scores the fuller
+        # turn only), counted separately from fallbacks.
+        content, _ = known_good_message_report()
+        opener = content.model_dump()
+        opener["opener_message"] = "Nice work — full breakdown to follow."
+        opener["message"] = ""
+        opener["next_steps"] = []
+        _seed_message_report(db, schema_version="2.0", report=opener)
+        card = score_db_reports(
+            db, prompt_id="coach_message_v1", schema_version="2.0"
+        )
+        assert card.skipped_opener_only == 1
+        assert len(card.report_scores) == 0
+        assert card.errors == []  # skipped before parse/score, never an error
+        assert card.to_dict()["skipped_opener_only"] == 1
+
+    def test_fuller_rows_still_scored_alongside_opener(self, db):
+        # A complete fuller row (non-empty message) is scored; the opener row beside
+        # it is skipped.
+        content, _ = known_good_message_report()
+        _seed_message_report(db, schema_version="2.0", report=content.model_dump())
+        opener = content.model_dump()
+        opener["opener_message"] = "Quick reaction."
+        opener["message"] = ""
+        _seed_message_report(db, schema_version="2.0", report=opener)
+        card = score_db_reports(
+            db, prompt_id="coach_message_v1", schema_version="2.0"
+        )
+        assert len(card.report_scores) == 1
+        assert card.skipped_opener_only == 1
