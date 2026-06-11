@@ -67,6 +67,13 @@ SCHEMA_VERSION_BY_FAMILY = {
 # Token budget for the A3 message call (thinking tokens count against it).
 _MESSAGE_MAX_TOKENS = 8192
 
+# Token budget for the legacy structured JSON report. Was 1024, which truncated
+# under claude-sonnet-4-6 (more verbose JSON than the retired model) — the report
+# hit stop_reason=max_tokens mid-object and the partial/fenced text failed to
+# parse, silently falling back. The structured report is bounded (≤6 takeaways,
+# ≤3 next_steps, evidence arrays), so 4096 gives ample headroom without truncation.
+_STRUCTURED_MAX_TOKENS = 4096
+
 # Nudge appended when the model wrote prose but skipped the tail tool.
 _TAIL_REMINDER = (
     "You wrote the message but did not call record_coach_tail. Call it now, "
@@ -282,7 +289,7 @@ async def _generate_structured(
     policy_violations: List[str] = []
     try:
         raw_response = await client.generate_json(
-            system=system_prompt, user=user_message, max_tokens=1024,
+            system=system_prompt, user=user_message, max_tokens=_STRUCTURED_MAX_TOKENS,
         )
         cleaned = _strip_code_fences(raw_response)
         parsed = json.loads(cleaned)
@@ -493,7 +500,7 @@ async def _retry_with_fixes(
         raw = await client.generate_json(
             system=system_prompt,
             user=retry_message,
-            max_tokens=1024,
+            max_tokens=_STRUCTURED_MAX_TOKENS,
         )
         cleaned = _strip_code_fences(raw)
         parsed = json.loads(cleaned)
@@ -517,13 +524,23 @@ def _coerce_uuid(value) -> uuid.UUID:
 
 
 def _strip_code_fences(text: str) -> str:
-    """Remove markdown code fences (```json ... ```) that LLMs sometimes add."""
+    """Remove markdown code fences (```json ... ```) that LLMs sometimes add.
+
+    Tolerates an UNTERMINATED opening fence: a closing-fence-less or truncated
+    response (e.g. ```json\\n{...) would otherwise be handed to json.loads with a
+    leading backtick and fail as "Expecting value: line 1 column 1". Stripping a
+    leading fence even without its close lets the JSON body parse. (Defence in
+    depth alongside `_STRUCTURED_MAX_TOKENS`, which prevents the truncation that
+    drops the closing fence in the first place.)"""
     stripped = text.strip()
-    # Match ```json\n...\n``` or ```\n...\n```
+    # Match a fully fenced block ```json\n...\n``` or ```\n...\n```.
     match = re.match(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", stripped, re.DOTALL)
     if match:
         return match.group(1).strip()
-    return stripped
+    # Otherwise strip a leading opening fence and any trailing fence independently.
+    stripped = re.sub(r"^```(?:json)?\s*\n?", "", stripped)
+    stripped = re.sub(r"\n?```\s*$", "", stripped)
+    return stripped.strip()
 
 
 def _to_read(db_report: CoachReport) -> CoachReportRead:
