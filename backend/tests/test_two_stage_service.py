@@ -310,3 +310,74 @@ async def test_fallback_opener_schedules_recovery_fuller(db, _v2):
     assert opener.schedule_fuller_turn is True  # recovery, despite no LLM judgment
     row = _stored(db, activity)
     assert is_opener_only(row.report) is True  # opener-shaped fallback
+
+
+# --- #217: fuller-fallback recovery (no silently-abandoned safety-forced turn) -
+
+
+def _empty_prose_blocks():
+    # A response that carries a tail but NO prose text block: parse yields an empty
+    # message, so merge raises EmptyMessageError (the observed transient #217 failure,
+    # logged as "coach response carried no prose message"). A tail is present so the
+    # tail-skip corrective retry does not fire and consume an extra stubbed result.
+    return [_tail(headline="x", next_steps=[], risks=[], questions=[])]
+
+
+async def test_fuller_retries_once_on_transient_empty_prose(db, _v2):
+    # #217: the fuller LLM occasionally returns no prose block (transient — an
+    # immediate re-run recovers it). One in-process retry turns that single hiccup
+    # into a real turn instead of a silently-dropped fallback.
+    activity = _seed(db)
+    fake = _client(_result(_empty_prose_blocks()), _result(_fuller_blocks()))
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        read = await generate_fuller(db, str(activity.id))
+    assert read is not None
+    assert fake.generate_coach_message.call_count == 2  # retried once
+    row = _stored(db, activity)
+    assert row.is_fallback is False
+    assert row.report["message"].startswith("Aerobically")
+
+
+async def test_fuller_persistent_fallback_stays_opener_only_and_recovers(db, _v2):
+    # #217: when BOTH fuller attempts return no prose, the fallback must not lock the
+    # exchange as a complete (fuller-shaped) fallback. It stays opener-only — message
+    # empty, opener prose preserved, is_fallback, no digest, no learning loop — so the
+    # reply/force/timer paths can still produce the substantive turn. Mirrors
+    # test_opener_medical_overreach_stays_opener_only_and_recovers for the fuller side.
+    activity = _seed(db)
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_opener_blocks(schedule=True)))):
+        await generate_opener(db, str(activity.id))
+    opener_row_id = _stored(db, activity).id
+
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_empty_prose_blocks()),
+                                     _result(_empty_prose_blocks()))), \
+         patch("app.services.coach.service.write_back_beliefs") as wb, \
+         patch("app.services.coach.service.enqueue_consolidation") as ec:
+        read = await generate_fuller(db, str(activity.id))
+
+    assert read is not None
+    row = _stored(db, activity)
+    assert row.id == opener_row_id            # same evolving row
+    assert row.is_fallback is True
+    assert is_opener_only(row.report) is True  # NOT a stuck fuller-shaped fallback
+    assert row.report["message"] == ""
+    assert row.report["opener_message"].startswith("Nice work")  # preserved
+    assert row.digest is None                  # opener-only carries no digest
+    wb.assert_not_called()                     # learning loop never fires on fallback
+    ec.assert_not_called()
+
+    # The exchange is still open: a subsequent fuller turn regenerates a real report
+    # (it does NOT cache-hit the stuck fallback) and preserves the opener half.
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_fuller_blocks()))), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        await generate_fuller(db, str(activity.id))
+    row2 = _stored(db, activity)
+    assert row2.is_fallback is False
+    assert row2.report["message"].startswith("Aerobically")
+    assert row2.report["opener_message"].startswith("Nice work")

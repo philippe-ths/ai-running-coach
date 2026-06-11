@@ -77,6 +77,12 @@ _MESSAGE_MAX_TOKENS = 8192
 # than the fuller turn. Tunable.
 _OPENER_MAX_TOKENS = 2048
 
+# #217: total attempts at the prose call before degrading to a fallback. The prose
+# response is occasionally empty (no text block) but recovers on an immediate
+# re-run, so one retry (2 attempts) reclaims that transient failure. Both stages
+# (opener and fuller) share it.
+_EMPTY_PROSE_ATTEMPTS = 2
+
 # Token budget for the legacy structured JSON report. Was 1024, which truncated
 # under claude-sonnet-4-6 (more verbose JSON than the retired model) — the report
 # hit stop_reason=max_tokens mid-object and the partial/fenced text failed to
@@ -369,7 +375,19 @@ async def generate_fuller(
     # Preserve the opener prose on the evolving row — the fuller LLM does not emit
     # opener_message, so carry it forward so the two-line thread (opener + fuller)
     # survives in storage and on the frontend.
-    if opener_prose:
+    if outcome.is_fallback and opener_prose:
+        # #217: a fuller fallback must NOT lock the exchange. The fuller-shaped
+        # fallback carries a non-empty `message`, which would make the row complete
+        # (not opener-only) and defeat both recovery paths: generate_fuller would
+        # cache-hit it and the reply path's is_opener_only gate would reject it, so a
+        # safety-forced (red-flag) turn dies on one transient LLM failure. Keep the
+        # row OPENER-ONLY instead (message empty, opener prose preserved) — exactly
+        # the opener-fallback pattern — so the reply/force/timer paths regenerate the
+        # substantive turn. The row stays is_fallback (not notified, no learning loop).
+        outcome.report_dump = CoachMessageReport(
+            message="", opener_message=opener_prose, tail_degraded=True
+        ).model_dump()
+    elif opener_prose:
         outcome.report_dump["opener_message"] = opener_prose
 
     return _persist_report(
@@ -674,40 +692,57 @@ async def _generate_message(
     max_tokens = _OPENER_MAX_TOKENS if is_opener else _MESSAGE_MAX_TOKENS
     merge = merge_opener if is_opener else merge_report
     fallback = _opener_fallback_outcome if is_opener else _message_fallback_outcome
-    try:
-        result = await _call_message(client, system_prompt, user_message, max_tokens=max_tokens)
-        if result.stop_reason == "refusal":
-            logger.warning("coach message refused; storing fallback")
+    # #217: the prose call occasionally returns no text block at all (an empty-prose
+    # response, observed as transient — an immediate re-run recovers it). A single
+    # in-process retry turns that one hiccup into a real turn instead of a fallback,
+    # which matters most for the safety-forced fuller turn whose substantive coaching
+    # would otherwise be silently dropped. The retry is scoped to that specific
+    # failure; refusal / max_tokens / tail-skip keep their existing one-shot handling.
+    report = None
+    raw_response = ""
+    for attempt in range(_EMPTY_PROSE_ATTEMPTS):
+        try:
+            result = await _call_message(client, system_prompt, user_message, max_tokens=max_tokens)
+            if result.stop_reason == "refusal":
+                logger.warning("coach message refused; storing fallback")
+                return fallback()
+            if result.stop_reason == "max_tokens":
+                logger.info("coach message truncated (max_tokens); retrying once")
+                retried = await _call_message(
+                    client, system_prompt, user_message, max_tokens=max_tokens
+                )
+                if retried.stop_reason != "refusal":
+                    result = retried
+
+            parsed = parse_blocks(result.content_blocks)
+            # Tail-skip corrective retry: the model is allowed to skip the tool under
+            # tool_choice=auto. One nudge before accepting a degraded tail.
+            if parsed.tail is None and result.stop_reason == "end_turn":
+                logger.info("coach message skipped the tail tool; one corrective retry")
+                nudge = f"{user_message}\n\n{_TAIL_REMINDER}"
+                result2 = await _call_message(
+                    client, system_prompt, nudge, max_tokens=max_tokens
+                )
+                parsed2 = parse_blocks(result2.content_blocks)
+                if parsed2.tail is not None and parsed2.message.strip():
+                    parsed, result = parsed2, result2
+
+            raw_response = _serialize_blocks(result.content_blocks)
+            report = merge(parsed)
+            break
+        except EmptyMessageError:
+            if attempt + 1 < _EMPTY_PROSE_ATTEMPTS:
+                logger.warning(
+                    "coach response carried no prose message; retrying once (#217)"
+                )
+                continue
+            logger.warning(
+                "coach response carried no prose message after retry; storing fallback"
+            )
             return fallback()
-        if result.stop_reason == "max_tokens":
-            logger.info("coach message truncated (max_tokens); retrying once")
-            retried = await _call_message(
-                client, system_prompt, user_message, max_tokens=max_tokens
-            )
-            if retried.stop_reason != "refusal":
-                result = retried
-
-        parsed = parse_blocks(result.content_blocks)
-        # Tail-skip corrective retry: the model is allowed to skip the tool under
-        # tool_choice=auto. One nudge before accepting a degraded tail.
-        if parsed.tail is None and result.stop_reason == "end_turn":
-            logger.info("coach message skipped the tail tool; one corrective retry")
-            nudge = f"{user_message}\n\n{_TAIL_REMINDER}"
-            result2 = await _call_message(
-                client, system_prompt, nudge, max_tokens=max_tokens
-            )
-            parsed2 = parse_blocks(result2.content_blocks)
-            if parsed2.tail is not None and parsed2.message.strip():
-                parsed, result = parsed2, result2
-
-        raw_response = _serialize_blocks(result.content_blocks)
-        report = merge(parsed)
-    except EmptyMessageError:
-        logger.warning("coach response carried no prose message; storing fallback")
-        return fallback()
-    except anthropic.APIError as e:
-        logger.error("coach message transport error: %s", e)
-        return fallback()
+        except anthropic.APIError as e:
+            logger.error("coach message transport error: %s", e)
+            return fallback()
 
     violations = validate_message_policy(report, pack)
     if violations:
