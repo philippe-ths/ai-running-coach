@@ -1,6 +1,7 @@
 import logging
+import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update
 from pydantic import BaseModel
@@ -11,6 +12,10 @@ from app.models import Activity, StravaAccount
 from app.core.queue import queue
 from app.jobs.process_new_activity import process_new_activity_job
 from app.jobs.strava_sync import sync_activity_job
+from app.schemas import CheckInCreate
+from app.services.checkins import write_checkin
+from app.services.notifications import get_notifier
+from app.services.notifications.callback_token import decode as decode_callback_token
 
 logger = logging.getLogger(__name__)
 
@@ -149,3 +154,134 @@ async def receive_webhook(
         return {"status": "processed", "action": "enqueued_sync"}
 
     return {"status": "ignored", "reason": "unknown_aspect"}
+
+
+# --- Telegram inbound callback (I1b, #220) -------------------------------------
+# The runner taps an RPE/pain button on the opener message in Telegram; Telegram
+# POSTs a callback_query here. The endpoint is BasicAuth-exempt (the /api/webhooks
+# prefix) so Telegram can reach it, so it must authenticate the request itself
+# before any side effect, mirroring the Strava-webhook posture above.
+
+
+class _TgChat(BaseModel):
+    id: int = 0
+
+
+class _TgMessage(BaseModel):
+    chat: _TgChat = _TgChat()
+
+
+class _TgCallbackQuery(BaseModel):
+    id: str
+    data: str | None = None
+    message: _TgMessage | None = None
+
+
+class TelegramUpdate(BaseModel):
+    # Telegram sends every update type to one webhook URL; we only act on
+    # callback_query (a button tap) and ignore the rest. Extra fields are dropped.
+    update_id: int = 0
+    callback_query: _TgCallbackQuery | None = None
+
+
+def _callback_is_authentic(
+    secret_header: str | None, callback: _TgCallbackQuery
+) -> bool:
+    """Authenticate an inbound Telegram callback before any side effect.
+
+    Two checks, mirroring the Strava posture:
+
+    1. The `X-Telegram-Bot-Api-Secret-Token` header must equal our configured
+       secret. Telegram echoes the `secret_token` set at webhook registration on
+       every request, so it is the stronger (secret) check. When the secret is
+       unconfigured the check is skipped for local dev, but it fails closed in
+       production so an empty secret never silently opens the endpoint.
+    2. The callback's chat id must match our configured TELEGRAM_CHAT_ID. Chat
+       ids are guessable, so this is the weaker check, but it is always available
+       and ties the action to the one connected runner.
+    """
+    expected_secret = settings.TELEGRAM_WEBHOOK_SECRET
+    if expected_secret:
+        if secret_header != expected_secret:
+            logger.warning("telegram_callback_rejected_secret_mismatch")
+            return False
+    elif settings.APP_ENV == "production":
+        logger.critical("telegram_webhook_secret_missing_in_production")
+        return False
+
+    chat_id = callback.message.chat.id if callback.message else 0
+    expected_chat = str(settings.TELEGRAM_CHAT_ID).strip()
+    if not expected_chat or str(chat_id) != expected_chat:
+        logger.warning(
+            "telegram_callback_rejected_chat_mismatch",
+            extra={"chat_id": chat_id},
+        )
+        return False
+
+    return True
+
+
+def _answer_callback(callback_query_id: str, *, text: str = "") -> None:
+    """Best-effort acknowledge the tap so Telegram clears the button spinner.
+
+    Only the Telegram notifier can answer; any other active channel (email,
+    no-op, in-memory) has no callback to answer, so this is a guarded no-op
+    there. Never raises into the request path."""
+    notifier = get_notifier()
+    answer = getattr(notifier, "answer_callback", None)
+    if answer is None:
+        return
+    try:
+        answer(callback_query_id, text=text)
+    except Exception:
+        logger.exception("failed to answer telegram callback %s", callback_query_id)
+
+
+@router.post("/webhooks/telegram")
+def receive_telegram_callback(
+    update: TelegramUpdate,
+    db: Session = Depends(get_db),
+    secret_header: str | None = Header(
+        default=None, alias="X-Telegram-Bot-Api-Secret-Token"
+    ),
+):
+    """Handle a runner tapping an RPE/pain button on the Telegram opener (I1b).
+
+    Authenticate first, then turn the tap into the same CheckIn the in-app path
+    writes (via the shared `write_checkin`), which also fires the A4 fuller turn
+    when the exchange is open. Always returns 200 to a malformed-but-authentic or
+    non-callback update so Telegram does not retry; rejects an unauthenticated
+    request with 403 before any side effect."""
+    callback = update.callback_query
+    if callback is None:
+        # Not a button tap (a plain message, etc.): nothing to do.
+        return {"status": "ignored", "reason": "not_callback"}
+
+    if not _callback_is_authentic(secret_header, callback):
+        raise HTTPException(status_code=403, detail="Unauthenticated callback")
+
+    action = decode_callback_token(callback.data or "")
+    if action is None:
+        logger.warning("telegram_callback_unparseable_token")
+        _answer_callback(callback.id)
+        return {"status": "ignored", "reason": "bad_token"}
+
+    try:
+        activity_uuid = uuid.UUID(action.activity_id)
+    except ValueError:
+        _answer_callback(callback.id)
+        return {"status": "ignored", "reason": "bad_activity"}
+
+    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
+    if activity is None:
+        _answer_callback(callback.id)
+        return {"status": "ignored", "reason": "unknown_activity"}
+
+    # Build the validated CheckIn payload from the token (range-checked the same
+    # as the in-app path), then write through the shared helper.
+    checkin_data = CheckInCreate(**{action.field: action.value})
+    write_checkin(db, activity_uuid, checkin_data)
+
+    label = "RPE" if action.kind == "rpe" else "pain"
+    _answer_callback(callback.id, text=f"Got it — {label} {action.value} recorded.")
+    return {"status": "processed", "action": "checkin_written"}

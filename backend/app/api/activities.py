@@ -9,6 +9,7 @@ from app.db.session import get_db
 from app.models import Activity, StravaAccount, CheckIn
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead
 from app.services import activity_queries, analysis
+from app.services.checkins import write_checkin
 from app.services.analysis.classifier import Classification, compose_headline
 from app.services.analysis.splits import calculate_splits
 from app.services.strava_ingestion import get_strava_port, ingest_recent_activities
@@ -177,26 +178,6 @@ def create_checkin(
     checkin_data: CheckInCreate,
     db: Session = Depends(get_db)
 ):
-    # 1. Upsert CheckIn
-    existing = db.query(CheckIn).filter(CheckIn.activity_id == activity_id).first()
-    if existing:
-        for k, v in checkin_data.dict(exclude_unset=True).items():
-            setattr(existing, k, v)
-        db_obj = existing
-    else:
-        db_obj = CheckIn(activity_id=activity_id, **checkin_data.dict())
-        db.add(db_obj)
-    
-    db.commit()
-    db.refresh(db_obj)
-
-    # 2. Trigger Re-Processing to incorporate user feedback
-    analysis.analyze(db, str(activity_id))
-
-    # 3. A4: a check-in is a reply — if the two-stage exchange is still open, fire
-    # the fuller turn early (best-effort; never breaks the check-in write).
-    from app.jobs.process_new_activity import maybe_enqueue_fuller_turn
-
-    maybe_enqueue_fuller_turn(db, activity_id)
-
-    return db_obj
+    # Shared with the Telegram inbound callback path (I1b) so both writes are
+    # identical: upsert + re-analyze + conditional A4 fuller-turn trigger.
+    return write_checkin(db, activity_id, checkin_data)

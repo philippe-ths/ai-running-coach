@@ -1,9 +1,47 @@
 from typing import Optional
 
 from app.schemas.coach import CoachReportRead
+from app.services.notifications.callback_token import encode as encode_callback_token
 from app.services.notifications.in_memory_adapter import InMemoryNotifier
 from app.services.notifications.noop_adapter import NoOpNotifier
-from app.services.notifications.port import Notification, NotifierPort
+from app.services.notifications.port import (
+    Notification,
+    NotificationAction,
+    NotifierPort,
+)
+
+
+def _opener_actions(report: CoachReportRead) -> tuple[NotificationAction, ...]:
+    """Build tappable RPE/pain actions from a message report's questions (I1b).
+
+    Mirrors the in-app contract (`CoachReportPanel.handleOptionTap`): only `rpe`
+    and `pain` options are tappable, and a tap carries the option's numeric
+    payload. Skips any option whose payload is not an integer (so a malformed
+    option drops out rather than producing a dead button). Returns empty for the
+    structured legacy shape or a report with no tappable options."""
+    content = report.report
+    questions = getattr(content, "questions", None)
+    if not questions:
+        return ()
+    actions: list[NotificationAction] = []
+    for q in questions:
+        for opt in getattr(q, "options", []) or []:
+            if opt.kind not in ("rpe", "pain"):
+                continue
+            try:
+                value = int(opt.payload)
+            except (TypeError, ValueError):
+                continue
+            try:
+                token = encode_callback_token(
+                    kind=opt.kind,
+                    activity_id=str(report.activity_id),
+                    value=value,
+                )
+            except ValueError:
+                continue
+            actions.append(NotificationAction(label=opt.label, token=token))
+    return tuple(actions)
 
 _active: NotifierPort | None = None
 
@@ -95,12 +133,16 @@ def build_coach_notification(
             app_base_url=app_base_url,
             stage=stage,
         )
+        # I1b: only the opener carries tappable RPE/pain buttons (the fuller turn
+        # is the response to that input, so it has no quick-reply affordances).
+        actions = _opener_actions(report) if stage == "opener" else ()
         return Notification(
             to=str(settings.TELEGRAM_CHAT_ID),
             subject=subject,
             html="",
             text=text,
             url=url,
+            actions=actions,
         )
     if channel == "email":
         from app.services.notifications.email_template import (
