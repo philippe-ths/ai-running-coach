@@ -172,6 +172,19 @@ async def get_or_generate_coach_report(
     else:
         outcome = await _generate_structured(client, system_prompt, user_message, pack)
 
+    # Monitoring (A3): one greppable WARNING per stored degraded tail — a real prose
+    # message produced but no usable structured tail (the loop abstains on it). This
+    # is the single chokepoint covering every degrade path, so it surfaces the
+    # `tail_degraded` rate in prod logs / Sentry without a batch job; the eval
+    # scorecard's tail_degraded counter is the complementary batch view.
+    if outcome.tail_degraded:
+        logger.warning(
+            "coach_tail_degraded: stored a prose message with a degraded tail "
+            "(activity=%s, prompt=%s); the learning loop abstains on this report",
+            activity_uuid,
+            prompt_id,
+        )
+
     meta = CoachReportMeta(
         confidence=pack.metrics.confidence,
         model_id=settings.COACH_MODEL_ID,
