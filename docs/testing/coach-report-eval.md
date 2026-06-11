@@ -20,7 +20,7 @@ each PASS / FAIL / NOT_APPLICABLE:
 
 | Assertion | Asks | NOT_APPLICABLE when |
 | --- | --- | --- |
-| `led_with_headline` | Did the report open with a headline verdict (N3)? | never |
+| `led_with_headline` | Did the report open with a headline verdict (N3)? | a prose message with a degraded tail (no headline label to assess) |
 | `discounted_inflated_hr` | When a confound fired (`discount_signals.likely_inflated_by`), did the report name it / discount the HR drift rather than read it as fatigue? | no concrete confound fired |
 | `no_medical_overreach` | Did it stay in the coaching lane? Reuses the production policy gate (validator rule 5) verbatim. | never |
 | `advanced_not_parroted` | When a prior report exists in the pack, did this one advance the narrative instead of restating it (lead/next-step overlap below threshold)? | no prior report in the pack |
@@ -112,6 +112,56 @@ cd .. && make eval EVAL_ARGS="--regenerate --activities 20"  # regen v2 reports,
 deterministic pipeline over the streams already seeded) and is required first so
 the regenerated context packs carry the current metrics (axes, `discount_signals`)
 and the M4 longitudinal contrast.
+
+## Scoring the A3 prose-message family (schema 2.0)
+
+The harness scores both output shapes (ADR 0009). The rubric extractors
+(`_report_text` / `_assertive_text` / `_lead_text` / `_forward_words`) and field
+accessors branch over the `CoachReportContent | CoachMessageReport` union, so the
+eight assertions are written once over a uniform surface:
+
+- For the prose message the **lead** is its opening sentence (the verdict the
+  prompt asks it to lead with), the **assertive** surface is the whole message
+  body plus the tail's next_steps/risks (not the tail's questions), and the **full**
+  surface is the message plus every tail text field.
+- `no_medical_overreach` runs `validate_message_policy` for the prose shape (the
+  same rule 5 over message + tail).
+- `led_with_headline` is `NOT_APPLICABLE` on a degraded tail (the headline label
+  lives in the tail; the prose still led with a verdict).
+
+The loader parses 2.x rows as `CoachMessageReport`, `make eval` defaults to
+whichever family the active prompt selects (`active_schema_version`), the scorecard
+carries a `tail_degraded` count (operational health: a real message with no usable
+tail), and `make eval-selftest` validates a good + deliberately-bad fixture for
+**each** shape (`known_good_message_report` / `deliberately_bad_message_report`).
+
+The prose lexical floors are re-baselined for prose at cutover: the parrot-overlap
+and trend/load/caveat keyword lists are unchanged, but the prose surfaces they scan
+are larger, so the realistic-paraphrase blind spots above are wider for the message
+shape — treat a green scorecard as "no detectable regression" even more cautiously
+until the #164 LLM-judge lands.
+
+### A3 cutover rehearsal (the done-decision evidence)
+
+The cutover from `coach_report_v10` (1.2) to `coach_message_v1` (2.0) is a config
+flip (`COACH_PROMPT_ID`), gated by an eval compare on seeded regenerated data. This
+step makes **real Anthropic calls** and needs owner-authorised spend:
+
+```bash
+make seed-local SEED_ARGS="--activities 20"               # freeze ~20 real activities
+cd backend && .venv/bin/python -m scripts.reanalyze_all   # rebuild metrics from real streams
+# baseline the active structured family first
+cd .. && make eval EVAL_ARGS="--regenerate --activities 20 --output v10.json"
+# flip to the prose family and regenerate + score
+COACH_PROMPT_ID=coach_message_v1 make eval EVAL_ARGS="--regenerate --activities 20 --output msg.json"
+COACH_PROMPT_ID=coach_message_v1 make eval EVAL_ARGS="--compare v10.json"   # no assertion-level regression
+```
+
+A clean compare (no assertion-level regression vs the v10/1.2 baseline) plus a
+`tail_degraded` count at or near zero is the A3 done-decision evidence. Rollback is
+the inverse flip: setting `COACH_PROMPT_ID` back to `coach_report_v10` re-serves the
+cached v10 rows with zero code change (the stored rows read back in their own
+schema-version family).
 
 ## Why each layer is trustworthy
 
