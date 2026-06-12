@@ -31,6 +31,9 @@ class ActivityRead(ActivityBase):
     is_deleted: bool
     user_intent: Optional[str] = None
     avg_cadence: Optional[float] = None
+    # Classification headline composed at read time from DerivedMetric axes;
+    # null until the activity has been analysed (#136).
+    headline: Optional[str] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 

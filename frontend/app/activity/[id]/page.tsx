@@ -7,6 +7,7 @@ import { Activity } from '@/lib/types';
 import AdvancedMetrics from '@/components/AdvancedMetrics';
 import StreamCharts from '@/components/StreamCharts';
 import { SplitsPanel } from '@/components/SplitsPanel';
+import { LapsPanel } from '@/components/LapsPanel';
 import StopsPanel from '@/components/StopsPanel';
 import EfficiencyPanel from '@/components/EfficiencyPanel';
 import CoachReportPanel from '@/components/CoachReportPanel';
@@ -23,18 +24,18 @@ export default async function ActivityDetail({ params }: { params: { id: string 
     <div className="space-y-6 relative">
 
       <div className="mb-4">
-        <Link href="/" className="text-blue-600 hover:underline text-sm">← Back to Dashboard</Link>
+        <Link href="/" className="text-blue-600 dark:text-blue-400 hover:underline text-sm">← Back to Dashboard</Link>
       </div>
 
-      <header className="border-b pb-4">
+      <header className="border-b dark:border-gray-700 pb-4">
         <div className="flex justify-between items-start">
             <div className="min-w-0">
-                <h1 className="text-3xl font-bold text-gray-900 break-words">{activity.name}</h1>
-                <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 text-gray-600 items-center">
+                <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 break-words">{activity.name}</h1>
+                <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 text-gray-600 dark:text-gray-400 items-center">
                     <span>{format(new Date(activity.start_date), 'PPPP p')}</span>
                     <span>{formatDistanceKm(activity.distance_m)}</span>
                     {activity.metrics?.headline && (
-                        <span className="inline-block px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-sm font-medium">
+                        <span className="inline-block px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-200 text-sm font-medium">
                             {activity.metrics.headline}
                         </span>
                     )}
@@ -69,6 +70,11 @@ export default async function ActivityDetail({ params }: { params: { id: string 
              <StreamCharts streams={activity.streams} />
           )}
 
+          {/* Laps Panel: only when the runner recorded laps (#208) */}
+          {activity.laps && activity.laps.length > 0 && (
+              <LapsPanel laps={activity.laps} />
+          )}
+
           {/* Splits Panel */}
           {activity.splits && activity.splits.length > 0 && (
               <SplitsPanel splits={activity.splits} />
@@ -93,90 +99,90 @@ export default async function ActivityDetail({ params }: { params: { id: string 
 
         {/* Sidebar: Check-In & Stats */}
         <div className="space-y-6 min-w-0">
-           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-              <h3 className="font-semibold text-gray-700 mb-3">Metrics</h3>
+           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
+              <h3 className="font-semibold text-gray-700 dark:text-gray-300 mb-3">Metrics</h3>
               <dl className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                    <dt className="text-gray-500">Duration</dt>
+                    <dt className="text-gray-500 dark:text-gray-400">Duration</dt>
                     <dd className="font-medium">{formatDuration(activity.moving_time_s)}</dd>
                 </div>
                 {activity.raw_summary?.elapsed_time && (
                     <div className="flex justify-between">
-                        <dt className="text-gray-500">Elapsed Time</dt>
+                        <dt className="text-gray-500 dark:text-gray-400">Elapsed Time</dt>
                         <dd className="font-medium">{formatDuration(activity.raw_summary.elapsed_time)}</dd>
                     </div>
                 )}
                 <div className="flex justify-between">
-                   <dt className="text-gray-500">Avg Pace</dt>
+                   <dt className="text-gray-500 dark:text-gray-400">Avg Pace</dt>
                    <dd className="font-medium">
                      {formatPace(activity.distance_m, activity.moving_time_s)}
                    </dd>
                 </div>
                 <div className="flex justify-between">
-                    <dt className="text-gray-500">Distance</dt>
+                    <dt className="text-gray-500 dark:text-gray-400">Distance</dt>
                     <dd className="font-medium">{formatDistanceKm(activity.distance_m)}</dd>
                 </div>
                 
-                <div className="border-t border-gray-100 my-2 pt-2"></div>
+                <div className="border-t border-gray-100 dark:border-gray-700 my-2 pt-2"></div>
                 
                 <div className="flex justify-between">
-                    <dt className="text-gray-500">Avg HR</dt>
+                    <dt className="text-gray-500 dark:text-gray-400">Avg HR</dt>
                     <dd className="font-medium">{activity.avg_hr ? `${Math.round(activity.avg_hr)} bpm` : '-'}</dd>
                 </div>
                 {activity.raw_summary?.max_heartrate && (
                     <div className="flex justify-between">
-                        <dt className="text-gray-500">Max HR</dt>
+                        <dt className="text-gray-500 dark:text-gray-400">Max HR</dt>
                         <dd className="font-medium">{Math.round(activity.raw_summary.max_heartrate)} bpm</dd>
                     </div>
                 )}
                 {activity.raw_summary?.suffer_score && (
                     <div className="flex justify-between">
-                        <dt className="text-gray-500">Strava Suffer Score</dt>
+                        <dt className="text-gray-500 dark:text-gray-400">Strava Suffer Score</dt>
                         <dd className="font-medium">{activity.raw_summary.suffer_score}</dd>
                     </div>
                 )}
 
                 {(activity.raw_summary?.average_watts || activity.raw_summary?.kilojoules) && (
-                    <div className="border-t border-gray-100 my-2 pt-2"></div>
+                    <div className="border-t border-gray-100 dark:border-gray-700 my-2 pt-2"></div>
                 )}
 
                 {activity.raw_summary?.average_watts && (
                     <div className="flex justify-between">
-                        <dt className="text-gray-500">Avg Power</dt>
+                        <dt className="text-gray-500 dark:text-gray-400">Avg Power</dt>
                         <dd className="font-medium">{Math.round(activity.raw_summary.average_watts)} W</dd>
                     </div>
                 )}
                 {activity.raw_summary?.weighted_average_watts && (
                     <div className="flex justify-between">
-                        <dt className="text-gray-500">Norm. Power</dt>
+                        <dt className="text-gray-500 dark:text-gray-400">Norm. Power</dt>
                         <dd className="font-medium">{Math.round(activity.raw_summary.weighted_average_watts)} W</dd>
                     </div>
                 )}
                 {activity.raw_summary?.kilojoules && (
                     <div className="flex justify-between">
-                        <dt className="text-gray-500">Energy</dt>
+                        <dt className="text-gray-500 dark:text-gray-400">Energy</dt>
                         <dd className="font-medium">{Math.round(activity.raw_summary.kilojoules)} kJ</dd>
                     </div>
                 )}
 
-                <div className="border-t border-gray-100 my-2 pt-2"></div>
+                <div className="border-t border-gray-100 dark:border-gray-700 my-2 pt-2"></div>
                 
                 {activity.avg_cadence && (
                     <>
                         <div className="flex justify-between">
-                            <dt className="text-gray-500">Avg Cadence</dt>
+                            <dt className="text-gray-500 dark:text-gray-400">Avg Cadence</dt>
                             <dd className="font-medium">{Math.round(activity.avg_cadence)} spm</dd>
                         </div>
-                        <div className="border-t border-gray-100 my-2 pt-2"></div>
+                        <div className="border-t border-gray-100 dark:border-gray-700 my-2 pt-2"></div>
                     </>
                 )}
                 <div className="flex justify-between">
-                    <dt className="text-gray-500">Elevation</dt>
+                    <dt className="text-gray-500 dark:text-gray-400">Elevation</dt>
                     <dd className="font-medium">{Math.round(activity.elev_gain_m)} m</dd>
                 </div>
                 {activity.raw_summary?.device_name && (
                     <div className="flex justify-between">
-                        <dt className="text-gray-500">Device</dt>
+                        <dt className="text-gray-500 dark:text-gray-400">Device</dt>
                         <dd className="font-medium text-right max-w-[150px] truncate" title={activity.raw_summary.device_name}>
                             {activity.raw_summary.device_name}
                         </dd>
@@ -188,23 +194,23 @@ export default async function ActivityDetail({ params }: { params: { id: string 
       </div>
 
       {/* Debug Section */}
-      <details className="mt-8 text-xs text-slate-400">
+      <details className="mt-8 text-xs text-slate-400 dark:text-gray-500">
         <summary className="cursor-pointer mb-2">Debug: Raw Strava Data & Streams</summary>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
                 <h4 className="font-semibold mb-2">Strava Activity Summary</h4>
-                <pre className="p-4 bg-slate-50 rounded overflow-x-auto border border-slate-100 h-96">
+                <pre className="p-4 bg-slate-50 dark:bg-gray-700/50 rounded overflow-x-auto border border-slate-100 dark:border-gray-700 h-96">
                 {JSON.stringify(activity.raw_summary, null, 2)}
                 </pre>
             </div>
             <div>
                  <h4 className="font-semibold mb-2">Hidden Streams (High Frequency Data)</h4>
                  {activity.streams && activity.streams.length > 0 ? (
-                     <pre className="p-4 bg-slate-50 rounded overflow-x-auto border border-slate-100 h-96">
+                     <pre className="p-4 bg-slate-50 dark:bg-gray-700/50 rounded overflow-x-auto border border-slate-100 dark:border-gray-700 h-96">
                         {JSON.stringify(activity.streams, null, 2)}
                      </pre>
                  ) : (
-                     <div className="p-4 bg-slate-50 rounded border border-slate-100 h-96 flex items-center justify-center italic text-slate-500">
+                     <div className="p-4 bg-slate-50 dark:bg-gray-700/50 rounded border border-slate-100 dark:border-gray-700 h-96 flex items-center justify-center italic text-slate-500 dark:text-gray-400">
                          No streams available (or not loaded).
                      </div>
                  )}

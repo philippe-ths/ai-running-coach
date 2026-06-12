@@ -25,13 +25,13 @@ const DiffStat = ({
   const diff = current - previous;
   // Use a small epsilon for float comparison, or checking if effectively 0
   if (Math.abs(diff) < 0.001) {
-    return <div className="text-xs text-gray-400 mt-1">No change</div>;
+    return <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">No change</div>;
   }
 
   const isPositive = diff > 0;
   // For these metrics (distance, time, count, score), more is generally "active" (green).
   // If we had "pace" where lower is better, we'd need a prop logic.
-  const color = isPositive ? "text-green-600" : "text-red-600";
+  const color = isPositive ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400";
   const arrow = isPositive ? "↑" : "↓";
 
   return (
@@ -86,8 +86,8 @@ export default function TrendsPage() {
     <div className="space-y-6">
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Trends</h1>
-          <p className="text-gray-600 mt-1">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Trends</h1>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">
             Track your progress over time.
           </p>
         </div>
@@ -100,7 +100,7 @@ export default function TrendsPage() {
           <RangeSelector selected={range} onChange={setRange} />
           <Link
             href="/"
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700/50"
           >
             Dashboard
           </Link>
@@ -108,20 +108,20 @@ export default function TrendsPage() {
       </header>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-md p-4 text-red-700 text-sm">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 text-red-700 dark:text-red-300 text-sm">
           {error}
         </div>
       )}
 
       {loading && !data && (
-        <div className="text-gray-400 text-center py-16">Loading trends...</div>
+        <div className="text-gray-400 dark:text-gray-500 text-center py-16">Loading trends...</div>
       )}
 
       {data && (
         <div className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white p-4 rounded-lg border shadow-sm">
-              <div className="text-sm text-gray-500">Total Distance</div>
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+              <div className="text-sm text-gray-500 dark:text-gray-400">Total Distance</div>
               <div className="text-2xl font-bold">
                 {formatDistanceKm(data.summary.total_distance_m)}
               </div>
@@ -131,8 +131,8 @@ export default function TrendsPage() {
                 format={formatDistanceKm}
               />
             </div>
-            <div className="bg-white p-4 rounded-lg border shadow-sm">
-              <div className="text-sm text-gray-500">Total Time</div>
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+              <div className="text-sm text-gray-500 dark:text-gray-400">Total Time</div>
               <div className="text-2xl font-bold">
                 {formatDuration(data.summary.total_moving_time_s)}
               </div>
@@ -142,8 +142,8 @@ export default function TrendsPage() {
                 format={formatDuration}
               />
             </div>
-            <div className="bg-white p-4 rounded-lg border shadow-sm">
-              <div className="text-sm text-gray-500">Activities</div>
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+              <div className="text-sm text-gray-500 dark:text-gray-400">Activities</div>
               <div className="text-2xl font-bold">
                 {data.summary.activity_count}
               </div>
@@ -153,8 +153,8 @@ export default function TrendsPage() {
                 format={(v) => v.toString()}
               />
             </div>
-            <div className="bg-white p-4 rounded-lg border shadow-sm">
-              <div className="text-sm text-gray-500">Total Load</div>
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+              <div className="text-sm text-gray-500 dark:text-gray-400">Total Load</div>
               <div className="text-2xl font-bold">
                 {Math.round(data.summary.total_suffer_score).toLocaleString()}
               </div>

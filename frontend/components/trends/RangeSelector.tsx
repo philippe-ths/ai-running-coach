@@ -18,7 +18,7 @@ interface Props {
 
 export default function RangeSelector({ selected, onChange }: Props) {
   return (
-    <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 gap-0.5">
+    <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1 gap-0.5">
       {RANGES.map(({ key, label }) => (
         <button
           key={key}
@@ -26,7 +26,7 @@ export default function RangeSelector({ selected, onChange }: Props) {
           className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
             selected === key
               ? "bg-blue-600 text-white shadow-sm"
-              : "text-gray-600 hover:bg-gray-100"
+              : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
           }`}
         >
           {label}

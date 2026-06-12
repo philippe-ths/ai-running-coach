@@ -24,28 +24,28 @@ export default function EfficiencyPanel({ data }: { data: EfficiencyAnalysis }) 
   }).join(' ');
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
       <div className="flex items-center gap-2 mb-4">
-         <div className="p-2 bg-emerald-100 rounded-full text-emerald-700">
+         <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-full text-emerald-700 dark:text-emerald-300">
             <Zap size={18} />
          </div>
-         <h3 className="font-semibold text-gray-800">Efficiency Analysis</h3>
+         <h3 className="font-semibold text-gray-800 dark:text-gray-200">Efficiency Analysis</h3>
       </div>
       
       <div className="grid grid-cols-2 gap-4 mb-6">
-          <div className="bg-gray-50 p-3 rounded-md border border-gray-100">
-              <div className="text-xs text-gray-500 uppercase font-medium">Avg Efficiency</div>
-              <div className="text-2xl font-bold text-gray-900">{fmt(average)}</div>
-              <div className="text-xs text-gray-400 mt-1">m/min per bpm</div>
+          <div className="bg-gray-50 dark:bg-gray-700/50 p-3 rounded-md border border-gray-100 dark:border-gray-700">
+              <div className="text-xs text-gray-500 dark:text-gray-400 uppercase font-medium">Avg Efficiency</div>
+              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">{fmt(average)}</div>
+              <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">m/min per bpm</div>
           </div>
-          <div className="bg-emerald-50 p-3 rounded-md border border-emerald-100">
-              <div className="text-xs text-emerald-700 uppercase font-medium">Best 3 min</div>
-              <div className="text-2xl font-bold text-emerald-700">{fmt(best_sustained)}</div>
-              <div className="text-xs text-emerald-600 mt-1">Sustained</div>
+          <div className="bg-emerald-50 dark:bg-emerald-900/30 p-3 rounded-md border border-emerald-100 dark:border-emerald-800">
+              <div className="text-xs text-emerald-700 dark:text-emerald-300 uppercase font-medium">Best 3 min</div>
+              <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{fmt(best_sustained)}</div>
+              <div className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">Sustained</div>
           </div>
       </div>
       
-      <div className="relative h-24 w-full bg-gray-50/50 rounded-lg p-2 border border-gray-100">
+      <div className="relative h-24 w-full bg-gray-50/50 dark:bg-gray-700/30 rounded-lg p-2 border border-gray-100 dark:border-gray-700">
          <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full overflow-visible" preserveAspectRatio="none">
              {/* Gradient definition */}
              <defs>
@@ -70,7 +70,7 @@ export default function EfficiencyPanel({ data }: { data: EfficiencyAnalysis }) 
             />
          </svg>
       </div>
-       <p className="text-xs text-gray-400 text-center mt-2">
+       <p className="text-xs text-gray-400 dark:text-gray-500 text-center mt-2">
            Rolling Efficiency (Speed/HR)
        </p>
     </div>

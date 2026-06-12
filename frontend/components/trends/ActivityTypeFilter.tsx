@@ -52,10 +52,10 @@ export default function ActivityTypeFilter({
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
       >
         <svg
-          className="w-4 h-4 text-gray-400"
+          className="w-4 h-4 text-gray-400 dark:text-gray-500"
           fill="none"
           viewBox="0 0 24 24"
           strokeWidth={1.5}
@@ -69,7 +69,7 @@ export default function ActivityTypeFilter({
         </svg>
         {label}
         <svg
-          className={`w-3.5 h-3.5 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`w-3.5 h-3.5 text-gray-400 dark:text-gray-500 transition-transform ${open ? "rotate-180" : ""}`}
           fill="none"
           viewBox="0 0 24 24"
           strokeWidth={2}
@@ -80,38 +80,38 @@ export default function ActivityTypeFilter({
       </button>
 
       {open && (
-        <div className="absolute left-0 mt-1 w-48 max-w-[calc(100vw-2rem)] bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
+        <div className="absolute left-0 mt-1 w-48 max-w-[calc(100vw-2rem)] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-20 py-1">
           <button
             onClick={selectAll}
-            className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 ${
-              allSelected ? "text-blue-600 font-medium" : "text-gray-700"
+            className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 ${
+              allSelected ? "text-blue-600 dark:text-blue-400 font-medium" : "text-gray-700 dark:text-gray-300"
             }`}
           >
             <span
               className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${
                 allSelected
                   ? "bg-blue-600 border-blue-600 text-white"
-                  : "border-gray-300"
+                  : "border-gray-300 dark:border-gray-600"
               }`}
             >
               {allSelected && "✓"}
             </span>
             All Activities
           </button>
-          <div className="border-t border-gray-100 my-1" />
+          <div className="border-t border-gray-100 dark:border-gray-700 my-1" />
           {available.map((type) => {
             const checked = allSelected || selected.includes(type);
             return (
               <button
                 key={type}
                 onClick={() => toggle(type)}
-                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 text-gray-700"
+                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 text-gray-700 dark:text-gray-300"
               >
                 <span
                   className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${
                     checked
                       ? "bg-blue-600 border-blue-600 text-white"
-                      : "border-gray-300"
+                      : "border-gray-300 dark:border-gray-600"
                   }`}
                 >
                   {checked && "✓"}

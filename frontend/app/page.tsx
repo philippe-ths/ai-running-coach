@@ -30,8 +30,8 @@ export default async function Dashboard() {
     <div className="space-y-8">
       <header className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-start">
         <div>
-            <h1 className="text-3xl font-bold text-gray-900">Weekly Summary</h1>
-            <p className="text-gray-600 mt-1">Here is what is happening this week.</p>
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Weekly Summary</h1>
+            <p className="text-gray-600 dark:text-gray-400 mt-1">Here is what is happening this week.</p>
         </div>
         <div className="shrink-0">
             <SyncButton />
@@ -40,27 +40,27 @@ export default async function Dashboard() {
 
       {/* Week Stats Placeholder */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-lg border shadow-sm">
-            <div className="text-sm text-gray-500">Distance</div>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+            <div className="text-sm text-gray-500 dark:text-gray-400">Distance</div>
             <div className="text-2xl font-bold">{(totalDistance / 1000).toFixed(1)} km</div>
         </div>
-        <div className="bg-white p-4 rounded-lg border shadow-sm">
-            <div className="text-sm text-gray-500">Time</div>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+            <div className="text-sm text-gray-500 dark:text-gray-400">Time</div>
             <div className="text-2xl font-bold">{(totalTime / 3600).toFixed(1)} h</div>
         </div>
-        <div className="bg-white p-4 rounded-lg border shadow-sm">
-            <div className="text-sm text-gray-500">Hard Days</div>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+            <div className="text-sm text-gray-500 dark:text-gray-400">Hard Days</div>
             <div className="text-2xl font-bold">{hardDays}</div>
         </div>
-        <div className="bg-white p-4 rounded-lg border shadow-sm">
-            <div className="text-sm text-gray-500">Load Trend</div>
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+            <div className="text-sm text-gray-500 dark:text-gray-400">Load Trend</div>
             <div className="text-2xl font-bold">--%</div>
         </div>
       </div>
 
       <section>
         <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-gray-800">Recent Activities</h2>
+            <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200">Recent Activities</h2>
             {/* Sync trigger could go here */}
         </div>
         <ActivityList activities={activities} />

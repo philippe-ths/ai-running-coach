@@ -26,15 +26,15 @@ export default function SufferScoreChart({ data, granularity }: Props) {
   const title = `Accumulated Load per ${granularity === "daily" ? "Day" : "Week"}`;
 
   return (
-    <div className="bg-white rounded-lg border shadow-sm p-5">
-      <h3 className="text-sm font-semibold text-gray-700 mb-1">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
+      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
         {title}
       </h3>
-      <p className="text-xs text-gray-400 mb-4">
+      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
         Accumulates with both duration and intensity. Not a measure of how hard you ran.
       </p>
       {chartData.length === 0 ? (
-        <p className="text-gray-400 text-sm py-8 text-center">
+        <p className="text-gray-400 dark:text-gray-500 text-sm py-8 text-center">
           No data for this range.
         </p>
       ) : (

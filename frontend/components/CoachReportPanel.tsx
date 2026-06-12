@@ -121,7 +121,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
     return (
       <button
         onClick={() => fetchReport(true)}
-        className="w-full bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:border-blue-300 hover:shadow-md transition-all flex items-center justify-center gap-2 text-gray-600 hover:text-blue-600"
+        className="w-full bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-md transition-all flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
       >
         <Sparkles className="w-5 h-5" />
         <span className="font-medium">Get Coach Analysis</span>
@@ -131,7 +131,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
 
   if (status === 'loading') {
     return (
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 flex items-center justify-center gap-2 text-gray-500">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400">
         <Loader2 className="w-5 h-5 animate-spin" />
         <span>Generating coach analysis...</span>
       </div>
@@ -140,11 +140,11 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
 
   if (status === 'error') {
     return (
-      <div className="bg-red-50 rounded-xl border border-red-200 p-6">
-        <p className="text-red-700 text-sm">{errorMsg}</p>
+      <div className="bg-red-50 dark:bg-red-900/30 rounded-xl border border-red-200 dark:border-red-800 p-6">
+        <p className="text-red-700 dark:text-red-300 text-sm">{errorMsg}</p>
         <button
           onClick={() => fetchReport(true)}
-          className="mt-2 text-sm text-red-600 hover:text-red-800 underline"
+          className="mt-2 text-sm text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 underline"
         >
           Try again
         </button>
@@ -163,7 +163,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   const reRunButton = (
     <button
       onClick={() => fetchReport(true, true)}
-      className="text-xs text-gray-400 hover:text-blue-600 flex items-center gap-1 transition-colors"
+      className="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1 transition-colors"
       title="Re-run coach analysis"
     >
       <RefreshCw className="w-3.5 h-3.5" />
@@ -182,10 +182,10 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
             const hasOpener = Boolean(body.opener_message);
             const hasFuller = (body.message ?? '').trim().length > 0;
             return (
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-blue-600" />
+                  <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                     Coach Analysis
                   </h2>
                   {reRunButton}
@@ -193,14 +193,14 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
 
                 {/* Opener turn (stage one) */}
                 {hasOpener && (
-                  <div className="prose prose-sm prose-gray max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
+                  <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
                     <Markdown>{body.opener_message as string}</Markdown>
                   </div>
                 )}
 
                 {/* Awaiting the fuller turn (opener-only state) */}
                 {hasOpener && !hasFuller && (
-                  <p className="mt-3 text-sm text-gray-500 flex items-center gap-2">
+                  <p className="mt-3 text-sm text-gray-500 dark:text-gray-400 flex items-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Putting together the full breakdown…
                   </p>
@@ -209,11 +209,11 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                 {/* Fuller turn (stage two) */}
                 {hasFuller && (
                   <>
-                    {hasOpener && <hr className="my-4 border-gray-100" />}
+                    {hasOpener && <hr className="my-4 border-gray-100 dark:border-gray-700" />}
                     {body.headline && (
-                      <h3 className="text-lg font-semibold text-gray-900 mb-2">{body.headline}</h3>
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">{body.headline}</h3>
                     )}
-                    <div className="prose prose-sm prose-gray max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
+                    <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
                       <Markdown>{body.message}</Markdown>
                     </div>
                   </>
@@ -226,13 +226,13 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
           {(body.message ?? '').trim().length > 0 && body.next_steps.length > 0 && (
             <div className="space-y-2">
               {body.next_steps.map((step, i) => (
-                <div key={i} className="bg-green-50 rounded-lg border border-green-200 p-4">
+                <div key={i} className="bg-green-50 dark:bg-green-900/30 rounded-lg border border-green-200 dark:border-green-800 p-4">
                   <div className="flex items-start gap-2">
-                    <ChevronRight className="w-4 h-4 text-green-600 mt-0.5 shrink-0" />
+                    <ChevronRight className="w-4 h-4 text-green-600 dark:text-green-400 mt-0.5 shrink-0" />
                     <div>
-                      <p className="font-medium text-green-900 text-sm">{step.action}</p>
-                      <p className="text-green-800 text-sm mt-1">{step.details}</p>
-                      <p className="text-green-600 text-xs mt-1 italic">{step.why}</p>
+                      <p className="font-medium text-green-900 dark:text-green-200 text-sm">{step.action}</p>
+                      <p className="text-green-800 dark:text-green-300 text-sm mt-1">{step.details}</p>
+                      <p className="text-green-600 dark:text-green-400 text-xs mt-1 italic">{step.why}</p>
                     </div>
                   </div>
                 </div>
@@ -244,13 +244,13 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
           {body.risks.length > 0 && (
             <div className="space-y-2">
               {body.risks.map((risk, i) => (
-                <div key={i} className="bg-amber-50 rounded-lg border border-amber-200 p-4">
+                <div key={i} className="bg-amber-50 dark:bg-amber-900/30 rounded-lg border border-amber-200 dark:border-amber-800 p-4">
                   <div className="flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
                     <div>
-                      <p className="font-medium text-amber-900 text-sm">{risk.flag.replace(/_/g, ' ')}</p>
-                      <p className="text-amber-800 text-sm mt-1">{risk.explanation}</p>
-                      <p className="text-amber-600 text-xs mt-1 italic">{risk.mitigation}</p>
+                      <p className="font-medium text-amber-900 dark:text-amber-200 text-sm">{risk.flag.replace(/_/g, ' ')}</p>
+                      <p className="text-amber-800 dark:text-amber-300 text-sm mt-1">{risk.explanation}</p>
+                      <p className="text-amber-600 dark:text-amber-400 text-xs mt-1 italic">{risk.mitigation}</p>
                     </div>
                   </div>
                 </div>
@@ -262,12 +262,12 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
           {body.questions.length > 0 && (
             <div className="space-y-2">
               {body.questions.map((q, i) => (
-                <div key={i} className="bg-blue-50 rounded-lg border border-blue-200 p-4">
+                <div key={i} className="bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-800 p-4">
                   <div className="flex items-start gap-2">
-                    <HelpCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                    <HelpCircle className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
                     <div className="flex-1">
-                      <p className="text-blue-900 text-sm font-medium">{q.question}</p>
-                      <p className="text-blue-600 text-xs mt-1 italic">{q.reason}</p>
+                      <p className="text-blue-900 dark:text-blue-200 text-sm font-medium">{q.question}</p>
+                      <p className="text-blue-600 dark:text-blue-400 text-xs mt-1 italic">{q.reason}</p>
                       {q.options.length > 0 && (
                         <div className="flex flex-wrap items-center gap-2 mt-2">
                           {q.options.map((opt) => {
@@ -281,7 +281,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                               return (
                                 <span
                                   key={opt.id}
-                                  className="inline-flex items-center rounded-full border border-blue-300 bg-white px-3 py-1 text-xs font-medium text-blue-700"
+                                  className="inline-flex items-center rounded-full border border-blue-300 dark:border-blue-700 bg-white dark:bg-gray-800 px-3 py-1 text-xs font-medium text-blue-700 dark:text-blue-300"
                                 >
                                   {opt.label}
                                 </span>
@@ -295,8 +295,8 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                                 onClick={() => handleOptionTap(i, opt)}
                                 className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition-colors disabled:cursor-default ${
                                   isChosen && answered
-                                    ? 'border-green-400 bg-green-100 text-green-800'
-                                    : 'border-blue-300 bg-white text-blue-700 hover:bg-blue-100 disabled:opacity-50'
+                                    ? 'border-green-400 dark:border-green-600 bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200'
+                                    : 'border-blue-300 dark:border-blue-700 bg-white dark:bg-gray-800 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 disabled:opacity-50'
                                 }`}
                               >
                                 {opt.label}
@@ -304,10 +304,10 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                             );
                           })}
                           {tapState[i] === 'sent' && (
-                            <span className="text-xs text-green-700">Thanks — got it</span>
+                            <span className="text-xs text-green-700 dark:text-green-300">Thanks — got it</span>
                           )}
                           {tapState[i] === 'error' && (
-                            <span className="text-xs text-red-600">Couldn’t save — tap to retry</span>
+                            <span className="text-xs text-red-600 dark:text-red-400">Couldn’t save — tap to retry</span>
                           )}
                         </div>
                       )}
@@ -321,25 +321,25 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
       ) : (
         <>
           {/* Key Takeaways */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xl font-semibold text-gray-800 flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-blue-600" />
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                 Coach Analysis
               </h2>
               {reRunButton}
             </div>
             {body.headline && (
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">{body.headline}</h3>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">{body.headline}</h3>
             )}
             {body.thesis && (
-              <p className="text-sm text-gray-700 mb-3 leading-relaxed">{body.thesis}</p>
+              <p className="text-sm text-gray-700 dark:text-gray-300 mb-3 leading-relaxed">{body.thesis}</p>
             )}
             {body.lead_argument && (
-              <div className="mb-3 bg-blue-50 rounded-lg border border-blue-200 p-4">
+              <div className="mb-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-800 p-4">
                 <div className="flex items-start gap-2">
-                  <Sparkles className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-                  <p className="text-sm font-medium text-blue-900">{body.lead_argument.text}</p>
+                  <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+                  <p className="text-sm font-medium text-blue-900 dark:text-blue-200">{body.lead_argument.text}</p>
                 </div>
               </div>
             )}
@@ -347,8 +347,8 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
               {body.key_takeaways.map((item, i) => {
                 const text = typeof item === 'string' ? item : item.text;
                 return (
-                  <li key={i} className="flex gap-2 text-sm text-gray-700">
-                    <span className="text-blue-500 mt-0.5 shrink-0">&bull;</span>
+                  <li key={i} className="flex gap-2 text-sm text-gray-700 dark:text-gray-300">
+                    <span className="text-blue-500 dark:text-blue-400 mt-0.5 shrink-0">&bull;</span>
                     <span>{text}</span>
                   </li>
                 );
@@ -359,13 +359,13 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
           {/* Next Steps */}
           <div className="space-y-2">
             {body.next_steps.map((step, i) => (
-              <div key={i} className="bg-green-50 rounded-lg border border-green-200 p-4">
+              <div key={i} className="bg-green-50 dark:bg-green-900/30 rounded-lg border border-green-200 dark:border-green-800 p-4">
                 <div className="flex items-start gap-2">
-                  <ChevronRight className="w-4 h-4 text-green-600 mt-0.5 shrink-0" />
+                  <ChevronRight className="w-4 h-4 text-green-600 dark:text-green-400 mt-0.5 shrink-0" />
                   <div>
-                    <p className="font-medium text-green-900 text-sm">{step.action}</p>
-                    <p className="text-green-800 text-sm mt-1">{step.details}</p>
-                    <p className="text-green-600 text-xs mt-1 italic">{step.why}</p>
+                    <p className="font-medium text-green-900 dark:text-green-200 text-sm">{step.action}</p>
+                    <p className="text-green-800 dark:text-green-300 text-sm mt-1">{step.details}</p>
+                    <p className="text-green-600 dark:text-green-400 text-xs mt-1 italic">{step.why}</p>
                   </div>
                 </div>
               </div>
@@ -376,15 +376,15 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
           {body.risks.length > 0 && (
             <div className="space-y-2">
               {body.risks.map((risk, i) => (
-                <div key={i} className="bg-amber-50 rounded-lg border border-amber-200 p-4">
+                <div key={i} className="bg-amber-50 dark:bg-amber-900/30 rounded-lg border border-amber-200 dark:border-amber-800 p-4">
                   <div className="flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
                     <div>
-                      <p className="font-medium text-amber-900 text-sm">
+                      <p className="font-medium text-amber-900 dark:text-amber-200 text-sm">
                         {risk.flag.replace(/_/g, ' ')}
                       </p>
-                      <p className="text-amber-800 text-sm mt-1">{risk.explanation}</p>
-                      <p className="text-amber-600 text-xs mt-1 italic">{risk.mitigation}</p>
+                      <p className="text-amber-800 dark:text-amber-300 text-sm mt-1">{risk.explanation}</p>
+                      <p className="text-amber-600 dark:text-amber-400 text-xs mt-1 italic">{risk.mitigation}</p>
                     </div>
                   </div>
                 </div>
@@ -396,12 +396,12 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
           {body.questions.length > 0 && (
             <div className="space-y-2">
               {body.questions.map((q, i) => (
-                <div key={i} className="bg-blue-50 rounded-lg border border-blue-200 p-4">
+                <div key={i} className="bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-800 p-4">
                   <div className="flex items-start gap-2">
-                    <HelpCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                    <HelpCircle className="w-4 h-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
                     <div>
-                      <p className="text-blue-900 text-sm font-medium">{q.question}</p>
-                      <p className="text-blue-600 text-xs mt-1 italic">{q.reason}</p>
+                      <p className="text-blue-900 dark:text-blue-200 text-sm font-medium">{q.question}</p>
+                      <p className="text-blue-600 dark:text-blue-400 text-xs mt-1 italic">{q.reason}</p>
                     </div>
                   </div>
                 </div>
@@ -412,14 +412,14 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
       )}
 
       {/* Meta footer */}
-      <div className="flex items-center gap-3 text-xs text-gray-400 px-1">
+      <div className="flex items-center gap-3 text-xs text-gray-400 dark:text-gray-500 px-1">
         <span
           className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
             confidence === 'high'
-              ? 'bg-green-100 text-green-700'
+              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
               : confidence === 'medium'
-              ? 'bg-yellow-100 text-yellow-700'
-              : 'bg-red-100 text-red-700'
+              ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300'
+              : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
           }`}
         >
           {confidence} confidence
@@ -437,32 +437,32 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
       {/* Debug: opt-in via NEXT_PUBLIC_SHOW_DEBUG_PANEL=true (or "1"). Off in
           prod by default; the panel exposes the full context pack and prompt. */}
       {SHOW_DEBUG_PANEL && (
-        <details className="text-xs text-slate-400">
-          <summary className="cursor-pointer hover:text-slate-600">
+        <details className="text-xs text-slate-400 dark:text-gray-500">
+          <summary className="cursor-pointer hover:text-slate-600 dark:hover:text-gray-300">
             Debug: LLM Input & Output
           </summary>
           <div className="mt-2 space-y-3">
             <div>
-              <h4 className="font-semibold text-slate-500 mb-1">System Prompt</h4>
-              <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
+              <h4 className="font-semibold text-slate-500 dark:text-gray-400 mb-1">System Prompt</h4>
+              <pre className="p-3 bg-slate-50 dark:bg-gray-700/50 rounded border border-slate-100 dark:border-gray-700 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
                 {report.debug.system_prompt}
               </pre>
             </div>
             <div>
-              <h4 className="font-semibold text-slate-500 mb-1">Context Pack (LLM Input)</h4>
-              <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto max-h-96 overflow-y-auto">
+              <h4 className="font-semibold text-slate-500 dark:text-gray-400 mb-1">Context Pack (LLM Input)</h4>
+              <pre className="p-3 bg-slate-50 dark:bg-gray-700/50 rounded border border-slate-100 dark:border-gray-700 overflow-x-auto max-h-96 overflow-y-auto">
                 {JSON.stringify(report.debug.context_pack, null, 2)}
               </pre>
             </div>
             <div>
-              <h4 className="font-semibold text-slate-500 mb-1">Raw LLM Response</h4>
-              <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
+              <h4 className="font-semibold text-slate-500 dark:text-gray-400 mb-1">Raw LLM Response</h4>
+              <pre className="p-3 bg-slate-50 dark:bg-gray-700/50 rounded border border-slate-100 dark:border-gray-700 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
                 {report.debug.raw_llm_response || '(empty)'}
               </pre>
             </div>
             <div>
-              <h4 className="font-semibold text-slate-500 mb-1">Meta</h4>
-              <pre className="p-3 bg-slate-50 rounded border border-slate-100 overflow-x-auto">
+              <h4 className="font-semibold text-slate-500 dark:text-gray-400 mb-1">Meta</h4>
+              <pre className="p-3 bg-slate-50 dark:bg-gray-700/50 rounded border border-slate-100 dark:border-gray-700 overflow-x-auto">
                 {JSON.stringify(report.meta, null, 2)}
               </pre>
             </div>

@@ -1,0 +1,138 @@
+"""Weekly training-load report for the Load view (#209).
+
+Aggregates per-activity ``effort_score`` (the cumulative TRIMP-like training
+load, #168 — a load number, never an intensity verdict) into calendar weeks
+(Monday start) and judges each week against the runner's own recent norm: the
+trailing ``CHRONIC_WEEKS``-week average, with an optimal band of
+``BAND_LOW``..``BAND_HIGH`` times that average (Strava Relative Effort style).
+A week with fewer than ``CHRONIC_WEEKS`` prior weeks of history, or a zero
+chronic average, abstains with ``no_baseline`` rather than judging.
+
+Known caveat inherited from #186: effort_score is not comparable between
+activities with and without HR data; the report sums what is stored.
+"""
+
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import Optional
+from uuid import UUID
+
+from sqlalchemy.orm import Session, joinedload
+
+from app.models import Activity
+from app.schemas.trends import LoadActivityPoint, LoadResponse, LoadWeek
+from app.services.analysis.classifier import Classification, compose_headline
+
+# The chronic baseline window and the optimal band around it.
+CHRONIC_WEEKS = 4
+BAND_LOW = 0.8
+BAND_HIGH = 1.3
+
+# History served to the long-term trend chart.
+MAX_WEEKS = 52
+
+
+@dataclass
+class LoadFact:
+    """One activity's contribution, decoupled from the ORM for pure logic."""
+
+    activity_id: UUID
+    name: str
+    day: date
+    effort_score: float
+    headline: Optional[str] = None
+
+
+def week_start(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+def _status(score: float, target_min: Optional[float], target_max: Optional[float]) -> str:
+    if target_min is None or target_max is None:
+        return "no_baseline"
+    if score < target_min:
+        return "below"
+    if score > target_max:
+        return "high"
+    return "optimal"
+
+
+def build_load_report(facts: list[LoadFact], today: date) -> LoadResponse:
+    """Pure aggregation: facts -> chronological weekly report ending this week."""
+    current_week = week_start(today)
+    if facts:
+        first_week = min(week_start(f.day) for f in facts)
+    else:
+        first_week = current_week
+    # Bound the series so per-request cost stays flat as history grows.
+    earliest_served = current_week - timedelta(weeks=MAX_WEEKS - 1)
+    first_week = max(first_week, earliest_served)
+
+    by_week: dict[date, list[LoadFact]] = {}
+    for f in facts:
+        by_week.setdefault(week_start(f.day), []).append(f)
+
+    n_weeks = (current_week - first_week).days // 7 + 1
+    starts = [first_week + timedelta(weeks=i) for i in range(n_weeks)]
+    scores = [round(sum(f.effort_score for f in by_week.get(s, [])), 1) for s in starts]
+
+    weeks: list[LoadWeek] = []
+    for i, start in enumerate(starts):
+        target_min = target_max = None
+        if i >= CHRONIC_WEEKS:
+            chronic = sum(scores[i - CHRONIC_WEEKS:i]) / CHRONIC_WEEKS
+            if chronic > 0:
+                target_min = round(chronic * BAND_LOW, 1)
+                target_max = round(chronic * BAND_HIGH, 1)
+
+        daily = [0.0] * 7
+        members = sorted(by_week.get(start, []), key=lambda f: f.day)
+        for f in members:
+            daily[f.day.weekday()] = round(daily[f.day.weekday()] + f.effort_score, 1)
+
+        weeks.append(
+            LoadWeek(
+                week_start=start,
+                score=scores[i],
+                daily=daily,
+                target_min=target_min,
+                target_max=target_max,
+                status=_status(scores[i], target_min, target_max),
+                activities=[
+                    LoadActivityPoint(
+                        id=f.activity_id,
+                        name=f.name,
+                        date=f.day,
+                        effort_score=round(f.effort_score, 1),
+                        headline=f.headline,
+                    )
+                    for f in members
+                ],
+            )
+        )
+
+    return LoadResponse(weeks=weeks)
+
+
+def get_load_report(db: Session, today: Optional[date] = None) -> LoadResponse:
+    activities = (
+        db.query(Activity)
+        .options(joinedload(Activity.metrics))
+        .filter(Activity.is_deleted.is_(False))
+        .all()
+    )
+    facts = []
+    for a in activities:
+        if a.metrics is None or a.metrics.effort_score is None:
+            continue
+        start = a.start_date.date() if isinstance(a.start_date, datetime) else a.start_date
+        facts.append(
+            LoadFact(
+                activity_id=a.id,
+                name=a.name,
+                day=start,
+                effort_score=float(a.metrics.effort_score),
+                headline=compose_headline(a, Classification.from_metrics(a.metrics)),
+            )
+        )
+    return build_load_report(facts, today or date.today())
