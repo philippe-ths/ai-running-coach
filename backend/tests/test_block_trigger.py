@@ -294,6 +294,40 @@ async def test_reply_after_close_or_before_open_does_nothing(db, configured):
     assert maybe_enqueue_fuller_turn(db, activity.id) is False
 
 
+async def test_force_regeneration_never_resets_exchange_sentinels(db, configured):
+    # AC5: force=true regenerates the report artifact but re-fires nothing — the
+    # exchange's delivery sentinels are untouched by regeneration.
+    from app.services.coach.service import generate_fuller
+
+    user, _ = _seed_user(db)
+    activity = _seed_activity(db, user)
+    block = assign_activity_to_block(db, activity)
+    exchange = _exchange(db, block)
+    opened = datetime.now(timezone.utc) - timedelta(hours=2)
+    sent = datetime.now(timezone.utc) - timedelta(hours=1)
+    exchange.opened_at = opened
+    exchange.opener_sent_at = sent
+    exchange.fuller_sent_at = sent
+    db.commit()
+
+    fuller = [_text("Updated full take."), _tail(
+        headline="Again", next_steps=[], risks=[],
+        questions=[{"question": "How did it feel?", "reason": "calibrate",
+                    "options": [{"id": "rpe", "label": "Rate 1-10", "kind": "rpe"}]}],
+    )]
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(fuller)), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        read = await generate_fuller(db, str(activity.id), force=True)
+
+    assert read is not None  # the artifact regenerated
+    db.refresh(exchange)
+    # (SQLite returns naive datetimes; compare in naive UTC)
+    assert exchange.opener_sent_at == sent.replace(tzinfo=None)
+    assert exchange.fuller_sent_at == sent.replace(tzinfo=None)  # still closed; nothing re-fires
+
+
 async def test_reply_outside_window_does_nothing(db, configured):
     user, _ = _seed_user(db)
     activity = _seed_activity(db, user)
