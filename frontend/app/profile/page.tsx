@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import ConnectStravaButton from '@/components/ConnectStravaButton';
+import ImportStravaHistory from '@/components/ImportStravaHistory';
 import ThemeToggle from '@/components/ThemeToggle';
 import { fetchFromAPI } from '@/lib/api';
 
@@ -178,6 +179,10 @@ export default function ProfilePage() {
         </button>
 
       </form>
+
+      <div className="mt-6">
+        <ImportStravaHistory />
+      </div>
     </div>
   );
 }

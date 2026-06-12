@@ -30,6 +30,10 @@ from app.schemas.trends import (  # noqa: F401
     WeeklyTimePoint,
     TrendsResponse,
 )
+from app.schemas.strava_import import (  # noqa: F401
+    StravaImportCreate,
+    StravaImportRead,
+)
 from app.schemas.coach import (  # noqa: F401
     CoachTakeaway,
     CoachNextStep,
@@ -55,6 +59,8 @@ __all__ = [
     "CheckInCreate",
     "CheckInRead",
     "SyncResponse",
+    "StravaImportCreate",
+    "StravaImportRead",
     "DerivedMetricRead",
     "ActivityStreamRead",
     "ActivityDetailRead",

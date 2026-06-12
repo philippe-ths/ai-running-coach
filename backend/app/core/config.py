@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     BACKFILL_BATCH_SIZE: int = 20
     BACKFILL_BATCH_PAUSE_SECONDS: int = 300
 
+    # Historical Strava import (#239). A self-pacing background job walks a
+    # runner's Strava history backward in time, ingesting one page of activity
+    # summaries per batch (no streams, no AI coach analysis, no notifications).
+    # Each batch is a single Strava list call, far below the backfill's
+    # per-activity stream cost; the pause only keeps the worker free for
+    # webhooks/polling between batches. 50 activities per page (Strava's max).
+    IMPORT_PAGE_SIZE: int = 50
+    IMPORT_BATCH_PAUSE_SECONDS: int = 5
+
     # Two-stage Exchange cadence (A4, ADR 0010). The opener fires immediately on a
     # finished activity; the conditional fuller turn fires on the runner's reply or
     # this timer, whichever is first. Only the two-stage prompt (coach_message_v2)

@@ -1,6 +1,13 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.services.strava_ingestion.port import Tokens
+
+
+def _start_epoch(raw: dict) -> int:
+    dt = datetime.strptime(raw["start_date"], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
+    return int(dt.timestamp())
 
 
 class InMemoryStravaAdapter:
@@ -15,6 +22,7 @@ class InMemoryStravaAdapter:
         self.refresh_calls: list[str] = []
         self.exchange_calls: list[str] = []
         self.list_calls: list[tuple[str, datetime, int]] = []
+        self.page_calls: list[tuple[int, int | None, int, int]] = []
         self.stream_calls: list[tuple[int, list[str]]] = []
         self.activity_calls: list[int] = []
 
@@ -61,6 +69,27 @@ class InMemoryStravaAdapter:
     ) -> list[dict]:
         self.list_calls.append((access_token, since, per_page))
         return list(self.activities)
+
+    async def list_activities_page(
+        self,
+        access_token: str,
+        *,
+        after: int,
+        before: int | None = None,
+        page: int = 1,
+        per_page: int = 50,
+    ) -> list[dict]:
+        self.page_calls.append((after, before, page, per_page))
+        # Mirror Strava: inclusive `after`, exclusive `before`, newest first.
+        window = [
+            raw
+            for raw in self.activities
+            if _start_epoch(raw) >= after
+            and (before is None or _start_epoch(raw) < before)
+        ]
+        window.sort(key=_start_epoch, reverse=True)
+        start = (page - 1) * per_page
+        return window[start : start + per_page]
 
     async def get_activity(self, access_token: str, activity_id: int) -> dict:
         self.activity_calls.append(activity_id)
