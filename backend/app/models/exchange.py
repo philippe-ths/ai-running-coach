@@ -39,6 +39,14 @@ class Exchange(Base):
         ForeignKey("blocks.id"), unique=True, index=True
     )
 
+    # Lifecycle: set when the opener stage has GENERATED (the exchange has
+    # opened and spoken for the block), independent of notification delivery —
+    # so the reply path works under a NoOp local notifier exactly as the A4
+    # report-shape probe did. The reply window is anchored here.
+    opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Stage sentinels (the A4 Activity sentinels, relocated). opener_sent_at is
     # the opener-notification dedup; fuller_sent_at is the fuller-notification
     # dedup AND the fuller job's idempotency guard. fuller_sent_at set means the

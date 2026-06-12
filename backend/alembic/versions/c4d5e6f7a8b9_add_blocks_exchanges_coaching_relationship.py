@@ -68,6 +68,7 @@ def upgrade() -> None:
         sa.Column(
             "block_id", sa.Uuid(), sa.ForeignKey("blocks.id"), nullable=False, unique=True
         ),
+        sa.Column("opened_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("opener_sent_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("fuller_sent_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
@@ -120,8 +121,9 @@ def upgrade() -> None:
     )
     op.execute(
         """
-        INSERT INTO exchanges (id, user_id, block_id, opener_sent_at, fuller_sent_at, created_at)
+        INSERT INTO exchanges (id, user_id, block_id, opened_at, opener_sent_at, fuller_sent_at, created_at)
         SELECT gen_random_uuid(), b.user_id, b.id,
+               COALESCE(a.opener_notification_sent_at, a.coach_notification_sent_at, a.start_date),
                COALESCE(a.opener_notification_sent_at, a.coach_notification_sent_at, a.start_date),
                COALESCE(a.coach_notification_sent_at, a.start_date),
                now()

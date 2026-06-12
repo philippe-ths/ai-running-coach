@@ -145,6 +145,7 @@ def split_block(db: Session, block: Block, *, at_activity: Activity) -> tuple[Bl
         Exchange(
             user_id=block.user_id,
             block_id=new_block.id,
+            opened_at=original_exchange.opened_at,
             opener_sent_at=original_exchange.opener_sent_at,
             fuller_sent_at=original_exchange.fuller_sent_at,
         )
@@ -154,7 +155,7 @@ def split_block(db: Session, block: Block, *, at_activity: Activity) -> tuple[Bl
     db.flush()
 
     block.user_corrected = True
-    _recompute_block(db, block)
+    _recompute_block(db, block, force_primary=True)
     db.commit()
     return block, new_block
 
@@ -174,6 +175,7 @@ def merge_blocks(db: Session, first: Block, second: Block) -> Block:
 
     surviving = db.query(Exchange).filter(Exchange.block_id == first.id).one()
     absorbed = db.query(Exchange).filter(Exchange.block_id == second.id).one()
+    surviving.opened_at = _latest(surviving.opened_at, absorbed.opened_at)
     surviving.opener_sent_at = _latest(surviving.opener_sent_at, absorbed.opener_sent_at)
     surviving.fuller_sent_at = _latest(surviving.fuller_sent_at, absorbed.fuller_sent_at)
 
@@ -185,7 +187,7 @@ def merge_blocks(db: Session, first: Block, second: Block) -> Block:
 
     first.user_corrected = True
     db.flush()
-    _recompute_block(db, first)
+    _recompute_block(db, first, force_primary=True)
     db.commit()
     return first
 
@@ -199,10 +201,19 @@ def _latest(a: Optional[datetime], b: Optional[datetime]) -> Optional[datetime]:
     return max(a, b)
 
 
-def _recompute_block(db: Session, block: Block) -> None:
-    """Recompute start/end/primary from the block's current members."""
+def _recompute_block(db: Session, block: Block, *, force_primary: bool = False) -> None:
+    """Recompute start/end/primary from the block's current members.
+
+    The primary is FROZEN once the block's exchange has opened: the opener
+    spoke about it and the coach report row is keyed on it, so a late arrival
+    may grow the block's bounds but never moves the exchange's anchor. A
+    runner split/merge correction (`force_primary`) recomputes it regardless —
+    an explicit correction outranks the frozen anchor.
+    """
     members = db.query(Activity).filter(Activity.block_id == block.id).all()
     block.start_date = min(a.start_date for a in members)
     block.end_date = max(activity_end(a) for a in members)
-    block.primary_activity_id = pick_primary(members).id
+    exchange = db.query(Exchange).filter(Exchange.block_id == block.id).first()
+    if force_primary or exchange is None or exchange.opened_at is None:
+        block.primary_activity_id = pick_primary(members).id
     db.add(block)

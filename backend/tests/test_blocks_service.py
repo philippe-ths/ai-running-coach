@@ -145,6 +145,29 @@ def test_out_of_order_sync_converges_to_one_block(db):
     assert joined.primary_activity_id == later.id  # still the longest run
 
 
+def test_primary_is_frozen_once_the_exchange_has_opened(db):
+    # The opener spoke about the primary activity and the report row is keyed
+    # on it; a late arrival into the open exchange must not move that anchor,
+    # however long it is.
+    user = _make_user(db)
+    run = _make_activity(db, user, start=T0, elapsed=1500, type="Run")
+    block = assign_activity_to_block(db, run, gap_seconds=GAP)
+    exchange = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+    exchange.opened_at = datetime.now(timezone.utc)
+    db.commit()
+
+    longer = _make_activity(
+        db, user, start=T0 + timedelta(seconds=1800), elapsed=7200, type="Run"
+    )
+    joined = assign_activity_to_block(db, longer, gap_seconds=GAP)
+
+    assert joined.id == block.id
+    assert joined.primary_activity_id == run.id  # frozen, not the longer run
+    assert _aware(joined.end_date) == _aware(
+        longer.start_date + timedelta(seconds=7200)
+    )  # bounds still grow
+
+
 def _grouped_pair(db, user):
     """A walk then a run grouped into one block (run primary)."""
     walk = _make_activity(db, user, start=T0, elapsed=1200, type="Walk")
