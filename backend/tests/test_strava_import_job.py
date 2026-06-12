@@ -57,12 +57,12 @@ def _raw(strava_id: int, start: datetime, name: str = "Old run") -> dict:
     }
 
 
-def _make_import(db, user, since_date=date(2025, 1, 1), cursor_before=None) -> StravaImport:
+def _make_import(db, user, since_date=date(2025, 1, 1), cursor_page=1) -> StravaImport:
     imp = StravaImport(
         user_id=user.id,
         since_date=since_date,
         status="running",
-        cursor_before=cursor_before,
+        cursor_page=cursor_page,
         activities_imported=0,
     )
     db.add(imp)
@@ -96,7 +96,7 @@ async def test_batch_imports_summaries_and_completes_on_short_page(db, strava_ad
 
 
 @pytest.mark.asyncio
-async def test_full_page_advances_cursor_and_is_not_done(db, strava_adapter):
+async def test_full_page_advances_page_cursor_and_is_not_done(db, strava_adapter):
     from app.jobs.strava_import import run_import_batch
 
     user, _account = _seed_user_and_account(db)
@@ -111,13 +111,18 @@ async def test_full_page_advances_cursor_and_is_not_done(db, strava_adapter):
     assert result.done is False
     db.refresh(imp)
     assert imp.status == "running"
-    # Cursor advanced to the oldest activity's start epoch (exclusive upper bound).
-    assert imp.cursor_before == int(older.timestamp())
+    # Cursor advanced to the next page.
+    assert imp.cursor_page == 2
 
 
 @pytest.mark.asyncio
-async def test_cursor_walks_backward_without_repeating(db, strava_adapter):
-    """A second batch bounded by the cursor returns only strictly-older activities."""
+async def test_page_walk_covers_whole_window_without_repeating(db, strava_adapter):
+    """Walking page by page imports every activity exactly once and completes.
+
+    Regression for the one-page stop: with `after` set, Strava returns
+    oldest-first, so a `before = oldest` cursor would have ended after page 1.
+    Page-number pagination must keep going.
+    """
     from app.jobs.strava_import import run_import_batch
 
     user, _account = _seed_user_and_account(db)
@@ -128,11 +133,13 @@ async def test_cursor_walks_backward_without_repeating(db, strava_adapter):
     imp = _make_import(db, user, since_date=date(2025, 1, 1))
 
     first = await run_import_batch(db, imp, limit=2)
-    assert first.imported == 2  # a, b (newest first)
+    assert first.imported == 2
     assert first.done is False
+    db.refresh(imp)
+    assert imp.cursor_page == 2
 
     second = await run_import_batch(db, imp, limit=2)
-    # Only c remains older than the cursor; a/b are not re-fetched.
+    # Page 2 holds the remaining one activity; the short page completes the import.
     assert second.imported == 1
     assert second.done is True
     db.refresh(imp)

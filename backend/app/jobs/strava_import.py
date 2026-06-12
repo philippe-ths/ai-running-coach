@@ -1,10 +1,9 @@
 """Historical Strava import: backfill a runner's past activities on demand (#239).
 
 A self-pacing background job (modelled on the stream backfill, #110). Each run
-fetches one page of the runner's Strava history within a moving time window,
-upserts the activity summaries, runs deterministic analysis, and advances a
-resume cursor. It walks backward in time from today to the user-chosen
-`since_date`.
+fetches one page of the runner's Strava history in the window from `since_date`
+to today, upserts the activity summaries, runs deterministic analysis, and
+advances the page cursor.
 
 Crucially it imports *raw data only*: summaries and deterministic analysis
 (distance/time/effort that power trends), never the AI coach report, opener, or
@@ -14,11 +13,15 @@ analyses of runs weeks or years old. Coach analysis stays opt-in (the existing
 per-activity path).
 
 State lives entirely in a `StravaImport` row:
-  - `cursor_before` is the exclusive upper-bound epoch of the next page. It starts
-    NULL (newest) and advances to the oldest activity's start epoch each batch,
-    so a page is never re-walked and an interruption resumes from the cursor.
-  - dedup by `strava_activity_id` (via `upsert_activity`) makes any partial-batch
-    replay idempotent, so the import is safely re-runnable.
+  - `cursor_page` is the next page to fetch (1-based), with a fixed `after` lower
+    bound. Strava returns results oldest-first when `after` is set, so paginating
+    by page number walks the whole window regardless of sort order; the cursor
+    advances by one per full page and an interruption resumes from it. (An
+    earlier `before`-epoch cursor was wrong: with `after` set the first page is
+    the *oldest* 50 activities, so `before = oldest` excluded everything and the
+    import stopped after one page.)
+  - dedup by `strava_activity_id` (via `upsert_activity`) makes any replayed page
+    idempotent, so the import is safely re-runnable.
 
 Pacing: when a full page comes back there is likely more history, so the job
 schedules its own successor via rq-scheduler after `IMPORT_BATCH_PAUSE_SECONDS`,
@@ -57,22 +60,14 @@ class ImportBatchResult:
     done: bool = True
 
 
-def _start_epoch(raw: dict) -> int:
-    dt = datetime.strptime(raw["start_date"], "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=timezone.utc
-    )
-    return int(dt.timestamp())
-
-
 async def run_import_batch(
     db: Session, import_obj: StravaImport, *, limit: int
 ) -> ImportBatchResult:
-    """Fetch one page within (since_date, cursor_before], upsert + analyze each.
+    """Fetch one page (since_date.., page=cursor_page), upsert + analyze each.
 
-    Advances `cursor_before` to the oldest activity seen so the next batch is the
-    strictly-older page; marks the import complete when a short page signals the
-    window is exhausted. Commits progress as it goes so an interruption resumes.
-    Never notifies.
+    Advances `cursor_page` by one when a full page comes back; marks the import
+    complete when a short page signals the window is exhausted. Commits progress
+    as it goes so an interruption resumes. Never notifies.
     """
     account = (
         db.query(StravaAccount)
@@ -89,13 +84,13 @@ async def run_import_batch(
     port = get_strava_port()
     since = datetime.combine(import_obj.since_date, time.min, tzinfo=timezone.utc)
     after = int(since.timestamp())
-    before = import_obj.cursor_before
+    page = import_obj.cursor_page
 
     try:
         access_token = await ensure_valid_access_token(db, account, port)
         try:
             batch = await port.list_activities_page(
-                access_token, after=after, before=before, per_page=limit
+                access_token, after=after, page=page, per_page=limit
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 401:
@@ -105,7 +100,7 @@ async def run_import_batch(
             )
             access_token = await ensure_valid_access_token(db, account, port, force=True)
             batch = await port.list_activities_page(
-                access_token, after=after, before=before, per_page=limit
+                access_token, after=after, page=page, per_page=limit
             )
     except Exception as exc:  # noqa: BLE001 - surface the failure on the row, don't crash the worker
         import_obj.status = "failed"
@@ -116,7 +111,6 @@ async def run_import_batch(
         return ImportBatchResult(imported=0, done=True)
 
     imported = 0
-    oldest_epoch: int | None = None
     for raw in batch:
         try:
             activity = upsert_activity(db, raw, account.user_id)
@@ -137,23 +131,22 @@ async def run_import_batch(
         except Exception as exc:  # noqa: BLE001 - one bad activity must not sink the batch
             db.rollback()
             logger.error("Error importing activity %s: %s", raw.get("id"), exc)
-        epoch = _start_epoch(raw)
-        oldest_epoch = epoch if oldest_epoch is None else min(oldest_epoch, epoch)
 
     import_obj.activities_imported += imported
     # A short page means we have reached the end of the window: done. A full page
-    # means there is likely more, older history to walk; advance the cursor.
+    # means there is likely more history; advance to the next page.
     done = len(batch) < limit
     if done:
         import_obj.status = "completed"
-    elif oldest_epoch is not None:
-        import_obj.cursor_before = oldest_epoch
+    else:
+        import_obj.cursor_page = page + 1
     db.add(import_obj)
     db.commit()
 
     logger.info(
-        "Historical import %s batch: imported %d (total %d), done=%s",
+        "Historical import %s batch: page %d imported %d (total %d), done=%s",
         import_obj.id,
+        page,
         imported,
         import_obj.activities_imported,
         done,
@@ -222,7 +215,7 @@ def enqueue_import(db: Session, account: StravaAccount, since_date) -> StravaImp
         user_id=account.user_id,
         since_date=since_date,
         status="running",
-        cursor_before=None,
+        cursor_page=1,
         activities_imported=0,
     )
     db.add(import_obj)
