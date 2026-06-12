@@ -27,6 +27,23 @@ class StravaPort(Protocol):
         per_page: int = 50,
     ) -> list[dict]: ...
 
+    async def list_activities_page(
+        self,
+        access_token: str,
+        *,
+        after: int,
+        before: int | None = None,
+        page: int = 1,
+        per_page: int = 50,
+    ) -> list[dict]:
+        """Return a single page of activities in the (after, before) epoch window.
+
+        Newest first. Used by the historical import (#239) to walk a runner's
+        history backward in time one page at a time, advancing `before` to the
+        oldest activity seen so each batch is bounded and the job is resumable.
+        """
+        ...
+
     async def get_activity(self, access_token: str, activity_id: int) -> dict: ...
 
     async def get_activity_streams(

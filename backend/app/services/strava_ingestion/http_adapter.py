@@ -189,6 +189,51 @@ class HTTPStravaAdapter:
                 )
         return activities
 
+    async def list_activities_page(
+        self,
+        access_token: str,
+        *,
+        after: int,
+        before: int | None = None,
+        page: int = 1,
+        per_page: int = 50,
+    ) -> list[dict]:
+        """Fetch one page of `/athlete/activities` in the (after, before) window.
+
+        Strava returns activities newest-first and treats `before`/`after` as
+        exclusive/inclusive epoch bounds. The historical import (#239) walks
+        backward by re-calling with `before` set to the oldest activity's start
+        epoch, so each batch is a bounded, resumable step rather than the full
+        page-walk that `list_recent_activities` does.
+        """
+        headers = {"Authorization": f"Bearer {access_token}"}
+        params: dict[str, int] = {"page": page, "per_page": per_page, "after": after}
+        if before is not None:
+            params["before"] = before
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
+            response = await _send_with_retry(
+                lambda: client.get(
+                    f"{_BASE_URL}/athlete/activities",
+                    headers=headers,
+                    params=params,
+                ),
+                label="list_activities_page",
+            )
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                logger.error(
+                    "Strava API Error: %s - %s",
+                    e.response.status_code,
+                    e.response.text,
+                )
+                if e.response.status_code == 403:
+                    logger.error(
+                        "Missing Scopes: Ensure 'activity:read_all' is granted."
+                    )
+                raise
+            return response.json()
+
     async def get_activity(self, access_token: str, activity_id: int) -> dict:
         headers = {"Authorization": f"Bearer {access_token}"}
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
