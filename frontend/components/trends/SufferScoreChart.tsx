@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { SufferScorePoint, DailySufferScorePoint, WeeklySufferScorePoint } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
+import ChartTooltip from "@/components/charts/ChartTooltip";
 
 interface Props {
   data: SufferScorePoint[] | DailySufferScorePoint[] | WeeklySufferScorePoint[];
@@ -54,8 +55,12 @@ export default function SufferScoreChart({ data, granularity }: Props) {
               width={40}
             />
             <Tooltip
-              formatter={(value: number | undefined) => [value ?? 0, "Accumulated Load"]}
-              labelFormatter={(label) => label}
+              content={
+                <ChartTooltip
+                  formatter={(value) => [(value as number) ?? 0, "Accumulated Load"]}
+                />
+              }
+              cursor={{ fill: "rgba(0,0,0,0.05)" }}
             />
             <Bar
               dataKey="effort_score"

@@ -21,6 +21,8 @@ export type {
   TrendsSummary,
   TrendsData,
   TrendsRange,
+  WeeklyStatsSummary,
+  WeeklyStatsData,
   LoadActivityPoint,
   LoadStatus,
   LoadWeek,

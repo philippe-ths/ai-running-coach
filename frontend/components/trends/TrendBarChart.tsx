@@ -10,6 +10,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { formatDateLabel } from "@/lib/format";
+import ChartTooltip from "@/components/charts/ChartTooltip";
 
 interface TrendBarChartProps {
   data: any[];
@@ -61,16 +62,6 @@ export default function TrendBarChart({
 
   const tooltipPrefix = granularity === "daily" ? "" : "Week of ";
 
-  const formatTooltipValue = (val: number, entry: any) => {
-    // entry.payload contains the full data object
-    const raw = entry.payload.rawValue;
-    if (isDistance) {
-      return [`${(raw / 1000).toFixed(2)} km`, "Distance"];
-    } else {
-      return [formatMinutes(raw), "Moving Time"];
-    }
-  };
-
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
       <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">{title}</h3>
@@ -95,25 +86,17 @@ export default function TrendBarChart({
               unit={unitLabel}
               width={60}
             />
-            {/* 
-              Recharts Tooltip formatter signature can vary.
-              We want to format the 'value' but specifically look at rawValue.
-              However, the simplest approach for Recharts is to just format the value we plotted
-              OR pass a custom content.
-              Actually, the formatter callback receives (value, name, props).
-              Props.payload is the data item.
-            */}
             <Tooltip
-              formatter={(value, name, props) => {
-                if (props && props.payload) {
-                   // When hovering, props.payload is the data object
-                   const raw = props.payload.rawValue;
-                   if (isDistance) return [`${(raw / 1000).toFixed(2)} km`, "Distance"];
-                   return [formatMinutes(raw), "Moving Time"];
-                }
-                return [value, name];
-              }}
-              labelFormatter={(label) => `${tooltipPrefix}${label}`}
+              content={
+                <ChartTooltip
+                  formatter={(_value, _name, entry) => {
+                    const raw = (entry.payload?.rawValue as number) ?? 0;
+                    if (isDistance) return [`${(raw / 1000).toFixed(2)} km`, "Distance"];
+                    return [formatMinutes(raw), "Moving Time"];
+                  }}
+                  labelFormatter={(label) => `${tooltipPrefix}${label}`}
+                />
+              }
               cursor={{ fill: "rgba(0,0,0,0.05)" }}
             />
             <Bar

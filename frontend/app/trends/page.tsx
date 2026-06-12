@@ -11,35 +11,7 @@ import TrendBarChart from "@/components/trends/TrendBarChart";
 import SufferScoreChart from "@/components/trends/SufferScoreChart";
 import EfficiencyTrendChart from "@/components/trends/EfficiencyTrendChart";
 import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
-
-const DiffStat = ({
-  current,
-  previous,
-  format,
-}: {
-  current: number;
-  previous?: number | null;
-  format: (val: number) => string;
-}) => {
-  if (previous === undefined || previous === null) return null;
-  const diff = current - previous;
-  // Use a small epsilon for float comparison, or checking if effectively 0
-  if (Math.abs(diff) < 0.001) {
-    return <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">No change</div>;
-  }
-
-  const isPositive = diff > 0;
-  // For these metrics (distance, time, count, score), more is generally "active" (green).
-  // If we had "pace" where lower is better, we'd need a prop logic.
-  const color = isPositive ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400";
-  const arrow = isPositive ? "↑" : "↓";
-
-  return (
-    <div className={`text-xs ${color} mt-1 font-medium`}>
-      {arrow} {format(Math.abs(diff))}
-    </div>
-  );
-};
+import StatDiff from "@/components/StatDiff";
 
 export default function TrendsPage() {
   const [range, setRange] = useState<TrendsRange>("30D");
@@ -125,7 +97,7 @@ export default function TrendsPage() {
               <div className="text-2xl font-bold">
                 {formatDistanceKm(data.summary.total_distance_m)}
               </div>
-              <DiffStat
+              <StatDiff
                 current={data.summary.total_distance_m}
                 previous={data.previous_summary?.total_distance_m}
                 format={formatDistanceKm}
@@ -136,7 +108,7 @@ export default function TrendsPage() {
               <div className="text-2xl font-bold">
                 {formatDuration(data.summary.total_moving_time_s)}
               </div>
-              <DiffStat
+              <StatDiff
                 current={data.summary.total_moving_time_s}
                 previous={data.previous_summary?.total_moving_time_s}
                 format={formatDuration}
@@ -147,7 +119,7 @@ export default function TrendsPage() {
               <div className="text-2xl font-bold">
                 {data.summary.activity_count}
               </div>
-              <DiffStat
+              <StatDiff
                 current={data.summary.activity_count}
                 previous={data.previous_summary?.activity_count}
                 format={(v) => v.toString()}
@@ -158,7 +130,7 @@ export default function TrendsPage() {
               <div className="text-2xl font-bold">
                 {Math.round(data.summary.total_suffer_score).toLocaleString()}
               </div>
-              <DiffStat
+              <StatDiff
                 current={data.summary.total_suffer_score}
                 previous={data.previous_summary?.total_suffer_score}
                 format={(v) => Math.round(v).toLocaleString()}
