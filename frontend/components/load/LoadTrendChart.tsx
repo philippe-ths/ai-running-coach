@@ -19,14 +19,25 @@ interface Props {
 }
 
 export default function LoadTrendChart({ weeks }: Props) {
-  const chartData = weeks.map((w) => ({
+  // Per-week optimal range; null for early weeks that lack a trailing baseline.
+  const rawBands = weeks.map((w) =>
+    w.target_min != null && w.target_max != null
+      ? ([w.target_min, w.target_max] as [number, number])
+      : null,
+  );
+  // Carry the nearest known range into bandless weeks so the optimal band spans
+  // the whole chart instead of only the recent weeks that have a baseline.
+  const firstKnown = rawBands.find((b) => b != null) ?? null;
+  let lastKnown = firstKnown;
+  const filledBands = rawBands.map((b) => {
+    if (b != null) lastKnown = b;
+    return b ?? lastKnown;
+  });
+
+  const chartData = weeks.map((w, i) => ({
     label: formatDateLabel(w.week_start),
     score: w.score,
-    // Range area for the optimal band; null when the week has no baseline.
-    band:
-      w.target_min != null && w.target_max != null
-        ? [w.target_min, w.target_max]
-        : null,
+    band: filledBands[i],
   }));
 
   return (
