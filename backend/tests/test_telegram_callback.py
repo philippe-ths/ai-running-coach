@@ -185,14 +185,29 @@ def _seed_activity(db) -> Activity:
     return a
 
 
-def _update(token: str, *, chat_id=42, cbq_id="cbq-1") -> dict:
+def _update(
+    token: str, *, chat_id=42, cbq_id="cbq-1", message_id=0, reply_markup=None
+) -> dict:
+    message: dict = {"chat": {"id": chat_id}}
+    if message_id:
+        message["message_id"] = message_id
+    if reply_markup is not None:
+        message["reply_markup"] = reply_markup
     return {
         "update_id": 1,
         "callback_query": {
             "id": cbq_id,
             "data": token,
-            "message": {"chat": {"id": chat_id}},
+            "message": message,
         },
+    }
+
+
+def _keyboard(*buttons: tuple[str, str]) -> dict:
+    return {
+        "inline_keyboard": [
+            [{"text": label, "callback_data": token}] for label, token in buttons
+        ]
     }
 
 
@@ -217,7 +232,7 @@ def isolate_side_effects():
     ) as fuller, patch(
         "app.api.webhooks.get_notifier", return_value=notifier
     ):
-        yield {"answer": answer, "fuller": fuller}
+        yield {"answer": answer, "fuller": fuller, "notifier": notifier}
 
 
 class TestInboundAuth:
@@ -351,3 +366,90 @@ class TestParityWithInApp:
         via_tg = db.query(CheckIn).filter(CheckIn.activity_id == a_tg.id).first()
         assert in_app.rpe == via_tg.rpe == 7
         assert in_app.pain_score == via_tg.pain_score
+
+
+class TestTapAcknowledgment:
+    """#230: a successful tap is acknowledged persistently in-chat by check-marking
+    the chosen button on the opener's inline keyboard (only the keyboard is edited;
+    editing the text would strip the HTML title/link Telegram does not echo back).
+    """
+
+    def _post(self, client, token, **update_kwargs):
+        return client.post(
+            "/api/webhooks/telegram",
+            json=_update(token, **update_kwargs),
+            headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+        )
+
+    def test_tap_marks_the_chosen_button(self, client, db, configured, isolate_side_effects):
+        a = _seed_activity(db)
+        t5 = encode(kind="rpe", activity_id=str(a.id), value=5)
+        t9 = encode(kind="rpe", activity_id=str(a.id), value=9)
+        kb = _keyboard(("Cruising (RPE 5-6)", t5), ("Really pushing (RPE 9+)", t9))
+
+        resp = self._post(client, t9, message_id=555, reply_markup=kb)
+
+        assert resp.status_code == 200
+        edit = isolate_side_effects["notifier"].edit_message_reply_markup
+        edit.assert_called_once()
+        kwargs = edit.call_args.kwargs
+        assert kwargs["message_id"] == 555
+        rows = kwargs["reply_markup"]["inline_keyboard"]
+        assert rows[0][0]["text"] == "Cruising (RPE 5-6)"          # untouched
+        assert rows[1][0]["text"] == "✓ Really pushing (RPE 9+)"  # marked
+        assert rows[1][0]["callback_data"] == t9                   # token preserved
+
+    def test_retap_moves_the_mark(self, client, db, configured, isolate_side_effects):
+        a = _seed_activity(db)
+        t5 = encode(kind="rpe", activity_id=str(a.id), value=5)
+        t9 = encode(kind="rpe", activity_id=str(a.id), value=9)
+        kb = _keyboard(("✓ Cruising (RPE 5-6)", t5), ("Really pushing (RPE 9+)", t9))
+
+        resp = self._post(client, t9, message_id=555, reply_markup=kb)
+
+        assert resp.status_code == 200
+        rows = isolate_side_effects["notifier"].edit_message_reply_markup \
+            .call_args.kwargs["reply_markup"]["inline_keyboard"]
+        assert rows[0][0]["text"] == "Cruising (RPE 5-6)"              # mark removed
+        assert rows[1][0]["text"] == "✓ Really pushing (RPE 9+)"  # mark moved
+
+    def test_same_button_retap_skips_the_noop_edit(self, client, db, configured, isolate_side_effects):
+        # Telegram rejects an edit that does not change the markup, so an
+        # already-marked button must not trigger a redundant API call.
+        a = _seed_activity(db)
+        t9 = encode(kind="rpe", activity_id=str(a.id), value=9)
+        kb = _keyboard(("✓ Really pushing (RPE 9+)", t9))
+
+        resp = self._post(client, t9, message_id=555, reply_markup=kb)
+
+        assert resp.status_code == 200
+        isolate_side_effects["notifier"].edit_message_reply_markup.assert_not_called()
+
+    def test_missing_keyboard_or_message_id_skips_marking(
+        self, client, db, configured, isolate_side_effects
+    ):
+        a = _seed_activity(db)
+        token = encode(kind="rpe", activity_id=str(a.id), value=7)
+
+        resp = self._post(client, token)  # no message_id, no reply_markup
+
+        assert resp.status_code == 200
+        row = db.query(CheckIn).filter(CheckIn.activity_id == a.id).first()
+        assert row is not None and row.rpe == 7  # the write still happened
+        isolate_side_effects["notifier"].edit_message_reply_markup.assert_not_called()
+
+    def test_marking_failure_never_breaks_the_request(
+        self, client, db, configured, isolate_side_effects
+    ):
+        a = _seed_activity(db)
+        token = encode(kind="rpe", activity_id=str(a.id), value=7)
+        kb = _keyboard(("Comfortably hard (RPE 7-8)", token))
+        isolate_side_effects["notifier"].edit_message_reply_markup.side_effect = (
+            RuntimeError("telegram down")
+        )
+
+        resp = self._post(client, token, message_id=555, reply_markup=kb)
+
+        assert resp.status_code == 200
+        row = db.query(CheckIn).filter(CheckIn.activity_id == a.id).first()
+        assert row is not None and row.rpe == 7
