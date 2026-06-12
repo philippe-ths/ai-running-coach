@@ -50,11 +50,28 @@ class SplitRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class LapRead(BaseModel):
+    """One recorded Strava lap, projected from raw_summary at read time (#208)."""
+
+    lap: int
+    name: Optional[str] = None
+    distance_m: Optional[float] = None
+    elapsed_time_s: Optional[int] = None
+    moving_time_s: Optional[int] = None
+    avg_speed_mps: Optional[float] = None
+    avg_hr: Optional[float] = None
+    max_hr: Optional[float] = None
+    avg_cadence: Optional[float] = None
+
+
 class ActivityDetailRead(ActivityRead):
     metrics: Optional[DerivedMetricRead] = None
     check_in: Optional[CheckInRead] = None
     streams: List[ActivityStreamRead] = []
     splits: List[SplitRead] = []
+    # Recorded Strava laps (the runner's own lap-button marks). Empty when the
+    # activity has no usable recorded laps (#208).
+    laps: List[LapRead] = []
 
     @model_validator(mode="after")
     def normalize_stream_cadence(self) -> "ActivityDetailRead":

@@ -83,11 +83,11 @@ export default function EfficiencyTrendChart({ data, granularity }: Props) {
   };
 
   return (
-    <div className="bg-white rounded-lg border shadow-sm p-5">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
       <div className="mb-4 flex items-start justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
-          <p className="text-xs text-gray-500 mt-1">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">{title}</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             Meters per heartbeat. Higher is better.
           </p>
         </div>
@@ -101,7 +101,7 @@ export default function EfficiencyTrendChart({ data, granularity }: Props) {
       </div>
 
       {chartData.length === 0 ? (
-        <p className="text-gray-400 text-sm py-8 text-center">
+        <p className="text-gray-400 dark:text-gray-500 text-sm py-8 text-center">
           No sufficient heart rate data for this range.
         </p>
       ) : (
@@ -163,7 +163,7 @@ export default function EfficiencyTrendChart({ data, granularity }: Props) {
         </div>
       )}
       
-      <div className="mt-3 text-xs text-gray-500 bg-gray-50 p-2 rounded">
+      <div className="mt-3 text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 p-2 rounded">
         Efficiency is affected by heat, hills, wind, terrain, and stops. Compare similar routes/efforts for best signal.
       </div>
     </div>

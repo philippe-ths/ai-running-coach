@@ -21,6 +21,10 @@ export type {
   TrendsSummary,
   TrendsData,
   TrendsRange,
+  LoadActivityPoint,
+  LoadStatus,
+  LoadWeek,
+  LoadData,
 } from "./types/trends";
 export type {
   EvidenceRef,

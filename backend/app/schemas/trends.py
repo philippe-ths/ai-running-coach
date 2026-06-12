@@ -4,6 +4,7 @@ Pydantic schemas for the /api/trends endpoint.
 
 from datetime import date
 from typing import List, Optional
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -91,3 +92,27 @@ class TrendsResponse(BaseModel):
     efficiency_trend: List[EfficiencyPoint]
     weekly_zone_load: List[ZoneLoadWeekPoint]
     daily_zone_load: List[DailyZoneLoadPoint]
+
+
+class LoadActivityPoint(BaseModel):
+    """One activity's contribution to a week's training load (#209)."""
+    id: UUID
+    name: str
+    date: date
+    effort_score: float
+    headline: Optional[str] = None
+
+
+class LoadWeek(BaseModel):
+    """One calendar week (Monday start) of training load (#209)."""
+    week_start: date
+    score: float
+    daily: List[float]  # 7 values, Monday..Sunday
+    target_min: Optional[float] = None  # optimal band from the trailing 4-week avg
+    target_max: Optional[float] = None
+    status: str  # below | optimal | high | no_baseline
+    activities: List[LoadActivityPoint]
+
+
+class LoadResponse(BaseModel):
+    weeks: List[LoadWeek]  # chronological; last entry is the current week

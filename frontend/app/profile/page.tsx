@@ -80,11 +80,11 @@ export default function ProfilePage() {
         <h1 className="text-2xl font-bold whitespace-nowrap">Athlete Profile</h1>
         <div className="flex items-center gap-4 flex-wrap">
             <ConnectStravaButton />
-            <Link href="/" className="text-blue-600 hover:underline">Cancel</Link>
+            <Link href="/" className="text-blue-600 dark:text-blue-400 hover:underline">Cancel</Link>
         </div>
       </header>
       
-      <form onSubmit={handleSubmit} className="space-y-6 bg-white p-6 border rounded-xl shadow-sm">
+      <form onSubmit={handleSubmit} className="space-y-6 bg-white dark:bg-gray-800 p-6 border dark:border-gray-700 rounded-xl shadow-sm">
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -93,7 +93,7 @@ export default function ProfilePage() {
                     name="goal_type" 
                     value={formData.goal_type} 
                     onChange={handleChange}
-                    className="w-full border rounded p-2"
+                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 >
                     <option value="general">General Fitness</option>
                     <option value="5k">5k</option>
@@ -109,7 +109,7 @@ export default function ProfilePage() {
                     name="experience_level" 
                     value={formData.experience_level} 
                     onChange={handleChange}
-                    className="w-full border rounded p-2"
+                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 >
                     <option value="new">Beginner</option>
                     <option value="intermediate">Intermediate</option>
@@ -124,7 +124,7 @@ export default function ProfilePage() {
                     name="weekly_days_available"
                     value={formData.weekly_days_available}
                     onChange={handleChange}
-                    className="w-full border rounded p-2"
+                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 />
             </div>
 
@@ -136,9 +136,9 @@ export default function ProfilePage() {
                     value={formData.max_hr || ''}
                     onChange={handleChange}
                     placeholder="e.g. 190"
-                    className="w-full border rounded p-2"
+                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 />
-                 <p className="text-xs text-gray-500 mt-1">
+                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     Used to calculate zones. If unknown, estimate with 220 minus age.
                 </p>
             </div>
@@ -150,7 +150,7 @@ export default function ProfilePage() {
                     name="current_weekly_km"
                     value={formData.current_weekly_km}
                     onChange={handleChange}
-                    className="w-full border rounded p-2"
+                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 />
             </div>
         </div>
@@ -163,7 +163,7 @@ export default function ProfilePage() {
                 onChange={handleChange}
                 rows={3}
                 placeholder="Any nagging pains or past injuries?"
-                className="w-full border rounded p-2"
+                className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
             />
         </div>
 

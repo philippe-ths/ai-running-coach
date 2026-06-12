@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.schemas.trends import TrendsResponse
+from app.schemas.trends import LoadResponse, TrendsResponse
+from app.services.training_load import get_load_report
 from app.services.trends import (
     get_available_types,
     get_trends_report,
@@ -30,3 +31,9 @@ def get_trends(
     db: Session = Depends(get_db),
 ):
     return get_trends_report(db, range, types)
+
+
+@router.get("/trends/load", response_model=LoadResponse)
+def get_training_load(db: Session = Depends(get_db)):
+    """Weekly training-load report: scores, optimal band, contributions (#209)."""
+    return get_load_report(db)

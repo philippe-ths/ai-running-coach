@@ -14,6 +14,18 @@ export interface Split {
   elev_gain?: number;
 }
 
+export interface Lap {
+  lap: number;
+  name?: string | null;
+  distance_m?: number | null;
+  elapsed_time_s?: number | null;
+  moving_time_s?: number | null;
+  avg_speed_mps?: number | null;
+  avg_hr?: number | null;
+  max_hr?: number | null;
+  avg_cadence?: number | null;
+}
+
 export interface Activity {
   id: string;
   name: string;
@@ -30,4 +42,5 @@ export interface Activity {
   streams?: ActivityStream[];
   check_in?: CheckIn;
   splits?: Split[];
+  laps?: Lap[];
 }

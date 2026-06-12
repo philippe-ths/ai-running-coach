@@ -12,6 +12,7 @@ from app.services import activity_queries, analysis
 from app.services.checkins import write_checkin
 from app.services.analysis.classifier import Classification, compose_headline
 from app.services.analysis.splits import calculate_splits
+from app.services.laps import project_laps
 from app.services.strava_ingestion import get_strava_port, ingest_recent_activities
 
 router = APIRouter()
@@ -145,7 +146,16 @@ def read_activities(
     Get stored activities (paginated).
     """
     # Note: In multi-user app, filter by current_user.id
-    return activity_queries.get_activities(db, skip=skip, limit=limit)
+    activities = activity_queries.get_activities(db, skip=skip, limit=limit)
+    responses = []
+    for activity in activities:
+        response = ActivityRead.model_validate(activity)
+        if activity.metrics:
+            response.headline = compose_headline(
+                activity, Classification.from_metrics(activity.metrics)
+            )
+        responses.append(response)
+    return responses
 
 @router.get("/activities/{activity_id}", response_model=ActivityDetailRead)
 def read_activity(
@@ -165,6 +175,7 @@ def read_activity(
     # Convert to Pydantic model manually to inject transient splits + headline
     response = ActivityDetailRead.model_validate(activity)
     response.splits = splits_data
+    response.laps = project_laps(activity.raw_summary, effective_type)
     if response.metrics:
         response.metrics.headline = compose_headline(
             activity, Classification.from_metrics(activity.metrics)

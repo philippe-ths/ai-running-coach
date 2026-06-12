@@ -45,15 +45,15 @@ function CustomTooltip({
   if (total === 0) return null;
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-sm">
-      <p className="font-semibold text-gray-700 mb-1">{label}</p>
+    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-3 text-sm">
+      <p className="font-semibold text-gray-700 dark:text-gray-300 mb-1">{label}</p>
       {payload.map((p) => (
         <div key={p.name} className="flex justify-between gap-6">
           <span style={{ color: p.color }}>{p.name}</span>
           <span className="font-mono">{Math.round(p.value)} min</span>
         </div>
       ))}
-      <div className="border-t mt-1 pt-1 flex justify-between gap-6 font-semibold text-gray-800">
+      <div className="border-t dark:border-gray-700 mt-1 pt-1 flex justify-between gap-6 font-semibold text-gray-800 dark:text-gray-200">
         <span>Total</span>
         <span className="font-mono">{Math.round(total)} min</span>
       </div>
@@ -74,9 +74,9 @@ export default function ZoneLoadChart({ data, granularity }: ZoneLoadChartProps)
 
   if (!data.length || !hasAnyData) {
     return (
-      <div className="bg-white rounded-lg border shadow-sm p-5">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">{title}</h3>
-        <p className="text-gray-400 text-sm py-8 text-center">
+      <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
+        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">{title}</h3>
+        <p className="text-gray-400 dark:text-gray-500 text-sm py-8 text-center">
           No HR zone data available yet. Sync activities with heart rate data.
         </p>
       </div>
@@ -93,10 +93,10 @@ export default function ZoneLoadChart({ data, granularity }: ZoneLoadChartProps)
   const tooltipPrefix = granularity === "daily" ? "" : "Week of ";
 
   return (
-    <div className="bg-white rounded-lg border shadow-sm p-5">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
-        <p className="text-xs text-gray-400 mt-0.5">
+        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">{title}</h3>
+        <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
           Easy (&lt;70% HR) · Moderate (70-80%) · Hard (&gt;80%)
         </p>
       </div>

@@ -82,3 +82,27 @@ export interface TrendsData {
 }
 
 export type TrendsRange = "7D" | "30D" | "3M" | "6M" | "1Y" | "ALL";
+
+export interface LoadActivityPoint {
+  id: string;
+  name: string;
+  date: string;
+  effort_score: number;
+  headline?: string | null;
+}
+
+export type LoadStatus = 'below' | 'optimal' | 'high' | 'no_baseline';
+
+export interface LoadWeek {
+  week_start: string;
+  score: number;
+  daily: number[]; // 7 values, Monday..Sunday
+  target_min?: number | null;
+  target_max?: number | null;
+  status: LoadStatus;
+  activities: LoadActivityPoint[];
+}
+
+export interface LoadData {
+  weeks: LoadWeek[];
+}

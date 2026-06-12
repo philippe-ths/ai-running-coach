@@ -37,7 +37,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from sqlalchemy import create_engine, insert, select, text
+from sqlalchemy import bindparam, create_engine, insert, select, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.engine import Engine
 
@@ -50,10 +50,15 @@ from app.core.config import settings  # noqa: E402
 from app.models import (  # noqa: E402
     Activity,
     ActivityStream,
+    Block,
     CheckIn,
     CoachChatMessage,
+    CoachNarrative,
     CoachReport,
+    CoachingContext,
+    CoachingRelationship,
     DerivedMetric,
+    Exchange,
     RunnerBaseline,
     StravaAccount,
     User,
@@ -61,8 +66,19 @@ from app.models import (  # noqa: E402
 )
 
 # Models in foreign-key dependency order. Load top-to-bottom; wipe bottom-to-top.
-USER_MODELS = [User, UserProfile, StravaAccount, RunnerBaseline]
-ACTIVITY_MODELS = [Activity, ActivityStream, DerivedMetric, CoachReport, CoachChatMessage, CheckIn]
+USER_MODELS = [
+    User,
+    UserProfile,
+    StravaAccount,
+    RunnerBaseline,
+    CoachingRelationship,
+    CoachingContext,
+    CoachNarrative,
+]
+# activities.block_id <-> blocks.primary_activity_id is circular (A1), so
+# activities are inserted with block_id nulled, blocks/exchanges follow, and
+# block_id is backfilled last (see seed()).
+ACTIVITY_MODELS = [Activity, Block, Exchange, ActivityStream, DerivedMetric, CoachReport, CoachChatMessage, CheckIn]
 ORDERED_MODELS = USER_MODELS + ACTIVITY_MODELS
 
 # Tables keyed off activity_id, filtered when --activities limits the snapshot.
@@ -154,6 +170,23 @@ def seed(source_url: str, target_url: str, activities_limit: int, with_live_toke
     for model in ACTIVITY_CHILD_MODELS:
         snapshot[model] = [r for r in snapshot[model] if r["activity_id"] in keep_activity_ids]
 
+    # Blocks survive only when their primary activity does; exchanges follow
+    # their block. Activities are inserted with block_id nulled (circular FK
+    # with blocks.primary_activity_id) and backfilled after blocks land.
+    snapshot[Block] = [
+        r for r in snapshot[Block] if r["primary_activity_id"] in keep_activity_ids
+    ]
+    keep_block_ids = {r["id"] for r in snapshot[Block]}
+    snapshot[Exchange] = [r for r in snapshot[Exchange] if r["block_id"] in keep_block_ids]
+
+    block_assignments = {
+        r["id"]: r["block_id"]
+        for r in snapshot[Activity]
+        if r.get("block_id") in keep_block_ids
+    }
+    for row in snapshot[Activity]:
+        row["block_id"] = None
+
     if not with_live_tokens:
         for row in snapshot[StravaAccount]:
             row["access_token"] = REDACTED_TOKEN
@@ -163,6 +196,19 @@ def seed(source_url: str, target_url: str, activities_limit: int, with_live_toke
     for model in ORDERED_MODELS:
         count = _insert_rows(target, model, snapshot[model])
         print(f"  {model.__tablename__:<22} {count}")
+
+    if block_assignments:
+        stmt = (
+            Activity.__table__.update()
+            .where(Activity.__table__.c.id == bindparam("aid"))
+            .values(block_id=bindparam("bid"))
+        )
+        with target.begin() as conn:
+            conn.execute(
+                stmt,
+                [{"aid": aid, "bid": bid} for aid, bid in block_assignments.items()],
+            )
+        print(f"  activities.block_id    {len(block_assignments)} backfilled")
 
     source.dispose()
     target.dispose()

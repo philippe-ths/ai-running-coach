@@ -103,19 +103,19 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
   // --- VIEW MODE ---
   if (!isEditing && existingCheckIn) {
     return (
-      <div className="bg-green-50 rounded-lg shadow-sm border border-green-200 p-4">
+      <div className="bg-green-50 dark:bg-green-900/30 rounded-lg shadow-sm border border-green-200 dark:border-green-800 p-4">
           <div className="flex justify-between items-start mb-3">
-              <h3 className="font-semibold text-green-800">Activity Report</h3>
-              <button 
+              <h3 className="font-semibold text-green-800 dark:text-green-200">Activity Report</h3>
+              <button
                 onClick={() => setIsEditing(true)}
-                className="text-xs font-medium text-green-700 hover:text-green-900 underline"
+                className="text-xs font-medium text-green-700 dark:text-green-300 hover:text-green-900 dark:hover:text-green-100 underline"
               >
                 Edit
               </button>
           </div>
-          <dl className="grid grid-cols-2 gap-4 text-sm text-green-700">
-              <div className="col-span-2 flex justify-between border-b border-green-100 pb-1">
-                  <dt className="text-green-800 opacity-80">Type</dt>
+          <dl className="grid grid-cols-2 gap-4 text-sm text-green-700 dark:text-green-300">
+              <div className="col-span-2 flex justify-between border-b border-green-100 dark:border-green-800 pb-1">
+                  <dt className="text-green-800 dark:text-green-200 opacity-80">Type</dt>
                   <dd className="font-medium text-right">
                        {currentType || headline || 'Auto-detected'}
                        <span className="text-[10px] block opacity-60 font-normal">
@@ -124,21 +124,21 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
                   </dd>
               </div>
               {existingCheckIn.rpe != null && (
-                  <div className="flex justify-between border-b border-green-100 pb-1">
-                      <dt className="text-green-800 opacity-80">RPE</dt>
+                  <div className="flex justify-between border-b border-green-100 dark:border-green-800 pb-1">
+                      <dt className="text-green-800 dark:text-green-200 opacity-80">RPE</dt>
                       <dd className="font-medium">{existingCheckIn.rpe}/10</dd>
                   </div>
               )}
               {existingCheckIn.pain_score != null && (
-                  <div className="flex justify-between border-b border-green-100 pb-1">
-                      <dt className="text-green-800 opacity-80">Pain</dt>
+                  <div className="flex justify-between border-b border-green-100 dark:border-green-800 pb-1">
+                      <dt className="text-green-800 dark:text-green-200 opacity-80">Pain</dt>
                       <dd className="font-medium">{existingCheckIn.pain_score}/10</dd>
                   </div>
               )}
               {existingCheckIn.notes && (
                   <div className="col-span-2 pt-1">
-                       <dt className="text-xs font-bold uppercase tracking-wider text-green-800 opacity-60 mb-1">Notes</dt>
-                       <dd className="italic bg-white/50 p-2 rounded border border-green-100/50 text-green-900 break-words">
+                       <dt className="text-xs font-bold uppercase tracking-wider text-green-800 dark:text-green-200 opacity-60 mb-1">Notes</dt>
+                       <dd className="italic bg-white/50 dark:bg-gray-900/50 p-2 rounded border border-green-100/50 dark:border-green-800/50 text-green-900 dark:text-green-200 break-words">
                         &ldquo;{existingCheckIn.notes}&rdquo;
                       </dd>
                   </div>
@@ -150,20 +150,20 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
 
   // --- EDIT MODE ---
   return (
-    <form onSubmit={handleSubmit} className="space-y-4 bg-gray-50 p-4 rounded-lg border border-gray-100 shadow-sm">
+    <form onSubmit={handleSubmit} className="space-y-4 bg-gray-50 dark:bg-gray-800 p-4 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm">
       <div className="flex justify-between items-center">
-        <h3 className="font-semibold text-gray-800">
+        <h3 className="font-semibold text-gray-800 dark:text-gray-200">
             {existingCheckIn ? 'Edit Report' : 'Activity Check-In'}
         </h3>
       </div>
       
       {/* Intent Selection */}
       <div>
-        <label className="block text-sm font-medium mb-1 text-gray-700">Activity Type</label>
+        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Activity Type</label>
         <select
           value={intent}
           onChange={(e) => setIntent(e.target.value)}
-          className="w-full border border-gray-300 rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all bg-white"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all bg-white dark:bg-gray-900 dark:text-gray-100"
         >
           <option value="">{headline ? `Auto-detected: ${headline}` : "Auto-detected"}</option>
           {typeOptions.map(type => (
@@ -171,7 +171,7 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
           ))}
         </select>
         {headline && (
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                 Detected as: {headline}{intent === "" ? "" : " · overridden below"}
             </p>
         )}
@@ -179,24 +179,24 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-            <label className="block text-sm font-medium mb-1 text-gray-700">RPE (1-10)</label>
-            <input 
+            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">RPE (1-10)</label>
+            <input
             type="number" min="1" max="10"
             value={effort}
             onChange={(e) => setEffort(e.target.value === '' ? '' : Number(e.target.value))}
-            className="w-full border border-gray-300 rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+            className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
             placeholder="Difficuty"
             required
             />
         </div>
 
         <div>
-            <label className="block text-sm font-medium mb-1 text-gray-700">Pain (0-10)</label>
-            <input 
+            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Pain (0-10)</label>
+            <input
             type="number" min="0" max="10"
             value={pain}
             onChange={(e) => setPain(e.target.value === '' ? '' : Number(e.target.value))}
-            className="w-full border border-gray-300 rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+            className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
             placeholder="Soreness"
             required
             />
@@ -204,17 +204,17 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-1 text-gray-700">Notes</label>
-        <textarea 
+        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Notes</label>
+        <textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
-          className="w-full border border-gray-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+          className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
           rows={3}
           placeholder="How did it feel? Any fatigue, aches, or specific context?"
         />
       </div>
 
-      <div className="flex gap-2 pt-2 border-t border-gray-200 mt-2">
+      <div className="flex gap-2 pt-2 border-t border-gray-200 dark:border-gray-700 mt-2">
         {existingCheckIn && (
           <button 
             type="button"
@@ -226,7 +226,7 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
               setIntent(currentType || "");
               setIsEditing(false);
             }}
-            className="px-3 py-2 rounded text-sm font-medium text-gray-600 hover:bg-gray-200 border border-gray-300 transition-colors"
+            className="px-3 py-2 rounded text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 transition-colors"
           >
             Cancel
           </button>

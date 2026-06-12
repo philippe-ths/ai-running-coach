@@ -32,7 +32,7 @@ export default function SyncButton() {
   return (
     <div className="flex items-center gap-2">
       {stats && (
-        <span className="text-xs text-green-600 font-medium">
+        <span className="text-xs text-green-600 dark:text-green-400 font-medium">
           Synced: {stats.upserted} | Analyzed: {stats.analyzed}
           {stats.errors.length > 0 && <span className="text-red-500 ml-1">({stats.errors.length} err)</span>}
         </span>
@@ -41,7 +41,7 @@ export default function SyncButton() {
       <button 
         onClick={handleSync}
         disabled={loading}
-        className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
+        className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700/50 disabled:opacity-50"
       >
         <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
         {loading ? "Syncing..." : "Sync Now"}

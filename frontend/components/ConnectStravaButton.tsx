@@ -37,24 +37,24 @@ export default function ConnectStravaButton() {
   }, []);
 
   if (loading) {
-    return <span className="text-sm text-gray-500">Checking Strava…</span>;
+    return <span className="text-sm text-gray-500 dark:text-gray-400">Checking Strava…</span>;
   }
 
   if (status?.connected) {
     return (
       <div className="flex items-center gap-3 whitespace-nowrap">
-        <span className="inline-flex items-center gap-2 text-sm text-green-700">
+        <span className="inline-flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
           <CheckCircle2 size={16} />
           <span>
             Connected to Strava
             {status.athlete_id != null && (
-              <span className="text-gray-500"> (#{status.athlete_id})</span>
+              <span className="text-gray-500 dark:text-gray-400"> (#{status.athlete_id})</span>
             )}
           </span>
         </span>
         <a
           href={STRAVA_LOGIN_HREF}
-          className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
+          className="inline-flex items-center gap-1 text-sm text-blue-600 dark:text-blue-400 hover:underline"
           title="Re-run the Strava OAuth flow to refresh tokens or switch athletes"
         >
           <RefreshCw size={14} />
