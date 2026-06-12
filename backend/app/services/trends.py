@@ -25,7 +25,12 @@ from app.schemas.trends import (
     EfficiencyPoint,
     ZoneLoadWeekPoint,
     DailyZoneLoadPoint,
+    WeeklyStatsSummary,
+    WeeklyStatsResponse,
 )
+
+# Effort-axis labels that count a day as "hard" for the dashboard summary.
+_HARD_EFFORTS = {"tempo", "hard"}
 
 ALLOWED_RANGES = {"7D", "30D", "3M", "6M", "1Y", "ALL"}
 
@@ -41,7 +46,7 @@ class ActivityFact:
         "activity_id", "local_date", "activity_type", "user_intent",
         "distance_m", "moving_time_s", "elapsed_time_s",
         "elev_gain_m", "avg_hr", "avg_cadence", "average_speed_mps",
-        "effort_score", "time_in_zones",
+        "effort_score", "effort", "time_in_zones",
     )
 
     def __init__(self, activity: Activity):
@@ -59,6 +64,11 @@ class ActivityFact:
         self.average_speed_mps = activity.average_speed_mps
         self.effort_score: Optional[float] = (
             activity.metrics.effort_score if activity.metrics else None
+        )
+        # Effort axis (ADR 0007): recovery|easy|moderate|tempo|hard. Used to
+        # count "hard days" on the dashboard without an HR/name heuristic.
+        self.effort: Optional[str] = (
+            activity.metrics.effort if activity.metrics else None
         )
         self.time_in_zones: Optional[dict] = (
             activity.metrics.time_in_zones if activity.metrics else None
@@ -153,11 +163,33 @@ _RANGE_DAYS = {
 
 
 def _resolve_since(range_key: str) -> Optional[date]:
-    """Return the earliest local date to include, or None for ALL."""
+    """Return the earliest local date to include, or None for ALL.
+
+    The window is inclusive on both ends (``since`` .. ``today``), so a range of
+    N days subtracts N-1 to span exactly N calendar days. e.g. 7D with today =
+    Jun 9 covers Jun 3–Jun 9 inclusive, not Jun 2–Jun 9 (#179).
+    """
     days = _RANGE_DAYS.get(range_key.upper())
     if days is None:
         return None
-    return date.today() - timedelta(days=days)
+    return date.today() - timedelta(days=days - 1)
+
+
+def _period_window(range_key: str) -> Optional[tuple[date, date]]:
+    """Return (current_start, previous_start) for a fixed range, or None for ALL.
+
+    The current window is ``[current_start, today]`` (inclusive) and the previous
+    window is ``[previous_start, current_start)``. Both span exactly
+    ``_RANGE_DAYS[range]`` calendar days with no gap or overlap at the boundary,
+    so period-over-period deltas line up with the charts (#179).
+    """
+    days = _RANGE_DAYS.get(range_key.upper())
+    if days is None:
+        return None
+    current_start = _resolve_since(range_key)
+    assert current_start is not None  # days is not None here
+    previous_start = current_start - timedelta(days=days)
+    return current_start, previous_start
 
 
 def get_available_types(db: Session) -> List[str]:
@@ -475,6 +507,38 @@ def build_zone_load_daily(
     return result
 
 
+def _summarise_window(facts: List[ActivityFact]) -> WeeklyStatsSummary:
+    """Collapse activity facts for one window into the dashboard summary card totals."""
+    hard_days = len({f.local_date for f in facts if f.effort in _HARD_EFFORTS})
+    return WeeklyStatsSummary(
+        total_distance_m=sum(f.distance_m for f in facts),
+        total_moving_time_s=sum(f.moving_time_s for f in facts),
+        activity_count=len(facts),
+        total_load=round(sum(f.effort_score or 0.0 for f in facts), 1),
+        hard_days=hard_days,
+    )
+
+
+def get_weekly_stats(db: Session) -> WeeklyStatsResponse:
+    """
+    Rolling 7-day summary for the dashboard, plus the prior 7 days for comparison.
+
+    Uses exactly the same 7-day window as the Trends 7D view (via
+    ``_period_window``) so the dashboard cards and Trends 7D can never drift
+    (#246, #179). "Hard days" is derived from the effort axis rather than an
+    HR/name heuristic.
+    """
+    current_start, prev_start = _period_window("7D")  # type: ignore[misc]
+
+    current = _query_activity_facts(db, current_start, None)
+    previous = _query_activity_facts(db, prev_start, current_start)
+
+    return WeeklyStatsResponse(
+        summary=_summarise_window(current),
+        previous_summary=_summarise_window(previous),
+    )
+
+
 def get_trends_report(
     db: Session,
     range_key: str = "30D",
@@ -504,12 +568,9 @@ def get_trends_report(
 
     # Previous period summary
     previous_summary = None
-    days = _RANGE_DAYS.get(range_upper)
-    if days is not None:
-        today = date.today()
-        current_start = today - timedelta(days=days)
-        prev_start = current_start - timedelta(days=days)
-
+    window = _period_window(range_upper)
+    if window is not None:
+        current_start, prev_start = window
         prev_facts = _query_activity_facts(db, prev_start, current_start, types=types)
         previous_summary = TrendsSummary(
             total_distance_m=sum(f.distance_m for f in prev_facts),

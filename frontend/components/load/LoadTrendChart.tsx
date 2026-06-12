@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { LoadWeek } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
+import ChartTooltip from "@/components/charts/ChartTooltip";
 
 interface Props {
   weeks: LoadWeek[];
@@ -59,12 +60,16 @@ export default function LoadTrendChart({ weeks }: Props) {
             <XAxis dataKey="label" tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
             <YAxis tick={{ fontSize: 12 }} tickLine={false} axisLine={false} width={40} />
             <Tooltip
-              formatter={(value: any, name: string | undefined) => {
-                if (name === "band" && Array.isArray(value)) {
-                  return [`${value[0]} – ${value[1]}`, "Optimal range"];
-                }
-                return [value ?? 0, "Weekly load"];
-              }}
+              content={
+                <ChartTooltip
+                  formatter={(value, name) => {
+                    if (name === "band" && Array.isArray(value)) {
+                      return [`${value[0]} – ${value[1]}`, "Optimal range"];
+                    }
+                    return [(value as number) ?? 0, "Weekly load"];
+                  }}
+                />
+              }
             />
             <Area
               dataKey="band"

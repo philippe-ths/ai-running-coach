@@ -94,6 +94,21 @@ class TrendsResponse(BaseModel):
     daily_zone_load: List[DailyZoneLoadPoint]
 
 
+class WeeklyStatsSummary(BaseModel):
+    """Totals for a rolling 7-day window used by the dashboard summary cards."""
+    total_distance_m: int
+    total_moving_time_s: int
+    activity_count: int
+    total_load: float
+    hard_days: int
+
+
+class WeeklyStatsResponse(BaseModel):
+    """Current rolling 7-day window plus the prior 7 days for comparison (#246, #248)."""
+    summary: WeeklyStatsSummary
+    previous_summary: WeeklyStatsSummary
+
+
 class LoadActivityPoint(BaseModel):
     """One activity's contribution to a week's training load (#209)."""
     id: UUID

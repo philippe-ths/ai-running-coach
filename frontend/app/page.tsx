@@ -1,30 +1,46 @@
 import { fetchFromAPI } from '@/lib/api';
+import { WeeklyStatsData } from '@/lib/types';
+import { formatDistanceKm, formatDuration } from '@/lib/format';
 import ActivityList from '@/components/ActivityList';
 import SyncButton from '@/components/SyncButton';
+import StatDiff from '@/components/StatDiff';
 
 // Force dynamic since we fetch user data (no static cache for dashboard)
 export const dynamic = 'force-dynamic';
 
+/**
+ * Percentage change in load vs the previous 7 days, e.g. "+12%".
+ * Returns null when there's no prior load to compare against (can't divide by 0).
+ */
+function formatLoadTrend(current: number, previous: number): string | null {
+  if (previous <= 0) return null;
+  const pct = Math.round(((current - previous) / previous) * 100);
+  const sign = pct > 0 ? '+' : '';
+  return `${sign}${pct}%`;
+}
+
 export default async function Dashboard() {
+  // Recent activity list (for the feed) and the weekly summary stats are
+  // separate concerns. The summary aggregates over a true rolling 7-day window
+  // server-side (matching Trends 7D) instead of summing a capped recent list,
+  // so the two surfaces report identical numbers (#246).
   let activities = [];
+  let stats: WeeklyStatsData | null = null;
   try {
-    activities = await fetchFromAPI('/api/activities?limit=10') || [];
+    [activities, stats] = await Promise.all([
+      fetchFromAPI('/api/activities?limit=10').then((a) => a || []),
+      fetchFromAPI('/api/stats/weekly') as Promise<WeeklyStatsData | null>,
+    ]);
   } catch (e) {
-    console.error("Failed to fetch activities", e);
+    console.error('Failed to fetch dashboard data', e);
   }
 
-  // Calculate stats from fetched activities
-  // In a real app, this should come from a dedicated /api/stats endpoint
-  // to aggregate correctly over date ranges (e.g. this week vs last week).
-  // For MVP Step 9/11, we aggregate locally on the clientside from recent list.
-  
-  const totalDistance = activities.reduce((sum: number, act: any) => sum + (act.distance_m || 0), 0);
-  const totalTime = activities.reduce((sum: number, act: any) => sum + (act.moving_time_s || 0), 0);
-  const hardDays = activities.filter((act: any) => {
-      // Very crude "hard day" check if HR > 150 or label contains Hard/Tempo
-      // Ideally use the derived effort axis once the list endpoint exposes it.
-      return (act.avg_hr && act.avg_hr > 155) || (act.name && act.name.match(/Tempo|Interval|Race/i));
-  }).length;
+  const summary = stats?.summary;
+  const previous = stats?.previous_summary;
+  const loadTrend =
+    summary && previous
+      ? formatLoadTrend(summary.total_load, previous.total_load)
+      : null;
 
   return (
     <div className="space-y-8">
@@ -38,23 +54,55 @@ export default async function Dashboard() {
         </div>
       </header>
 
-      {/* Week Stats Placeholder */}
+      {/* Week stats — rolling 7-day window vs the previous 7 days (#246, #248). */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
             <div className="text-sm text-gray-500 dark:text-gray-400">Distance</div>
-            <div className="text-2xl font-bold">{(totalDistance / 1000).toFixed(1)} km</div>
+            <div className="text-2xl font-bold">
+              {summary ? formatDistanceKm(summary.total_distance_m) : '—'}
+            </div>
+            {summary && previous && (
+              <StatDiff
+                current={summary.total_distance_m}
+                previous={previous.total_distance_m}
+                format={formatDistanceKm}
+              />
+            )}
         </div>
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
             <div className="text-sm text-gray-500 dark:text-gray-400">Time</div>
-            <div className="text-2xl font-bold">{(totalTime / 3600).toFixed(1)} h</div>
+            <div className="text-2xl font-bold">
+              {summary ? formatDuration(summary.total_moving_time_s) : '—'}
+            </div>
+            {summary && previous && (
+              <StatDiff
+                current={summary.total_moving_time_s}
+                previous={previous.total_moving_time_s}
+                format={formatDuration}
+              />
+            )}
         </div>
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
             <div className="text-sm text-gray-500 dark:text-gray-400">Hard Days</div>
-            <div className="text-2xl font-bold">{hardDays}</div>
+            <div className="text-2xl font-bold">{summary ? summary.hard_days : '—'}</div>
+            {summary && previous && (
+              <StatDiff
+                current={summary.hard_days}
+                previous={previous.hard_days}
+                format={(v) => v.toString()}
+              />
+            )}
         </div>
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
             <div className="text-sm text-gray-500 dark:text-gray-400">Load Trend</div>
-            <div className="text-2xl font-bold">--%</div>
+            <div className="text-2xl font-bold">{loadTrend ?? '--%'}</div>
+            {summary && previous && (
+              <StatDiff
+                current={summary.total_load}
+                previous={previous.total_load}
+                format={(v) => Math.round(v).toLocaleString()}
+              />
+            )}
         </div>
       </div>
 

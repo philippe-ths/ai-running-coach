@@ -15,6 +15,7 @@ import { EfficiencyPoint } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
 import { useMemo, useState } from "react";
 import ActivityTypeFilter from "./ActivityTypeFilter";
+import ChartTooltip from "@/components/charts/ChartTooltip";
 
 interface Props {
   data: EfficiencyPoint[];
@@ -125,11 +126,14 @@ export default function EfficiencyTrendChart({ data, granularity }: Props) {
                 unit=""
               />
               <Tooltip
-                formatter={(value: any, name: any) => [
-                  typeof value === "number" ? `${value.toFixed(2)} m/beat` : value,
-                  name === "trend" ? "Trend (5-act avg)" : name,
-                ]}
-                labelFormatter={(label) => label}
+                content={
+                  <ChartTooltip
+                    formatter={(value, name) => [
+                      typeof value === "number" ? `${value.toFixed(2)} m/beat` : (value as any),
+                      name === "trend" ? "Trend (5-act avg)" : (name as any),
+                    ]}
+                  />
+                }
               />
               <Legend />
               

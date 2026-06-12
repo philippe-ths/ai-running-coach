@@ -83,6 +83,19 @@ export interface TrendsData {
 
 export type TrendsRange = "7D" | "30D" | "3M" | "6M" | "1Y" | "ALL";
 
+export interface WeeklyStatsSummary {
+  total_distance_m: number;
+  total_moving_time_s: number;
+  activity_count: number;
+  total_load: number;
+  hard_days: number;
+}
+
+export interface WeeklyStatsData {
+  summary: WeeklyStatsSummary;
+  previous_summary: WeeklyStatsSummary;
+}
+
 export interface LoadActivityPoint {
   id: string;
   name: string;
