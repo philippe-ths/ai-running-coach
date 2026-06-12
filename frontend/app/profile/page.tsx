@@ -86,7 +86,11 @@ export default function ProfilePage() {
             <Link href="/" className="text-blue-600 dark:text-blue-400 hover:underline">Cancel</Link>
         </div>
       </header>
-      
+
+      <div className="mb-6">
+        <ImportStravaHistory />
+      </div>
+
       <form onSubmit={handleSubmit} className="space-y-6 bg-white dark:bg-gray-800 p-6 border dark:border-gray-700 rounded-xl shadow-sm">
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -179,10 +183,6 @@ export default function ProfilePage() {
         </button>
 
       </form>
-
-      <div className="mt-6">
-        <ImportStravaHistory />
-      </div>
     </div>
   );
 }
