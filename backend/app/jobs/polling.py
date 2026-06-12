@@ -73,7 +73,7 @@ async def poll_for_new_activities(
 
 
 def _enqueue_pipeline(athlete_id: int, activity_id: int) -> None:
-    from app.jobs.process_new_activity import process_new_activity_job
+    from app.jobs.process_new_activity import PIPELINE_RETRY, process_new_activity_job
 
     queue.enqueue(
         process_new_activity_job,
@@ -81,6 +81,7 @@ def _enqueue_pipeline(athlete_id: int, activity_id: int) -> None:
         strava_activity_id=activity_id,
         job_id=f"pipeline_poll_{activity_id}",
         result_ttl=3600,
+        retry=PIPELINE_RETRY,
     )
 
 

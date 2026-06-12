@@ -56,7 +56,7 @@ Health check: `curl http://localhost:8000/api/health`
 ### 4) Run worker
 In a second terminal (from `backend/`, venv activated):
 ```bash
-rq worker --url $REDIS_URL
+rq worker --with-scheduler --url $REDIS_URL
 ```
 
 ### 4b) Run the polling scheduler (optional, enables ASAP coach-report emails)
