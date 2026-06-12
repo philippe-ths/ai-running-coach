@@ -44,7 +44,7 @@ Two platforms. Vercel serves the frontend and proxies API traffic to the backend
 - Project `running-coach`, environment `production`. Web service public URL `https://web-production-b64d8.up.railway.app`.
 - Three app services run off the same image (`backend/Dockerfile`):
   - `web` — the FastAPI app (`uvicorn app.main:app`), serves `/api/*`.
-  - `worker` — `rq worker`, runs background jobs (ingest, analyze, coach, email).
+  - `worker` — `python -m app.worker` (RQ worker with the embedded scheduler enabled), runs background jobs (ingest, analyze, coach, notify).
   - `scheduler` — `rqscheduler`, fires the recurring polling job. (ADR 0006 deletes this service under multi-user.)
 - Two managed databases: `Postgres` and `Redis`.
 - Env vars are per-service (see "Configuration" below). The `worker` runs the RQ jobs and sends email, so SMTP/notify vars must be present on `worker`, not only `web`.
@@ -85,6 +85,8 @@ app (the route handler) rather than treated as static; the route handler, not th
 | `ANTHROPIC_API_KEY`, `COACH_MODEL_ID`, `COACH_PROMPT_ID` | — | ✓ | ✓ |
 | `STRAVA_CLIENT_ID/SECRET`, `STRAVA_REDIRECT_URI`, `STRAVA_WEBHOOK_*` | — | ✓ (all) | ✓ (client id/secret + webhook verify token only) |
 | `SMTP_*`, `NOTIFY_TO` | — | ✓ | ✓ (worker sends the email) |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | — | ✓ (inbound callback auth + button-mark edits) | ✓ (outbound sends) |
+| `TELEGRAM_WEBHOOK_SECRET` | — | ✓ (web hosts the inbound callback) | — |
 | `CORS_ALLOWED_ORIGINS` | — | ✓ | — |
 
 The Vercel-side names are `BACKEND_*`; the Railway-side gate names are `BASIC_AUTH_*`. They are different
