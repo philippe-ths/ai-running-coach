@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import ThemeToggle from '@/components/ThemeToggle';
 
 const LINKS = [
   { href: '/load', label: 'Load' },
@@ -17,7 +16,7 @@ export default function NavBar() {
     href === '/' ? pathname === '/' : pathname.startsWith(href);
 
   return (
-    <nav className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 sticky top-0 z-10">
+    <nav className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 sticky top-0 z-10 overflow-x-hidden">
       <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
         <Link
           href="/"
@@ -39,7 +38,6 @@ export default function NavBar() {
               {label}
             </Link>
           ))}
-          <ThemeToggle />
         </div>
       </div>
     </nav>

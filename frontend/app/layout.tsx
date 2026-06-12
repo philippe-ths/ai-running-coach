@@ -1,5 +1,5 @@
 import './globals.css';
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 import NavBar from '@/components/NavBar';
 import ThemeProvider from '@/components/ThemeProvider';
@@ -9,6 +9,15 @@ const inter = Inter({ subsets: ['latin'] });
 export const metadata: Metadata = {
   title: 'AI Running Coach',
   description: 'Local-first running advice',
+};
+
+// Lock the viewport so the app behaves like a native screen: no pinch-to-zoom
+// and no double-tap zoom on mobile.
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 export default function RootLayout({
