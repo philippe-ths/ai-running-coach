@@ -1,9 +1,11 @@
-"""A4 reply path (deliverable 6): a runner reply (check-in or chat) fires the
-fuller turn early when the exchange is open, bounded by the reply window.
+"""Reply path (A4 deliverable 6, reworked onto exchange rows by A1): a runner
+reply (check-in or chat) fires the fuller turn early when the block's exchange
+is open, bounded by the reply window.
 
-Covers maybe_enqueue_fuller_turn's open/closed/stale decision (AC2/AC4), the
-idempotency-vs-timer enqueue, and the check-in endpoint wiring. The trust boundary
-(aiw-security-testing) is exercised: input only ever enqueues work for the activity
+Covers maybe_enqueue_fuller_turn's open/closed/stale decision (read from the
+`exchanges` row, not the report shape), the idempotency-vs-timer enqueue, and
+the check-in endpoint wiring. The trust boundary (aiw-security-testing) is
+exercised: input only ever enqueues work for the block owning the activity
 named in the URL, and an oversized note never reaches an LLM synchronously.
 """
 
@@ -16,8 +18,8 @@ import pytest
 from app.core.config import settings
 from app.jobs import process_new_activity as pna
 from app.jobs.process_new_activity import maybe_enqueue_fuller_turn
-from app.models import Activity, DerivedMetric, User
-from app.models.coach_report import CoachReport
+from app.models import Activity, DerivedMetric, Exchange, User
+from app.services.blocks import assign_activity_to_block
 
 
 @pytest.fixture
@@ -57,81 +59,73 @@ def _activity(db, uid):
     return a
 
 
-def _opener_row(db, activity, *, created_at=None, prompt_id="coach_message_v2"):
-    row = CoachReport(
-        id=uuid4(), activity_id=activity.id, prompt_id=prompt_id, schema_version="2.0",
-        report={"message": "", "opener_message": "Nice work!", "schedule_fuller_turn": True},
-        meta={}, context_pack={}, is_fallback=False, digest=None,
-    )
-    db.add(row)
+def _exchange(db, activity, *, opened_at=None, fuller_sent_at=None) -> Exchange:
+    """Assign the activity's block and put its exchange in the given state."""
+    block = assign_activity_to_block(db, activity)
+    exchange = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+    exchange.opened_at = opened_at
+    exchange.fuller_sent_at = fuller_sent_at
     db.flush()
-    if created_at is not None:
-        row.created_at = created_at
-        db.flush()
-    return row
-
-
-def _fuller_row(db, activity):
-    row = CoachReport(
-        id=uuid4(), activity_id=activity.id, prompt_id="coach_message_v2", schema_version="2.0",
-        report={"message": "Full breakdown.", "opener_message": "Nice work!"},
-        meta={}, context_pack={}, is_fallback=False, digest={"x": 1},
-    )
-    db.add(row)
-    db.flush()
-    return row
+    return exchange
 
 
 def test_enqueues_when_exchange_open(db, v2, fake_queue):
     uid = _user(db)
     activity = _activity(db, uid)
-    _opener_row(db, activity, created_at=datetime.now(timezone.utc) - timedelta(hours=1))
+    _exchange(db, activity, opened_at=datetime.now(timezone.utc) - timedelta(hours=1))
 
     assert maybe_enqueue_fuller_turn(db, activity.id) is True
     fake_queue.enqueue.assert_called_once()
     args = fake_queue.enqueue.call_args
     assert args.args[0] is pna.fuller_turn_job
-    assert args.args[1] == str(activity.id)
+    assert args.args[1] == str(activity.id)  # the block's primary activity
 
 
 def test_no_enqueue_when_fuller_already_done(db, v2, fake_queue):
-    # AC4: a check-in on an activity whose exchange is closed does not re-fire.
+    # AC3/AC4: a check-in on an activity whose exchange is closed does not re-fire.
     uid = _user(db)
     activity = _activity(db, uid)
-    _opener_row(db, activity, created_at=datetime.now(timezone.utc))
-    activity.coach_notification_sent_at = datetime.now(timezone.utc)
-    db.flush()
+    _exchange(db, activity,
+              opened_at=datetime.now(timezone.utc),
+              fuller_sent_at=datetime.now(timezone.utc))
 
     assert maybe_enqueue_fuller_turn(db, activity.id) is False
     fake_queue.enqueue.assert_not_called()
 
 
 def test_no_enqueue_when_opener_stale(db, v2, fake_queue):
-    # AC4: a reply on an activity whose opener is older than the window does not
+    # AC4: a reply on an exchange whose opener is older than the window does not
     # spin up a new exchange.
     uid = _user(db)
     activity = _activity(db, uid)
-    _opener_row(db, activity, created_at=datetime.now(timezone.utc) - timedelta(days=3))
+    _exchange(db, activity, opened_at=datetime.now(timezone.utc) - timedelta(days=3))
 
     assert maybe_enqueue_fuller_turn(db, activity.id) is False
     fake_queue.enqueue.assert_not_called()
 
 
-def test_no_enqueue_when_no_opener_row(db, v2, fake_queue):
-    uid = _user(db)
-    activity = _activity(db, uid)  # no report row at all
-    assert maybe_enqueue_fuller_turn(db, activity.id) is False
-    fake_queue.enqueue.assert_not_called()
-
-
-def test_no_enqueue_when_row_is_complete_fuller(db, v2, fake_queue):
-    # A complete fuller row is not "open" — the exchange already produced its
-    # fuller turn.
+def test_no_enqueue_when_exchange_not_opened(db, v2, fake_queue):
+    # The block exists but its exchange has not opened (no opener yet): a reply
+    # cannot spin up the exchange.
     uid = _user(db)
     activity = _activity(db, uid)
-    _fuller_row(db, activity)
+    _exchange(db, activity, opened_at=None)
+
     assert maybe_enqueue_fuller_turn(db, activity.id) is False
     fake_queue.enqueue.assert_not_called()
+
+
+def test_reply_refires_fuller_whose_send_failed(db, v2, fake_queue):
+    # A1 behaviour: the open/closed decision is delivery state, not report shape.
+    # A fuller that GENERATED but failed to send leaves the exchange open
+    # (fuller_sent_at null), so a reply re-fires the fuller job, which cache-hits
+    # the complete row and just re-sends — the "left null so re-sendable" rule.
+    uid = _user(db)
+    activity = _activity(db, uid)
+    _exchange(db, activity, opened_at=datetime.now(timezone.utc))
+
+    assert maybe_enqueue_fuller_turn(db, activity.id) is True
+    fake_queue.enqueue.assert_called_once()
 
 
 def test_no_enqueue_under_single_shot_prompt(db, fake_queue, monkeypatch):
@@ -139,7 +133,7 @@ def test_no_enqueue_under_single_shot_prompt(db, fake_queue, monkeypatch):
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")
     uid = _user(db)
     activity = _activity(db, uid)
-    _opener_row(db, activity, created_at=datetime.now(timezone.utc))
+    _exchange(db, activity, opened_at=datetime.now(timezone.utc))
     assert maybe_enqueue_fuller_turn(db, activity.id) is False
     fake_queue.enqueue.assert_not_called()
 
@@ -147,7 +141,7 @@ def test_no_enqueue_under_single_shot_prompt(db, fake_queue, monkeypatch):
 def test_enqueue_best_effort_swallows_redis_error(db, v2):
     uid = _user(db)
     activity = _activity(db, uid)
-    _opener_row(db, activity, created_at=datetime.now(timezone.utc))
+    _exchange(db, activity, opened_at=datetime.now(timezone.utc))
     boom = MagicMock()
     boom.enqueue.side_effect = RuntimeError("redis down")
     with patch("app.jobs.process_new_activity.queue", boom):
@@ -162,11 +156,20 @@ def test_unknown_activity_id_does_not_enqueue(db, v2, fake_queue):
     fake_queue.enqueue.assert_not_called()
 
 
+def test_unblocked_activity_does_not_enqueue(db, v2, fake_queue):
+    # An activity that was never grouped (pre-A1 code path) has no exchange to
+    # advance; the reply is a no-op rather than an error.
+    uid = _user(db)
+    activity = _activity(db, uid)
+    assert maybe_enqueue_fuller_turn(db, activity.id) is False
+    fake_queue.enqueue.assert_not_called()
+
+
 def test_checkin_endpoint_triggers_reply_enqueue(db, client, v2):
     # Endpoint wiring: POST /checkin calls maybe_enqueue_fuller_turn after persisting.
     uid = _user(db)
     activity = _activity(db, uid)
-    _opener_row(db, activity, created_at=datetime.now(timezone.utc))
+    _exchange(db, activity, opened_at=datetime.now(timezone.utc))
     db.commit()
     with patch("app.jobs.process_new_activity.maybe_enqueue_fuller_turn") as m:
         resp = client.post(f"/api/activities/{activity.id}/checkin",

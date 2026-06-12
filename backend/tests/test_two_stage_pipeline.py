@@ -1,10 +1,13 @@
-"""Pipeline tests for the A4 two-stage Exchange cadence (deliverable 5).
+"""Pipeline tests for the two-stage Exchange cadence (A4 deliverable 5, reworked
+onto exchange rows by A1).
 
 Covers the opener stage (generate + notify + conditional schedule), the
 idempotent fuller turn (timer/reply preemption can't double-send), the
-two-notifications-max dedup (AC5), the deterministic safety-override schedule
-(AC3), and the rq-scheduler enqueue_in wiring. The opener/fuller LLM calls are
-stubbed; the scheduler helper is patched (then exercised separately).
+two-notifications-max dedup (AC5), the deterministic safety-override schedule,
+and the rq-scheduler enqueue_in wiring. Stage sentinels live on the block's
+`exchanges` row (A1); the legacy Activity sentinels must stay unwritten. The
+opener/fuller LLM calls are stubbed; the scheduler helper is patched (then
+exercised separately).
 """
 
 from datetime import datetime
@@ -21,7 +24,8 @@ from app.jobs.process_new_activity import (
     maybe_enqueue_fuller_turn,
     process_fuller_turn,
 )
-from app.models import Activity, DerivedMetric, StravaAccount, User, UserProfile
+from app.models import Activity, DerivedMetric, Exchange, StravaAccount, User, UserProfile
+from app.services.blocks import assign_activity_to_block
 from app.services.coach.llm import MessageResult
 from app.services.coach.output_contract import is_opener_only
 from app.services.coach.service import get_active_report_row
@@ -71,6 +75,14 @@ def _seed(db, *, flags=None) -> Activity:
     return activity
 
 
+def _exchange_of(db, activity) -> Exchange:
+    """The activity's block's exchange, assigning the block if needed."""
+    if activity.block_id is None:
+        assign_activity_to_block(db, activity)
+        db.refresh(activity)
+    return db.query(Exchange).filter(Exchange.block_id == activity.block_id).one()
+
+
 def _text(t):
     return {"type": "text", "text": t}
 
@@ -113,19 +125,24 @@ def _client(*results):
 
 async def test_opener_notifies_and_schedules_when_salient(db, configured, notifier):
     activity = _seed(db)
+    exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(pna, "_schedule_fuller_turn") as sched:
         result = await _run_opener_stage(
-            db=db, activity=activity, strava_activity_id=activity.strava_activity_id, notifier=notifier
+            db=db, activity=activity, exchange=exchange, notifier=notifier
         )
 
     assert result is not None  # opener notification sent
     assert len(notifier.sent) == 1
-    db.refresh(activity)
-    assert activity.opener_notification_sent_at is not None
-    assert activity.coach_notification_sent_at is None  # fuller not done
+    db.refresh(exchange)
+    assert exchange.opened_at is not None
+    assert exchange.opener_sent_at is not None
+    assert exchange.fuller_sent_at is None  # fuller not done
     sched.assert_called_once_with(str(activity.id))
+    # A1: the legacy Activity sentinels are no longer written.
+    db.refresh(activity)
+    assert activity.opener_notification_sent_at is None
 
 
 async def test_fallback_opener_still_notified_and_schedules(db, configured, notifier):
@@ -133,11 +150,12 @@ async def test_fallback_opener_still_notified_and_schedules(db, configured, noti
     # (its templated prose is benign) so a red-flag opener is never silent, and it
     # schedules a recovery fuller.
     activity = _seed(db, flags=["illness_or_extreme_fatigue"])
+    exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result([], stop_reason="refusal"))), \
          patch.object(pna, "_schedule_fuller_turn") as sched:
         result = await _run_opener_stage(
-            db=db, activity=activity, strava_activity_id=activity.strava_activity_id, notifier=notifier
+            db=db, activity=activity, exchange=exchange, notifier=notifier
         )
     assert result is not None  # the fallback opener WAS notified
     assert len(notifier.sent) == 1
@@ -146,42 +164,43 @@ async def test_fallback_opener_still_notified_and_schedules(db, configured, noti
 
 async def test_opener_does_not_schedule_when_unremarkable(db, configured, notifier):
     activity = _seed(db)
+    exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))), \
          patch.object(pna, "_schedule_fuller_turn") as sched:
         await _run_opener_stage(
-            db=db, activity=activity, strava_activity_id=activity.strava_activity_id, notifier=notifier
+            db=db, activity=activity, exchange=exchange, notifier=notifier
         )
     # AC1: an unremarkable run ends at the opener — no fuller scheduled.
     sched.assert_not_called()
 
 
 async def test_red_flag_forces_schedule_despite_llm(db, configured, notifier):
-    # AC3: the deterministic safety override forces a fuller turn regardless of the
+    # The deterministic safety override forces a fuller turn regardless of the
     # LLM's schedule judgment.
     activity = _seed(db, flags=["illness_or_extreme_fatigue"])
+    exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))), \
          patch.object(pna, "_schedule_fuller_turn") as sched:
         await _run_opener_stage(
-            db=db, activity=activity, strava_activity_id=activity.strava_activity_id, notifier=notifier
+            db=db, activity=activity, exchange=exchange, notifier=notifier
         )
     sched.assert_called_once()
 
 
 async def test_opener_idempotent_skips_when_already_sent(db, configured, notifier):
     activity = _seed(db)
+    exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(pna, "_schedule_fuller_turn"):
-        await _run_opener_stage(db=db, activity=activity,
-                                strava_activity_id=activity.strava_activity_id, notifier=notifier)
+        await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     # second run: opener already notified -> no-op, no second notification
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(pna, "_schedule_fuller_turn") as sched2:
-        result = await _run_opener_stage(db=db, activity=activity,
-                                         strava_activity_id=activity.strava_activity_id, notifier=notifier)
+        result = await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert result is None
     assert len(notifier.sent) == 1
     sched2.assert_not_called()
@@ -192,6 +211,7 @@ async def test_opener_idempotent_skips_when_already_sent(db, configured, notifie
 
 async def test_fuller_turn_notifies_and_sets_sentinel(db, configured, notifier):
     activity = _seed(db)
+    exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))), \
          patch("app.services.coach.service.write_back_beliefs"), \
@@ -199,12 +219,14 @@ async def test_fuller_turn_notifies_and_sets_sentinel(db, configured, notifier):
         result = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert result is not None
     assert len(notifier.sent) == 1
+    db.refresh(exchange)
+    assert exchange.fuller_sent_at is not None
     db.refresh(activity)
-    assert activity.coach_notification_sent_at is not None
+    assert activity.coach_notification_sent_at is None  # legacy sentinel unwritten
 
 
 async def test_fuller_turn_idempotent_racing_timer_noops(db, configured, notifier):
-    # AC2: a reply fires the fuller; the racing timer then no-ops.
+    # AC2/AC5: a reply fires the fuller; the racing timer then no-ops.
     activity = _seed(db)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()), _result(_fuller_blocks()))), \
@@ -224,11 +246,11 @@ async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, n
     # null, and the row stays opener-only so a reply re-opens the exchange and the
     # substantive coaching can still land — the safety floor's guarantee survives.
     activity = _seed(db, flags=["illness_or_extreme_fatigue"])
+    exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))), \
          patch.object(pna, "_schedule_fuller_turn"):
-        await _run_opener_stage(db=db, activity=activity,
-                                strava_activity_id=activity.strava_activity_id, notifier=notifier)
+        await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert len(notifier.sent) == 1  # opener only
 
     empty = [_tail(headline="x", next_steps=[], risks=[], questions=[])]
@@ -239,13 +261,13 @@ async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, n
         result = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert result is None              # a fallback fuller is not notified
     assert len(notifier.sent) == 1     # still just the opener
-    db.refresh(activity)
-    assert activity.coach_notification_sent_at is None  # sentinel left open for retry
+    db.refresh(exchange)
+    assert exchange.fuller_sent_at is None  # sentinel left open for retry
     row = get_active_report_row(db, activity.id)
     assert is_opener_only(row.report) is True  # recoverable, not a stuck fallback
 
     # A reply re-opens the exchange — the recovery path the stuck fallback used to
-    # defeat (the row is opener-only, so maybe_enqueue_fuller_turn re-fires).
+    # defeat (the exchange is opened and unclosed, so maybe_enqueue re-fires).
     with patch("app.jobs.process_new_activity.queue", Mock()):
         assert maybe_enqueue_fuller_turn(db, activity.id) is True
 
@@ -257,18 +279,18 @@ async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, n
         recovered = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert recovered is not None
     assert len(notifier.sent) == 2
-    db.refresh(activity)
-    assert activity.coach_notification_sent_at is not None
+    db.refresh(exchange)
+    assert exchange.fuller_sent_at is not None
 
 
 async def test_two_notifications_max_opener_then_fuller(db, configured, notifier):
-    # AC5: at most two notifications per activity (one opener, one fuller).
+    # AC5: at most two notifications per exchange (one opener, one fuller).
     activity = _seed(db)
+    exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(pna, "_schedule_fuller_turn"):
-        await _run_opener_stage(db=db, activity=activity,
-                                strava_activity_id=activity.strava_activity_id, notifier=notifier)
+        await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))), \
          patch("app.services.coach.service.write_back_beliefs"), \
@@ -276,9 +298,13 @@ async def test_two_notifications_max_opener_then_fuller(db, configured, notifier
         await process_fuller_turn(db=db, activity=activity, notifier=notifier)
 
     assert len(notifier.sent) == 2  # opener + fuller, no more
+    db.refresh(exchange)
+    assert exchange.opener_sent_at is not None
+    assert exchange.fuller_sent_at is not None
+    # A1: the legacy Activity sentinels stay unwritten under the two-stage path.
     db.refresh(activity)
-    assert activity.opener_notification_sent_at is not None
-    assert activity.coach_notification_sent_at is not None
+    assert activity.opener_notification_sent_at is None
+    assert activity.coach_notification_sent_at is None
 
 
 # --- rollback inertness (#216) -------------------------------------------------
@@ -287,15 +313,15 @@ async def test_two_notifications_max_opener_then_fuller(db, configured, notifier
 async def test_scheduled_fuller_is_inert_after_rollback_to_single_shot(
     db, configured, notifier, monkeypatch
 ):
-    # #216 / AC8: a fuller scheduled under coach_message_v2 that fires AFTER the
+    # #216 / AC6: a fuller scheduled under coach_message_v2 that fires AFTER the
     # owner rolls COACH_PROMPT_ID back to a single-shot prompt must be a no-op —
     # no generation, no notification, no learning-loop write-back.
     activity = _seed(db)
+    exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(pna, "_schedule_fuller_turn"):
-        await _run_opener_stage(db=db, activity=activity,
-                                strava_activity_id=activity.strava_activity_id, notifier=notifier)
+        await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert len(notifier.sent) == 1  # the opener went out before the rollback
 
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")  # rollback
@@ -309,8 +335,8 @@ async def test_scheduled_fuller_is_inert_after_rollback_to_single_shot(
     client_cls.assert_not_called()   # no generation at all
     wb.assert_not_called()
     ec.assert_not_called()
-    db.refresh(activity)
-    assert activity.coach_notification_sent_at is None
+    db.refresh(exchange)
+    assert exchange.fuller_sent_at is None
 
 
 # --- crash recovery via job retry (#215) ---------------------------------------
@@ -323,25 +349,24 @@ async def test_opener_crash_before_schedule_recovers_on_rerun(db, configured, no
     # opener notified — without a second LLM call (generate_opener re-enters on
     # the stored row). This pins the re-entrancy the retry policy relies on.
     activity = _seed(db)
+    exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(pna, "_schedule_fuller_turn", side_effect=RuntimeError("worker died")):
         with pytest.raises(RuntimeError):
-            await _run_opener_stage(db=db, activity=activity,
-                                    strava_activity_id=activity.strava_activity_id, notifier=notifier)
+            await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert len(notifier.sent) == 0  # crashed before notify
 
     with patch("app.services.coach.service.AnthropicClient") as client_cls, \
          patch.object(pna, "_schedule_fuller_turn") as sched:
-        result = await _run_opener_stage(db=db, activity=activity,
-                                         strava_activity_id=activity.strava_activity_id, notifier=notifier)
+        result = await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
 
     assert result is not None
     client_cls.assert_not_called()  # idempotent re-entry, no fresh generation
     sched.assert_called_once_with(str(activity.id))
     assert len(notifier.sent) == 1
-    db.refresh(activity)
-    assert activity.opener_notification_sent_at is not None
+    db.refresh(exchange)
+    assert exchange.opener_sent_at is not None
 
 
 # --- the scheduler wiring (enqueue_in) ----------------------------------------
@@ -371,3 +396,28 @@ async def test_schedule_fuller_turn_uses_enqueue_in(monkeypatch):
     assert captured["delta"] == timedelta(seconds=10800)
     assert captured["func"] is pna.fuller_turn_job
     assert captured["args"] == ("abc-123",)
+
+
+async def test_schedule_block_complete_uses_enqueue_in(monkeypatch):
+    from datetime import timedelta
+
+    captured = {}
+
+    class _FakeScheduler:
+        def __init__(self, connection=None):
+            pass
+
+        def enqueue_in(self, delta, func, *args):
+            captured["delta"] = delta
+            captured["func"] = func
+            captured["args"] = args
+
+    monkeypatch.setattr(settings, "BLOCK_GAP_SECONDS", 1800)
+    monkeypatch.setattr("rq_scheduler.Scheduler", _FakeScheduler)
+    monkeypatch.setattr("redis.Redis.from_url", staticmethod(lambda url: object()))
+
+    pna._schedule_block_complete("block-1", "act-1")
+
+    assert captured["delta"] == timedelta(seconds=1800)
+    assert captured["func"] is pna.block_complete_job
+    assert captured["args"] == ("block-1", "act-1")

@@ -4,7 +4,7 @@ from sqlalchemy import select
 from typing import Optional
 
 from app.db.session import get_db
-from app.models import User, StravaAccount, UserProfile
+from app.models import CoachingRelationship, User, StravaAccount, UserProfile
 from app.schemas import UserProfileRead, UserProfileCreate
 
 router = APIRouter()
@@ -24,6 +24,15 @@ def get_current_user_profile(db: Session, auto_create_user: bool = True) -> User
 
     if not user:
          raise HTTPException(status_code=404, detail="No user found")
+
+    # A1: the thin coaching_relationship singleton anchors the relationship from
+    # first contact, auto-created the way the default profile is below.
+    relationship_row = db.execute(
+        select(CoachingRelationship).where(CoachingRelationship.user_id == user.id)
+    ).scalars().first()
+    if not relationship_row:
+        db.add(CoachingRelationship(user_id=user.id))
+        db.commit()
 
     profile = db.execute(select(UserProfile).where(UserProfile.user_id == user.id)).scalars().first()
     if not profile:

@@ -19,6 +19,9 @@ from app.models.coach_chat_message import CoachChatMessage  # noqa: F401
 from app.models.coach_narrative import CoachNarrative  # noqa: F401
 from app.models.runner_baseline import RunnerBaseline  # noqa: F401
 from app.models.coaching_context import CoachingContext  # noqa: F401
+from app.models.block import Block  # noqa: F401
+from app.models.exchange import Exchange  # noqa: F401
+from app.models.coaching_relationship import CoachingRelationship  # noqa: F401
 
 __all__ = [
     "generate_uuid",
@@ -34,4 +37,7 @@ __all__ = [
     "CoachNarrative",
     "RunnerBaseline",
     "CoachingContext",
+    "Block",
+    "Exchange",
+    "CoachingRelationship",
 ]

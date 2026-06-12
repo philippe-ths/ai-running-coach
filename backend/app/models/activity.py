@@ -38,6 +38,12 @@ class Activity(Base):
     raw_summary: Mapped[dict] = mapped_column(JSON, default={})
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # The Block this activity belongs to (A1, ADR 0011). Nullable: an activity
+    # is assigned at ingestion (or by backfill); a null means not yet grouped.
+    block_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("blocks.id", use_alter=True), nullable=True, index=True
+    )
+
     # The FULLER-turn notification sentinel (A4): set once the fuller coaching turn
     # has been notified. Also the fuller job's idempotency guard, so a reply-fired
     # and a timer-fired fuller run cannot double-send. (Pre-A4 this was the single
@@ -85,3 +91,4 @@ class Activity(Base):
         "CheckIn", back_populates="activity", uselist=False, cascade="all, delete-orphan"
     )
     streams = relationship("ActivityStream", back_populates="activity", cascade="all, delete-orphan")
+    block = relationship("Block", back_populates="activities", foreign_keys=[block_id])

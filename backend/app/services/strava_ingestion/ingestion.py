@@ -177,6 +177,7 @@ async def ingest_recent_activities(
                     await _fetch_and_store_streams(db, activity, access_token, port)
                 db.commit()
 
+                _assign_block(db, activity)
                 ingested.append(activity)
             except Exception as exc:
                 db.rollback()
@@ -203,4 +204,23 @@ async def ingest_activity_by_id(
     activity = upsert_activity(db, raw, account.user_id)
     db.commit()
     db.refresh(activity)
+    _assign_block(db, activity)
     return activity
+
+
+def _assign_block(db: Session, activity) -> None:
+    """A1: every newly-ingested activity is grouped into its Block here, so all
+    ingest paths (webhook, polling, manual sync, backfill) converge on the same
+    grouping. A re-synced activity keeps its block. Guarded: a grouping failure
+    must never break ingestion (the baseline-recompute pattern)."""
+    if activity.block_id is not None:
+        return
+    try:
+        from app.services.blocks import assign_activity_to_block
+
+        assign_activity_to_block(db, activity)
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "block assignment failed for activity %s", activity.strava_activity_id
+        )

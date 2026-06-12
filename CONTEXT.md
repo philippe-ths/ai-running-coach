@@ -4,7 +4,7 @@ Definitions resolved during design discussions. Implementation details belong in
 
 ## Coaching relationship
 
-The durable, per-runner relationship the coach maintains over time: one continuous coaching memory and narrative per `User`, not a pile of per-activity artifacts. A finished `Activity` is an *event* within the relationship that may prompt the coach to speak, never the unit of the relationship itself. The relationship holds the runner-model the coach carries forward (the narrative so far, what it has learned via `Belief` and `Preference profile`, and the open threads), and every coach touchpoint reads from and writes back to this one shared memory, so each touchpoint is a continuation rather than a fresh start. Distinct from a single `Coach report generation`, which under this model is one *form* a turn in the relationship can take, not the relationship itself.
+The durable, per-runner relationship the coach maintains over time: one continuous coaching memory and narrative per `User`, not a pile of per-activity artifacts. A finished `Activity` is an *event* within the relationship that may prompt the coach to speak, never the unit of the relationship itself. The relationship holds the runner-model the coach carries forward (the narrative so far, what it has learned via `Belief` and `Preference profile`, and the open threads), and every coach touchpoint reads from and writes back to this one shared memory, so each touchpoint is a continuation rather than a fresh start. Distinct from a single `Coach report generation`, which under this model is one *form* a turn in the relationship can take, not the relationship itself. Materialised since A1 (ADR 0011) as a thin one-row-per-user anchor (`coaching_relationship`), auto-created with the user; P1's voice/stance dials and later relationship state extend that row rather than create it.
 _Avoid_: treating the coach's output as a standalone per-activity report; the protagonist is the relationship, and a report is a move within an ongoing conversation, not the conversation itself.
 
 ## Exchange
@@ -66,7 +66,7 @@ _Avoid_: letting any lower tier (corpus, materials, user assertions, generic kno
 
 A side-channel delivery of an `Exchange` to the runner — distinct from the in-app artifact. The `CoachReport` is the stored record of that exchange (under A3 / ADR 0009 its product is a human prose `message`, not a structured form; older rows are the legacy structured shape), rendered by the frontend; a notification is one transmission of that message (or a representation of it) to an external channel such as Telegram or email.
 
-A notification is at-most-once per `Exchange` stage per `Activity` per channel: a two-stage exchange (ADR 0010) sends one opener notification and, if a fuller turn fires, one fuller notification, each deduped by its own sentinel (see `Notified at`). The sentinels live on the `Activity` row, not on the `CoachReport`, because re-generating a report (e.g., `force=true`) must not re-fire a notification.
+A notification is at-most-once per `Exchange` stage per channel: a two-stage exchange (ADR 0010) sends one opener notification and, if a fuller turn fires, one fuller notification, each deduped by its own sentinel (see `Notified at`). The sentinels live on the `Exchange` row since A1 (ADR 0011; before that, on `Activity`), not on the `CoachReport`, because re-generating a report (e.g., `force=true`) must not re-fire a notification.
 
 ## Notifier
 
@@ -74,7 +74,7 @@ The abstraction for sending a notification. Modelled as a port (`NotifierPort`) 
 
 ## Notified at
 
-The per-stage sentinels for notification dedup: timestamp columns on `Activity` indicating that a notification has been successfully sent for that activity. A two-stage `Exchange` (ADR 0010) carries one per stage (the opener sentinel and the fuller-turn sentinel); a single-stage exchange uses only the fuller-turn sentinel. Null means "not yet notified" for that stage. Set after a successful send; left null on failure so retries can re-send.
+The per-stage sentinels for notification dedup: timestamp columns on the `Exchange` row (A1, ADR 0011) indicating that a notification has been successfully sent for that stage of the exchange. A two-stage `Exchange` (ADR 0010) carries one per stage (the opener sentinel and the fuller-turn sentinel, the latter also marking the exchange closed); a single-stage exchange uses only the fuller-turn sentinel (on `Activity`, the legacy home the single-shot rollback path still uses). Null means "not yet notified" for that stage. Set after a successful send; left null on failure so retries can re-send.
 
 ## Process new activity
 

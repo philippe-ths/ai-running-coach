@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     # same-day reply lands the fuller turn; a check-in on a stale run does not.
     EXCHANGE_REPLY_WINDOW_SECONDS: int = 86400
 
+    # Block grouping (A1, ADR 0011): both the time-gap threshold that groups
+    # temporally-contiguous activities into one Block AND the block-complete
+    # debounce that gates the opener (the gap doubles as the trigger). An
+    # activity starting within this many seconds of the previous block's end
+    # joins it; a block with no new member for this long is complete.
+    BLOCK_GAP_SECONDS: int = 1800
+
     # Phase 1 deployment: throwaway basic auth in front of /api/*.
     # Both must be set for the middleware to enforce; either empty disables it.
     # TODO(phase-2): remove when session auth lands.

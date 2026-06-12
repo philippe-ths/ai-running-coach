@@ -383,6 +383,29 @@ class ContinuityContext(BaseModel):
     reply: Optional[str] = None
 
 
+class BlockMember(BaseModel):
+    """One activity in a multi-member Block, as the coach sees it."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    duration_s: int
+    distance_m: int
+    is_primary: bool = False
+
+
+class BlockContext(BaseModel):
+    """A1 (ADR 0011): the thin block aggregate for a MULTI-member block — the
+    member list (chronological) plus combined totals, so the coach can speak
+    about the morning as a whole. The subject activity stays the block's
+    primary; per-activity signals are unchanged. Never built for a
+    block-of-one (AC8: the solo-run pack is byte-stable, no `block` key)."""
+    model_config = ConfigDict(extra="forbid")
+
+    members: list[BlockMember]
+    combined_duration_s: int
+    combined_distance_m: int
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -410,11 +433,18 @@ class CoachContextPack(BaseModel):
     # A4 fuller-turn continuity (opener prose + any reply). Defaulted (empty) for
     # the opener stage and single-shot exchanges; only the fuller path populates it.
     continuity: ContinuityContext = Field(default_factory=ContinuityContext)
+    # A1 multi-member block aggregate. None for a block-of-one and OMITTED from
+    # serialization entirely (AC8: the solo-run pack stays byte-stable pre/post A1).
+    block: Optional[BlockContext] = None
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
         """Serialise to the JSON-primitive dict shape the LLM input and DB column expect."""
-        return self.model_dump(mode="python")
+        data = self.model_dump(mode="python")
+        if data.get("block") is None:
+            # AC8: a block-of-one emits nothing new — not even a null key.
+            data.pop("block", None)
+        return data
 
     def fingerprint(self) -> str:
         """Deterministic SHA-256 cache key. Byte-identical to the legacy hash_context_pack output."""

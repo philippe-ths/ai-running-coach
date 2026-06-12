@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Activity, DerivedMetric, RunnerBaseline, UserProfile
+from app.models import Activity, Block, DerivedMetric, RunnerBaseline, UserProfile
 from app.models.checkin import CheckIn
 from app.models.coach_chat_message import CoachChatMessage
 from app.services.analysis.baseline import bucket_key
@@ -47,6 +47,8 @@ from app.schemas.coach_context import (
     AdherenceContext,
     BaselineTrendDelta,
     BelievedFactsContext,
+    BlockContext,
+    BlockMember,
     CalibrationContext,
     CheckInContext,
     CoachContextPack,
@@ -194,7 +196,38 @@ def build_context_pack(
         narrative=b.narrative,
         salience=b.salience,
         continuity=continuity or ContinuityContext(),
+        block=_build_block_context(db, activity),
         safety_rules=b.safety_rules,
+    )
+
+
+def _build_block_context(db: Session, activity: Activity) -> Optional[BlockContext]:
+    """The A1 multi-member block aggregate, or None for a block-of-one (AC8:
+    the solo-run pack must stay byte-stable, so no section is emitted at all)."""
+    if activity.block_id is None:
+        return None
+    members = (
+        db.query(Activity)
+        .filter(Activity.block_id == activity.block_id)
+        .order_by(Activity.start_date)
+        .all()
+    )
+    if len(members) < 2:
+        return None
+    block = db.query(Block).filter(Block.id == activity.block_id).first()
+    primary_id = block.primary_activity_id if block else activity.id
+    return BlockContext(
+        members=[
+            BlockMember(
+                type=m.type,
+                duration_s=m.elapsed_time_s or 0,
+                distance_m=m.distance_m or 0,
+                is_primary=m.id == primary_id,
+            )
+            for m in members
+        ],
+        combined_duration_s=sum(m.elapsed_time_s or 0 for m in members),
+        combined_distance_m=sum(m.distance_m or 0 for m in members),
     )
 
 
