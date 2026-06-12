@@ -231,3 +231,46 @@ class TestGetActivityStreamsRetries:
         )
 
         assert result is None
+
+
+class TestHttpTimeout:
+    """ReadTimeout must propagate so the job-level handler can log and react."""
+
+    @pytest.mark.asyncio
+    async def test_read_timeout_propagates_from_list_activities(
+        self, monkeypatch, _no_real_sleep
+    ):
+        original_init = httpx.AsyncClient.__init__
+
+        async def _timeout_handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        def patched_init(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(_timeout_handler)
+            original_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+        with pytest.raises(httpx.ReadTimeout):
+            await HTTPStravaAdapter().list_recent_activities(
+                access_token="abc",
+                since=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            )
+
+    @pytest.mark.asyncio
+    async def test_read_timeout_propagates_from_get_activity(
+        self, monkeypatch, _no_real_sleep
+    ):
+        original_init = httpx.AsyncClient.__init__
+
+        async def _timeout_handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        def patched_init(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(_timeout_handler)
+            original_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+        with pytest.raises(httpx.ReadTimeout):
+            await HTTPStravaAdapter().get_activity(access_token="abc", activity_id=42)
