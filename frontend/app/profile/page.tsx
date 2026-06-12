@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import ConnectStravaButton from '@/components/ConnectStravaButton';
+import ThemeToggle from '@/components/ThemeToggle';
 import { fetchFromAPI } from '@/lib/api';
 
 export default function ProfilePage() {
@@ -79,6 +80,7 @@ export default function ProfilePage() {
       <header className="mb-6 flex flex-wrap justify-between items-center gap-4">
         <h1 className="text-2xl font-bold whitespace-nowrap">Athlete Profile</h1>
         <div className="flex items-center gap-4 flex-wrap">
+            <ThemeToggle />
             <ConnectStravaButton />
             <Link href="/" className="text-blue-600 dark:text-blue-400 hover:underline">Cancel</Link>
         </div>

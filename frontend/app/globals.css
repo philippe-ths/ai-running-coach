@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+html,
+body {
+  /* Native-app feel: kill browser-only gestures and chrome that don't belong
+     in the app shell. */
+  overscroll-behavior: none; /* no pull-to-refresh / scroll-chaining bounce */
+  -webkit-tap-highlight-color: transparent; /* no blue flash on tap (Android) */
+  -webkit-touch-callout: none; /* no long-press callout menu on links/images */
+  touch-action: manipulation; /* no 300ms double-tap-to-zoom delay */
+  user-select: none; /* no accidental text selection on UI chrome */
+}
+
 body {
   background: #fdfbf7;
   color: #171717;
@@ -10,4 +21,15 @@ body {
 .dark body {
   background: #0f172a;
   color: #e5e7eb;
+}
+
+/* Re-enable selection where reading/copying real content is expected. */
+p,
+pre,
+code,
+article,
+input,
+textarea,
+.selectable {
+  user-select: text;
 }
