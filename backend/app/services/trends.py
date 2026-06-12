@@ -163,11 +163,33 @@ _RANGE_DAYS = {
 
 
 def _resolve_since(range_key: str) -> Optional[date]:
-    """Return the earliest local date to include, or None for ALL."""
+    """Return the earliest local date to include, or None for ALL.
+
+    The window is inclusive on both ends (``since`` .. ``today``), so a range of
+    N days subtracts N-1 to span exactly N calendar days. e.g. 7D with today =
+    Jun 9 covers Jun 3–Jun 9 inclusive, not Jun 2–Jun 9 (#179).
+    """
     days = _RANGE_DAYS.get(range_key.upper())
     if days is None:
         return None
-    return date.today() - timedelta(days=days)
+    return date.today() - timedelta(days=days - 1)
+
+
+def _period_window(range_key: str) -> Optional[tuple[date, date]]:
+    """Return (current_start, previous_start) for a fixed range, or None for ALL.
+
+    The current window is ``[current_start, today]`` (inclusive) and the previous
+    window is ``[previous_start, current_start)``. Both span exactly
+    ``_RANGE_DAYS[range]`` calendar days with no gap or overlap at the boundary,
+    so period-over-period deltas line up with the charts (#179).
+    """
+    days = _RANGE_DAYS.get(range_key.upper())
+    if days is None:
+        return None
+    current_start = _resolve_since(range_key)
+    assert current_start is not None  # days is not None here
+    previous_start = current_start - timedelta(days=days)
+    return current_start, previous_start
 
 
 def get_available_types(db: Session) -> List[str]:
@@ -501,15 +523,12 @@ def get_weekly_stats(db: Session) -> WeeklyStatsResponse:
     """
     Rolling 7-day summary for the dashboard, plus the prior 7 days for comparison.
 
-    Uses exactly the same window as the Trends 7D view — current window is
-    ``[today-7d, now)`` and the previous window is ``[today-14d, today-7d)`` —
-    so the dashboard cards and Trends 7D can never drift (#246). "Hard days" is
-    derived from the effort axis rather than an HR/name heuristic.
+    Uses exactly the same 7-day window as the Trends 7D view (via
+    ``_period_window``) so the dashboard cards and Trends 7D can never drift
+    (#246, #179). "Hard days" is derived from the effort axis rather than an
+    HR/name heuristic.
     """
-    days = _RANGE_DAYS["7D"]
-    today = date.today()
-    current_start = today - timedelta(days=days)
-    prev_start = current_start - timedelta(days=days)
+    current_start, prev_start = _period_window("7D")  # type: ignore[misc]
 
     current = _query_activity_facts(db, current_start, None)
     previous = _query_activity_facts(db, prev_start, current_start)
@@ -549,12 +568,9 @@ def get_trends_report(
 
     # Previous period summary
     previous_summary = None
-    days = _RANGE_DAYS.get(range_upper)
-    if days is not None:
-        today = date.today()
-        current_start = today - timedelta(days=days)
-        prev_start = current_start - timedelta(days=days)
-
+    window = _period_window(range_upper)
+    if window is not None:
+        current_start, prev_start = window
         prev_facts = _query_activity_facts(db, prev_start, current_start, types=types)
         previous_summary = TrendsSummary(
             total_distance_m=sum(f.distance_m for f in prev_facts),
