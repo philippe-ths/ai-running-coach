@@ -2,6 +2,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -31,10 +32,13 @@ _STREAM_TYPES = [
 
 
 async def ensure_valid_access_token(
-    db: Session, account: StravaAccount, port: StravaPort
+    db: Session, account: StravaAccount, port: StravaPort, *, force: bool = False
 ) -> str:
-    """Return a valid access token, refreshing and persisting if needed."""
-    if account.expires_at > time.time() + _TOKEN_REFRESH_BUFFER_S:
+    """Return a valid access token, refreshing and persisting if needed.
+
+    Pass force=True to unconditionally refresh (e.g. after a mid-flight 401).
+    """
+    if not force and account.expires_at > time.time() + _TOKEN_REFRESH_BUFFER_S:
         return account.access_token
 
     tokens = await port.refresh_token(account.refresh_token)
@@ -162,9 +166,18 @@ async def ingest_recent_activities(
 
     try:
         access_token = await ensure_valid_access_token(db, account, port)
-        raw_activities = await port.list_recent_activities(
-            access_token=access_token, since=since, per_page=50
-        )
+        try:
+            raw_activities = await port.list_recent_activities(
+                access_token=access_token, since=since, per_page=50
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 401:
+                raise
+            logger.warning("strava_401_mid_flight: force-refreshing token and retrying list")
+            access_token = await ensure_valid_access_token(db, account, port, force=True)
+            raw_activities = await port.list_recent_activities(
+                access_token=access_token, since=since, per_page=50
+            )
         stats.fetched = len(raw_activities)
 
         for raw in raw_activities:
@@ -200,7 +213,14 @@ async def ingest_activity_by_id(
 ) -> Activity:
     """Fetch a single activity summary and upsert it. No streams, no analysis."""
     access_token = await ensure_valid_access_token(db, account, port)
-    raw = await port.get_activity(access_token, strava_activity_id)
+    try:
+        raw = await port.get_activity(access_token, strava_activity_id)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 401:
+            raise
+        logger.warning("strava_401_mid_flight: force-refreshing token and retrying get_activity")
+        access_token = await ensure_valid_access_token(db, account, port, force=True)
+        raw = await port.get_activity(access_token, strava_activity_id)
     activity = upsert_activity(db, raw, account.user_id)
     db.commit()
     db.refresh(activity)

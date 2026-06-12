@@ -1,3 +1,4 @@
+import httpx
 import pytest
 
 from app.models import Activity, ActivityStream, StravaAccount, User
@@ -7,6 +8,7 @@ from app.services.strava_ingestion import (
     ingest_recent_activities,
     refetch_streams,
 )
+from app.services.strava_ingestion.port import Tokens
 
 
 def _make_account(db, athlete_id: int = 12345) -> StravaAccount:
@@ -150,3 +152,68 @@ async def test_refetch_streams_replaces_existing_rows(db):
         .all()
     }
     assert stream_types == {"time", "heartrate"}
+
+
+def _make_401_error(url: str = "https://www.strava.com/api/v3/athlete/activities"):
+    request = httpx.Request("GET", url)
+    response = httpx.Response(401, request=request)
+    return httpx.HTTPStatusError("401 Unauthorized", request=request, response=response)
+
+
+class TestIngestRetryOn401:
+    """A mid-flight 401 triggers a forced token refresh and a single retry."""
+
+    @pytest.mark.asyncio
+    async def test_list_activities_retries_after_401(self, db):
+        account = _make_account(db, athlete_id=60001)
+
+        class _Once401Adapter(InMemoryStravaAdapter):
+            _calls = 0
+
+            async def list_recent_activities(self, access_token, since, per_page=50):
+                self._calls += 1
+                if self._calls == 1:
+                    raise _make_401_error()
+                return await super().list_recent_activities(access_token, since, per_page)
+
+        adapter = _Once401Adapter()
+        adapter.seed_activities([_raw_activity(600, "Post-401 Run")])
+        adapter.seed_refresh_response(
+            Tokens(access_token="fresh_token", refresh_token="new_refresh", expires_at=9999999999)
+        )
+
+        ingested, stats = await ingest_recent_activities(
+            db, account, adapter, fetch_streams=False
+        )
+
+        assert stats.upserted == 1
+        assert ingested[0].strava_activity_id == 600
+        assert adapter.refresh_calls == ["fake_refresh"]
+        assert adapter._calls == 2
+
+    @pytest.mark.asyncio
+    async def test_get_activity_retries_after_401(self, db):
+        account = _make_account(db, athlete_id=60002)
+
+        class _Once401Adapter(InMemoryStravaAdapter):
+            _calls = 0
+
+            async def get_activity(self, access_token, activity_id):
+                self._calls += 1
+                if self._calls == 1:
+                    raise _make_401_error(
+                        f"https://www.strava.com/api/v3/activities/{activity_id}"
+                    )
+                return await super().get_activity(access_token, activity_id)
+
+        adapter = _Once401Adapter()
+        adapter.seed_activities([_raw_activity(700, "Post-401 Single")])
+        adapter.seed_refresh_response(
+            Tokens(access_token="fresh_token", refresh_token="new_refresh", expires_at=9999999999)
+        )
+
+        activity = await ingest_activity_by_id(db, account, adapter, 700)
+
+        assert activity.strava_activity_id == 700
+        assert adapter.refresh_calls == ["fake_refresh"]
+        assert adapter._calls == 2

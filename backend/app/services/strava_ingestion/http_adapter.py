@@ -26,6 +26,11 @@ _MAX_RETRY_AFTER_S = 60.0
 # silent truncation never masquerades as "fetched everything". See #109.
 _MAX_PAGES = 40
 
+# Hard cap on how long we wait for a single Strava response. 30 s is well
+# above typical latency but short enough to free a worker within one polling
+# interval. Without this, a slow Strava response hangs the job queue forever.
+_HTTP_TIMEOUT_S = 30.0
+
 
 def _parse_retry_after(response: httpx.Response, default: float) -> float:
     raw = response.headers.get("Retry-After")
@@ -92,7 +97,7 @@ class HTTPStravaAdapter:
         return f"https://www.strava.com/oauth/authorize?{query}"
 
     async def exchange_code(self, code: str) -> Tokens:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
             response = await client.post(
                 _OAUTH_URL,
                 data={
@@ -112,7 +117,7 @@ class HTTPStravaAdapter:
         )
 
     async def refresh_token(self, refresh_token: str) -> Tokens:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
             response = await client.post(
                 _OAUTH_URL,
                 data={
@@ -146,7 +151,7 @@ class HTTPStravaAdapter:
         headers = {"Authorization": f"Bearer {access_token}"}
         after = int(since.timestamp())
         activities: list[dict] = []
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
             for page in range(1, _MAX_PAGES + 1):
                 params = {"page": page, "per_page": per_page, "after": after}
                 response = await _send_with_retry(
@@ -186,7 +191,7 @@ class HTTPStravaAdapter:
 
     async def get_activity(self, access_token: str, activity_id: int) -> dict:
         headers = {"Authorization": f"Bearer {access_token}"}
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
             response = await _send_with_retry(
                 lambda: client.get(
                     f"{_BASE_URL}/activities/{activity_id}",
@@ -205,7 +210,7 @@ class HTTPStravaAdapter:
     ) -> dict | None:
         keys = ",".join(stream_types)
         headers = {"Authorization": f"Bearer {access_token}"}
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
             response = await _send_with_retry(
                 lambda: client.get(
                     f"{_BASE_URL}/activities/{activity_id}/streams/{keys}?key_by_type=true",
