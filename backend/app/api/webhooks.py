@@ -170,6 +170,8 @@ class _TgChat(BaseModel):
 
 class _TgMessage(BaseModel):
     chat: _TgChat = _TgChat()
+    message_id: int = 0
+    reply_markup: dict | None = None
 
 
 class _TgCallbackQuery(BaseModel):
@@ -238,6 +240,45 @@ def _answer_callback(callback_query_id: str, *, text: str = "") -> None:
         logger.exception("failed to answer telegram callback %s", callback_query_id)
 
 
+_TAP_MARK = "✓ "
+
+
+def _mark_tapped_button(callback: _TgCallbackQuery) -> None:
+    """Persistently acknowledge a tap in-chat (#230): re-render the opener's
+    inline keyboard with the chosen button check-marked. A re-tap moves the mark
+    (each pass strips old marks first). Only the keyboard is edited — editing the
+    text would strip the HTML title/link, which Telegram does not echo back in
+    the callback payload. Best-effort: never raises into the request path, and
+    skips entirely when the callback carries no keyboard/message id or the active
+    notifier cannot edit (email, no-op)."""
+    msg = callback.message
+    if msg is None or not msg.message_id or not msg.reply_markup:
+        return
+    edit = getattr(get_notifier(), "edit_message_reply_markup", None)
+    if edit is None:
+        return
+
+    keyboard = msg.reply_markup.get("inline_keyboard") or []
+    marked = []
+    for row in keyboard:
+        new_row = []
+        for button in row:
+            label = (button.get("text") or "").removeprefix(_TAP_MARK)
+            if button.get("callback_data") == callback.data:
+                label = _TAP_MARK + label
+            new_row.append({**button, "text": label})
+        marked.append(new_row)
+    if marked == keyboard:
+        return  # same button re-tapped: Telegram rejects a no-change edit
+
+    try:
+        edit(message_id=msg.message_id, reply_markup={"inline_keyboard": marked})
+    except Exception:
+        logger.exception(
+            "failed to mark tapped telegram button on message %s", msg.message_id
+        )
+
+
 @router.post("/webhooks/telegram")
 def receive_telegram_callback(
     update: TelegramUpdate,
@@ -284,5 +325,6 @@ def receive_telegram_callback(
     write_checkin(db, activity_uuid, checkin_data)
 
     label = "RPE" if action.kind == "rpe" else "pain"
+    _mark_tapped_button(callback)
     _answer_callback(callback.id, text=f"Got it — {label} {action.value} recorded.")
     return {"status": "processed", "action": "checkin_written"}
