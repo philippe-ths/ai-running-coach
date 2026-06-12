@@ -71,6 +71,27 @@ class TelegramNotifier:
                 f"Telegram API rejected answerCallbackQuery: {payload.get('description', 'unknown error')}"
             )
 
+    def edit_message_reply_markup(
+        self, *, message_id: int, reply_markup: dict
+    ) -> None:
+        """Replace an existing message's inline keyboard (the #230 tap mark).
+
+        Same error contract as answer_callback: best-effort by the caller, but
+        raises on transport/API errors so failures land in logs."""
+        url = f"{self.api_base}/bot{self.bot_token}/editMessageReplyMarkup"
+        body = {
+            "chat_id": self.chat_id,
+            "message_id": message_id,
+            "reply_markup": reply_markup,
+        }
+        response = httpx.post(url, json=body, timeout=self.timeout)
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok", False):
+            raise RuntimeError(
+                f"Telegram API rejected editMessageReplyMarkup: {payload.get('description', 'unknown error')}"
+            )
+
     @staticmethod
     def _reply_markup(notification: Notification) -> dict | None:
         """Build an inline keyboard from the notification's actions, or None.

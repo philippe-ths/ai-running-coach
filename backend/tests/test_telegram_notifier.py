@@ -160,3 +160,32 @@ def test_answer_callback_raises_when_api_reports_not_ok():
     ):
         with pytest.raises(RuntimeError, match="query is too old"):
             _notifier().answer_callback("cbq-1")
+
+
+def test_edit_message_reply_markup_posts_to_edit_endpoint():
+    kb = {"inline_keyboard": [[{"text": "✓ RPE 7", "callback_data": "t"}]]}
+    with patch(
+        "app.services.notifications.telegram_adapter.httpx.post",
+        return_value=_ok_response(),
+    ) as post:
+        _notifier().edit_message_reply_markup(message_id=555, reply_markup=kb)
+
+    assert post.call_args.args[0] == (
+        "https://api.telegram.org/bot123:ABC/editMessageReplyMarkup"
+    )
+    body = post.call_args.kwargs["json"]
+    assert body == {"chat_id": "42", "message_id": 555, "reply_markup": kb}
+
+
+def test_edit_message_reply_markup_raises_when_api_reports_not_ok():
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"ok": False, "description": "message is not modified"}
+    with patch(
+        "app.services.notifications.telegram_adapter.httpx.post",
+        return_value=response,
+    ):
+        with pytest.raises(RuntimeError, match="message is not modified"):
+            _notifier().edit_message_reply_markup(
+                message_id=555, reply_markup={"inline_keyboard": []}
+            )
