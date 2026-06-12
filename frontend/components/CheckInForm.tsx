@@ -123,14 +123,18 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
                        </span>
                   </dd>
               </div>
-              <div className="flex justify-between border-b border-green-100 pb-1">
-                  <dt className="text-green-800 opacity-80">RPE</dt>
-                  <dd className="font-medium">{existingCheckIn.rpe}/10</dd>
-              </div>
-              <div className="flex justify-between border-b border-green-100 pb-1">
-                  <dt className="text-green-800 opacity-80">Pain</dt>
-                  <dd className="font-medium">{existingCheckIn.pain_score}/10</dd>
-              </div>
+              {existingCheckIn.rpe != null && (
+                  <div className="flex justify-between border-b border-green-100 pb-1">
+                      <dt className="text-green-800 opacity-80">RPE</dt>
+                      <dd className="font-medium">{existingCheckIn.rpe}/10</dd>
+                  </div>
+              )}
+              {existingCheckIn.pain_score != null && (
+                  <div className="flex justify-between border-b border-green-100 pb-1">
+                      <dt className="text-green-800 opacity-80">Pain</dt>
+                      <dd className="font-medium">{existingCheckIn.pain_score}/10</dd>
+                  </div>
+              )}
               {existingCheckIn.notes && (
                   <div className="col-span-2 pt-1">
                        <dt className="text-xs font-bold uppercase tracking-wider text-green-800 opacity-60 mb-1">Notes</dt>
