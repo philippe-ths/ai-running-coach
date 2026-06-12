@@ -275,6 +275,17 @@ async def process_fuller_turn(
     completion; a notify-retry re-sends the cached fuller without re-generating.
     A fallback fuller is not notified (and leaves the sentinel null), consistent
     with the single-shot fallback rule."""
+    # #216 / AC8 rollback inertness: a fuller scheduled via enqueue_in before a
+    # rollback to a single-shot prompt can still fire up to the stage-two delay
+    # after the flip. Gate it like every other A4 trigger so the stale timer is
+    # a no-op instead of leaking a wrong-prompt generation + notification.
+    if not is_two_stage_prompt(settings.COACH_PROMPT_ID):
+        logger.info(
+            "Skipping fuller turn for activity %s: active prompt %s is single-shot",
+            activity.strava_activity_id, settings.COACH_PROMPT_ID,
+        )
+        return None
+
     db.refresh(activity)
     if activity.coach_notification_sent_at is not None:
         logger.info(

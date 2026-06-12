@@ -381,3 +381,16 @@ async def test_fuller_persistent_fallback_stays_opener_only_and_recovers(db, _v2
     assert row2.is_fallback is False
     assert row2.report["message"].startswith("Aerobically")
     assert row2.report["opener_message"].startswith("Nice work")
+
+
+async def test_generate_fuller_noops_under_single_shot_prompt(db, _v2, monkeypatch):
+    # #216: generate_fuller is meaningful only under the two-stage prompt. After a
+    # rollback to a single-shot id it must refuse to run — no LLM call, nothing
+    # persisted — so a stale scheduled fuller cannot leak a wrong-path report.
+    activity = _seed(db)
+    monkeypatch.setattr(_v2, "COACH_PROMPT_ID", "coach_report_v10")
+    with patch("app.services.coach.service.AnthropicClient") as client_cls:
+        read = await generate_fuller(db, str(activity.id))
+    assert read is None
+    client_cls.assert_not_called()
+    assert _stored(db, activity) is None  # nothing written under the rolled-back id

@@ -326,8 +326,17 @@ async def generate_fuller(
     row exists (preserving the opener prose so both halves survive), else inserts a
     fresh row. Fires the learning-loop write-back + Consolidation on completion
     (non-fallback only). A complete (fuller) row is returned from cache unless
-    `force`. Returns None when the activity has no metrics.
+    `force`. Returns None when the activity has no metrics, or when the active
+    prompt is not the two-stage one (a stale caller after a rollback must not run
+    the fuller-mode prose call under a single-shot prompt — #216).
     """
+    if not is_two_stage_prompt(settings.COACH_PROMPT_ID):
+        logger.info(
+            "generate_fuller skipped: active prompt %s is single-shot",
+            settings.COACH_PROMPT_ID,
+        )
+        return None
+
     activity_uuid = _coerce_uuid(activity_id)
 
     existing = get_active_report_row(db, activity_uuid)

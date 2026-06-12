@@ -281,6 +281,38 @@ async def test_two_notifications_max_opener_then_fuller(db, configured, notifier
     assert activity.coach_notification_sent_at is not None
 
 
+# --- rollback inertness (#216) -------------------------------------------------
+
+
+async def test_scheduled_fuller_is_inert_after_rollback_to_single_shot(
+    db, configured, notifier, monkeypatch
+):
+    # #216 / AC8: a fuller scheduled under coach_message_v2 that fires AFTER the
+    # owner rolls COACH_PROMPT_ID back to a single-shot prompt must be a no-op —
+    # no generation, no notification, no learning-loop write-back.
+    activity = _seed(db)
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_opener_blocks(schedule=True)))), \
+         patch.object(pna, "_schedule_fuller_turn"):
+        await _run_opener_stage(db=db, activity=activity,
+                                strava_activity_id=activity.strava_activity_id, notifier=notifier)
+    assert len(notifier.sent) == 1  # the opener went out before the rollback
+
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")  # rollback
+    with patch("app.services.coach.service.AnthropicClient") as client_cls, \
+         patch("app.services.coach.service.write_back_beliefs") as wb, \
+         patch("app.services.coach.service.enqueue_consolidation") as ec:
+        result = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
+
+    assert result is None
+    assert len(notifier.sent) == 1   # no stray single-shot notification
+    client_cls.assert_not_called()   # no generation at all
+    wb.assert_not_called()
+    ec.assert_not_called()
+    db.refresh(activity)
+    assert activity.coach_notification_sent_at is None
+
+
 # --- the scheduler wiring (enqueue_in) ----------------------------------------
 
 
