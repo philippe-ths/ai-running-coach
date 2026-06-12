@@ -8,6 +8,8 @@ interface LapsPanelProps {
   laps?: Lap[];
 }
 
+type Metric = 'pace' | 'hr';
+
 function lapPaceSecPerKm(lap: Lap): number | null {
   if (lap.avg_speed_mps && lap.avg_speed_mps > 0.1) return 1000 / lap.avg_speed_mps;
   return null;
@@ -26,25 +28,100 @@ function formatLapDistance(lap: Lap): string {
   return `${(lap.distance_m / 1000).toFixed(2)} km`;
 }
 
+function lapHasPace(lap: Lap): boolean {
+  return lap.avg_speed_mps != null && lap.avg_speed_mps > 0.1;
+}
+
+function lapHasHr(lap: Lap): boolean {
+  return lap.avg_hr != null && lap.avg_hr > 0;
+}
+
+// Value that drives bar height for the chosen metric. For pace we use speed so
+// faster laps stand out (taller = quicker); for HR we use the raw bpm.
+function lapMetricValue(lap: Lap, metric: Metric): number | null {
+  if (metric === 'pace') return lapHasPace(lap) ? lap.avg_speed_mps! : null;
+  return lapHasHr(lap) ? lap.avg_hr! : null;
+}
+
 export function LapsPanel({ laps }: LapsPanelProps) {
+  const hasPace = !!laps?.some(lapHasPace);
+  const hasHr = !!laps?.some(lapHasHr);
+  // Default to pace when available, otherwise fall back to HR.
+  const [metric, setMetric] = useState<Metric>(hasPace ? 'pace' : 'hr');
   const [selected, setSelected] = useState<number | null>(null);
 
   if (!laps || laps.length === 0) {
     return null;
   }
 
-  // Bar height scales with speed so faster laps stand out (Strava-style).
-  const speeds = laps.map((l) => l.avg_speed_mps ?? 0);
-  const maxSpeed = Math.max(...speeds, 0.1);
+  // If the preferred metric has no data, show whatever we do have.
+  const activeMetric: Metric = metric === 'pace' && !hasPace ? 'hr' : metric === 'hr' && !hasHr ? 'pace' : metric;
+  const showToggle = hasPace && hasHr;
+
+  // Scale bars across the value range so differences are visible. HR values sit
+  // in a narrow band, so anchoring to the min (not zero) keeps the chart useful.
+  const values = laps.map((l) => lapMetricValue(l, activeMetric)).filter((v): v is number => v != null);
+  const minValue = values.length ? Math.min(...values) : 0;
+  const maxValue = values.length ? Math.max(...values) : 1;
+  const range = maxValue - minValue;
+
+  const barHeightPct = (lap: Lap): number => {
+    const v = lapMetricValue(lap, activeMetric);
+    if (v == null) return 0;
+    if (range <= 0) return 100;
+    // Floor of 12% keeps even the smallest bar visible/clickable.
+    return 12 + ((v - minValue) / range) * 88;
+  };
+
+  const barColor = (isSelected: boolean): string => {
+    if (activeMetric === 'hr') {
+      return isSelected
+        ? 'bg-rose-600'
+        : 'bg-rose-300 dark:bg-rose-800/80 group-hover:bg-rose-400 dark:group-hover:bg-rose-700';
+    }
+    return isSelected
+      ? 'bg-blue-600'
+      : 'bg-blue-300 dark:bg-blue-800 group-hover:bg-blue-400 dark:group-hover:bg-blue-700';
+  };
+
+  const barTitle = (lap: Lap): string =>
+    activeMetric === 'hr'
+      ? `Lap ${lap.lap}: ${lap.avg_hr ? Math.round(lap.avg_hr) + ' bpm' : '-'}`
+      : `Lap ${lap.lap}: ${formatLapPace(lap)}`;
 
   return (
     <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6 mb-6">
-      <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Laps</h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Laps</h3>
 
-      {/* Pace-per-lap bar chart */}
-      <div className="flex items-end gap-1 h-28 mb-6" role="img" aria-label="Pace per lap">
-        {laps.map((lap, i) => {
-          const heightPct = Math.max(((lap.avg_speed_mps ?? 0) / maxSpeed) * 100, 4);
+        {showToggle && (
+          <div className="flex items-center rounded-full border border-gray-200 dark:border-gray-700 p-0.5 text-xs font-medium">
+            {(['pace', 'hr'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={activeMetric === m}
+                onClick={() => setMetric(m)}
+                className={`px-3 py-1 rounded-full transition-colors ${
+                  activeMetric === m
+                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                    : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                }`}
+              >
+                {m === 'pace' ? 'Pace' : 'HR'}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Per-lap bar chart for the selected metric */}
+      <div
+        className="flex items-end gap-1 h-28 mb-6"
+        role="img"
+        aria-label={activeMetric === 'hr' ? 'Average heart rate per lap' : 'Pace per lap'}
+      >
+        {laps.map((lap) => {
           const isSelected = selected === lap.lap;
           return (
             <button
@@ -52,38 +129,30 @@ export function LapsPanel({ laps }: LapsPanelProps) {
               type="button"
               onClick={() => setSelected(isSelected ? null : lap.lap)}
               className="flex-1 flex items-end h-full group"
-              title={`Lap ${lap.lap}: ${formatLapPace(lap)}`}
+              title={barTitle(lap)}
             >
               <div
-                className={`w-full rounded-t transition-colors ${
-                  isSelected ? 'bg-blue-600' : 'bg-blue-300 dark:bg-blue-800 group-hover:bg-blue-400 dark:group-hover:bg-blue-700'
-                }`}
-                style={{ height: `${heightPct}%` }}
+                className={`w-full rounded-t transition-colors ${barColor(isSelected)}`}
+                style={{ height: `${barHeightPct(lap)}%` }}
               />
             </button>
           );
         })}
       </div>
 
-      <div className="overflow-x-auto max-h-80 overflow-y-auto">
+      <div className="overflow-x-auto max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700">
         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-          <thead className="bg-gray-50 dark:bg-gray-700/50 sticky top-0">
+          <thead className="sticky top-0 z-10 bg-gray-100 dark:bg-gray-700 shadow-sm">
             <tr>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                Lap
-              </th>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                Distance
-              </th>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                Time
-              </th>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                Pace
-              </th>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                Avg HR
-              </th>
+              {['Lap', 'Distance', 'Time', 'Pace', 'Avg HR'].map((label) => (
+                <th
+                  key={label}
+                  scope="col"
+                  className="px-6 py-3 text-left text-xs font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200 uppercase tracking-wider"
+                >
+                  {label}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
