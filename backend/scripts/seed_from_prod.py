@@ -38,6 +38,7 @@ import sys
 from pathlib import Path
 
 from sqlalchemy import create_engine, insert, select, text
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.engine import Engine
 
 # Make the backend package importable when run as a bare script.
@@ -83,8 +84,17 @@ def _normalise_driver(url: str) -> str:
 
 
 def _read_rows(engine: Engine, model) -> list[dict]:
+    """Read all rows, selecting only the columns the SOURCE actually has.
+
+    A branch that adds a model column would otherwise break seeding until prod
+    has run the matching migration. Columns missing on the source are simply
+    absent from the copied dicts and take their local defaults (they are new,
+    so they must be nullable/defaulted for prod's own deploy anyway).
+    """
     with engine.connect() as conn:
-        return [dict(r) for r in conn.execute(select(model.__table__)).mappings()]
+        source_cols = {c["name"] for c in sa_inspect(conn).get_columns(model.__tablename__)}
+        cols = [c for c in model.__table__.columns if c.name in source_cols]
+        return [dict(r) for r in conn.execute(select(*cols)).mappings()]
 
 
 def _reset_target_schema(target_url: str) -> None:
