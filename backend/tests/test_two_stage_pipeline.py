@@ -313,6 +313,37 @@ async def test_scheduled_fuller_is_inert_after_rollback_to_single_shot(
     assert activity.coach_notification_sent_at is None
 
 
+# --- crash recovery via job retry (#215) ---------------------------------------
+
+
+async def test_opener_crash_before_schedule_recovers_on_rerun(db, configured, notifier):
+    # #215: a worker crash after the opener row is committed but before the fuller
+    # is scheduled and the opener notified must be recoverable by re-running the
+    # job (the RQ retry). The re-run completes the exchange — fuller scheduled,
+    # opener notified — without a second LLM call (generate_opener re-enters on
+    # the stored row). This pins the re-entrancy the retry policy relies on.
+    activity = _seed(db)
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_opener_blocks(schedule=True)))), \
+         patch.object(pna, "_schedule_fuller_turn", side_effect=RuntimeError("worker died")):
+        with pytest.raises(RuntimeError):
+            await _run_opener_stage(db=db, activity=activity,
+                                    strava_activity_id=activity.strava_activity_id, notifier=notifier)
+    assert len(notifier.sent) == 0  # crashed before notify
+
+    with patch("app.services.coach.service.AnthropicClient") as client_cls, \
+         patch.object(pna, "_schedule_fuller_turn") as sched:
+        result = await _run_opener_stage(db=db, activity=activity,
+                                         strava_activity_id=activity.strava_activity_id, notifier=notifier)
+
+    assert result is not None
+    client_cls.assert_not_called()  # idempotent re-entry, no fresh generation
+    sched.assert_called_once_with(str(activity.id))
+    assert len(notifier.sent) == 1
+    db.refresh(activity)
+    assert activity.opener_notification_sent_at is not None
+
+
 # --- the scheduler wiring (enqueue_in) ----------------------------------------
 
 

@@ -82,6 +82,22 @@ class TestDispatchForAuthenticEvents:
         assert kwargs["strava_athlete_id"] == CONNECTED_ATHLETE_ID
         assert kwargs["strava_activity_id"] == 7777
 
+    def test_create_enqueue_carries_retry_policy(
+        self, client, fake_queue, connected_account
+    ):
+        # #215: a worker crash mid-pipeline (after ingest, before the opener is
+        # scheduled/notified) strands the exchange unless RQ re-runs the job —
+        # polling never re-picks an already-ingested activity. The pipeline
+        # enqueue must carry the shared bounded Retry policy.
+        from app.jobs.process_new_activity import PIPELINE_RETRY
+
+        response = _post(client, aspect_type="create")
+        assert response.status_code == 200
+
+        _, kwargs = fake_queue.enqueue.call_args
+        assert kwargs["retry"] is PIPELINE_RETRY
+        assert PIPELINE_RETRY.max >= 1
+
     def test_update_enqueues_existing_sync_activity_job(
         self, client, fake_queue, connected_account
     ):

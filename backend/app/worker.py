@@ -23,7 +23,11 @@ def main() -> None:
     logger.info("Worker booting; listening on %s", ",".join(LISTEN))
     queues = [Queue(name, connection=redis_conn) for name in LISTEN]
     worker = Worker(queues, connection=redis_conn)
-    worker.work()
+    # with_scheduler: RQ's retry intervals (#215 PIPELINE_RETRY) park retried jobs
+    # in the ScheduledJobRegistry, which only a worker-embedded scheduler thread
+    # moves back onto the queue. Without it an interval retry is stranded forever.
+    # Independent of the separate rq-scheduler process (polling/fuller timers).
+    worker.work(with_scheduler=True)
 
 
 if __name__ == "__main__":

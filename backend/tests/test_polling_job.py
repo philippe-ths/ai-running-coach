@@ -92,6 +92,13 @@ async def test_polling_enqueues_pipeline_for_each_new_activity(db, fake_queue):
     assert kwargs["strava_athlete_id"] == 555
     assert kwargs["strava_activity_id"] == 1001
 
+    # #215: the polling enqueue carries the same bounded Retry policy as the
+    # webhook path, so a worker crash mid-pipeline is re-run rather than
+    # stranding the already-ingested activity forever.
+    from app.jobs.process_new_activity import PIPELINE_RETRY
+
+    assert kwargs["retry"] is PIPELINE_RETRY
+
 
 @pytest.mark.asyncio
 async def test_polling_with_no_new_activities_enqueues_nothing(db, fake_queue):

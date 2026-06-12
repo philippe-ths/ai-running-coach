@@ -105,7 +105,7 @@ Vercel before relying on them.
 | Postgres | `docker compose up -d postgres redis` | host `5433` → container `5432` |
 | Redis | (same compose) | `6379` |
 | Backend web | `uvicorn app.main:app --reload --port 8000` | `8000` |
-| Backend worker | `rq worker --url $REDIS_URL` | — |
+| Backend worker | `rq worker --with-scheduler --url $REDIS_URL` | — |
 | Backend scheduler (optional) | `python -m app.jobs.scheduler` then `rqscheduler --url $REDIS_URL` | — |
 | Frontend | `npm run dev` | `3000` |
 

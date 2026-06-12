@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models import Activity, StravaAccount
 from app.core.queue import queue
-from app.jobs.process_new_activity import process_new_activity_job
+from app.jobs.process_new_activity import PIPELINE_RETRY, process_new_activity_job
 from app.jobs.strava_sync import sync_activity_job
 from app.schemas import CheckInCreate
 from app.services.checkins import write_checkin
@@ -138,6 +138,7 @@ async def receive_webhook(
             strava_activity_id=event.object_id,
             job_id=job_id,
             result_ttl=3600,
+            retry=PIPELINE_RETRY,
         )
         return {"status": "processed", "action": "enqueued_pipeline"}
 

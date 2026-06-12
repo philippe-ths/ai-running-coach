@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from rq import Retry
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -49,6 +50,15 @@ from app.services.strava_ingestion import (
 )
 
 logger = logging.getLogger(__name__)
+
+# #215: the recovery trigger for a worker crash mid-pipeline. Once ingest has
+# persisted the Activity row, polling treats it as known and never re-picks it,
+# so without a retry a crash between ingest and the opener notify/schedule
+# permanently strands the exchange. Every stage is idempotent on re-entry
+# (opener row reuse, per-stage sentinels, fuller sentinel), so a re-run is safe.
+# RQ 2.x honours retries_left for failed, horse-dead, AND abandoned jobs (the
+# whole-worker SIGKILL of a Railway deploy), re-enqueueing on registry cleanup.
+PIPELINE_RETRY = Retry(max=3, interval=[60, 300, 900])
 
 
 def _notify(
