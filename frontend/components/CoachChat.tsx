@@ -15,11 +15,21 @@ export default function CoachChat({ activityId }: Props) {
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [expanded, setExpanded] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Scroll the messages container itself — NOT scrollIntoView, which bubbles
+    // up to every scrollable ancestor and on an iOS PWA yanks the whole page so
+    // the input scrolls out of view (#223). Pin to the bottom only when the user
+    // is already near it, so streaming tokens don't fight a user who scrolled up
+    // to re-read. Instant (no smooth) so per-token updates don't pile up
+    // animations into perpetual jitter.
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const nearBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
   }, []);
 
   // Load chat history on mount
@@ -205,7 +215,7 @@ export default function CoachChat({ activityId }: Props) {
       </div>
 
       {/* Messages */}
-      <div className="max-h-96 overflow-y-auto px-4 py-3 space-y-3">
+      <div ref={messagesContainerRef} className="max-h-96 overflow-y-auto px-4 py-3 space-y-3">
         {messages.length === 0 && !streaming && (
           <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-4">
             Ask about your workout, training plan, or anything about this session.
@@ -247,7 +257,6 @@ export default function CoachChat({ activityId }: Props) {
             </div>
           </div>
         )}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Input */}
