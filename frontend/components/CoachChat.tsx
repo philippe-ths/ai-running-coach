@@ -79,23 +79,36 @@ export default function CoachChat({ activityId }: Props) {
 
       const decoder = new TextDecoder();
       let fullResponse = '';
+      // SSE events are delimited by a blank line. Buffer across reads so an
+      // event split over two network chunks is reassembled before parsing.
+      let buffer = '';
+
+      const handleEvent = (event: string) => {
+        for (const line of event.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6);
+          if (data === '[DONE]') continue;
+          try {
+            // The backend JSON-encodes each chunk so multi-line markdown
+            // survives the SSE protocol intact.
+            fullResponse += JSON.parse(data) as string;
+            setStreamingText(fullResponse);
+          } catch {
+            // Ignore a malformed frame rather than aborting the whole stream.
+          }
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        // Parse SSE data lines
-        const lines = chunk.split('\n');
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            fullResponse += data;
-            setStreamingText(fullResponse);
-          }
-        }
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() ?? ''; // keep the trailing partial event
+        for (const event of events) handleEvent(event);
       }
+      if (buffer.trim()) handleEvent(buffer);
 
       // Finalize: replace streaming text with a proper message
       const assistantMsg: ChatMessage = {
@@ -108,11 +121,13 @@ export default function CoachChat({ activityId }: Props) {
       setMessages(prev => [...prev, assistantMsg]);
       setStreamingText('');
     } catch (err) {
+      // Surface a friendly, actionable message rather than the raw fetch error
+      // (Safari reports a dropped connection as the opaque "Load failed") (#223).
       const errorMsg: ChatMessage = {
         id: crypto.randomUUID(),
         activity_id: activityId,
         role: 'assistant',
-        content: err instanceof Error ? err.message : 'Something went wrong. Please try again.',
+        content: "Sorry, I couldn't reach your coach just now. Please try again.",
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [...prev, errorMsg]);

@@ -1,3 +1,5 @@
+import json
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,7 +17,23 @@ from app.services.coach.service import (
     _to_read,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+def _sse_data(text: str) -> str:
+    """Frame one chunk as an SSE `data:` event.
+
+    The payload is JSON-encoded so it survives the SSE line protocol intact: a
+    coach reply is multi-paragraph markdown, and a raw newline inside `data: …`
+    would split the value across lines (everything after the first newline is
+    silently dropped by an SSE parser) or, on a blank line, dispatch a truncated
+    event. JSON escaping collapses every chunk to a single line with no blank
+    lines, so the client reconstructs the exact text. The `[DONE]` sentinel is
+    sent unencoded and checked for before any JSON parse on the client.
+    """
+    return f"data: {json.dumps(text)}\n\n"
 
 
 @router.get(
@@ -59,7 +77,7 @@ def delete_chat(activity_id: UUID, db: Session = Depends(get_db)):
     from app.models.coach_chat_message import CoachChatMessage
 
     db.query(CoachChatMessage).filter(
-        CoachChatMessage.activity_id == str(activity_id)
+        CoachChatMessage.activity_id == activity_id
     ).delete()
     db.commit()
 
@@ -74,7 +92,7 @@ async def post_chat(
     # Validate that a coach report exists
     existing = (
         db.query(CoachReport)
-        .filter(CoachReport.activity_id == str(activity_id))
+        .filter(CoachReport.activity_id == activity_id)
         .first()
     )
     if not existing:
@@ -84,10 +102,26 @@ async def post_chat(
         )
 
     async def event_stream():
-        async for chunk in stream_chat_response(db, str(activity_id), body.message):
-            # SSE format: data lines followed by blank line
-            yield f"data: {chunk}\n\n"
-        yield "data: [DONE]\n\n"
+        # Flush a comment frame immediately so the connection (and its 200) is
+        # established before the slow first token, rather than going silent
+        # through proxies that would otherwise time the request out (#223).
+        yield ": ok\n\n"
+        try:
+            async for chunk in stream_chat_response(db, activity_id, body.message):
+                yield _sse_data(chunk)
+        except Exception:
+            # The stream is already open (status + headers sent), so a raised
+            # exception here would just sever the connection — the browser
+            # surfaces that as a bare "Load failed". Stream a readable message
+            # instead so the user sees what happened and can retry (#223).
+            logger.exception(
+                "coach chat stream failed for activity %s", activity_id
+            )
+            yield _sse_data(
+                "Sorry, I hit an error answering that. Please try again."
+            )
+        finally:
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         event_stream(),

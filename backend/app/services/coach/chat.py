@@ -111,9 +111,11 @@ def _build_chat_system_prompt(
 
 def get_chat_history(db: Session, activity_id: str) -> List[ChatMessageRead]:
     """Return all chat messages for an activity, ordered chronologically."""
+    from app.services.coach.service import _coerce_uuid
+
     messages = (
         db.query(CoachChatMessage)
-        .filter(CoachChatMessage.activity_id == activity_id)
+        .filter(CoachChatMessage.activity_id == _coerce_uuid(activity_id))
         .order_by(CoachChatMessage.created_at.asc())
         .all()
     )
@@ -133,7 +135,11 @@ async def stream_chat_response(
     # Load the coach report (must exist before chatting). Prefer the active
     # version; fall back to the most recent report of any version so chat still
     # works against an activity whose only report predates a version bump.
-    from app.services.coach.service import get_active_report_row
+    from app.services.coach.service import _coerce_uuid, get_active_report_row
+
+    # Coerce once: Postgres tolerates the string form via implicit cast, but the
+    # Uuid column type does not bind a str under SQLite (used in tests).
+    activity_id = _coerce_uuid(activity_id)
 
     report_row = get_active_report_row(db, activity_id) or (
         db.query(CoachReport)
