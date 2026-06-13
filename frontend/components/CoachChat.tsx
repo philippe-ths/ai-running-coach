@@ -144,7 +144,12 @@ export default function CoachChat({ activityId }: Props) {
       <button
         onClick={() => {
           setExpanded(true);
-          setTimeout(() => inputRef.current?.focus(), 100);
+          // Bring the input into view before focusing it (#226). focus() with
+          // preventScroll avoids the browser's own scroll jump fighting ours.
+          setTimeout(() => {
+            inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            inputRef.current?.focus({ preventScroll: true });
+          }, 100);
         }}
         className="w-full bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-md transition-all flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
       >
@@ -233,6 +238,7 @@ export default function CoachChat({ activityId }: Props) {
       {/* Input */}
       <div className="border-t border-gray-100 dark:border-gray-700 p-3">
         <div className="flex gap-2">
+          {/* text-base (16px) keeps iOS Safari from auto-zooming the field on focus (#227). */}
           <textarea
             ref={inputRef}
             value={input}
@@ -240,7 +246,7 @@ export default function CoachChat({ activityId }: Props) {
             onKeyDown={handleKeyDown}
             placeholder="Ask your coach..."
             rows={1}
-            className="flex-1 resize-none rounded-lg border border-gray-200 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="flex-1 resize-none rounded-lg border border-gray-200 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             disabled={streaming}
           />
           <button
