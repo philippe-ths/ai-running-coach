@@ -7,7 +7,7 @@ read time, so this is a zero-backfill migration with no behaviour change until a
 runner declares a voice.
 
 Revision ID: e1f2a3b4c5d6
-Revises: c4d5e6f7a8b9
+Revises: b4e7c2a9f1d3
 Create Date: 2026-06-14 00:00:00.000000
 
 """
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'e1f2a3b4c5d6'
-down_revision: Union[str, None] = 'c4d5e6f7a8b9'
+down_revision: Union[str, None] = 'b4e7c2a9f1d3'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
