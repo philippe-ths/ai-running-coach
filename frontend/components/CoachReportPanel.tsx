@@ -11,6 +11,12 @@ import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2, RefreshCw }
 const OPENER_POLL_INTERVAL_MS = 30000;
 const OPENER_POLL_MAX_ATTEMPTS = 40;
 
+// On-demand (re)generation runs in the worker (#260) — the request only enqueues
+// it, so the panel polls for the fresh report rather than blocking. A two-stage
+// generation takes ~30-120s, so poll every 5s up to ~3 minutes.
+const REGEN_POLL_INTERVAL_MS = 5000;
+const REGEN_POLL_MAX_ATTEMPTS = 36;
+
 // Public env var inlined at build time. Set NEXT_PUBLIC_SHOW_DEBUG_PANEL=true
 // (or "1") on the build environment to expose the LLM-input/output panel.
 const SHOW_DEBUG_PANEL =
@@ -24,7 +30,7 @@ interface Props {
 
 export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   const [report, setReport] = useState<CoachReport | null>(null);
-  const [status, setStatus] = useState<'checking' | 'idle' | 'loading' | 'loaded' | 'error'>('checking');
+  const [status, setStatus] = useState<'checking' | 'idle' | 'loading' | 'regenerating' | 'loaded' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
 
   // I1a: tappable RPE/pain input. One answer per question; key by question index.
@@ -113,6 +119,62 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
     return () => clearTimeout(id);
   }, [status, report, activityId]);
 
+  // #260: on-demand (re)generation is asynchronous. The "Re-run" / "Get analysis"
+  // buttons enqueue a worker job (no gateway timeout) and we poll for the fresh
+  // report — the report is "fresh" once its generated_at differs from the one we
+  // started with (or, generating from nothing, once any report appears).
+  const regenBaseline = useRef<string | null>(null);
+  const regenAttempts = useRef(0);
+  const [regenTick, setRegenTick] = useState(0);
+
+  const regenerate = useCallback(async () => {
+    regenBaseline.current = report?.meta.generated_at ?? null;
+    regenAttempts.current = 0;
+    setErrorMsg('');
+    setStatus('regenerating');
+    setRegenTick((t) => t + 1);
+    try {
+      const res = await fetch(
+        `/api/activities/${activityId}/coach-report/regenerate`,
+        { method: 'POST' },
+      );
+      if (!res.ok) throw new Error(`Couldn't start regeneration (${res.status})`);
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Could not start regeneration.');
+      setStatus('error');
+    }
+  }, [activityId, report]);
+
+  useEffect(() => {
+    if (status !== 'regenerating') return;
+    if (regenAttempts.current >= REGEN_POLL_MAX_ATTEMPTS) {
+      setErrorMsg('This is taking longer than usual — your report is still being written. Check back in a moment.');
+      setStatus('error');
+      return;
+    }
+    const id = setTimeout(async () => {
+      regenAttempts.current += 1;
+      try {
+        const res = await fetch(
+          `/api/activities/${activityId}/coach-report?generate=false&force=false`,
+        );
+        if (res.ok) {
+          const data = (await res.json()) as CoachReport;
+          const ga = data?.meta?.generated_at ?? null;
+          if (ga && ga !== regenBaseline.current) {
+            setReport(data);
+            setStatus('loaded');
+            return;
+          }
+        }
+      } catch {
+        // transient; keep polling
+      }
+      setRegenTick((t) => t + 1);
+    }, REGEN_POLL_INTERVAL_MS);
+    return () => clearTimeout(id);
+  }, [status, regenTick, activityId]);
+
   if (!hasMetrics) return null;
 
   if (status === 'checking') return null;
@@ -120,7 +182,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   if (status === 'idle') {
     return (
       <button
-        onClick={() => fetchReport(true)}
+        onClick={regenerate}
         className="w-full bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-md transition-all flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
       >
         <Sparkles className="w-5 h-5" />
@@ -138,12 +200,21 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
     );
   }
 
+  if (status === 'regenerating') {
+    return (
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400">
+        <Loader2 className="w-5 h-5 animate-spin" />
+        <span>Writing your coach analysis… this can take a minute.</span>
+      </div>
+    );
+  }
+
   if (status === 'error') {
     return (
       <div className="bg-red-50 dark:bg-red-900/30 rounded-xl border border-red-200 dark:border-red-800 p-6">
         <p className="text-red-700 dark:text-red-300 text-sm">{errorMsg}</p>
         <button
-          onClick={() => fetchReport(true)}
+          onClick={regenerate}
           className="mt-2 text-sm text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 underline"
         >
           Try again
@@ -162,7 +233,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   // verdict/takeaway panel below, untouched.
   const reRunButton = (
     <button
-      onClick={() => fetchReport(true, true)}
+      onClick={regenerate}
       className="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1 transition-colors"
       title="Re-run coach analysis"
     >
