@@ -173,6 +173,32 @@ def get_active_report_row(db: Session, activity_id) -> Optional[CoachReport]:
     )
 
 
+def get_displayable_report_row(db: Session, activity_id) -> Optional[CoachReport]:
+    """A report row suitable for DISPLAY: the active-version row if present, else
+    the most recently created cached report of ANY (prompt_id, schema_version).
+
+    This is the read/display fallback (#261) that keeps a COACH_PROMPT_ID flip from
+    turning every historical activity into a cache-miss-that-regenerates: after a
+    flip (e.g. activating P1.1 voice coach_message_v3), prior-version reports still
+    render instead of 404-ing or triggering a synchronous regeneration that exceeds
+    the gateway timeout (#260). It is a read concern ONLY — it never affects the M0
+    versioned-cache identity used for regeneration (get_active_report_row and
+    get_or_generate_coach_report are unchanged), so the background pipeline still
+    generates the active version for new activities, and an explicit force=True
+    regeneration still targets the active version.
+    """
+    active = get_active_report_row(db, activity_id)
+    if active is not None:
+        return active
+    activity_uuid = _coerce_uuid(activity_id)
+    return (
+        db.query(CoachReport)
+        .filter(CoachReport.activity_id == activity_uuid)
+        .order_by(CoachReport.created_at.desc())
+        .first()
+    )
+
+
 async def get_or_generate_coach_report(
     db: Session, activity_id: str, force: bool = False
 ) -> Optional[CoachReportRead]:
