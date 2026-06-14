@@ -166,6 +166,9 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
             {"theme": "easy_discipline", "tendency": "acts_on", "acted": 5, "total": 6},
             {"theme": "add_long_run", "tendency": "ignores", "acted": 0, "total": 4},
         ]},
+        # (9) a referral nudge fired, but the report relays no professional-consult
+        # prompt — the safety floor was dropped (the P1.1 voice regression sensor).
+        calibration={"referral": {"nudge": "Consider a check-in with a healthcare professional.", "basis": "illness_or_extreme_fatigue"}},
     )
     return content, pack
 
@@ -244,5 +247,8 @@ def deliberately_bad_message_report() -> Tuple[CoachMessageReport, CoachContextP
             {"theme": "easy_discipline", "tendency": "acts_on", "acted": 5, "total": 6},
             {"theme": "add_long_run", "tendency": "ignores", "acted": 0, "total": 4},
         ]},
+        # (9) a referral nudge fired but the message relays no professional-consult
+        # prompt — the safety floor was dropped (the P1.1 voice regression sensor).
+        calibration={"referral": {"nudge": "Consider a check-in with a healthcare professional.", "basis": "illness_or_extreme_fatigue"}},
     )
     return content, pack

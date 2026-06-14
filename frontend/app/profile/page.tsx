@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import ConnectStravaButton from '@/components/ConnectStravaButton';
 import ImportStravaHistory from '@/components/ImportStravaHistory';
 import ThemeToggle from '@/components/ThemeToggle';
+import VoiceDialsPanel from '@/components/VoiceDialsPanel';
 import { fetchFromAPI } from '@/lib/api';
 
 export default function ProfilePage() {
@@ -183,6 +184,10 @@ export default function ProfilePage() {
         </button>
 
       </form>
+
+      <div className="mt-6">
+        <VoiceDialsPanel />
+      </div>
     </div>
   );
 }
