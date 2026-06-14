@@ -484,6 +484,22 @@ def block_complete_job(block_id: str, activity_id: str) -> None:
         db.close()
 
 
+def regenerate_report_job(activity_id: str) -> None:
+    """RQ entrypoint for an on-demand coach-report regeneration (the UI "Re-run"
+    button, #260). Runs the force regeneration in the WORKER so the slow two-stage
+    LLM call (30-120s) never blocks the HTTP request or exceeds the gateway timeout
+    — the request only enqueues this job and the frontend polls for the result.
+
+    Delegates to the same force path the synchronous endpoint used, so the result
+    is identical; only the place it runs changes. Idempotent enough for a double
+    click: a second run just replaces the active-version row again."""
+    db = SessionLocal()
+    try:
+        asyncio.run(get_or_generate_coach_report(db, str(activity_id), force=True))
+    finally:
+        db.close()
+
+
 def fuller_turn_job(activity_id: str) -> None:
     """RQ entrypoint for the A4 fuller turn (scheduled by the opener via the timer,
     or enqueued early by a reply). Opens its own session and the active notifier."""

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.profile import get_current_user_profile
 from app.db.session import get_db
-from app.models import CoachingRelationship
+from app.models import Activity, CoachingRelationship
 from app.models.coach_report import CoachReport
 from app.schemas.chat import ChatHistoryResponse, ChatMessageSend
 from app.schemas.coach import CoachReportRead
@@ -123,6 +123,34 @@ async def get_coach_report(
             detail="Activity not found or metrics not yet computed.",
         )
     return report
+
+
+@router.post(
+    "/activities/{activity_id}/coach-report/regenerate",
+    status_code=202,
+)
+def regenerate_coach_report(activity_id: UUID, db: Session = Depends(get_db)):
+    """Kick off an asynchronous coach-report regeneration (#260).
+
+    The two-stage generation is a 30-120s LLM call — far past the gateway timeout —
+    so the synchronous force path 504s. This enqueues the work onto the worker
+    (where new runs already generate) and returns immediately; the frontend polls
+    the GET endpoint for the fresh report. Returns 404 when the activity has no
+    metrics to regenerate from.
+    """
+    activity = db.query(Activity).filter(Activity.id == activity_id).first()
+    if not activity or not activity.metrics:
+        raise HTTPException(
+            status_code=404,
+            detail="Activity not found or metrics not yet computed.",
+        )
+    # Imported here to keep the queue/job dependency off the module import path of
+    # the read endpoints (and out of test collection that does not touch Redis).
+    from app.core.queue import queue
+    from app.jobs.process_new_activity import regenerate_report_job
+
+    queue.enqueue(regenerate_report_job, str(activity_id))
+    return {"status": "regenerating"}
 
 
 @router.get(
