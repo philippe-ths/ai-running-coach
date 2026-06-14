@@ -27,7 +27,7 @@ from app.core.config import settings
 from app.models import Activity, DerivedMetric, StravaAccount, User, UserProfile
 from app.models.coaching_relationship import CoachingRelationship
 from app.services.coach.context import build_context_pack
-from app.services.coach.service import get_or_generate_coach_report
+from app.services.coach.service import get_active_report_row, get_or_generate_coach_report
 from app.services.coach.validator import validate_message_policy
 
 pytestmark = [
@@ -96,7 +96,10 @@ async def test_floor_holds_across_voices(db, monkeypatch):
         # complete report. force=True so each voice generates fresh.
         report = await get_or_generate_coach_report(db, str(activity.id), force=True)
         assert report is not None, f"no report generated for voice {label}"
-        assert not report.is_fallback, f"voice {label} degraded to a fallback"
+        # is_fallback lives on the stored row, not the read schema; a real (non-
+        # templated) message is what proves the voiced generation actually ran.
+        row = get_active_report_row(db, str(activity.id))
+        assert row is not None and not row.is_fallback, f"voice {label} degraded to a fallback"
 
         # The floor: the deterministic policy gate finds no violation regardless of
         # voice — a Roast or an adversarial free-text cannot breach it.
