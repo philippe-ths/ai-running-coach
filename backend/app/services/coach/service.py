@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models import Activity
 from app.models.coach_report import CoachReport
+from app.models.coaching_relationship import CoachingRelationship
 from app.schemas.coach import (
     CoachMessageReport,
     CoachReportContent,
@@ -47,8 +48,10 @@ from app.services.coach.prompts import (
     MESSAGE_PROMPT_PREFIX,
     PROMPT_VERSIONS,
     TWO_STAGE_PROMPT_ID,
+    TWO_STAGE_PROMPT_IDS,
     build_system_prompt,
 )
+from app.services.coach.voice import resolve_voice
 from app.services.coach.retrieval import fetch_latest_user_reply
 from app.services.coach.validator import (
     PolicyViolation,
@@ -116,8 +119,25 @@ def is_two_stage_prompt(prompt_id: str) -> bool:
 
     The cadence (opener -> conditional fuller) is gated here, not unconditionally,
     so flipping COACH_PROMPT_ID back to coach_message_v1 or a coach_report_v* id
-    serves the prior single-shot path with zero code change (AC8 rollback)."""
-    return prompt_id == TWO_STAGE_PROMPT_ID
+    serves the prior single-shot path with zero code change (AC8 rollback).
+    coach_message_v3 (P1.1 voice) is two-stage exactly like coach_message_v2."""
+    return prompt_id in TWO_STAGE_PROMPT_IDS
+
+
+def _resolve_voice_for_activity(db: Session, activity: Activity):
+    """Resolve the runner's declared coach voice for this activity's owner (P1.1).
+
+    Loads the thin CoachingRelationship row (the row may not exist yet — a runner
+    who never opened their profile) and resolves it to a VoiceProfile; a missing
+    row or an undeclared voice resolves to the moderate default. This only affects
+    voice-aware prompts (coach_message_v3) — render_voice_block is a no-op for every
+    other prompt id, so the resolved voice is harmless under any other prompt."""
+    relationship = (
+        db.query(CoachingRelationship)
+        .filter(CoachingRelationship.user_id == activity.user_id)
+        .first()
+    )
+    return resolve_voice(relationship)
 
 
 def active_schema_version(prompt_id: str) -> str:
@@ -198,7 +218,10 @@ async def get_or_generate_coach_report(
     prompt_id = settings.COACH_PROMPT_ID
     schema_version = active_schema_version(prompt_id)
     classification = Classification.from_metrics(activity.metrics)
-    system_prompt = build_system_prompt(prompt_id, playbook_key(activity, classification))
+    voice = _resolve_voice_for_activity(db, activity)
+    system_prompt = build_system_prompt(
+        prompt_id, playbook_key(activity, classification), voice=voice
+    )
     user_message = json.dumps(pack_dict, default=str)
 
     client = AnthropicClient(
@@ -281,8 +304,11 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     input_hash = pack.fingerprint()
     pack_dict = pack.to_serializable_dict()
     # The opener is a brief reaction, not a playbook-driven analysis (mode="opener"
-    # ignores the playbook), so the system prompt is the lean opener form.
-    system_prompt = build_system_prompt(prompt_id, mode="opener")
+    # ignores the playbook), so the system prompt is the lean opener form. The voice
+    # block (P1.1) rides both stages, so the opener already speaks in the declared
+    # voice.
+    voice = _resolve_voice_for_activity(db, activity)
+    system_prompt = build_system_prompt(prompt_id, mode="opener", voice=voice)
     user_message = json.dumps(pack_dict, default=str)
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
@@ -372,8 +398,9 @@ async def generate_fuller(
     input_hash = pack.fingerprint()
     pack_dict = pack.to_serializable_dict()
     classification = Classification.from_metrics(activity.metrics)
+    voice = _resolve_voice_for_activity(db, activity)
     system_prompt = build_system_prompt(
-        prompt_id, playbook_key(activity, classification), mode="fuller"
+        prompt_id, playbook_key(activity, classification), mode="fuller", voice=voice
     )
     user_message = json.dumps(pack_dict, default=str)
     client = AnthropicClient(

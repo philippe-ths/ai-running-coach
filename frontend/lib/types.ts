@@ -44,4 +44,12 @@ export type {
 } from "./types/coach";
 export { isMessageReport, isOpenerOnly } from "./types/coach";
 export type { ChatMessage } from "./types/chat";
+export type {
+  VoiceDials,
+  VoiceAxisInfo,
+  VoicePresetInfo,
+  VoiceCatalog,
+  VoiceConfig,
+  DialKey,
+} from "./types/voice";
 

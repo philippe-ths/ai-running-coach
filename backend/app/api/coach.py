@@ -6,10 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.api.profile import get_current_user_profile
 from app.db.session import get_db
+from app.models import CoachingRelationship
 from app.models.coach_report import CoachReport
 from app.schemas.chat import ChatHistoryResponse, ChatMessageSend
 from app.schemas.coach import CoachReportRead
+from app.schemas.voice import VoiceConfigRead, VoiceDials, build_catalog
 from app.services.coach.chat import get_chat_history, stream_chat_response
 from app.services.coach.service import (
     get_active_report_row,
@@ -34,6 +37,61 @@ def _sse_data(text: str) -> str:
     sent unencoded and checked for before any JSON parse on the client.
     """
     return f"data: {json.dumps(text)}\n\n"
+
+
+def _get_or_create_relationship(db: Session) -> CoachingRelationship:
+    """Resolve the current runner's coaching_relationship row, creating it if needed.
+
+    Reuses the profile helper's user resolution (Strava-linked user first), which
+    also auto-creates the thin relationship row the way it auto-creates the default
+    profile, so a runner who never edited their profile still has a row to read/write.
+    """
+    profile = get_current_user_profile(db)
+    return (
+        db.query(CoachingRelationship)
+        .filter(CoachingRelationship.user_id == profile.user_id)
+        .first()
+    )
+
+
+def _read_voice(relationship: CoachingRelationship) -> VoiceConfigRead:
+    current = VoiceDials(
+        preset=relationship.voice_preset,
+        warmth=relationship.voice_warmth,
+        humor=relationship.voice_humor,
+        directness=relationship.voice_directness,
+        energy=relationship.voice_energy,
+        freetext=relationship.voice_freetext,
+    )
+    return VoiceConfigRead(current=current, catalog=build_catalog())
+
+
+@router.get("/coach/voice", response_model=VoiceConfigRead)
+def get_voice(db: Session = Depends(get_db)):
+    """The runner's declared coach voice plus the catalog the UI renders from."""
+    return _read_voice(_get_or_create_relationship(db))
+
+
+@router.put("/coach/voice", response_model=VoiceConfigRead)
+def update_voice(voice_in: VoiceDials, db: Session = Depends(get_db)):
+    """Set the runner's declared coach voice (preset + four dials + free-text).
+
+    Runner-sovereign (ADR 0012): this is the only writer of voice state — no
+    background job ever changes it. Voice flexes delivery only (ADR 0013); the
+    free-text is stored verbatim and framed as untrusted tone-data at prompt time,
+    never as instructions.
+    """
+    relationship = _get_or_create_relationship(db)
+    relationship.voice_preset = voice_in.preset
+    relationship.voice_warmth = voice_in.warmth
+    relationship.voice_humor = voice_in.humor
+    relationship.voice_directness = voice_in.directness
+    relationship.voice_energy = voice_in.energy
+    relationship.voice_freetext = voice_in.freetext
+    db.add(relationship)
+    db.commit()
+    db.refresh(relationship)
+    return _read_voice(relationship)
 
 
 @router.get(
