@@ -13,9 +13,11 @@ const OPENER_POLL_MAX_ATTEMPTS = 40;
 
 // On-demand (re)generation runs in the worker (#260) — the request only enqueues
 // it, so the panel polls for the fresh report rather than blocking. A two-stage
-// generation takes ~30-120s, so poll every 5s up to ~3 minutes.
-const REGEN_POLL_INTERVAL_MS = 5000;
-const REGEN_POLL_MAX_ATTEMPTS = 36;
+// generation can take ~2-6 minutes, and the worker job timeout is 600s (#264), so
+// poll every 8s for ~12 minutes — comfortably past the worst-case generation so the
+// report is caught when it lands rather than the poll giving up early.
+const REGEN_POLL_INTERVAL_MS = 8000;
+const REGEN_POLL_MAX_ATTEMPTS = 90;
 
 // Public env var inlined at build time. Set NEXT_PUBLIC_SHOW_DEBUG_PANEL=true
 // (or "1") on the build environment to expose the LLM-input/output panel.
@@ -148,7 +150,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   useEffect(() => {
     if (status !== 'regenerating') return;
     if (regenAttempts.current >= REGEN_POLL_MAX_ATTEMPTS) {
-      setErrorMsg('This is taking longer than usual — your report is still being written. Check back in a moment.');
+      setErrorMsg('Your report is still being written — this one is taking a while. It will appear here when it is ready; you can also reload the page in a few minutes.');
       setStatus('error');
       return;
     }

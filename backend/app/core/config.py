@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     # same-day reply lands the fuller turn; a check-in on a stale run does not.
     EXCHANGE_REPLY_WINDOW_SECONDS: int = 86400
 
+    # RQ death-penalty ceiling for worker jobs (#264). A two-stage coach generation
+    # (adaptive thinking -> prose -> tail) runs ~120-360s, well past RQ's 180s
+    # default, so a slow fuller turn / regeneration was being killed mid-generation
+    # before it could store the report. 600s gives comfortable margin over the
+    # worst case while still capping a genuinely stuck job. Applied as the queue
+    # default_timeout (queue.enqueue paths) and as the explicit timeout on the
+    # rq-scheduler enqueue_in calls (block-complete opener, scheduled fuller turn).
+    RQ_JOB_TIMEOUT_SECONDS: int = 600
+
     # Block grouping (A1, ADR 0011): both the time-gap threshold that groups
     # temporally-contiguous activities into one Block AND the block-complete
     # debounce that gates the opener (the gap doubles as the trigger). An

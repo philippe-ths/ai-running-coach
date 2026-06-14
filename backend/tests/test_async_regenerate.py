@@ -23,10 +23,15 @@ class TestRegenerateEndpoint:
         assert res.json() == {"status": "regenerating"}
         # the regeneration was handed to the worker, not run inline
         fake_queue.enqueue.assert_called_once()
-        args = fake_queue.enqueue.call_args.args
+        call = fake_queue.enqueue.call_args
         from app.jobs.process_new_activity import regenerate_report_job
-        assert args[0] is regenerate_report_job
-        assert args[1] == str(activity.id)
+        assert call.args[0] is regenerate_report_job
+        assert call.args[1] == str(activity.id)
+        # #264: the job timeout must exceed RQ's 180s default or a slow two-stage
+        # generation is killed before it stores the report.
+        from app.core.config import settings
+        assert call.kwargs.get("job_timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
+        assert settings.RQ_JOB_TIMEOUT_SECONDS > 180
 
     def test_404_when_activity_missing(self, client: TestClient, db):
         from uuid import uuid4
@@ -59,3 +64,33 @@ class TestRegenerateJob:
         # force=True is the whole point: it regenerates the active-version row.
         assert gen.await_args.kwargs.get("force") is True
         fake_db.close.assert_called_once()  # session is always closed
+
+
+class TestJobTimeouts:
+    """#264: coach-generation jobs must outlast RQ's 180s default death penalty."""
+
+    def test_queue_default_timeout_exceeds_rq_default(self):
+        from app.core.config import settings
+        from app.core.queue import queue
+        assert settings.RQ_JOB_TIMEOUT_SECONDS > 180
+        assert queue._default_timeout == settings.RQ_JOB_TIMEOUT_SECONDS
+
+    def test_scheduled_fuller_turn_sets_timeout(self):
+        from app.core.config import settings
+        from app.jobs import process_new_activity as job_mod
+
+        fake_scheduler = MagicMock()
+        with patch("rq_scheduler.Scheduler", return_value=fake_scheduler), \
+             patch("redis.Redis.from_url", return_value=MagicMock()):
+            job_mod._schedule_fuller_turn("act-1")
+        assert fake_scheduler.enqueue_in.call_args.kwargs.get("timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
+
+    def test_scheduled_block_complete_sets_timeout(self):
+        from app.core.config import settings
+        from app.jobs import process_new_activity as job_mod
+
+        fake_scheduler = MagicMock()
+        with patch("rq_scheduler.Scheduler", return_value=fake_scheduler), \
+             patch("redis.Redis.from_url", return_value=MagicMock()):
+            job_mod._schedule_block_complete("block-1", "act-1")
+        assert fake_scheduler.enqueue_in.call_args.kwargs.get("timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
