@@ -39,8 +39,8 @@ _Avoid_: coupling consolidation to exchange generation, or letting it invent fac
 
 ## Voice
 
-How the coach talks, as a personalization dial independent of `Coaching stance`: warm vs blunt, cheerleader vs drill-sergeant, terse vs expansive, playful vs clinical. Declared by the runner at onboarding and then adapted by the `Coaching relationship` from how the runner actually responds (the `Preference profile` loop generalised from advice-themes to tone). Voice may flex freely: it reshapes framing and delivery only, never the facts, the safety floor, or the data the coach grounds on.
-_Avoid_: conflating voice with `Coaching stance`, or letting a preferred voice soften a data-warranted message; tone changes, substance does not.
+How the coach talks, as a personalization dial independent of `Coaching stance`: warm vs blunt, cheerleader vs drill-sergeant, terse vs expansive, playful vs clinical. Runner-sovereign: declared by the runner at onboarding (placed by choosing a preset, then nudging the four operable dials Clinical↔Warm, Earnest↔Playful, Gentle↔Blunt, Calm↔Fired-up, plus a free-text escape-hatch) and re-dialled explicitly any time. The coach does NOT secretly infer voice from how the runner responds (that would violate the deterministic-write-back rule and has no ground-truth signal); it may raise the voice question out loud and let the runner decide. Voice may flex freely: it reshapes framing and delivery only, never the facts, the safety floor, or the data the coach grounds on.
+_Avoid_: conflating voice with `Coaching stance`; letting a preferred voice soften a data-warranted message (tone changes, substance does not); treating runner free-text as instructions rather than untrusted tone-data; calling explicit re-dialling "adaptive refinement".
 
 ## Coaching stance
 
