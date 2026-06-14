@@ -15,7 +15,7 @@ from app.schemas.coach import CoachReportRead
 from app.schemas.voice import VoiceConfigRead, VoiceDials, build_catalog
 from app.services.coach.chat import get_chat_history, stream_chat_response
 from app.services.coach.service import (
-    get_active_report_row,
+    get_displayable_report_row,
     get_or_generate_coach_report,
     _to_read,
 )
@@ -104,11 +104,17 @@ async def get_coach_report(
     force: bool = Query(False, description="If true, regenerate the active-version report (prior versions retained)"),
     db: Session = Depends(get_db),
 ):
-    if not generate and not force:
-        existing = get_active_report_row(db, str(activity_id))
-        if not existing:
+    # Display-safe (#261): unless an explicit regenerate (force) was asked for,
+    # prefer ANY cached report over a synchronous regeneration. A COACH_PROMPT_ID
+    # flip (e.g. activating voice coach_message_v3) leaves prior-version reports
+    # displayable rather than forcing a regen that exceeds the gateway timeout
+    # (#260). Only fall through to generation when no report exists at all.
+    if not force:
+        existing = get_displayable_report_row(db, str(activity_id))
+        if existing:
+            return _to_read(existing)
+        if not generate:
             raise HTTPException(status_code=404, detail="No cached report.")
-        return _to_read(existing)
 
     report = await get_or_generate_coach_report(db, str(activity_id), force=force)
     if not report:
