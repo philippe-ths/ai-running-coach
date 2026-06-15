@@ -52,6 +52,7 @@ from app.services.coach.prompts import (
     build_system_prompt,
 )
 from app.services.coach.voice import resolve_voice
+from app.services.coach.stance import resolve_stance
 from app.services.coach.retrieval import fetch_latest_user_reply
 from app.services.coach.validator import (
     PolicyViolation,
@@ -138,6 +139,24 @@ def _resolve_voice_for_activity(db: Session, activity: Activity):
         .first()
     )
     return resolve_voice(relationship)
+
+
+def _resolve_stance_for_activity(db: Session, activity: Activity):
+    """Resolve the runner's declared coaching stance for this activity's owner (P1.3).
+
+    Loads the thin CoachingRelationship row (may not exist yet) and resolves it to a
+    StanceProfile (selected school + the two emphasis axes); a missing row or an
+    undeclared stance resolves to the default school (aerobic-base) + balanced
+    emphasis. This only takes effect under a stance-aware prompt (coach_message_v5):
+    build_context_pack threads the school into the corpus section and the emphasis
+    into the stance section only under v5, so the resolved stance is harmless under
+    any other prompt id (the P1.2/voice precedent)."""
+    relationship = (
+        db.query(CoachingRelationship)
+        .filter(CoachingRelationship.user_id == activity.user_id)
+        .first()
+    )
+    return resolve_stance(relationship)
 
 
 def active_schema_version(prompt_id: str) -> str:
@@ -240,8 +259,10 @@ async def get_or_generate_coach_report(
     prompt_id = settings.COACH_PROMPT_ID
     schema_version = active_schema_version(prompt_id)
 
-    # Build context pack
-    pack = build_context_pack(db, activity, prompt_id=prompt_id)
+    # Build context pack. The runner's stance (P1.3) keys the corpus school and the
+    # emphasis section under a stance-aware prompt; inert otherwise.
+    stance = _resolve_stance_for_activity(db, activity)
+    pack = build_context_pack(db, activity, prompt_id=prompt_id, stance=stance)
     input_hash = pack.fingerprint()
     pack_dict = pack.to_serializable_dict()
 
@@ -313,7 +334,8 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
 
     prompt_id = settings.COACH_PROMPT_ID
     schema_version = active_schema_version(prompt_id)
-    pack = build_context_pack(db, activity, prompt_id=prompt_id)
+    stance = _resolve_stance_for_activity(db, activity)
+    pack = build_context_pack(db, activity, prompt_id=prompt_id, stance=stance)
 
     existing = get_active_report_row(db, activity_uuid)
     if existing is not None:
@@ -423,7 +445,8 @@ async def generate_fuller(
 
     prompt_id = settings.COACH_PROMPT_ID
     schema_version = active_schema_version(prompt_id)
-    pack = build_context_pack(db, activity, continuity=continuity, prompt_id=prompt_id)
+    stance = _resolve_stance_for_activity(db, activity)
+    pack = build_context_pack(db, activity, continuity=continuity, prompt_id=prompt_id, stance=stance)
     input_hash = pack.fingerprint()
     pack_dict = pack.to_serializable_dict()
     classification = Classification.from_metrics(activity.metrics)

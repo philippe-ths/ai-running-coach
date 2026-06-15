@@ -13,6 +13,11 @@ from app.models.coach_report import CoachReport
 from app.schemas.chat import ChatHistoryResponse, ChatMessageSend
 from app.schemas.coach import CoachReportRead
 from app.schemas.voice import VoiceConfigRead, VoiceDials, build_catalog
+from app.schemas.stance import (
+    StanceConfigRead,
+    StanceSelection,
+    build_catalog as build_stance_catalog,
+)
 from app.services.coach.chat import get_chat_history, stream_chat_response
 from app.services.coach.service import (
     get_displayable_report_row,
@@ -92,6 +97,39 @@ def update_voice(voice_in: VoiceDials, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(relationship)
     return _read_voice(relationship)
+
+
+def _read_stance(relationship: CoachingRelationship) -> StanceConfigRead:
+    current = StanceSelection(
+        school=relationship.stance_school,
+        data_sentiment=relationship.stance_data_sentiment,
+        process_outcome=relationship.stance_process_outcome,
+    )
+    return StanceConfigRead(current=current, catalog=build_stance_catalog())
+
+
+@router.get("/coach/stance", response_model=StanceConfigRead)
+def get_stance(db: Session = Depends(get_db)):
+    """The runner's declared coaching stance plus the catalog the UI renders from."""
+    return _read_stance(_get_or_create_relationship(db))
+
+
+@router.put("/coach/stance", response_model=StanceConfigRead)
+def update_stance(stance_in: StanceSelection, db: Session = Depends(get_db)):
+    """Set the runner's declared coaching stance (school + two emphasis dials).
+
+    Runner-sovereign (ADR 0015): this is the only writer of stance state — no
+    background job ever changes it. Stance reweights emphasis/method-framing only
+    (ADR 0014/0015); it never overrides the run's measured data or the safety floor.
+    """
+    relationship = _get_or_create_relationship(db)
+    relationship.stance_school = stance_in.school
+    relationship.stance_data_sentiment = stance_in.data_sentiment
+    relationship.stance_process_outcome = stance_in.process_outcome
+    db.add(relationship)
+    db.commit()
+    db.refresh(relationship)
+    return _read_stance(relationship)
 
 
 @router.get(

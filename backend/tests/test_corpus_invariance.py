@@ -148,3 +148,117 @@ def test_house_core_only_still_builds_when_no_school_resolves(db, monkeypatch):
     # the safety floor is untouched by the degradation
     assert "illness_or_extreme_fatigue" in pack.metrics.flags
     assert pack.calibration.referral is not None
+
+
+# ===========================================================================
+# P1.3 cross-STANCE invariance — the load-bearing AC3/AC4 gate (ADR 0015).
+#
+# The full stance (the SELECTED SCHOOL + the two EMPHASIS axes) is the runner-
+# controllable surface P1.2 only hardcoded. This sweeps all five schools × the
+# emphasis-axis extremes under v5 and asserts: the run's facts, surfaced safety
+# flags, and the deterministic policy outcome are byte-identical across EVERY
+# stance (AC3 — stance changes emphasis, never the floor or the facts), while the
+# fact-free corpus + stance pack sections genuinely differ (AC4 — stance is
+# load-bearing). The behavioural cross-stance LLM run is integration-tagged.
+# ===========================================================================
+
+V5 = "coach_message_v5"
+_ALL_SCHOOLS = (
+    "aerobic-base", "polarized", "enjoyment-and-consistency",
+    "strength-led", "periodization",
+)
+# the 1-5 corners of (data_sentiment, process_outcome) plus the balanced centre
+_EMPHASIS_EXTREMES = ((1, 1), (1, 5), (5, 1), (5, 5), (3, 3))
+
+
+def _stance(school, ds, po):
+    from app.services.coach.stance import Emphasis, StanceProfile
+    return StanceProfile(
+        school_id=school,
+        emphasis=Emphasis(data_sentiment=ds, process_outcome=po),
+        is_default=False,
+    )
+
+
+def _all_stances():
+    return [_stance(s, ds, po) for s in _ALL_SCHOOLS for (ds, po) in _EMPHASIS_EXTREMES]
+
+
+def _without_stance_surface(pack):
+    d = pack.to_serializable_dict()
+    d.pop("corpus", None)
+    d.pop("stance", None)
+    return d
+
+
+def test_stance_changes_only_corpus_and_stance_sections(db, monkeypatch):
+    """AC3 (facts/flags): across all five schools × every emphasis extreme under v5,
+    the pack MINUS the corpus + stance sections is byte-identical — the safety flag
+    and every fact stay put whatever the stance."""
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", V5)
+    activity = _seed_flagged_activity(db)
+
+    packs = [build_context_pack(db, activity, prompt_id=V5, stance=s) for s in _all_stances()]
+    base = _without_stance_surface(packs[0])
+    assert "illness_or_extreme_fatigue" in packs[0].metrics.flags
+
+    for pack in packs:
+        assert _without_stance_surface(pack) == base, "a fact moved under some stance"
+        assert pack.metrics.flags == packs[0].metrics.flags
+        # the red-flag referral the safety floor depends on is stance-invariant
+        assert pack.calibration.referral == packs[0].calibration.referral
+
+
+def test_validator_outcome_is_identical_across_all_stances(db, monkeypatch):
+    """AC3 (floor): the deterministic policy outcome on a fixed clean + overreach
+    report is identical across all five schools × every emphasis extreme — the
+    validator never reads the corpus/stance and the safety-relevant pack is
+    stance-invariant."""
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", V5)
+    activity = _seed_flagged_activity(db)
+
+    def clean_message():
+        return CoachMessageReport(
+            message="Solid long run. Your pace held steady and the effort looked controlled.",
+            headline="Steady long run", next_steps=[], risks=[], questions=[],
+        )
+
+    def overreach_message():
+        return CoachMessageReport(
+            message="This is overtraining syndrome — take 600mg of ibuprofen and rest.",
+            headline="Overtrained", next_steps=[], risks=[], questions=[],
+        )
+
+    outcomes = []
+    for s in _all_stances():
+        pack = build_context_pack(db, activity, prompt_id=V5, stance=s)
+        clean = [v.rule for v in validate_message_policy(clean_message(), pack)]
+        bad = [v.rule for v in validate_message_policy(overreach_message(), pack)]
+        outcomes.append((clean, bad))
+
+    assert all(o == outcomes[0] for o in outcomes)
+    assert "medical_overreach" in outcomes[0][1]  # the gate is real
+
+
+def test_stance_surface_is_load_bearing(db, monkeypatch):
+    """AC4: stance genuinely differentiates the pack — the corpus section differs
+    across the five schools, and the stance section differs across emphasis settings.
+    A dormant substrate would fail this."""
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", V5)
+    activity = _seed_flagged_activity(db)
+
+    # corpus section differs across all five schools (fixed balanced emphasis)
+    corpus_dumps = {
+        s: build_context_pack(db, activity, prompt_id=V5, stance=_stance(s, 3, 3)).corpus.model_dump()
+        for s in _ALL_SCHOOLS
+    }
+    assert len({repr(d) for d in corpus_dumps.values()}) == len(_ALL_SCHOOLS), \
+        "two schools produced an identical corpus section"
+
+    # stance section differs across the emphasis extremes (fixed school)
+    stance_dumps = [
+        build_context_pack(db, activity, prompt_id=V5, stance=_stance("aerobic-base", ds, po)).stance.model_dump()
+        for (ds, po) in _EMPHASIS_EXTREMES
+    ]
+    assert len({repr(d) for d in stance_dumps}) == len(_EMPHASIS_EXTREMES), \
+        "two emphasis settings produced an identical stance section"
