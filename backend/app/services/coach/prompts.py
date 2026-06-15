@@ -5,6 +5,8 @@ Each prompt version is stored as a constant and keyed by its ID.
 The active prompt_id is set in config (COACH_PROMPT_ID).
 """
 
+from typing import Optional
+
 SYSTEM_PROMPT_V1 = """You are a running coach assistant. Your job is to translate factual training data into concise, actionable coaching language.
 
 RULES:
@@ -399,6 +401,43 @@ SYSTEM_PROMPT_MESSAGE_V3 = SYSTEM_PROMPT_MESSAGE_V2 + _VOICE_ADDENDUM
 SYSTEM_PROMPT_MESSAGE_V3_OPENER = SYSTEM_PROMPT_MESSAGE_V2_OPENER + _VOICE_ADDENDUM
 
 
+# ===========================================================================
+# coach_message_v4 (P1.2) — the corpus-aware two-stage prompt (schema 2.0, same
+# family). ADR 0014 (the coaching corpus is keyed lexical retrieval under partial
+# authority tiering).
+#
+# v4 = v3 + a STATIC corpus addendum (prompt rule 25), for BOTH modes (fuller and
+# opener), following the Vn = V(n-1) + addendum idiom. Because v4 builds on v3 it
+# is BOTH two-stage and voice-aware; it ADDS the corpus discipline. The addendum
+# states the corpus's authority boundary: it reweights EMPHASIS and METHOD-FRAMING
+# only, stays goal-tethered, and never licenses unsupported advice, grounds a fact,
+# or overrides this run's re-derived DerivedMetric or the safety floor. The PER-RUN
+# corpus values (the house principles + the keyed school) are NOT baked into the
+# constant — they ride the context pack's `corpus` section (the narrative model,
+# data the coach reasons over, never instructions), built by _build_corpus_context.
+#
+# coach_message_v1..v3 and coach_report_v1..v10 stay BYTE-STABLE above.
+# ===========================================================================
+
+_CORPUS_ADDENDUM = """
+
+# COACHING CORPUS (the school of thought you coach from — emphasis and framing only)
+
+Your context carries a `corpus` section: an always-present set of house coaching principles plus, when one is selected, a school of training thought (its stance, its principles, and how it frames training methods). This is the body of coaching knowledge you reason FROM — the lens you bring to this run. Let it shape what you EMPHASISE, how you FRAME the training, and which of several equally-valid points you lead with, so you sound like a coach with a considered philosophy rather than a generic one.
+
+But the corpus changes only your EMPHASIS and FRAMING, never the facts. Everything in the GROUNDING and SAFETY sections above is INVARIANT under the corpus, exactly as it is under voice: the same numbers, the same flags, the same warnings, the same honesty are delivered whichever school is selected. The corpus is judgment knowledge, NEVER evidence and NEVER data:
+
+- It NEVER licenses advice the run's data does not support. A school that favours volume is no reason to tell a runner to add mileage their load and recovery do not warrant; a school that favours quality is no reason to prescribe intervals a fatigued or red-flagged run rules out. Stay tethered to THIS runner's real goal and to what the measured data actually shows.
+- It is NEVER the source of a factual claim. Do not cite a corpus principle as evidence for what happened in this run, and never derive a number, a trend, or an event from it. Ground every claim in the run's metrics and the deterministic facts, as the GROUNDING rules require.
+- It NEVER overrides this run's re-derived data or the safety floor. Where a school's emphasis and the run's data (or a safety signal) pull in different directions, the data and the floor win, silently — you frame the true picture through the school's lens, never bend the picture to fit the school.
+
+When no school is selected you still have the house principles; lean on those. The corpus tunes HOW you coach; it never changes what is true or what you must surface."""
+
+
+SYSTEM_PROMPT_MESSAGE_V4 = SYSTEM_PROMPT_MESSAGE_V3 + _CORPUS_ADDENDUM
+SYSTEM_PROMPT_MESSAGE_V4_OPENER = SYSTEM_PROMPT_MESSAGE_V3_OPENER + _CORPUS_ADDENDUM
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -416,6 +455,8 @@ PROMPT_VERSIONS = {
     "coach_message_v2": SYSTEM_PROMPT_MESSAGE_V2,
     # P1.1 voice-aware two-stage prompt (= v2 + the static VOICE addendum).
     "coach_message_v3": SYSTEM_PROMPT_MESSAGE_V3,
+    # P1.2 corpus-aware two-stage prompt (= v3 + the static CORPUS addendum).
+    "coach_message_v4": SYSTEM_PROMPT_MESSAGE_V4,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -425,7 +466,9 @@ MESSAGE_PROMPT_PREFIX = "coach_message"
 # The A4 two-stage prompt ids. Both stages of each share one cache identity / one
 # row; the MODE (opener vs fuller) is chosen by the caller/job, not derived from
 # the id. coach_message_v3 (P1.1) is two-stage exactly like v2.
-TWO_STAGE_PROMPT_IDS = frozenset({"coach_message_v2", "coach_message_v3"})
+TWO_STAGE_PROMPT_IDS = frozenset(
+    {"coach_message_v2", "coach_message_v3", "coach_message_v4"}
+)
 
 # Retained for back-compat references (the A4 default two-stage id). Membership
 # checks use TWO_STAGE_PROMPT_IDS so coach_message_v3 is covered everywhere.
@@ -437,11 +480,26 @@ TWO_STAGE_PROMPT_ID = "coach_message_v2"
 _OPENER_PROMPTS = {
     "coach_message_v2": SYSTEM_PROMPT_MESSAGE_V2_OPENER,
     "coach_message_v3": SYSTEM_PROMPT_MESSAGE_V3_OPENER,
+    "coach_message_v4": SYSTEM_PROMPT_MESSAGE_V4_OPENER,
 }
 
 # Prompt ids that consume a per-runner VOICE block (P1.1). Only these get the
-# runtime voice block appended; every other prompt stays byte-stable.
-VOICE_PROMPT_IDS = frozenset({"coach_message_v3"})
+# runtime voice block appended; every other prompt stays byte-stable. v4 (P1.2)
+# builds on v3, so it is voice-aware too.
+VOICE_PROMPT_IDS = frozenset({"coach_message_v3", "coach_message_v4"})
+
+# Prompt ids that carry the P1.2 coaching-corpus addendum AND the `corpus` context-
+# pack section. Membership implies voice-aware and two-stage (v4 builds on v3), and
+# gates BOTH the prompt addendum (above) and _build_corpus_context, so flipping
+# COACH_PROMPT_ID off coach_message_v4 leaves the corpus inert with zero code change.
+CORPUS_PROMPT_IDS = frozenset({"coach_message_v4"})
+
+
+def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt is corpus-aware (P1.2): it carries the corpus
+    addendum and its context pack carries the `corpus` section. False for every
+    other prompt, so the corpus substrate is wholly inert under a rollback."""
+    return prompt_id in CORPUS_PROMPT_IDS
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook

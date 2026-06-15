@@ -28,6 +28,7 @@ from app.models.coach_chat_message import CoachChatMessage
 from app.models.coach_report import CoachReport
 from app.models.derived_metric import DerivedMetric
 from app.schemas.coach_context import PriorReportDigest
+from app.services.coach.corpus import HOUSE_CORE, SCHOOLS, Corpus
 from app.services.coach.digest import build_report_digest
 from app.services.coach.output_contract import is_opener_only
 
@@ -46,6 +47,20 @@ def _as_uuid(value) -> uuid.UUID:
     """Accept a UUID or its string form. SQLite (tests) will not implicitly cast
     a string to a UUID column the way Postgres does, so coerce up front."""
     return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+
+
+def fetch_corpus(school_id: Optional[str]) -> Corpus:
+    """Pull the coaching corpus (P1.2, ADR 0014): the always-present house core
+    plus the keyed school of training thought.
+
+    A pure keyed LOOKUP into the code-resident `corpus.py` — no DB read, since the
+    corpus is house-authored and lives as code. This seam is the only place the
+    rest of the system reads the corpus. An unknown or null `school_id` degrades to
+    house-core-only (`school=None`), exactly as `narrative` degrades to null, so a
+    missing/unresolved school never breaks an exchange.
+    """
+    school = SCHOOLS.get(school_id) if school_id else None
+    return Corpus(house_core=HOUSE_CORE, school=school)
 
 
 def fetch_stream_view(db: Session, activity_id) -> Optional[dict]:

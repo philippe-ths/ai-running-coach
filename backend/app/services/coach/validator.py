@@ -144,6 +144,17 @@ _NEGATION_PATTERN = re.compile(
 _NARRATIVE_FIELD_PATTERN = re.compile(r"^\s*narrative(?:\.|\[|\s*$)", re.IGNORECASE)
 
 
+# --- Rule 7: corpus-is-not-evidence boundary (P1.2, ADR 0014) --------------
+# The coaching corpus is judgment knowledge the coach reasons FROM — never a fact
+# and never grounding. The pack carries it under the `corpus` section, so any
+# evidence ref whose field path points there is the LLM laundering philosophy into
+# a factual claim. Mirrors rule 6 exactly and is deliberately narrow — it matches
+# ONLY the corpus path, never legitimate evidence or framing that merely DRAWS on
+# the corpus without citing it — so it can never cause a false-positive fallback.
+# This is the code half of the authority boundary that prompt rule 25 states.
+_CORPUS_FIELD_PATTERN = re.compile(r"^\s*corpus(?:\.|\[|\s*$)", re.IGNORECASE)
+
+
 def _collect_evidence_fields(content: CoachReportContent) -> List[str]:
     """Every evidence `field` path the report cites, across the lead argument,
     key takeaways, and next steps."""
@@ -171,7 +182,7 @@ def _has_asserted_health_claim(text: str) -> bool:
 
 
 # --- Shared rule bodies ----------------------------------------------------
-# Each of the six rules is a standalone function over the primitives it needs
+# Each of the seven rules is a standalone function over the primitives it needs
 # (a text surface, structured flags/questions/evidence, the relevant pack
 # facts) rather than the CoachReportContent shape. validate_policy below
 # assembles those primitives from a structured report; a future prose entry
@@ -313,6 +324,30 @@ def check_narrative_evidence(evidence_field_paths: List[str]) -> List[PolicyViol
     return []
 
 
+def check_corpus_evidence(evidence_field_paths: List[str]) -> List[PolicyViolation]:
+    """Rule 7: the coaching corpus is judgment knowledge only — never cited as fact."""
+    corpus_fields = [
+        f for f in evidence_field_paths if _CORPUS_FIELD_PATTERN.match(f)
+    ]
+    if corpus_fields:
+        return [PolicyViolation(
+            rule="corpus_cited_as_fact",
+            detail=(
+                "Evidence cites the coaching corpus as a factual source: "
+                f"{corpus_fields}. The corpus is the school of thought the coach "
+                "reasons from and can never ground a claim."
+            ),
+            fix_instruction=(
+                "Remove every evidence reference whose field path is under "
+                "'corpus'. The corpus reweights emphasis and framing, never a fact: "
+                "re-ground each affected claim in this run's metrics or the "
+                "deterministic facts, or drop the claim. The corpus may shape what "
+                "you emphasise but must never be cited as evidence."
+            ),
+        )]
+    return []
+
+
 def validate_policy(
     content: CoachReportContent,
     context_pack: CoachContextPack,
@@ -322,7 +357,7 @@ def validate_policy(
     Returns list of violations (empty = all checks passed).
 
     Assembles the rule primitives from the structured report and delegates each
-    rule to its shared body. The violation order (rules 1-6) and every emitted
+    rule to its shared body. The violation order (rules 1-7) and every emitted
     string are preserved from the prior inline implementation.
     """
     full_text = _extract_all_text(content)
@@ -342,13 +377,15 @@ def validate_policy(
     violations += check_medical_overreach(full_text)
     # Rule 6: narrative is voice only, never cited evidence.
     violations += check_narrative_evidence(_collect_evidence_fields(content))
+    # Rule 7: corpus is judgment knowledge only, never cited evidence.
+    violations += check_corpus_evidence(_collect_evidence_fields(content))
 
     return violations
 
 
 # --- A3 prose-message entry point ------------------------------------------
 # validate_message_policy polices the A3 output shape (CoachMessageReport: a
-# human prose `message` + a thin structured tail) using the SAME six shared rule
+# human prose `message` + a thin structured tail) using the SAME seven shared rule
 # bodies as validate_policy. The only difference is how the primitives are
 # assembled: the text surface is the prose message PLUS every tail text field
 # (headline, next_steps, risks, questions, and tappable-option labels), so the
@@ -401,11 +438,11 @@ def validate_message_policy(
     report: CoachMessageReport,
     context_pack: CoachContextPack,
 ) -> List[PolicyViolation]:
-    """Run the six deterministic policy checks on the A3 prose-message output.
+    """Run the seven deterministic policy checks on the A3 prose-message output.
 
     Assembles each rule's primitives from the message + tail and delegates to the
     same shared rule bodies validate_policy uses, so prose and structured output
-    are policed by one identical rule set. Violation order (rules 1-6) matches
+    are policed by one identical rule set. Violation order (rules 1-7) matches
     validate_policy.
     """
     full_text = _extract_message_text(report)
@@ -425,6 +462,8 @@ def validate_message_policy(
     violations += check_medical_overreach(full_text)
     # Rule 6: narrative is voice only, never cited evidence (tail evidence paths).
     violations += check_narrative_evidence(_collect_message_evidence_fields(report))
+    # Rule 7: corpus is judgment knowledge only, never cited evidence (tail paths).
+    violations += check_corpus_evidence(_collect_message_evidence_fields(report))
 
     return violations
 

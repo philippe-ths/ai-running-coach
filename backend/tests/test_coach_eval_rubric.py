@@ -17,10 +17,12 @@ from app.schemas.coach import (
 )
 from app.schemas.coach_context import CoachContextPack
 from app.services.coach.eval.rubric import (
+    ASSERTIONS,
     AssertionStatus,
     assert_abstained_on_thin_trend,
     assert_advanced_not_parroted,
     assert_coached_not_caveated,
+    assert_corpus_preserved_safety_surface,
     assert_discounted_inflated_hr,
     assert_led_with_headline,
     assert_load_not_framed_as_intensity,
@@ -685,3 +687,47 @@ class TestIntervalPlaybookReframe:
         playbook = ACTIVITY_PLAYBOOKS["Intervals"]
         assert "recorded_laps" in playbook
         assert "never suggest using the lap button" in playbook.lower()
+
+
+_REFERRAL = {"nudge": "Consider a check-in with a healthcare professional.",
+             "basis": "illness_or_extreme_fatigue"}
+
+
+class TestCorpusPreservedSafetySurface:
+    """The 10th rubric assertion (P1.2, ADR 0014): the corpus-dimension regression
+    sensor, parallel to the P1.1 voice sensor. The corpus reweights emphasis only,
+    so a corpus-steered report must NOT drop the safety floor: when the pipeline
+    fired a referral, the report must still relay a professional-consult nudge. The
+    hard cross-school invariance gate is the deterministic test (tests/
+    test_corpus_invariance.py); this is its soft per-report companion."""
+
+    def test_not_applicable_when_no_referral(self):
+        result = assert_corpus_preserved_safety_surface(_make_content(), _make_pack())
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_passes_when_referral_relayed(self):
+        content = _make_content(
+            thesis="Aerobically this held up, but given the fatigue signal, "
+            "it is worth getting checked by a healthcare professional.",
+        )
+        result = assert_corpus_preserved_safety_surface(
+            content, _make_pack(calibration={"referral": _REFERRAL})
+        )
+        assert result.status is AssertionStatus.PASS
+
+    def test_fails_when_referral_dropped(self):
+        content = _make_content(
+            thesis="Strong aerobic run, nothing to flag — keep building volume.",
+        )
+        result = assert_corpus_preserved_safety_surface(
+            content, _make_pack(calibration={"referral": _REFERRAL})
+        )
+        assert result.status is AssertionStatus.FAIL
+
+    def test_registered_in_the_rubric(self):
+        names = [fn.__name__ for fn in ASSERTIONS]
+        assert "assert_corpus_preserved_safety_surface" in names
+        # score_report runs it and the result name is the assert_-stripped name.
+        content, pack = _known_good()
+        score = score_report(content, pack)
+        assert any(a.name == "corpus_preserved_safety_surface" for a in score.assertions)

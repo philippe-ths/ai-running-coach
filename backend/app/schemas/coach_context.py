@@ -406,6 +406,38 @@ class BlockContext(BaseModel):
     combined_distance_m: int
 
 
+class CorpusSchoolContext(BaseModel):
+    """P1.2 (ADR 0014): the keyed school of training thought in the corpus section.
+
+    Short structured fields mirroring the code-resident `corpus.School` — the
+    school's one-line `stance`, its `principles`, how it frames methods
+    (`method_framing`), and what it foregrounds (`emphasis_hints`). None when no
+    school resolves (the house-core-only degradation lives on CorpusContext)."""
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    stance: str
+    principles: List[str]
+    method_framing: str
+    emphasis_hints: List[str]
+
+
+class CorpusContext(BaseModel):
+    """P1.2 (ADR 0014): the coaching CORPUS the coach grounds its JUDGMENT in.
+
+    The always-present house `house_principles` plus the keyed `school` (None =
+    house-core-only). This is judgment knowledge the coach reasons over — NEVER a
+    fact and never grounding (validator rule 7 rejects citing a `corpus.*` path as
+    evidence; prompt rule 25 keeps it from overriding the re-derived DerivedMetric
+    or the safety floor). It rides the pack like `narrative` and is emitted ONLY
+    under a corpus-aware prompt id, so the pack stays byte-stable otherwise."""
+    model_config = ConfigDict(extra="forbid")
+
+    house_principles: List[str]
+    school: Optional[CorpusSchoolContext] = None
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -436,6 +468,10 @@ class CoachContextPack(BaseModel):
     # A1 multi-member block aggregate. None for a block-of-one and OMITTED from
     # serialization entirely (AC8: the solo-run pack stays byte-stable pre/post A1).
     block: Optional[BlockContext] = None
+    # P1.2 coaching corpus (ADR 0014). None under every non-corpus prompt and OMITTED
+    # from serialization entirely, exactly like `block`, so the pack stays byte-stable
+    # pre/post P1.2 (AC1/AC7); populated only under a corpus-aware prompt id.
+    corpus: Optional["CorpusContext"] = None
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
@@ -444,6 +480,9 @@ class CoachContextPack(BaseModel):
         if data.get("block") is None:
             # AC8: a block-of-one emits nothing new — not even a null key.
             data.pop("block", None)
+        if data.get("corpus") is None:
+            # AC1: a non-corpus prompt emits nothing — not even a null key.
+            data.pop("corpus", None)
         return data
 
     def fingerprint(self) -> str:

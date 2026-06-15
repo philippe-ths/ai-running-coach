@@ -235,14 +235,17 @@ async def get_or_generate_coach_report(
     if not activity or not activity.metrics:
         return None
 
+    # Resolve the active prompt up front: the prompt id gates the corpus pack
+    # section (P1.2), so it must be known before the pack is built.
+    prompt_id = settings.COACH_PROMPT_ID
+    schema_version = active_schema_version(prompt_id)
+
     # Build context pack
-    pack = build_context_pack(db, activity)
+    pack = build_context_pack(db, activity, prompt_id=prompt_id)
     input_hash = pack.fingerprint()
     pack_dict = pack.to_serializable_dict()
 
     # Build prompt with activity-type playbook, selected from the axes (ADR 0007)
-    prompt_id = settings.COACH_PROMPT_ID
-    schema_version = active_schema_version(prompt_id)
     classification = Classification.from_metrics(activity.metrics)
     voice = _resolve_voice_for_activity(db, activity)
     system_prompt = build_system_prompt(
@@ -310,7 +313,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
 
     prompt_id = settings.COACH_PROMPT_ID
     schema_version = active_schema_version(prompt_id)
-    pack = build_context_pack(db, activity)
+    pack = build_context_pack(db, activity, prompt_id=prompt_id)
 
     existing = get_active_report_row(db, activity_uuid)
     if existing is not None:
@@ -420,7 +423,7 @@ async def generate_fuller(
 
     prompt_id = settings.COACH_PROMPT_ID
     schema_version = active_schema_version(prompt_id)
-    pack = build_context_pack(db, activity, continuity=continuity)
+    pack = build_context_pack(db, activity, continuity=continuity, prompt_id=prompt_id)
     input_hash = pack.fingerprint()
     pack_dict = pack.to_serializable_dict()
     classification = Classification.from_metrics(activity.metrics)
