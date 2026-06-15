@@ -26,6 +26,19 @@ export interface Lap {
   avg_cadence?: number | null;
 }
 
+// P3 readiness (ADR 0016): the runner's current-condition read as of this activity.
+export interface TrainingLoad {
+  fitness: number;       // chronic load (zone-minutes, ~42d EWMA)
+  fatigue: number;       // acute load (zone-minutes, ~7d EWMA)
+  form: number;          // fitness − fatigue
+  ramp_rate: number;     // fitness change over the last 7 days
+  condition: string;     // fresh | balanced | fatigued | overreaching | building_baseline
+  trend: string;         // building | steady | detraining
+  ramp_aggressive: boolean;
+  warming_up: boolean;
+  sample_count: number;
+}
+
 export interface Activity {
   id: string;
   name: string;
@@ -43,4 +56,5 @@ export interface Activity {
   check_in?: CheckIn;
   splits?: Split[];
   laps?: Lap[];
+  training_load?: TrainingLoad | null;
 }
