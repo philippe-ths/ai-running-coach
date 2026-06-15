@@ -438,6 +438,50 @@ SYSTEM_PROMPT_MESSAGE_V4 = SYSTEM_PROMPT_MESSAGE_V3 + _CORPUS_ADDENDUM
 SYSTEM_PROMPT_MESSAGE_V4_OPENER = SYSTEM_PROMPT_MESSAGE_V3_OPENER + _CORPUS_ADDENDUM
 
 
+# ===========================================================================
+# coach_message_v5 (P1.3) — the stance-aware two-stage prompt (schema 2.0, same
+# family). ADR 0015 (coaching stance is a runner-selected school plus two
+# prompt-steered emphasis axes).
+#
+# v5 = v4 + a STATIC emphasis addendum (prompt rule 26), for BOTH modes (fuller and
+# opener), following the Vn = V(n-1) + addendum idiom. Because v5 builds on v4 it is
+# two-stage, voice-aware, AND corpus-aware; it ADDS the emphasis-axis discipline.
+# The runner's SELECTED SCHOOL needs no new rule — it rides the existing `corpus`
+# section that v4's rule 25 already consumes (P1.3 only threads the runner's school
+# id in place of the hardcoded default). The two emphasis axes are NET-NEW: their
+# PER-RUNNER values are NOT baked into the constant — they ride the context pack's
+# `stance` section (the narrative model, data the coach reasons over, never
+# instructions), built by _build_stance_context. The addendum states the axes'
+# authority boundary: they reweight WHAT THE COACH FOREGROUNDS only, stay
+# goal-tethered, and never license unsupported advice, ground a fact, or override
+# this run's re-derived DerivedMetric or the safety floor.
+#
+# coach_message_v1..v4 and coach_report_v1..v10 stay BYTE-STABLE above.
+# ===========================================================================
+
+_EMPHASIS_ADDENDUM = """
+
+# COACHING STANCE — EMPHASIS (what you foreground; emphasis only, never the facts)
+
+Your context carries a `stance` section with the runner's two emphasis axes, each set on a 1-5 dial they chose:
+- Data <-> Sentiment (1 = lead with the numbers; 5 = lead with how the run felt; 3 = balanced).
+- Process <-> Outcome (1 = foreground habits and execution; 5 = foreground results, PRs, and goals; 3 = balanced).
+
+Honour these by reweighting WHAT YOU FOREGROUND AND LEAD WITH — which true things you open on, dwell on, and frame the run around. A data-led runner gets the metrics up front and the feel as support; a sentiment-led runner gets their felt experience taken seriously first, with the numbers there to back it. A process-led runner hears about the habit, the execution, the consistency; an outcome-led runner hears how this moves them toward their result and goal. A balanced setting (3) means no tilt — coach as you naturally would.
+
+The emphasis axes change only your EMPHASIS, never the substance. Everything in the GROUNDING and SAFETY sections above is INVARIANT under stance, exactly as it is under voice and the corpus: the same numbers, the same flags, the same warnings, the same honesty whatever the dials say. The emphasis axes are runner PREFERENCE, never evidence and never fact:
+
+- They NEVER license advice the run's data does not support, and never change the runner's real goal. A sentiment tilt is no reason to soften a data-warranted caution; an outcome tilt is no reason to chase a PR the load and recovery rule out; a process tilt is no reason to ignore a result that matters. Stay tethered to THIS runner's real goal and to what the measured data shows.
+- They are NEVER the source of a factual claim. Do not cite an emphasis setting as evidence, and never derive a number, a trend, or an event from it.
+- A safety signal is surfaced in full regardless of the dials. You may not bury or downplay a warning because the runner leans sentiment, outcome, or anything else; emphasis reorders what you say, never whether you say what you must.
+
+Lead with what they want to hear about FIRST; never let it change what is true or what you are obliged to surface."""
+
+
+SYSTEM_PROMPT_MESSAGE_V5 = SYSTEM_PROMPT_MESSAGE_V4 + _EMPHASIS_ADDENDUM
+SYSTEM_PROMPT_MESSAGE_V5_OPENER = SYSTEM_PROMPT_MESSAGE_V4_OPENER + _EMPHASIS_ADDENDUM
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -457,6 +501,8 @@ PROMPT_VERSIONS = {
     "coach_message_v3": SYSTEM_PROMPT_MESSAGE_V3,
     # P1.2 corpus-aware two-stage prompt (= v3 + the static CORPUS addendum).
     "coach_message_v4": SYSTEM_PROMPT_MESSAGE_V4,
+    # P1.3 stance-aware two-stage prompt (= v4 + the static EMPHASIS addendum).
+    "coach_message_v5": SYSTEM_PROMPT_MESSAGE_V5,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -467,7 +513,7 @@ MESSAGE_PROMPT_PREFIX = "coach_message"
 # row; the MODE (opener vs fuller) is chosen by the caller/job, not derived from
 # the id. coach_message_v3 (P1.1) is two-stage exactly like v2.
 TWO_STAGE_PROMPT_IDS = frozenset(
-    {"coach_message_v2", "coach_message_v3", "coach_message_v4"}
+    {"coach_message_v2", "coach_message_v3", "coach_message_v4", "coach_message_v5"}
 )
 
 # Retained for back-compat references (the A4 default two-stage id). Membership
@@ -481,25 +527,42 @@ _OPENER_PROMPTS = {
     "coach_message_v2": SYSTEM_PROMPT_MESSAGE_V2_OPENER,
     "coach_message_v3": SYSTEM_PROMPT_MESSAGE_V3_OPENER,
     "coach_message_v4": SYSTEM_PROMPT_MESSAGE_V4_OPENER,
+    "coach_message_v5": SYSTEM_PROMPT_MESSAGE_V5_OPENER,
 }
 
 # Prompt ids that consume a per-runner VOICE block (P1.1). Only these get the
 # runtime voice block appended; every other prompt stays byte-stable. v4 (P1.2)
-# builds on v3, so it is voice-aware too.
-VOICE_PROMPT_IDS = frozenset({"coach_message_v3", "coach_message_v4"})
+# and v5 (P1.3) build on v3, so they are voice-aware too.
+VOICE_PROMPT_IDS = frozenset({"coach_message_v3", "coach_message_v4", "coach_message_v5"})
 
 # Prompt ids that carry the P1.2 coaching-corpus addendum AND the `corpus` context-
 # pack section. Membership implies voice-aware and two-stage (v4 builds on v3), and
 # gates BOTH the prompt addendum (above) and _build_corpus_context, so flipping
-# COACH_PROMPT_ID off coach_message_v4 leaves the corpus inert with zero code change.
-CORPUS_PROMPT_IDS = frozenset({"coach_message_v4"})
+# COACH_PROMPT_ID off a corpus-aware id leaves the corpus inert with zero code change.
+# v5 (P1.3) builds on v4, so it is corpus-aware too (it threads the runner's school).
+CORPUS_PROMPT_IDS = frozenset({"coach_message_v4", "coach_message_v5"})
+
+# Prompt ids that carry the P1.3 emphasis addendum (rule 26) AND the `stance`
+# context-pack section. Membership implies corpus-aware, voice-aware, and two-stage
+# (v5 builds on v4). Gates BOTH the emphasis addendum (above) and
+# _build_stance_context, so flipping COACH_PROMPT_ID off coach_message_v5 leaves the
+# emphasis axes inert with zero code change. (The selected school rides the `corpus`
+# section, gated by CORPUS_PROMPT_IDS; only the emphasis half is stance-gated here.)
+STANCE_PROMPT_IDS = frozenset({"coach_message_v5"})
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
-    """True when the active prompt is corpus-aware (P1.2): it carries the corpus
+    """True when the active prompt is corpus-aware (P1.2+): it carries the corpus
     addendum and its context pack carries the `corpus` section. False for every
     other prompt, so the corpus substrate is wholly inert under a rollback."""
     return prompt_id in CORPUS_PROMPT_IDS
+
+
+def is_stance_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt is stance-aware (P1.3): it carries the emphasis
+    addendum (rule 26) and its context pack carries the `stance` section. False for
+    every other prompt, so the emphasis axes are wholly inert under a rollback."""
+    return prompt_id in STANCE_PROMPT_IDS
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook

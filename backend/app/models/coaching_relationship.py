@@ -44,4 +44,15 @@ class CoachingRelationship(Base):
     voice_energy: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     voice_freetext: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
+    # P1.3 Coaching stance (ADR 0015). All nullable: a null stance resolves to the
+    # default school (aerobic-base) + balanced emphasis at read time, so the
+    # migration backfills nothing and pre-stance behaviour is unchanged until a
+    # runner declares a stance. `stance_school` is a corpus.SCHOOLS key (the school
+    # the coach reasons from). The two emphasis axes are 1-5: Data 1 - Sentiment 5,
+    # Process 1 - Outcome 5. Runner-sovereign like voice — written only by
+    # PUT /api/coach/stance, never inferred by a background job.
+    stance_school: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    stance_data_sentiment: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    stance_process_outcome: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+
     user = relationship("User", backref="coaching_relationship")

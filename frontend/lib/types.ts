@@ -52,4 +52,12 @@ export type {
   VoiceConfig,
   DialKey,
 } from "./types/voice";
+export type {
+  StanceSelection,
+  StanceSchoolInfo,
+  StanceAxisInfo,
+  StanceCatalog,
+  StanceConfig,
+  EmphasisKey,
+} from "./types/stance";
 

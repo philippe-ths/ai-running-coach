@@ -438,6 +438,36 @@ class CorpusContext(BaseModel):
     school: Optional[CorpusSchoolContext] = None
 
 
+class StanceEmphasisAxis(BaseModel):
+    """P1.3 (ADR 0015): one of the runner's two operable emphasis axes.
+
+    Carries the axis poles, the runner's 1-5 setting, and a short descriptor — the
+    structured form the coach reads to know what to FOREGROUND. Runner PREFERENCE,
+    never evidence and never grounding (the emphasis reweights what the coach leads
+    with, never the facts or the safety floor; prompt rule 26)."""
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    low_pole: str
+    high_pole: str
+    value: int
+    descriptor: str
+
+
+class StanceContext(BaseModel):
+    """P1.3 (ADR 0015): the runner's two emphasis axes (Data↔Sentiment,
+    Process↔Outcome) — the operable half of `Coaching stance`.
+
+    The runner's SELECTED SCHOOL is NOT here — it rides the `corpus` section (the
+    school's principles/method-framing). This section carries only the emphasis
+    tilt, kept separate because the corpus is coaching KNOWLEDGE while emphasis is
+    runner PREFERENCE. It rides the pack like `corpus` and is emitted ONLY under a
+    stance-aware prompt id, so the pack stays byte-stable otherwise."""
+    model_config = ConfigDict(extra="forbid")
+
+    emphasis: List[StanceEmphasisAxis]
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -472,6 +502,11 @@ class CoachContextPack(BaseModel):
     # from serialization entirely, exactly like `block`, so the pack stays byte-stable
     # pre/post P1.2 (AC1/AC7); populated only under a corpus-aware prompt id.
     corpus: Optional["CorpusContext"] = None
+    # P1.3 coaching stance — emphasis axes (ADR 0015). None under every non-stance
+    # prompt and OMITTED from serialization entirely, exactly like `corpus`/`block`,
+    # so the pack stays byte-stable pre/post P1.3 (AC1/AC7); populated only under a
+    # stance-aware prompt id.
+    stance: Optional["StanceContext"] = None
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
@@ -483,6 +518,9 @@ class CoachContextPack(BaseModel):
         if data.get("corpus") is None:
             # AC1: a non-corpus prompt emits nothing — not even a null key.
             data.pop("corpus", None)
+        if data.get("stance") is None:
+            # AC1: a non-stance prompt emits nothing — not even a null key.
+            data.pop("stance", None)
         return data
 
     def fingerprint(self) -> str:

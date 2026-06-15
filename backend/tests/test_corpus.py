@@ -20,12 +20,15 @@ def test_house_core_is_present_with_principles():
     assert all(isinstance(p, str) and p.strip() for p in corpus.HOUSE_CORE.principles)
 
 
-def test_three_house_original_schools_resolve_by_id():
-    """The library carries exactly the three P1.2 schools, each keyed by its id."""
+def test_five_house_original_schools_resolve_by_id():
+    """The library carries exactly the five schools (the three P1.2 schools plus the
+    two P1.3 schools surfaced by stance selection), each keyed by its id."""
     assert set(corpus.SCHOOLS) == {
         "aerobic-base",
         "polarized",
         "enjoyment-and-consistency",
+        "strength-led",
+        "periodization",
     }
     for school_id, school in corpus.SCHOOLS.items():
         assert school.id == school_id  # the key and the entry's own id agree

@@ -104,11 +104,11 @@ HOUSE_CORE = HouseCore(
 
 
 # ---------------------------------------------------------------------------
-# The school library (three house-original lenses for P1.2). They are deliberately
-# distinct in EMPHASIS so the same run reads differently under each (AC4), while
-# the facts and the safety floor stay invariant across all of them (AC3). The
-# strength-led + periodization schools are an additive follow-up once P1.3's
-# selection surfaces them.
+# The school library (five house-original lenses: the three from P1.2 plus the
+# strength-led + periodization schools authored in P1.3, once stance selection
+# surfaced them — ADR 0015). They are deliberately distinct in EMPHASIS so the
+# same run reads differently under each (AC4), while the facts and the safety
+# floor stay invariant across all of them (AC3).
 # ---------------------------------------------------------------------------
 
 SCHOOLS = {
@@ -198,6 +198,66 @@ SCHOOLS = {
             "enjoyment and how the run felt",
             "flexibility around life",
             "small, sustainable wins",
+        ),
+    ),
+    "strength-led": School(
+        id="strength-led",
+        name="Strength-Led",
+        stance=(
+            "Running serves the strength goal; conditioning should support the "
+            "lifting and the body, not compete with it for recovery."
+        ),
+        principles=(
+            "Running is in service of the primary strength goal — it builds work "
+            "capacity and health, it does not become the main event.",
+            "Keep most running genuinely easy so it adds aerobic fitness without "
+            "stealing the recovery the strength work needs.",
+            "Watch the interference cost: hard running and hard lifting compete for "
+            "the same recovery, so place and size running around the key sessions.",
+            "Durability and consistency beat chasing running PRs; the win is showing "
+            "up to lift fresh, not setting a 5k best.",
+        ),
+        method_framing=(
+            "Frame running as conditioning that complements the strength work: read "
+            "easy-day discipline, manageable fatigue, and recovery between hard "
+            "efforts as the signals that matter, and treat a run that compromises the "
+            "lifting as too much, not as progress."
+        ),
+        emphasis_hints=(
+            "running as support for the strength goal",
+            "keeping easy running easy to protect recovery",
+            "fatigue management across lifting and running",
+            "durability over running performance",
+        ),
+    ),
+    "periodization": School(
+        id="periodization",
+        name="Periodization",
+        stance=(
+            "Training is organised into phases with distinct purposes; what a run is "
+            "for depends on where it sits in the cycle."
+        ),
+        principles=(
+            "Train in phases — base, build, then sharpen and peak — each with a "
+            "distinct purpose, rather than doing a bit of everything every week.",
+            "Progressive overload plays out across the whole cycle: load rises "
+            "through a block, then a deliberate down week consolidates the gains.",
+            "The phase dictates the session — a base-phase run and a peak-phase run "
+            "have different jobs, so judge a run against what its phase is for.",
+            "Recovery weeks and tapers are scheduled work, not lost time; the peak is "
+            "earned by the phasing that came before it.",
+        ),
+        method_framing=(
+            "Frame this run by where it sits in the training cycle: read whether it "
+            "fits the current phase's purpose and the planned progression, and treat "
+            "structure, periodised load, and timely recovery weeks as the signals "
+            "that matter most."
+        ),
+        emphasis_hints=(
+            "the current training phase and its purpose",
+            "progression across the block, not the single run",
+            "scheduled recovery weeks and tapers",
+            "structure and periodised load",
         ),
     ),
 }

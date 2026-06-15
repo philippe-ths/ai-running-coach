@@ -37,7 +37,8 @@ from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.preference import build_preference_profile
 from app.services.coach.salience import compute_safety_override
 from app.services.coach.corpus import DEFAULT_SCHOOL_ID
-from app.services.coach.prompts import is_corpus_prompt
+from app.services.coach.prompts import _describe_dial, is_corpus_prompt, is_stance_prompt
+from app.services.coach.stance import StanceProfile, resolve_stance
 from app.services.coach.retrieval import (
     fetch_corpus,
     fetch_latest_user_reply,
@@ -58,6 +59,8 @@ from app.schemas.coach_context import (
     ContinuityContext,
     CorpusContext,
     CorpusSchoolContext,
+    StanceContext,
+    StanceEmphasisAxis,
     LongitudinalContext,
     MetricsContext,
     NarrativeContext,
@@ -176,6 +179,7 @@ def build_context_pack(
     *,
     continuity: Optional[ContinuityContext] = None,
     prompt_id: Optional[str] = None,
+    stance: Optional[StanceProfile] = None,
 ) -> CoachContextPack:
     """Assemble all facts the LLM needs. No computation, just data gathering.
 
@@ -184,9 +188,14 @@ def build_context_pack(
     (the opener prose this exchange already sent + any chat reply); the standard
     and opener paths leave it empty. The pack also carries the A4 `salience`
     section (novelty + safety override), computed in the B baseline. `prompt_id`
-    gates the P1.2 `corpus` section (ADR 0014): it is emitted ONLY under a
-    corpus-aware prompt id, so the pack stays byte-stable for every other prompt
-    and for callers that pass no prompt_id (the default).
+    gates the P1.2 `corpus` and P1.3 `stance` sections: each is emitted ONLY under
+    a corpus-/stance-aware prompt id, so the pack stays byte-stable for every other
+    prompt and for callers that pass no prompt_id (the default). `stance` (P1.3,
+    ADR 0015) is the runner's resolved StanceProfile: its `school_id` keys the
+    `corpus` section (replacing the hardcoded default) and its `emphasis` fills the
+    `stance` section. When omitted, the corpus falls to the hardcoded default school
+    and the stance section uses the balanced default — keeping callers that pass no
+    stance byte-stable against the P1.2-wired behaviour.
     """
     wc = assemble_working_context(db, activity)
     b, f = wc.b_baseline, wc.focus
@@ -206,7 +215,15 @@ def build_context_pack(
         salience=b.salience,
         continuity=continuity or ContinuityContext(),
         block=_build_block_context(db, activity),
-        corpus=_build_corpus_context(prompt_id),
+        # The runner's selected school takes effect ONLY under a stance-aware prompt
+        # (v5). Under v4 the corpus keeps the hardcoded default school (P1.2 stays
+        # byte-stable, AC1); P1.3's stance — school AND emphasis — activates together
+        # with v5. A non-stance/non-corpus prompt drops the corpus section entirely.
+        corpus=_build_corpus_context(
+            prompt_id,
+            school_id=stance.school_id if (stance and is_stance_prompt(prompt_id)) else None,
+        ),
+        stance=_build_stance_context(prompt_id, stance),
         safety_rules=b.safety_rules,
     )
 
@@ -218,12 +235,13 @@ def _build_corpus_context(
 
     Emitted ONLY under a corpus-aware prompt id (`is_corpus_prompt`), so the pack is
     byte-stable for every other prompt (AC1) — the section is dropped from
-    serialization when None, exactly like the `block` section. In P1.2 the school
-    key is the hardcoded `DEFAULT_SCHOOL_ID`; P1.3 replaces that with the runner's
-    stance selection (the `school_id` override exists for that and for the
-    cross-school invariance test). Reads the corpus through the `fetch_corpus` seam,
-    which degrades to house-core-only when no school resolves (AC5). The corpus is
-    judgment knowledge, never a fact — it never touches the run's DerivedMetric.
+    serialization when None, exactly like the `block` section. P1.3 threads the
+    runner's selected `school_id` here (via `build_context_pack`'s `stance` param);
+    when none is passed it falls back to the hardcoded `DEFAULT_SCHOOL_ID`, so a
+    caller that passes no stance stays byte-stable against P1.2. Reads the corpus
+    through the `fetch_corpus` seam, which degrades to house-core-only when no school
+    resolves (AC5). The corpus is judgment knowledge, never a fact — it never touches
+    the run's DerivedMetric.
     """
     if not is_corpus_prompt(prompt_id):
         return None
@@ -243,6 +261,37 @@ def _build_corpus_context(
             if school is not None
             else None
         ),
+    )
+
+
+def _build_stance_context(
+    prompt_id: Optional[str], stance: Optional[StanceProfile]
+) -> Optional[StanceContext]:
+    """The P1.3 coaching-stance pack section — the runner's two emphasis axes
+    (ADR 0015), or None.
+
+    Emitted ONLY under a stance-aware prompt id (`is_stance_prompt`), so the pack is
+    byte-stable for every other prompt (AC1) — the section is dropped from
+    serialization when None, exactly like `corpus`/`block`. Carries ONLY the
+    emphasis tilt (the selected school rides the `corpus` section); the values are
+    runner PREFERENCE, never evidence and never grounding — they never touch the
+    run's DerivedMetric. A caller that passes no stance under a stance prompt gets
+    the balanced default (resolve_stance(None)).
+    """
+    if not is_stance_prompt(prompt_id):
+        return None
+    resolved = stance or resolve_stance(None)
+    return StanceContext(
+        emphasis=[
+            StanceEmphasisAxis(
+                key=axis.key,
+                low_pole=axis.low_pole,
+                high_pole=axis.high_pole,
+                value=value,
+                descriptor=_describe_dial(value, axis.low_pole, axis.high_pole),
+            )
+            for axis, value in resolved.emphasis.as_ordered()
+        ]
     )
 
 
