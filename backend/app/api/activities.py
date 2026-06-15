@@ -7,12 +7,13 @@ from sqlalchemy import select
 
 from app.db.session import get_db
 from app.models import Activity, StravaAccount, CheckIn
-from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead
+from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead, TrainingLoadRead
 from app.services import activity_queries, analysis
 from app.services.checkins import write_checkin
 from app.services.analysis.classifier import Classification, compose_headline
 from app.services.analysis.splits import calculate_splits
 from app.services.laps import project_laps
+from app.services.readiness import build_readiness
 from app.services.strava_ingestion import get_strava_port, ingest_recent_activities
 
 router = APIRouter()
@@ -179,6 +180,23 @@ def read_activity(
     if response.metrics:
         response.metrics.headline = compose_headline(
             activity, Classification.from_metrics(activity.metrics)
+        )
+
+    # P3 readiness (ADR 0016): the current-condition read as of this activity,
+    # computed read-time from the user's windowed history. Shown regardless of the
+    # active coach prompt; None (card hidden) when there is no history.
+    readiness = build_readiness(db, activity.user_id, activity.start_date)
+    if readiness is not None:
+        response.training_load = TrainingLoadRead(
+            fitness=readiness.fitness,
+            fatigue=readiness.fatigue,
+            form=readiness.form,
+            ramp_rate=readiness.ramp_rate,
+            condition=readiness.condition,
+            trend=readiness.trend,
+            ramp_aggressive=readiness.ramp_aggressive,
+            warming_up=readiness.warming_up,
+            sample_count=readiness.sample_count,
         )
 
     return response

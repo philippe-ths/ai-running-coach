@@ -12,6 +12,7 @@ import StopsPanel from '@/components/StopsPanel';
 import EfficiencyPanel from '@/components/EfficiencyPanel';
 import CoachReportPanel from '@/components/CoachReportPanel';
 import CoachChat from '@/components/CoachChat';
+import TrainingLoadCard from '@/components/TrainingLoadCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,6 +60,11 @@ export default async function ActivityDetail({ params }: { params: { id: string 
               sportType={activity.raw_summary?.sport_type || activity.raw_summary?.type || 'Run'}
           />
           
+          {/* Training Load: current-condition read as of this activity (#276) */}
+          {activity.training_load && (
+              <TrainingLoadCard data={activity.training_load} />
+          )}
+
           {/* Coach Analysis */}
           <CoachReportPanel activityId={activity.id} hasMetrics={!!activity.metrics} />
 

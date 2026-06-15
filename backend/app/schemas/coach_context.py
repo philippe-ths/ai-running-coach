@@ -468,6 +468,32 @@ class StanceContext(BaseModel):
     emphasis: List[StanceEmphasisAxis]
 
 
+class TrainingLoadContext(BaseModel):
+    """P3 (ADR 0016): the runner's current-condition readiness read — our own
+    deterministic EWMA fitness/fatigue/form model from the per-activity load
+    primitive (`effort_score`), computed at read time as of the subject activity.
+
+    `fitness` (chronic load), `fatigue` (acute load), and `form` (their balance)
+    are in Edwards zone-minutes; `condition`/`trend` are the labelled read the coach
+    reasons over. This is a tier-3 deterministic FACT the coach may cite (unlike the
+    voice-only `narrative` and judgment-only `corpus`), but per `Authority tiering`
+    it never overrides this run's re-derived DerivedMetric or the safety floor
+    (prompt rule 27). While `warming_up`, the chronic baseline is not yet
+    established and the read abstains from a confident verdict. Emitted ONLY under a
+    training-load-aware prompt id, so the pack stays byte-stable otherwise."""
+    model_config = ConfigDict(extra="forbid")
+
+    fitness: float
+    fatigue: float
+    form: float
+    ramp_rate: float
+    condition: str          # fresh | balanced | fatigued | overreaching | building_baseline
+    trend: str              # building | steady | detraining
+    ramp_aggressive: bool
+    warming_up: bool
+    sample_count: int
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -507,6 +533,11 @@ class CoachContextPack(BaseModel):
     # so the pack stays byte-stable pre/post P1.3 (AC1/AC7); populated only under a
     # stance-aware prompt id.
     stance: Optional["StanceContext"] = None
+    # P3 training-load readiness (ADR 0016). None under every non-training-load
+    # prompt and OMITTED from serialization entirely, exactly like `corpus`/`stance`/
+    # `block`, so the pack stays byte-stable pre/post P3 (AC1/AC7); populated only
+    # under a training-load-aware prompt id.
+    training_load: Optional["TrainingLoadContext"] = None
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
@@ -521,6 +552,9 @@ class CoachContextPack(BaseModel):
         if data.get("stance") is None:
             # AC1: a non-stance prompt emits nothing — not even a null key.
             data.pop("stance", None)
+        if data.get("training_load") is None:
+            # AC1: a non-training-load prompt emits nothing — not even a null key.
+            data.pop("training_load", None)
         return data
 
     def fingerprint(self) -> str:

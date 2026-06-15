@@ -37,8 +37,14 @@ from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.preference import build_preference_profile
 from app.services.coach.salience import compute_safety_override
 from app.services.coach.corpus import DEFAULT_SCHOOL_ID
-from app.services.coach.prompts import _describe_dial, is_corpus_prompt, is_stance_prompt
+from app.services.coach.prompts import (
+    _describe_dial,
+    is_corpus_prompt,
+    is_stance_prompt,
+    is_training_load_prompt,
+)
 from app.services.coach.stance import StanceProfile, resolve_stance
+from app.services.readiness import build_readiness
 from app.services.coach.retrieval import (
     fetch_corpus,
     fetch_latest_user_reply,
@@ -61,6 +67,7 @@ from app.schemas.coach_context import (
     CorpusSchoolContext,
     StanceContext,
     StanceEmphasisAxis,
+    TrainingLoadContext,
     LongitudinalContext,
     MetricsContext,
     NarrativeContext,
@@ -224,6 +231,9 @@ def build_context_pack(
             school_id=stance.school_id if (stance and is_stance_prompt(prompt_id)) else None,
         ),
         stance=_build_stance_context(prompt_id, stance),
+        # P3 readiness (ADR 0016): emitted ONLY under a training-load-aware prompt id,
+        # computed read-time as of this activity (so the run is in the acute load).
+        training_load=_build_training_load_context(db, activity, prompt_id),
         safety_rules=b.safety_rules,
     )
 
@@ -292,6 +302,37 @@ def _build_stance_context(
             )
             for axis, value in resolved.emphasis.as_ordered()
         ]
+    )
+
+
+def _build_training_load_context(
+    db: Session, activity: Activity, prompt_id: Optional[str]
+) -> Optional[TrainingLoadContext]:
+    """The P3 training-load readiness pack section (ADR 0016), or None.
+
+    Emitted ONLY under a training-load-aware prompt id (`is_training_load_prompt`), so
+    the pack is byte-stable for every other prompt (AC1) — the section is dropped from
+    serialization when None, exactly like `corpus`/`stance`/`block`. Computed at read
+    time (mirroring M9 calibration) as of the activity's `start_date`, so this run is
+    in the acute load and a regen of an old activity reproduces the condition as of
+    then. A tier-3 deterministic FACT the coach may cite, but it never overrides the
+    run's re-derived DerivedMetric or the safety floor (prompt rule 27). Degrades to
+    None when no history is available (build_readiness guards)."""
+    if not is_training_load_prompt(prompt_id):
+        return None
+    model = build_readiness(db, activity.user_id, activity.start_date)
+    if model is None:
+        return None
+    return TrainingLoadContext(
+        fitness=model.fitness,
+        fatigue=model.fatigue,
+        form=model.form,
+        ramp_rate=model.ramp_rate,
+        condition=model.condition,
+        trend=model.trend,
+        ramp_aggressive=model.ramp_aggressive,
+        warming_up=model.warming_up,
+        sample_count=model.sample_count,
     )
 
 
