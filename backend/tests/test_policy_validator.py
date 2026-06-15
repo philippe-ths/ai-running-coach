@@ -1,15 +1,20 @@
 """Tests for the coach policy validator."""
 
-from app.schemas.coach import CoachReportContent, CoachTakeaway, CoachNextStep, CoachRisk, CoachQuestion
+from app.schemas.coach import (
+    CoachReportContent, CoachTakeaway, CoachNextStep, CoachRisk, CoachQuestion,
+    CoachMessageReport,
+)
 from app.schemas.coach_context import CoachContextPack
 from app.services.coach.validator import (
     validate_policy,
+    validate_message_policy,
     check_missing_questions,
     check_uncalibrated_zones,
     check_invalid_risk_flags,
     check_ungated_interval_claim,
     check_medical_overreach,
     check_narrative_evidence,
+    check_corpus_evidence,
 )
 
 
@@ -685,3 +690,58 @@ class TestSharedRuleBodies:
 
     def test_narrative_evidence_silent_on_real_paths(self):
         assert check_narrative_evidence(["metrics.hr_drift", "training_context.x"]) == []
+
+
+class TestCorpusEvidenceRule:
+    """Rule 7 (P1.2, ADR 0014): the coaching corpus is judgment knowledge, never
+    evidence — citing a `corpus.*` field path as report evidence is rejected. The
+    rule is deliberately narrow (it matches ONLY corpus path citations, mirroring
+    the rule-6 narrative precedent), so it never forces a false-positive fallback."""
+
+    def test_corpus_evidence_fires_on_corpus_path(self):
+        v = check_corpus_evidence(["metrics.hr_drift", "corpus.school.principles"])
+        assert [x.rule for x in v] == ["corpus_cited_as_fact"]
+        assert "corpus.school.principles" in v[0].detail
+
+    def test_corpus_evidence_fires_on_bare_and_bracket_and_case(self):
+        for path in ("corpus", "corpus.house_principles", "corpus[0]", "CORPUS.school"):
+            v = check_corpus_evidence([path])
+            assert [x.rule for x in v] == ["corpus_cited_as_fact"], path
+
+    def test_corpus_evidence_silent_on_real_paths(self):
+        assert check_corpus_evidence(["metrics.hr_drift", "training_context.x"]) == []
+
+    def test_corpus_evidence_anchored_no_false_positive(self):
+        # Anchored at the start, so a field that merely CONTAINS "corpus" never matches.
+        assert check_corpus_evidence(["my_corpus_data", "corpus_metrics", "metrics.corpus"]) == []
+
+    def test_validate_policy_fires_corpus_rule_on_citation(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="Volume is building.",
+                              evidence=[{"field": "corpus.school.method_framing", "value": "x"}]),
+                CoachTakeaway(text="Good easy control.",
+                              evidence=[{"field": "metrics.effort_score", "value": 3.0}]),
+            ],
+        )
+        rules = [v.rule for v in validate_policy(content, _make_pack())]
+        assert "corpus_cited_as_fact" in rules
+
+    def test_validate_message_policy_fires_corpus_rule_on_tail_citation(self):
+        report = CoachMessageReport(
+            message="Solid easy run; the effort stayed in the easy band the whole way.",
+            headline="Easy run",
+            next_steps=[CoachNextStep(
+                action="Add easy volume", details="another easy 5k this week",
+                why="builds the base", evidence=[{"field": "corpus.house_principles", "value": "x"}],
+            )],
+            risks=[], questions=[],
+        )
+        rules = [v.rule for v in validate_message_policy(report, _make_pack())]
+        assert "corpus_cited_as_fact" in rules
+
+    def test_corpus_rule_silent_when_no_corpus_citation(self):
+        # A clean report (default evidence is all real field paths) draws no corpus
+        # violation even though the rule is wired into the validator.
+        rules = [v.rule for v in validate_policy(_make_content(), _make_pack())]
+        assert "corpus_cited_as_fact" not in rules

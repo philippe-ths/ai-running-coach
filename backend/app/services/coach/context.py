@@ -36,7 +36,10 @@ from app.services.coach.narrative_store import build_narrative_context
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.preference import build_preference_profile
 from app.services.coach.salience import compute_safety_override
+from app.services.coach.corpus import DEFAULT_SCHOOL_ID
+from app.services.coach.prompts import is_corpus_prompt
 from app.services.coach.retrieval import (
+    fetch_corpus,
     fetch_latest_user_reply,
     fetch_prior_commitments,
     fetch_prior_digests,
@@ -53,6 +56,8 @@ from app.schemas.coach_context import (
     CheckInContext,
     CoachContextPack,
     ContinuityContext,
+    CorpusContext,
+    CorpusSchoolContext,
     LongitudinalContext,
     MetricsContext,
     NarrativeContext,
@@ -170,14 +175,18 @@ def build_context_pack(
     activity: Activity,
     *,
     continuity: Optional[ContinuityContext] = None,
+    prompt_id: Optional[str] = None,
 ) -> CoachContextPack:
     """Assemble all facts the LLM needs. No computation, just data gathering.
 
     Composes the working context (B baseline + the subject's focus payload) into
     the flat CoachContextPack. `continuity` carries the A4 fuller-turn continuity
     (the opener prose this exchange already sent + any chat reply); the standard
-    and opener paths leave it empty. The pack now also carries the A4 `salience`
-    section (novelty + safety override), computed in the B baseline.
+    and opener paths leave it empty. The pack also carries the A4 `salience`
+    section (novelty + safety override), computed in the B baseline. `prompt_id`
+    gates the P1.2 `corpus` section (ADR 0014): it is emitted ONLY under a
+    corpus-aware prompt id, so the pack stays byte-stable for every other prompt
+    and for callers that pass no prompt_id (the default).
     """
     wc = assemble_working_context(db, activity)
     b, f = wc.b_baseline, wc.focus
@@ -197,7 +206,43 @@ def build_context_pack(
         salience=b.salience,
         continuity=continuity or ContinuityContext(),
         block=_build_block_context(db, activity),
+        corpus=_build_corpus_context(prompt_id),
         safety_rules=b.safety_rules,
+    )
+
+
+def _build_corpus_context(
+    prompt_id: Optional[str], *, school_id: Optional[str] = None
+) -> Optional[CorpusContext]:
+    """The P1.2 coaching-corpus pack section (ADR 0014), or None.
+
+    Emitted ONLY under a corpus-aware prompt id (`is_corpus_prompt`), so the pack is
+    byte-stable for every other prompt (AC1) — the section is dropped from
+    serialization when None, exactly like the `block` section. In P1.2 the school
+    key is the hardcoded `DEFAULT_SCHOOL_ID`; P1.3 replaces that with the runner's
+    stance selection (the `school_id` override exists for that and for the
+    cross-school invariance test). Reads the corpus through the `fetch_corpus` seam,
+    which degrades to house-core-only when no school resolves (AC5). The corpus is
+    judgment knowledge, never a fact — it never touches the run's DerivedMetric.
+    """
+    if not is_corpus_prompt(prompt_id):
+        return None
+    resolved = fetch_corpus(school_id or DEFAULT_SCHOOL_ID)
+    school = resolved.school
+    return CorpusContext(
+        house_principles=list(resolved.house_core.principles),
+        school=(
+            CorpusSchoolContext(
+                id=school.id,
+                name=school.name,
+                stance=school.stance,
+                principles=list(school.principles),
+                method_framing=school.method_framing,
+                emphasis_hints=list(school.emphasis_hints),
+            )
+            if school is not None
+            else None
+        ),
     )
 
 

@@ -20,10 +20,12 @@ from app.models.coach_report import CoachReport
 from app.schemas.coach_context import PriorReportDigest
 from app.services.coach.digest import build_report_digest
 from app.services.coach.retrieval import (
+    fetch_corpus,
     fetch_prior_commitments,
     fetch_prior_digests,
     fetch_stream_view,
 )
+from app.services.coach import corpus as corpus_lib
 
 
 def _user(db) -> uuid.UUID:
@@ -328,3 +330,36 @@ def test_fetch_prior_commitments_skips_opener_only_rows(db):
     assert out is not None
     assert out.source_activity_id == complete.id
     assert len(out.next_steps) == 1
+
+
+# --- P1.2: fetch_corpus (the keyed corpus lookup, ADR 0014) ------------------
+# Pure keyed lookup into the code-resident corpus.py — no DB read. Degrades to
+# house-core-only when no school resolves (the narrative-degrades-to-null idiom).
+
+
+def test_fetch_corpus_resolves_the_named_school():
+    """Every known school id returns the house core plus that exact school."""
+    for school_id in ("aerobic-base", "polarized", "enjoyment-and-consistency"):
+        result = fetch_corpus(school_id)
+        assert result.house_core is corpus_lib.HOUSE_CORE
+        assert result.school is corpus_lib.SCHOOLS[school_id]
+
+
+def test_fetch_corpus_house_core_is_always_present():
+    """Every lookup carries the always-present house core, school or not."""
+    for school_id in ("aerobic-base", "polarized", "enjoyment-and-consistency"):
+        assert fetch_corpus(school_id).house_core is corpus_lib.HOUSE_CORE
+
+
+def test_fetch_corpus_unknown_school_degrades_to_house_core_only():
+    """An unknown school id degrades to house-core-only (school is None), never raising."""
+    result = fetch_corpus("no-such-school")
+    assert result.house_core is corpus_lib.HOUSE_CORE
+    assert result.school is None
+
+
+def test_fetch_corpus_none_school_degrades_to_house_core_only():
+    """A null school id (the no-selection case) also degrades to house-core-only."""
+    result = fetch_corpus(None)
+    assert result.house_core is corpus_lib.HOUSE_CORE
+    assert result.school is None
