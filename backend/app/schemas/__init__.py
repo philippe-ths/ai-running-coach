@@ -24,6 +24,7 @@ from app.schemas.detail import (  # noqa: F401
     DerivedMetricRead,
     ActivityStreamRead,
     ActivityDetailRead,
+    TrainingLoadRead,
 )
 from app.schemas.trends import (  # noqa: F401
     WeeklyDistancePoint,

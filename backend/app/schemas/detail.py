@@ -64,6 +64,23 @@ class LapRead(BaseModel):
     avg_cadence: Optional[float] = None
 
 
+class TrainingLoadRead(BaseModel):
+    """The P3 readiness read for this activity, projected at read time from the user's
+    windowed history (ADR 0016). None when there is no history to compute it from.
+    `fitness`/`fatigue`/`form` are in Edwards zone-minutes; `warming_up` means the
+    chronic baseline is not yet established and the condition is provisional."""
+
+    fitness: float
+    fatigue: float
+    form: float
+    ramp_rate: float
+    condition: str
+    trend: str
+    ramp_aggressive: bool
+    warming_up: bool
+    sample_count: int
+
+
 class ActivityDetailRead(ActivityRead):
     metrics: Optional[DerivedMetricRead] = None
     check_in: Optional[CheckInRead] = None
@@ -72,6 +89,11 @@ class ActivityDetailRead(ActivityRead):
     # Recorded Strava laps (the runner's own lap-button marks). Empty when the
     # activity has no usable recorded laps (#208).
     laps: List[LapRead] = []
+    # P3 readiness (ADR 0016): the runner's current-condition read as of this
+    # activity, projected at read time (the `laps` idiom). None when there is no
+    # history. Shown to the runner regardless of the active coach prompt — the model
+    # is always computable; the COACH_PROMPT_ID gate governs only the coach surface.
+    training_load: Optional[TrainingLoadRead] = None
 
     @model_validator(mode="after")
     def normalize_stream_cadence(self) -> "ActivityDetailRead":

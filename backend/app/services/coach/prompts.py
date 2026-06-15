@@ -482,6 +482,44 @@ SYSTEM_PROMPT_MESSAGE_V5 = SYSTEM_PROMPT_MESSAGE_V4 + _EMPHASIS_ADDENDUM
 SYSTEM_PROMPT_MESSAGE_V5_OPENER = SYSTEM_PROMPT_MESSAGE_V4_OPENER + _EMPHASIS_ADDENDUM
 
 
+# ===========================================================================
+# coach_message_v6 (P3) — the training-load-aware two-stage prompt (schema 2.0,
+# same family). ADR 0016 (training load is a read-time EWMA fitness/fatigue/form
+# model the coach reads through a gated pack section under a new prompt id).
+#
+# v6 = v5 + a STATIC readiness addendum (prompt rule 27), for BOTH modes (fuller and
+# opener), following the Vn = V(n-1) + addendum idiom. Because v6 builds on v5 it is
+# two-stage, voice-aware, corpus-aware, AND stance-aware; it ADDS the current-
+# condition discipline. The PER-RUN readiness values (fitness/fatigue/form/condition)
+# are NOT baked into the constant — they ride the context pack's `training_load`
+# section (a tier-3 deterministic FACT the coach may cite, but never a verdict and
+# never an override), built by _build_training_load_context. The addendum states the
+# authority boundary: training load is CONTEXT for the run, never overrides the run's
+# re-derived DerivedMetric or the safety floor, is not an intensity verdict or a
+# diagnosis, and is treated as provisional while the baseline is warming up.
+#
+# coach_message_v1..v5 and coach_report_v1..v10 stay BYTE-STABLE above.
+# ===========================================================================
+
+_READINESS_ADDENDUM = """
+
+# TRAINING LOAD — CURRENT CONDITION (context for the run; never a verdict on it)
+
+Your context carries a `training_load` section: our own deterministic read of the runner's current condition, built from their training load over time — fitness (the chronic load they have built), fatigue (the acute load they are carrying right now), form (the balance between the two), how fast fitness is ramping, and a labelled `condition` and `trend`. Use it to place THIS run inside the arc of their training: notice when a run sits on top of accumulated fatigue, when fresh legs explain a strong day, when fitness is climbing or slipping, when a ramp is turning aggressive — so your read of the run is informed by where they are, not only by what happened today.
+
+But training load is CONTEXT, never the verdict on the run, and it never moves the facts:
+
+- It NEVER overrides this run's re-derived data. Where the condition read and the run's measured metrics (or a safety signal) pull in different directions, the run's data and the safety floor win. Form is not an intensity verdict and not a diagnosis: a negative form or an aggressive ramp is a context to weigh, NEVER a reason to declare overtraining, illness, or any medical condition, and never grounds for medical or dosage advice (the SAFETY rules above hold in full).
+- Cite it as the fact it is, and no further. You may say fitness has been climbing, or that the run landed on tired legs, grounded in this section; do NOT inflate the condition label into a stronger claim than the numbers support, and never derive a metric, a trend, or an event from it that the run's own data does not show.
+- When the section is `warming_up`, the chronic baseline is not yet established. Treat the condition as provisional: do not assert a confident fresh/fatigued/overreaching verdict, and say as much plainly if you reference it at all.
+
+Let the condition inform HOW you read the run; never let it overrule what the run's own data and the safety floor establish."""
+
+
+SYSTEM_PROMPT_MESSAGE_V6 = SYSTEM_PROMPT_MESSAGE_V5 + _READINESS_ADDENDUM
+SYSTEM_PROMPT_MESSAGE_V6_OPENER = SYSTEM_PROMPT_MESSAGE_V5_OPENER + _READINESS_ADDENDUM
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -503,6 +541,8 @@ PROMPT_VERSIONS = {
     "coach_message_v4": SYSTEM_PROMPT_MESSAGE_V4,
     # P1.3 stance-aware two-stage prompt (= v4 + the static EMPHASIS addendum).
     "coach_message_v5": SYSTEM_PROMPT_MESSAGE_V5,
+    # P3 training-load-aware two-stage prompt (= v5 + the static READINESS addendum).
+    "coach_message_v6": SYSTEM_PROMPT_MESSAGE_V6,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -513,7 +553,8 @@ MESSAGE_PROMPT_PREFIX = "coach_message"
 # row; the MODE (opener vs fuller) is chosen by the caller/job, not derived from
 # the id. coach_message_v3 (P1.1) is two-stage exactly like v2.
 TWO_STAGE_PROMPT_IDS = frozenset(
-    {"coach_message_v2", "coach_message_v3", "coach_message_v4", "coach_message_v5"}
+    {"coach_message_v2", "coach_message_v3", "coach_message_v4", "coach_message_v5",
+     "coach_message_v6"}
 )
 
 # Retained for back-compat references (the A4 default two-stage id). Membership
@@ -528,19 +569,24 @@ _OPENER_PROMPTS = {
     "coach_message_v3": SYSTEM_PROMPT_MESSAGE_V3_OPENER,
     "coach_message_v4": SYSTEM_PROMPT_MESSAGE_V4_OPENER,
     "coach_message_v5": SYSTEM_PROMPT_MESSAGE_V5_OPENER,
+    "coach_message_v6": SYSTEM_PROMPT_MESSAGE_V6_OPENER,
 }
 
 # Prompt ids that consume a per-runner VOICE block (P1.1). Only these get the
 # runtime voice block appended; every other prompt stays byte-stable. v4 (P1.2)
 # and v5 (P1.3) build on v3, so they are voice-aware too.
-VOICE_PROMPT_IDS = frozenset({"coach_message_v3", "coach_message_v4", "coach_message_v5"})
+VOICE_PROMPT_IDS = frozenset(
+    {"coach_message_v3", "coach_message_v4", "coach_message_v5", "coach_message_v6"}
+)
 
 # Prompt ids that carry the P1.2 coaching-corpus addendum AND the `corpus` context-
 # pack section. Membership implies voice-aware and two-stage (v4 builds on v3), and
 # gates BOTH the prompt addendum (above) and _build_corpus_context, so flipping
 # COACH_PROMPT_ID off a corpus-aware id leaves the corpus inert with zero code change.
 # v5 (P1.3) builds on v4, so it is corpus-aware too (it threads the runner's school).
-CORPUS_PROMPT_IDS = frozenset({"coach_message_v4", "coach_message_v5"})
+CORPUS_PROMPT_IDS = frozenset(
+    {"coach_message_v4", "coach_message_v5", "coach_message_v6"}
+)
 
 # Prompt ids that carry the P1.3 emphasis addendum (rule 26) AND the `stance`
 # context-pack section. Membership implies corpus-aware, voice-aware, and two-stage
@@ -548,7 +594,14 @@ CORPUS_PROMPT_IDS = frozenset({"coach_message_v4", "coach_message_v5"})
 # _build_stance_context, so flipping COACH_PROMPT_ID off coach_message_v5 leaves the
 # emphasis axes inert with zero code change. (The selected school rides the `corpus`
 # section, gated by CORPUS_PROMPT_IDS; only the emphasis half is stance-gated here.)
-STANCE_PROMPT_IDS = frozenset({"coach_message_v5"})
+STANCE_PROMPT_IDS = frozenset({"coach_message_v5", "coach_message_v6"})
+
+# Prompt ids that carry the P3 readiness addendum (rule 27) AND the `training_load`
+# context-pack section. Membership implies stance-, corpus-, voice-aware, and
+# two-stage (v6 builds on v5). Gates BOTH the readiness addendum (above) and
+# _build_training_load_context, so flipping COACH_PROMPT_ID off coach_message_v6
+# leaves the readiness model inert with zero code change.
+TRAINING_LOAD_PROMPT_IDS = frozenset({"coach_message_v6"})
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
@@ -563,6 +616,14 @@ def is_stance_prompt(prompt_id: Optional[str]) -> bool:
     addendum (rule 26) and its context pack carries the `stance` section. False for
     every other prompt, so the emphasis axes are wholly inert under a rollback."""
     return prompt_id in STANCE_PROMPT_IDS
+
+
+def is_training_load_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt is training-load-aware (P3): it carries the
+    readiness addendum (rule 27) and its context pack carries the `training_load`
+    section. False for every other prompt, so the readiness model is wholly inert
+    under a rollback."""
+    return prompt_id in TRAINING_LOAD_PROMPT_IDS
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook
