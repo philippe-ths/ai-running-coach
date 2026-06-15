@@ -382,10 +382,11 @@ async def test_schedule_fuller_turn_uses_enqueue_in(monkeypatch):
         def __init__(self, connection=None):
             captured["constructed"] = True
 
-        def enqueue_in(self, delta, func, *args):
+        def enqueue_in(self, delta, func, *args, **kwargs):
             captured["delta"] = delta
             captured["func"] = func
             captured["args"] = args
+            captured["kwargs"] = kwargs
 
     monkeypatch.setattr(settings, "EXCHANGE_STAGE2_DELAY_SECONDS", 10800)
     monkeypatch.setattr("rq_scheduler.Scheduler", _FakeScheduler)
@@ -396,6 +397,8 @@ async def test_schedule_fuller_turn_uses_enqueue_in(monkeypatch):
     assert captured["delta"] == timedelta(seconds=10800)
     assert captured["func"] is pna.fuller_turn_job
     assert captured["args"] == ("abc-123",)
+    # #264: the slow fuller turn must outlast RQ's 180s default death penalty.
+    assert captured["kwargs"].get("timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
 
 
 async def test_schedule_block_complete_uses_enqueue_in(monkeypatch):
@@ -407,10 +410,11 @@ async def test_schedule_block_complete_uses_enqueue_in(monkeypatch):
         def __init__(self, connection=None):
             pass
 
-        def enqueue_in(self, delta, func, *args):
+        def enqueue_in(self, delta, func, *args, **kwargs):
             captured["delta"] = delta
             captured["func"] = func
             captured["args"] = args
+            captured["kwargs"] = kwargs
 
     monkeypatch.setattr(settings, "BLOCK_GAP_SECONDS", 1800)
     monkeypatch.setattr("rq_scheduler.Scheduler", _FakeScheduler)
@@ -421,3 +425,4 @@ async def test_schedule_block_complete_uses_enqueue_in(monkeypatch):
     assert captured["delta"] == timedelta(seconds=1800)
     assert captured["func"] is pna.block_complete_job
     assert captured["args"] == ("block-1", "act-1")
+    assert captured["kwargs"].get("timeout") == settings.RQ_JOB_TIMEOUT_SECONDS

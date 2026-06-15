@@ -310,11 +310,15 @@ def _schedule_block_complete(block_id: str, activity_id: str) -> None:
     from rq_scheduler import Scheduler
 
     scheduler = Scheduler(connection=Redis.from_url(settings.REDIS_URL))
+    # timeout (#264): rq-scheduler pops `timeout` into the created job. block-complete
+    # runs the opener generation, so it needs the same generous death-penalty ceiling
+    # as the rest of the coach jobs rather than RQ's 180s default.
     scheduler.enqueue_in(
         timedelta(seconds=settings.BLOCK_GAP_SECONDS),
         block_complete_job,
         block_id,
         activity_id,
+        timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
     )
 
 
@@ -327,10 +331,13 @@ def _schedule_fuller_turn(activity_id: str) -> None:
     from rq_scheduler import Scheduler
 
     scheduler = Scheduler(connection=Redis.from_url(settings.REDIS_URL))
+    # timeout (#264): the fuller turn is the heavy two-stage generation (~120-360s),
+    # so it must outlast RQ's 180s default or the death penalty kills it mid-write.
     scheduler.enqueue_in(
         timedelta(seconds=settings.EXCHANGE_STAGE2_DELAY_SECONDS),
         fuller_turn_job,
         activity_id,
+        timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
     )
 
 
