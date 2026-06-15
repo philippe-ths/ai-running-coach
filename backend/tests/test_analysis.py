@@ -6,7 +6,7 @@ from app.services.analysis.classifier import (
     compute_effort,
     playbook_key,
 )
-from app.services.analysis.metrics import calculate_effort_score
+from app.services.analysis.metrics import compute_training_load
 from app.services.analysis.flags import generate_flags
 
 
@@ -179,14 +179,15 @@ def test_playbook_key_non_run_is_none():
     assert playbook_key(Activity(type="Ride"), Classification(effort="hard")) is None
 
 
-# --- Effort score (unchanged) ---
+# --- Training-load primitive (#186): see test_training_load_primitive.py for
+# the full tier coverage; this keeps a smoke check on the legacy call shape. ---
 
-def test_effort_score_calculation():
-    act = Activity(moving_time_s=3600, avg_hr=None)
-    assert calculate_effort_score(act) == 60.0
+def test_training_load_primitive_smoke():
+    # No HR -> Tier C default aerobic band (zone 2): 60 min × 2 = 120.
+    assert compute_training_load(3600) == 120.0
 
-    act_hr = Activity(moving_time_s=3600, avg_hr=150, max_hr=200)
-    assert calculate_effort_score(act_hr) > 200
+    # Summary HR against the athlete max (190): 150/190 = 0.79 -> Z3 -> 60 × 3.
+    assert compute_training_load(3600, avg_hr=150, athlete_max_hr=190) == 180.0
 
 
 # --- Flags ---

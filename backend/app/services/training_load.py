@@ -1,15 +1,15 @@
 """Weekly training-load report for the Load view (#209).
 
-Aggregates per-activity ``effort_score`` (the cumulative TRIMP-like training
-load, #168 — a load number, never an intensity verdict) into calendar weeks
-(Monday start) and judges each week against the runner's own recent norm: the
-trailing ``CHRONIC_WEEKS``-week average, with an optimal band of
+Aggregates per-activity ``effort_score`` (the cumulative training load in
+Edwards "zone-minutes", #168/#186 — a load number, never an intensity verdict)
+into calendar weeks (Monday start) and judges each week against the runner's own
+recent norm: the trailing ``CHRONIC_WEEKS``-week average, with an optimal band of
 ``BAND_LOW``..``BAND_HIGH`` times that average (Strava Relative Effort style).
 A week with fewer than ``CHRONIC_WEEKS`` prior weeks of history, or a zero
 chronic average, abstains with ``no_baseline`` rather than judging.
 
-Known caveat inherited from #186: effort_score is not comparable between
-activities with and without HR data; the report sums what is stored.
+Since #186 ``effort_score`` is one comparable scale across activities with and
+without HR, so summing it across a mixed history is valid.
 """
 
 from dataclasses import dataclass

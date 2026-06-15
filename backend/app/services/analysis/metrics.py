@@ -181,36 +181,112 @@ def calculate_efficiency(streams: Dict[str, List[any]]) -> Optional[Dict[str, An
         "unit": "m/min/bpm"
     }
 
-def calculate_effort_score(activity: Activity) -> float:
-    """
-    Calculates a TRIMP-like effort score.
-    If HR is available, use zone weighting (simplified).
-    Else, use moving_time * intensity_factor.
-    """
-    if activity.avg_hr and activity.max_hr:
-        # Very rough MVP TRIMP approximation
-        # (avg_hr / max_hr) ^ 3 * duration_minutes
-        hr_ratio = activity.avg_hr / activity.max_hr
-        minutes = activity.moving_time_s / 60.0
-        return round(minutes * (hr_ratio ** 3) * 10, 1) # Scaling factor for readable numbers
-    
-    # No HR data — use duration as effort proxy
-    return round((activity.moving_time_s / 60.0), 1)
+# --- Per-activity training-load primitive (#186) ---
+#
+# One comparable unit across activities with and without HR: Edwards-style
+# "zone-minutes", load = Σ (minutes in zone z) × z, where z is the HR zone 1-5
+# (or its best per-tier estimate). Because every tier maps onto the same 1-5
+# intensity scale, the values are comparable and summable across a mixed
+# history (the property the acute/chronic/balance model is built from). This
+# replaced the old two-branch formula whose with-HR branch (minutes ×
+# (avg/peak)³ × 10) and no-HR branch (raw minutes) lived on different scales.
 
-def compute_derived_metrics_data(activity: Activity, streams_dict: Dict[str, List[any]] = {}, max_hr: int = 190) -> Dict[str, Any]:
+# Edwards zone weights: the zone number is the intensity weight.
+_ZONE_WEIGHT = {"Z1": 1, "Z2": 2, "Z3": 3, "Z4": 4, "Z5": 5}
+
+# Tier C, no HR and no RPE: assume the population-typical aerobic intensity
+# (zone 2, an easy/steady run — what a strap-less run usually is). Documented
+# assumption; a pace-based refinement is possible follow-up work.
+TRIMP_DEFAULT_BAND = 2
+
+
+def _band_from_pct(pct: float) -> int:
+    """The HR zone (1-5) the average HR falls in, against the athlete max.
+
+    Boundaries match ``calculate_time_in_zones`` / the effort-axis fallback
+    (Z1 50-60%, Z2 60-70%, Z3 70-80%, Z4 80-90%, Z5 90-100%).
+    """
+    if pct < 0.60:
+        return 1
+    if pct < 0.70:
+        return 2
+    if pct < 0.80:
+        return 3
+    if pct < 0.90:
+        return 4
+    return 5
+
+
+def _rpe_to_band(rpe: int) -> int:
+    """Map a 1-10 RPE onto the 1-5 intensity scale.
+
+    Mirrors ``services.coach.perceived_effort._rpe_band`` (duplicated rather
+    than imported so the analysis layer stays independent of the coach layer).
+    """
+    return min(5, max(1, (rpe + 1) // 2))
+
+
+def compute_training_load(
+    moving_time_s: Optional[float],
+    time_in_zones: Optional[Dict[str, int]] = None,
+    avg_hr: Optional[float] = None,
+    athlete_max_hr: Optional[int] = None,
+    rpe: Optional[int] = None,
+) -> float:
+    """Per-activity training load in Edwards "zone-minutes" (#186).
+
+    One scale regardless of HR availability, estimated from the best signal:
+
+    * Tier A — a per-sample HR zone distribution (``time_in_zones``): the true
+      Edwards sum Σ (minutes in zone z) × z.
+    * Tier B — summary HR only (``avg_hr`` against the ATHLETE max, never the
+      activity's recorded peak): the whole run weighted by the zone its average
+      HR falls in.
+    * Tier C — no HR: session-RPE when present, else the default aerobic band.
+
+    Returns load rounded to one decimal; 0.0 when there is no usable duration.
+    """
+    minutes = (moving_time_s or 0) / 60.0
+
+    # Tier A: a real per-sample zone distribution.
+    if time_in_zones:
+        zone_items = [(z, sec) for z, sec in time_in_zones.items() if z in _ZONE_WEIGHT]
+        zone_seconds = sum(sec for _, sec in zone_items)
+        if zone_seconds > 0:
+            weighted = sum((sec / 60.0) * _ZONE_WEIGHT[z] for z, sec in zone_items)
+            # Moving time below Z1 (HR < 50% max) or in HR gaps is excluded from
+            # the zones but is still aerobic work; count it at weight 1 so an easy
+            # run never collapses toward zero. Every minute is worth >= 1 load unit.
+            sub_zone_minutes = max(0.0, minutes - zone_seconds / 60.0)
+            return round(weighted + sub_zone_minutes, 1)
+
+    if minutes <= 0:
+        return 0.0
+
+    # Tier B: summary HR, athlete-max denominator.
+    if avg_hr and athlete_max_hr and athlete_max_hr > 0:
+        return round(minutes * _band_from_pct(avg_hr / athlete_max_hr), 1)
+
+    # Tier C: session-RPE, then the documented default aerobic weight.
+    if rpe:
+        return round(minutes * _rpe_to_band(rpe), 1)
+    return round(minutes * TRIMP_DEFAULT_BAND, 1)
+
+def compute_derived_metrics_data(
+    activity: Activity,
+    streams_dict: Dict[str, List[any]] = {},
+    max_hr: int = 190,
+    rpe: Optional[int] = None,
+) -> Dict[str, Any]:
     """
     Aggregates metrics for the DerivedMetric model.
     """
-    # Effort Score (Basic)
-    # If streams available with HR, could be better, but sticking to basic for consistency
-    effort = calculate_effort_score(activity)
-
     drift = None
     pace_var = None
     zones = None
     stops = None
     efficiency = None
-    
+
     if streams_dict:
         drift = calculate_hr_drift(streams_dict)
         pace_var = calculate_pace_variability(streams_dict)
@@ -218,9 +294,20 @@ def compute_derived_metrics_data(activity: Activity, streams_dict: Dict[str, Lis
         efficiency = calculate_efficiency(streams_dict)
 
         # Use provided max_hr if reasonable, else default
-        effective_max = max_hr if max_hr and max_hr > 150 else 190 
-        
+        effective_max = max_hr if max_hr and max_hr > 150 else 190
+
         zones = calculate_time_in_zones(streams_dict, effective_max)
+
+    # Training-load primitive (#186): comparable zone-minutes across HR/no-HR.
+    # Tier A uses the zone distribution; Tier B the summary HR against the
+    # athlete max; Tier C the session RPE or the default aerobic band.
+    effort = compute_training_load(
+        activity.moving_time_s,
+        time_in_zones=zones,
+        avg_hr=activity.avg_hr,
+        athlete_max_hr=max_hr,
+        rpe=rpe,
+    )
 
     return {
         "effort_score": effort,
