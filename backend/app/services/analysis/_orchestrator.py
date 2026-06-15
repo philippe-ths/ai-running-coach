@@ -150,8 +150,11 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     if profile and profile.max_hr and profile.max_hr > 100:
         max_hr = profile.max_hr
 
-    # 5. Compute metrics
-    metrics_data = compute_derived_metrics_data(activity, streams_dict, max_hr=max_hr)
+    # 5. Compute metrics. Pass the check-in RPE so the training-load primitive
+    # (#186) can fall back to session-RPE on a strap-less run.
+    metrics_data = compute_derived_metrics_data(
+        activity, streams_dict, max_hr=max_hr, rpe=check_in.rpe if check_in else None
+    )
 
     # 6. Classify into orthogonal axes (ADR 0007). Probe interval structure so
     # the structure axis is data-driven; a probed structure is the "repeated

@@ -282,7 +282,7 @@
     "unit": "m/min/bpm"
   },
   "effort": "tempo",
-  "effort_score": 346.6,
+  "effort_score": 180.0,
   "flags": [],
   "hr_drift": 0.0,
   "interval_kpis": null,
