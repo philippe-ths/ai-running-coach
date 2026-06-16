@@ -75,11 +75,25 @@ SCHEMA_VERSION_BY_FAMILY = {
 # Token budget for the A3 message call (thinking tokens count against it).
 _MESSAGE_MAX_TOKENS = 8192
 
+# #295: the ESCALATED budget used to RETRY a message call that truncated at
+# max_tokens (or returned no prose). A multi-activity block produces a richer pack,
+# so the model reasons longer under adaptive thinking and can spend the whole
+# budget on thinking before emitting the prose — retrying at the SAME budget hits
+# the identical wall and degrades to a canned fallback (the live #295 failure).
+# Retrying with more room lets the prose land. Generous headroom over the worst
+# observed thinking spend; only paid on the rare truncation retry.
+_MESSAGE_MAX_TOKENS_ESCALATED = 16384
+
 # Token budget for the A4 OPENER call. The opener is a brief reaction + a small
 # tail, but adaptive-thinking tokens count against max_tokens too, so this leaves
 # headroom for the private reasoning while keeping the opener materially lighter
 # than the fuller turn. Tunable.
 _OPENER_MAX_TOKENS = 2048
+
+# #295: the escalated retry budget for the lean opener (kept proportionally smaller
+# than the fuller's, since the opener is meant to be brief — a heavy thinking spend
+# on an opener is itself suspect, but the extra room still beats a fallback).
+_OPENER_MAX_TOKENS_ESCALATED = 4096
 
 # #217: total attempts at the prose call before degrading to a fallback. The prose
 # response is occasionally empty (no text block) but recovers on an immediate
@@ -123,6 +137,20 @@ def is_two_stage_prompt(prompt_id: str) -> bool:
     serves the prior single-shot path with zero code change (AC8 rollback).
     coach_message_v3 (P1.1 voice) is two-stage exactly like coach_message_v2."""
     return prompt_id in TWO_STAGE_PROMPT_IDS
+
+
+def is_receipt_cadence(prompt_id: str) -> bool:
+    """True when the active cadence is the #296 receipt cadence: an instant
+    deterministic per-activity receipt plus one full LLM report ~30 min after the
+    session, replacing the debounced LLM opener + 3h fuller timer.
+
+    Gated by the COACH_RECEIPT_CADENCE flag AND a two-stage (message-family) prompt:
+    the receipt itself has no prompt, but the full report is the configured prompt's
+    fuller mode, which only exists for a two-stage prompt. The flag is orthogonal to
+    COACH_PROMPT_ID, so the cadence and the prompt CONTENT roll back independently —
+    flipping the flag off restores the prior two-stage opener/fuller cadence with zero
+    code change, and it is inert under any single-shot prompt (no fuller mode to fire)."""
+    return settings.COACH_RECEIPT_CADENCE and is_two_stage_prompt(prompt_id)
 
 
 def _resolve_voice_for_activity(db: Session, activity: Activity):
@@ -824,30 +852,45 @@ async def _generate_message(
     structured path), since prose renders verbatim.
     """
     max_tokens = _OPENER_MAX_TOKENS if is_opener else _MESSAGE_MAX_TOKENS
+    escalated = _OPENER_MAX_TOKENS_ESCALATED if is_opener else _MESSAGE_MAX_TOKENS_ESCALATED
     merge = merge_opener if is_opener else merge_report
     fallback = _opener_fallback_outcome if is_opener else _message_fallback_outcome
     # #217: the prose call occasionally returns no text block at all (an empty-prose
     # response, observed as transient — an immediate re-run recovers it). A single
     # in-process retry turns that one hiccup into a real turn instead of a fallback,
     # which matters most for the safety-forced fuller turn whose substantive coaching
-    # would otherwise be silently dropped. The retry is scoped to that specific
-    # failure; refusal / max_tokens / tail-skip keep their existing one-shot handling.
+    # would otherwise be silently dropped.
+    # #295: a truncation (or empty-prose) retry escalates the TOKEN BUDGET rather
+    # than re-running at the same one that just truncated — a rich multi-activity
+    # pack can spend the whole budget on thinking before any prose, so the same
+    # budget fails identically and degrades to a canned fallback. More room lets the
+    # prose land. The empty-prose retry (attempt 1) uses the escalated budget too.
     report = None
     raw_response = ""
     truncated = False
     for attempt in range(_EMPTY_PROSE_ATTEMPTS):
+        budget = max_tokens if attempt == 0 else escalated
         try:
-            result = await _call_message(client, system_prompt, user_message, max_tokens=max_tokens)
+            result = await _call_message(client, system_prompt, user_message, max_tokens=budget)
             if result.stop_reason == "refusal":
                 logger.warning("coach message refused; storing fallback")
                 return fallback()
             if result.stop_reason == "max_tokens":
-                logger.info("coach message truncated (max_tokens); retrying once")
+                logger.info(
+                    "coach message truncated (max_tokens); retrying at a larger budget (#295)"
+                )
                 retried = await _call_message(
-                    client, system_prompt, user_message, max_tokens=max_tokens
+                    client, system_prompt, user_message, max_tokens=escalated
                 )
                 if retried.stop_reason != "refusal":
                     result = retried
+                if result.stop_reason == "max_tokens":
+                    # The budget escalation did not help: surface it loudly rather
+                    # than silently shipping a half-written turn (#295 AC).
+                    logger.warning(
+                        "coach message STILL truncated after budget escalation (#295); "
+                        "the turn may degrade — investigate the pack size / thinking spend"
+                    )
 
             parsed = parse_blocks(result.content_blocks)
             # Tail-skip corrective retry: the model is allowed to skip the tool under
@@ -856,7 +899,7 @@ async def _generate_message(
                 logger.info("coach message skipped the tail tool; one corrective retry")
                 nudge = f"{user_message}\n\n{_TAIL_REMINDER}"
                 result2 = await _call_message(
-                    client, system_prompt, nudge, max_tokens=max_tokens
+                    client, system_prompt, nudge, max_tokens=budget
                 )
                 parsed2 = parse_blocks(result2.content_blocks)
                 if parsed2.tail is not None and parsed2.message.strip():
@@ -869,7 +912,7 @@ async def _generate_message(
         except EmptyMessageError:
             if attempt + 1 < _EMPTY_PROSE_ATTEMPTS:
                 logger.warning(
-                    "coach response carried no prose message; retrying once (#217)"
+                    "coach response carried no prose message; retrying at a larger budget (#217/#295)"
                 )
                 continue
             logger.warning(

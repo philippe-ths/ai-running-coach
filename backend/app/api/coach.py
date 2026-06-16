@@ -96,6 +96,18 @@ def update_voice(voice_in: VoiceDials, db: Session = Depends(get_db)):
     db.add(relationship)
     db.commit()
     db.refresh(relationship)
+
+    # #296: regenerate the voiced receipt templates offline from the new voice, so
+    # the deterministic receipt speaks in it. Gated on the receipt cadence so an
+    # LLM generation is only spent when the templates are actually used; the lazy
+    # receipt-time path covers a later flag flip. Best-effort, never blocks the PUT.
+    from app.core.config import settings
+
+    if settings.COACH_RECEIPT_CADENCE:
+        from app.services.coach.receipt_voice import enqueue_receipt_template_refresh
+
+        enqueue_receipt_template_refresh(relationship.user_id)
+
     return _read_voice(relationship)
 
 

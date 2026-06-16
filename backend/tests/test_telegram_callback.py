@@ -453,3 +453,39 @@ class TestTapAcknowledgment:
         assert resp.status_code == 200
         row = db.query(CheckIn).filter(CheckIn.activity_id == a.id).first()
         assert row is not None and row.rpe == 7
+
+
+# --- Inbound: the #296 "done" tap ---------------------------------------------
+
+
+class TestDoneTap:
+    """A "done" tap is a control signal, not a CheckIn: it schedules the full
+    report (~30 min) and writes no CheckIn. Authenticated like the RPE/pain path."""
+
+    def test_done_tap_schedules_full_report_writes_no_checkin(
+        self, client, db, configured, isolate_side_effects
+    ):
+        a = _seed_activity(db)
+        token = encode(kind="done", activity_id=str(a.id))
+        with patch("app.api.webhooks.mark_done_and_schedule") as done:
+            resp = client.post(
+                "/api/webhooks/telegram",
+                json=_update(token),
+                headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["action"] == "done_scheduled"
+        done.assert_called_once()
+        # No CheckIn for a "done" tap (it carries no rpe/pain value).
+        assert db.query(CheckIn).filter(CheckIn.activity_id == a.id).first() is None
+        isolate_side_effects["answer"].assert_called_once()
+
+    def test_done_tap_rejected_without_secret(
+        self, client, db, configured, isolate_side_effects
+    ):
+        a = _seed_activity(db)
+        token = encode(kind="done", activity_id=str(a.id))
+        with patch("app.api.webhooks.mark_done_and_schedule") as done:
+            resp = client.post("/api/webhooks/telegram", json=_update(token))
+        assert resp.status_code == 403
+        done.assert_not_called()  # rejected before any side effect

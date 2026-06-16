@@ -10,7 +10,11 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models import Activity, StravaAccount
 from app.core.queue import queue
-from app.jobs.process_new_activity import PIPELINE_RETRY, process_new_activity_job
+from app.jobs.process_new_activity import (
+    PIPELINE_RETRY,
+    mark_done_and_schedule,
+    process_new_activity_job,
+)
 from app.jobs.strava_sync import sync_activity_job
 from app.schemas import CheckInCreate
 from app.services.checkins import write_checkin
@@ -319,8 +323,18 @@ def receive_telegram_callback(
         _answer_callback(callback.id)
         return {"status": "ignored", "reason": "unknown_activity"}
 
-    # Build the validated CheckIn payload from the token (range-checked the same
-    # as the in-app path), then write through the shared helper.
+    if action.kind == "done":
+        # #296: the "done" tap is a control signal, not a CheckIn — record the
+        # explicit completion and schedule the full report (~30 min). No CheckIn is
+        # written. A no-op (closed/stale exchange, or not the receipt cadence) still
+        # acks so the runner's button clears.
+        mark_done_and_schedule(db, activity_uuid)
+        _mark_tapped_button(callback)
+        _answer_callback(callback.id, text="Got it — I'll send your full report shortly.")
+        return {"status": "processed", "action": "done_scheduled"}
+
+    # RPE/pain: build the validated CheckIn payload from the token (range-checked
+    # the same as the in-app path), then write through the shared helper.
     checkin_data = CheckInCreate(**{action.field: action.value})
     write_checkin(db, activity_uuid, checkin_data)
 

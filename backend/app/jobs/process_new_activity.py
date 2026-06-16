@@ -35,20 +35,24 @@ from app.core.config import settings
 from app.core.queue import queue
 from app.db.session import SessionLocal
 from app.models import Activity, Block, Exchange, StravaAccount
+from app.models.coaching_relationship import CoachingRelationship
 from app.services.analysis import analyze_with_streams
 from app.services.analysis.classifier import Classification, compose_headline
 from app.services.blocks import activity_end, assign_activity_to_block
+from app.services.coach.receipt import build_receipt
 from app.services.coach.service import (
     generate_fuller,
     generate_opener,
     get_active_report_row,
     get_or_generate_coach_report,
+    is_receipt_cadence,
     is_two_stage_prompt,
 )
 from app.schemas.coach import CoachReportRead
 from app.services.notifications import (
     Notification,
     build_coach_notification,
+    build_receipt_notification,
     get_notifier,
 )
 from app.services.notifications.port import NotifierPort
@@ -150,6 +154,21 @@ async def process_new_activity(
 
     block = _ensure_block(db, activity)
 
+    if is_receipt_cadence(settings.COACH_PROMPT_ID):
+        # #296: an INSTANT deterministic receipt fires now (per activity, no LLM,
+        # cannot fall back); the full LLM report fires ~BLOCK_GAP_SECONDS later via
+        # the block-complete debounce (the no-"done" path) or a "done" tap. The
+        # block-complete gap doubles as the full-report timer, retiring the 3h timer.
+        receipt = await _send_receipt(
+            db=db, activity=activity, block=block, notifier=notifier
+        )
+        _schedule_block_complete(str(block.id), str(activity.id))
+        logger.info(
+            "Sent receipt + scheduled full-report check for block %s (activity %s) in %ds",
+            block.id, strava_activity_id, settings.BLOCK_GAP_SECONDS,
+        )
+        return receipt
+
     if is_two_stage_prompt(settings.COACH_PROMPT_ID):
         _schedule_block_complete(str(block.id), str(activity.id))
         logger.info(
@@ -174,6 +193,103 @@ def _exchange_for_activity(db: Session, activity: Activity) -> Optional[Exchange
     """The exchange owning this activity's block, via lazy block assignment."""
     block = _ensure_block(db, activity)
     return db.query(Exchange).filter(Exchange.block_id == block.id).first()
+
+
+def _receipt_templates_for(db: Session, user_id) -> Optional[dict]:
+    """The runner's pre-generated voiced receipt templates, or None for the
+    house-default floor. Read-only on the hot path: generation runs OFFLINE, never
+    here, so the receipt stays instant and LLM-free. A null column resolves to the
+    floor inside `build_receipt`. If a voice is declared but no set has been
+    generated yet, a lazy background refresh is enqueued (best-effort) so the NEXT
+    receipt speaks in voice — this receipt still uses the floor."""
+    from app.services.coach.receipt_voice import maybe_enqueue_lazy_refresh
+
+    rel = (
+        db.query(CoachingRelationship)
+        .filter(CoachingRelationship.user_id == user_id)
+        .first()
+    )
+    if rel is None:
+        return None
+    maybe_enqueue_lazy_refresh(rel)
+    return rel.receipt_templates
+
+
+async def _send_receipt(
+    *, db: Session, activity: Activity, block: Block, notifier: NotifierPort
+) -> Optional[Notification]:
+    """#296: send the instant, deterministic, block-aware receipt for this activity
+    and open the exchange.
+
+    Deduped by `Activity.receipt_sent_at` (one receipt per activity, idempotent on a
+    pipeline retry). The FIRST receipt opens the exchange (`opened_at`), anchoring
+    the reply window — independent of delivery, so the reply path works under a NoOp
+    local notifier. The receipt text is filled deterministically from the block
+    facts using the runner's voiced templates (or the house-default floor), so no
+    LLM is on the hot path and the receipt can never fall back. On a send failure the
+    sentinel is left null so the receipt stays re-sendable. Returns the Notification
+    sent, or None (already sent / no channel / send failed)."""
+    db.refresh(activity)
+    if activity.receipt_sent_at is not None:
+        logger.info(
+            "Skipping receipt for activity %s: already sent at %s",
+            activity.strava_activity_id, activity.receipt_sent_at,
+        )
+        return None
+
+    members = (
+        db.query(Activity)
+        .filter(Activity.block_id == block.id)
+        .order_by(Activity.start_date, Activity.id)
+        .all()
+    )
+    member_types = [m.type for m in members]
+    subject_index = next(
+        (i for i, m in enumerate(members) if m.id == activity.id), len(members) - 1
+    )
+    receipt = build_receipt(
+        member_types,
+        subject_index,
+        seed=activity.strava_activity_id,
+        templates=_receipt_templates_for(db, activity.user_id),
+    )
+    headline = compose_headline(activity, Classification.from_metrics(activity.metrics))
+    notification = build_receipt_notification(
+        receipt_text=receipt.text,
+        headline=headline,
+        activity_id=str(activity.id),
+        distance_m=activity.distance_m or 0,
+        app_base_url=settings.APP_BASE_URL,
+    )
+
+    # Open the exchange on the first receipt, independent of delivery (A4 posture):
+    # the reply window anchors here and must work even for a NoOp local notifier.
+    exchange = db.query(Exchange).filter(Exchange.block_id == block.id).first()
+    if exchange is not None and exchange.opened_at is None:
+        exchange.opened_at = datetime.now(timezone.utc)
+        db.add(exchange)
+        db.commit()
+
+    if notification is None:
+        logger.info(
+            "No receipt notification for activity %s: no channel configured",
+            activity.strava_activity_id,
+        )
+        return None
+
+    try:
+        notifier.send(notification)
+    except Exception:
+        logger.exception(
+            "Receipt send failed for activity %s; sentinel left unset",
+            activity.strava_activity_id,
+        )
+        return None
+
+    activity.receipt_sent_at = datetime.now(timezone.utc)
+    db.add(activity)
+    db.commit()
+    return notification
 
 
 async def _run_single_shot(
@@ -208,14 +324,16 @@ async def _run_single_shot(
 async def process_block_complete(
     *, db: Session, block_id: str, activity_id: str, notifier: NotifierPort
 ) -> Optional[Notification]:
-    """A1 block-complete check: open the block's exchange if this check still owns
-    the block.
+    """Block-complete check: under the two-stage cadence open the block's exchange
+    (LLM opener); under the #296 receipt cadence fire the FULL report.
 
-    Scheduled at +BLOCK_GAP_SECONDS by every processed activity; idempotency over
-    cancellation: the check no-ops unless its activity is still the block's LAST
-    member (a newer member means a fresh check is already pending) and the
-    exchange has not already been opened and notified. Gated on the two-stage
-    prompt so a check pending across a rollback flip is inert (AC6).
+    Scheduled at +BLOCK_GAP_SECONDS by every processed activity (and by a "done"
+    tap); idempotency over cancellation: the check no-ops unless its activity is
+    still the block's LAST member (a newer member means a fresh check is already
+    pending). Gated on the two-stage prompt so a check pending across a rollback to
+    a single-shot prompt is inert (AC6); the receipt-vs-opener branch is decided at
+    FIRE time, so a check pending across a cadence-flag flip does the now-current
+    thing rather than a stale one.
     """
     if not is_two_stage_prompt(settings.COACH_PROMPT_ID):
         logger.info(
@@ -248,6 +366,11 @@ async def process_block_complete(
         db.commit()
 
     primary = db.query(Activity).filter(Activity.id == block.primary_activity_id).one()
+    if is_receipt_cadence(settings.COACH_PROMPT_ID):
+        # #296: the receipt already fired on ingest; this debounce fires the deep
+        # FULL report covering the whole block (anchored on the primary), closing
+        # the exchange on fuller_sent_at. No LLM opener stage under this cadence.
+        return await process_fuller_turn(db=db, activity=primary, notifier=notifier)
     return await _run_opener_stage(db=db, activity=primary, exchange=exchange, notifier=notifier)
 
 
@@ -357,6 +480,11 @@ def maybe_enqueue_fuller_turn(db: Session, activity_id) -> bool:
     queued. Best-effort: a Redis hiccup never breaks the reply request. Returns
     True if it enqueued the fuller turn.
     """
+    if is_receipt_cadence(settings.COACH_PROMPT_ID):
+        # #296: an RPE/pain reply only records the check-in; the full report fires
+        # via the block-complete timer or a "done" tap so it covers the whole
+        # session, never early off a single activity's reply.
+        return False
     if not is_two_stage_prompt(settings.COACH_PROMPT_ID):
         return False
     activity_uuid = activity_id if isinstance(activity_id, uuid.UUID) else uuid.UUID(str(activity_id))
@@ -385,6 +513,62 @@ def maybe_enqueue_fuller_turn(db: Session, activity_id) -> bool:
     except Exception:
         logger.exception(
             "failed to enqueue reply-triggered fuller turn for block %s", block.id
+        )
+        return False
+    return True
+
+
+def mark_done_and_schedule(db: Session, activity_id) -> bool:
+    """#296 "done" tap: record the runner's explicit completion signal and schedule
+    the full report at +BLOCK_GAP_SECONDS (owner-locked: "done" -> full report in
+    30 min). Called from the Telegram "done" callback on any block member.
+
+    Only under the receipt cadence and only while the exchange is OPEN, not yet
+    CLOSED (`fuller_sent_at` null), and within the reply window — so a "done" tap on
+    a stale exchange never spins one up. The full-report check is scheduled on the
+    block's CURRENT last member, so a straggler that syncs before it fires still
+    supersedes it and is folded into the report (idempotent over cancellation, and
+    idempotent with the ingest-time check via `fuller_sent_at`). Best-effort: a
+    Redis hiccup never breaks the tap. Returns True if it scheduled the report."""
+    if not is_receipt_cadence(settings.COACH_PROMPT_ID):
+        return False
+    activity_uuid = activity_id if isinstance(activity_id, uuid.UUID) else uuid.UUID(str(activity_id))
+    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
+    if activity is None or activity.block_id is None:
+        return False
+
+    block = db.query(Block).filter(Block.id == activity.block_id).first()
+    exchange = db.query(Exchange).filter(Exchange.block_id == activity.block_id).first()
+    if block is None or exchange is None:
+        return False
+    if exchange.fuller_sent_at is not None:
+        return False  # closed: the full report already went
+
+    now = datetime.now(timezone.utc)
+    opened = exchange.opened_at
+    if opened is not None:
+        opened_aware = opened if opened.tzinfo else opened.replace(tzinfo=timezone.utc)
+        if (now - opened_aware).total_seconds() > settings.EXCHANGE_REPLY_WINDOW_SECONDS:
+            return False  # stale exchange: a "done" tap cannot resurrect it
+
+    # Record the explicit completion signal (idempotent), opening the exchange if
+    # the receipt somehow had not (defensive — the receipt opens it on ingest).
+    if exchange.done_at is None:
+        exchange.done_at = now
+        if exchange.opened_at is None:
+            exchange.opened_at = now
+        db.add(exchange)
+        db.commit()
+
+    last = max(
+        db.query(Activity).filter(Activity.block_id == block.id).all(),
+        key=activity_end,
+    )
+    try:
+        _schedule_block_complete(str(block.id), str(last.id))
+    except Exception:
+        logger.exception(
+            "failed to schedule done-triggered full report for block %s", block.id
         )
         return False
     return True
