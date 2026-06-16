@@ -6,11 +6,75 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Activity, ActivityStream, StravaAccount
+from app.models import Activity, ActivityStream, StravaAccount, UserProfile
 from app.schemas import SyncResponse
 from app.services.strava_ingestion.port import StravaPort, Tokens
 
 logger = logging.getLogger(__name__)
+
+
+def extract_hr_zone_bounds(raw_zones: dict | None) -> list[int] | None:
+    """Pull the 5 ascending HR-zone lower bounds (bpm) from a Strava
+    `/athlete/zones` payload, or None if the shape is not as expected (#297).
+
+    Strava returns ``{"heart_rate": {"custom_zones": bool, "zones": [{"min",
+    "max"}, ...]}}``. We keep each zone's ``min`` as its lower bound; the binning
+    only needs the ordering. A payload that is not exactly 5 ascending integer
+    zones is rejected so analysis falls back to the %-of-max-HR scheme rather
+    than binning against garbage.
+    """
+    if not isinstance(raw_zones, dict):
+        return None
+    hr = raw_zones.get("heart_rate")
+    if not isinstance(hr, dict):
+        return None
+    zones = hr.get("zones")
+    if not isinstance(zones, list) or len(zones) != 5:
+        return None
+    bounds: list[int] = []
+    for zone in zones:
+        if not isinstance(zone, dict):
+            return None
+        low = zone.get("min")
+        if not isinstance(low, (int, float)) or isinstance(low, bool):
+            return None
+        bounds.append(int(low))
+    if bounds != sorted(bounds):
+        return None
+    return bounds
+
+
+async def sync_athlete_zones(
+    db: Session,
+    account: StravaAccount,
+    port: StravaPort,
+    access_token: str,
+) -> list[int] | None:
+    """Fetch the runner's Strava HR zones and store them on their UserProfile
+    (#297). Guarded: a zones failure must never break a sync, since zones only
+    refine the time-in-zone metric and analysis degrades to the %max scheme.
+    Returns the stored bounds, or None when unavailable/unchanged-but-absent.
+    """
+    try:
+        raw_zones = await port.get_athlete_zones(access_token)
+        bounds = extract_hr_zone_bounds(raw_zones)
+        if not bounds:
+            return None
+        profile = (
+            db.query(UserProfile)
+            .filter(UserProfile.user_id == account.user_id)
+            .first()
+        )
+        if profile is None:
+            return None
+        profile.hr_zones = bounds
+        profile.hr_zones_source = "strava"
+        db.commit()
+        return bounds
+    except Exception as exc:  # never break sync over zones
+        db.rollback()
+        logger.warning("strava_zones_sync_failed: %s", exc)
+        return None
 
 # Buffer in seconds before token expiry we'll trigger a refresh.
 _TOKEN_REFRESH_BUFFER_S = 60
@@ -166,6 +230,9 @@ async def ingest_recent_activities(
 
     try:
         access_token = await ensure_valid_access_token(db, account, port)
+        # Refresh the runner's Strava HR zones once per sync so time-in-zone
+        # matches Strava (#297). Guarded internally; never blocks ingestion.
+        await sync_athlete_zones(db, account, port, access_token)
         try:
             raw_activities = await port.list_recent_activities(
                 access_token=access_token, since=since, per_page=50

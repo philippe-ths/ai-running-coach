@@ -52,3 +52,11 @@ class StravaPort(Protocol):
         activity_id: int,
         stream_types: list[str],
     ) -> dict | None: ...
+
+    async def get_athlete_zones(self, access_token: str) -> dict | None:
+        """Return the athlete's configured zones (HR/power), or None on failure.
+
+        The raw Strava `/athlete/zones` payload; callers extract what they need.
+        Requires the `profile:read_all` scope (already requested at auth).
+        """
+        ...

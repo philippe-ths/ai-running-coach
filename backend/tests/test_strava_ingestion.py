@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.models import Activity, ActivityStream, StravaAccount, User
+from app.models import Activity, ActivityStream, StravaAccount, User, UserProfile
 from app.services.strava_ingestion import (
     InMemoryStravaAdapter,
     ingest_activity_by_id,
@@ -9,6 +9,32 @@ from app.services.strava_ingestion import (
     refetch_streams,
 )
 from app.services.strava_ingestion.port import Tokens
+
+# Real-shaped Strava /athlete/zones payload (this runner's actual zones, #297).
+_STRAVA_ZONES = {
+    "heart_rate": {
+        "custom_zones": False,
+        "zones": [
+            {"min": 0, "max": 124},
+            {"min": 125, "max": 154},
+            {"min": 155, "max": 169},
+            {"min": 170, "max": 184},
+            {"min": 185, "max": -1},
+        ],
+    },
+}
+
+
+def _make_profile(db, user_id) -> UserProfile:
+    profile = UserProfile(
+        user_id=user_id,
+        goal_type="general",
+        experience_level="intermediate",
+        weekly_days_available=4,
+    )
+    db.add(profile)
+    db.commit()
+    return profile
 
 
 def _make_account(db, athlete_id: int = 12345) -> StravaAccount:
@@ -152,6 +178,42 @@ async def test_refetch_streams_replaces_existing_rows(db):
         .all()
     }
     assert stream_types == {"time", "heartrate"}
+
+
+@pytest.mark.asyncio
+async def test_sync_stores_runner_strava_hr_zones_on_profile(db):
+    """#297: a sync pulls the runner's Strava HR zones and stores their lower
+    bounds on the profile, so analysis can bin time-in-zone against them."""
+    account = _make_account(db, athlete_id=44444)
+    profile = _make_profile(db, account.user_id)
+    adapter = InMemoryStravaAdapter()
+    adapter.seed_activities([_raw_activity(1001, "Run")])
+    adapter.seed_streams(1001, {"time": {"data": [0, 1, 2]}})
+    adapter.seed_athlete_zones(_STRAVA_ZONES)
+
+    await ingest_recent_activities(db, account, adapter)
+
+    db.refresh(profile)
+    assert profile.hr_zones == [0, 125, 155, 170, 185]
+    assert profile.hr_zones_source == "strava"
+
+
+@pytest.mark.asyncio
+async def test_sync_without_zones_leaves_profile_unchanged_and_succeeds(db):
+    """When Strava returns no usable zones, the sync still succeeds and the
+    profile's zones stay null so analysis falls back to the %max scheme."""
+    account = _make_account(db, athlete_id=55555)
+    profile = _make_profile(db, account.user_id)
+    adapter = InMemoryStravaAdapter()  # athlete_zones defaults to None
+    adapter.seed_activities([_raw_activity(1101, "Run")])
+    adapter.seed_streams(1101, {"time": {"data": [0, 1, 2]}})
+
+    ingested, stats = await ingest_recent_activities(db, account, adapter)
+
+    assert stats.upserted == 1
+    db.refresh(profile)
+    assert profile.hr_zones is None
+    assert profile.hr_zones_source is None
 
 
 def _make_401_error(url: str = "https://www.strava.com/api/v3/athlete/activities"):

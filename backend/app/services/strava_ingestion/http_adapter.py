@@ -269,3 +269,20 @@ class HTTPStravaAdapter:
             except httpx.HTTPStatusError as e:
                 logger.error("Strava Stream Error: %s", e.response.status_code)
                 return None
+
+    async def get_athlete_zones(self, access_token: str) -> dict | None:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
+            response = await _send_with_retry(
+                lambda: client.get(f"{_BASE_URL}/athlete/zones", headers=headers),
+                label="get_athlete_zones",
+            )
+            try:
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                # Non-fatal: zones are an enhancement to the time-in-zone metric,
+                # not a sync prerequisite. A 403 means the profile:read_all scope
+                # was not granted; we log and fall back to the %max scheme.
+                logger.warning("Strava Zones Error: %s", e.response.status_code)
+                return None

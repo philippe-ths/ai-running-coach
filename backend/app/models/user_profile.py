@@ -21,6 +21,11 @@ class UserProfile(Base):
     current_weekly_km: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_hr: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_hr_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # "user_entered", "race_estimate", "lab_test"
+    # The runner's own HR-zone lower bounds (5 ascending bpm values), pulled from
+    # their Strava athlete zones so time-in-zone matches what Strava shows (#297).
+    # Null until first synced; analysis then falls back to the %-of-max-HR scheme.
+    hr_zones: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # List[int], len 5
+    hr_zones_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # "strava"
     upcoming_races: Mapped[list] = mapped_column(JSON, default=[])  # List[dict]
     injury_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Opt-in medication/physiology flag (N4 confounder stage reads it). Nullable:
