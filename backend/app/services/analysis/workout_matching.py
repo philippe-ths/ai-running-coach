@@ -83,28 +83,34 @@ def match_planned_to_detected(
     if detected["rep_duration_cv"] is not None and detected["rep_duration_cv"] > 30:
         result["confidence_reasons"].append("high_rep_duration_variability")
 
-    # Without a planned workout, confidence depends on detection quality alone
-    if not planned_workout:
-        result["confidence_reasons"].append("no_planned_workout")
-        if interval_structure.get("source") == "recorded_laps":
-            # The runner's own lap marks are ground-truth structure: detection
-            # is certain even when the reps varied. Rep-to-rep consistency is
-            # reported separately via consistency_score and does not lower this.
-            # Variability across reps (a ladder/pyramid/fartlek) is the runner's
-            # actual workout, not detection uncertainty, so those reasons must not
-            # propagate to lower the activity-level confidence downstream.
-            result["confidence_reasons"] = [
-                r
-                for r in result["confidence_reasons"]
-                if "variability" not in r and "outlier" not in r
-            ]
-            # The recorded laps are a perfect de-facto plan, so match_score is 1.0
-            # -- this keeps the prompt's "high AND match_score >= 0.8" gate and
+    # Recorded-laps ground-truth treatment: applies regardless of whether a
+    # planned workout is present. The runner's own lap marks settle the detection
+    # question -- confidence is always "high". Rep-to-rep spread is the runner's
+    # actual workout (a ladder, pyramid, fartlek), not detection uncertainty, so
+    # variability/outlier reasons are stripped here before they can leak downstream.
+    # When no plan is present the laps are also a perfect de-facto plan (match_score
+    # 1.0). When a plan IS present, match_score is left to the plan-scoring block
+    # below so it can reflect plan adherence -- detection certainty is still "high"
+    # because the detection question is already settled by the lap marks.
+    if interval_structure.get("source") == "recorded_laps":
+        result["confidence_reasons"] = [
+            r
+            for r in result["confidence_reasons"]
+            if "variability" not in r and "outlier" not in r
+        ]
+        result["detection_confidence"] = "high"
+        if not planned_workout:
+            result["confidence_reasons"].append("no_planned_workout")
+            # The recorded laps are a perfect de-facto plan, so match_score is
+            # 1.0 -- keeps the prompt's "high AND match_score >= 0.8" gate and
             # the deterministic validator consistent for the lap-sourced case.
             result["match_score"] = 1.0
-            result["detection_confidence"] = "high"
             return result
-        # Stream-derived structure: base detection confidence on consistency.
+        # Fall through to plan scoring so match_score can reflect adherence.
+
+    elif not planned_workout:
+        # Stream-derived, no plan: base detection confidence on consistency.
+        result["confidence_reasons"].append("no_planned_workout")
         consistency = summary.get("consistency_score", "unknown")
         if consistency == "high" and not any(
             "outlier" in r for r in result["confidence_reasons"]
@@ -167,19 +173,23 @@ def match_planned_to_detected(
 
     result["match_score"] = match_score
 
-    # Derive detection confidence from match score and reasons
-    critical_reasons = [
-        r
-        for r in reasons
-        if r
-        not in ("no_planned_workout",)
-    ]
-    if match_score >= 0.8 and len(critical_reasons) <= 1:
-        result["detection_confidence"] = "high"
-    elif match_score >= 0.5:
-        result["detection_confidence"] = "medium"
-    else:
-        result["detection_confidence"] = "low"
+    # For recorded_laps the detection confidence was already locked to "high"
+    # above -- plan adherence (match_score) is a separate axis and must not
+    # downgrade detection certainty that the lap marks have already settled.
+    if interval_structure.get("source") != "recorded_laps":
+        # Derive detection confidence from match score and reasons
+        critical_reasons = [
+            r
+            for r in reasons
+            if r
+            not in ("no_planned_workout",)
+        ]
+        if match_score >= 0.8 and len(critical_reasons) <= 1:
+            result["detection_confidence"] = "high"
+        elif match_score >= 0.5:
+            result["detection_confidence"] = "medium"
+        else:
+            result["detection_confidence"] = "low"
 
     return result
 
