@@ -419,6 +419,41 @@ async def test_force_regen_worker_death_preserves_prior_report(db, _v2):
     assert survived.is_fallback is False
 
 
+# --- #279: a failed force-regen must not clobber a prior good report ----------
+
+
+async def test_force_regen_fallback_preserves_prior_good_report(db, _v2):
+    # #279: a force-regenerate whose fuller generation fails (both attempts yield no
+    # prose -> a fallback) must KEEP the runner's prior complete, non-fallback report
+    # rather than overwrite it with "analysis unavailable".
+    activity = _seed(db)
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_fuller_blocks("Good report.")))), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        await generate_fuller(db, str(activity.id))
+    good = _stored(db, activity)
+    assert good.report["message"] == "Good report." and good.is_fallback is False
+    good_id = good.id
+
+    # Force-regenerate, but BOTH fuller attempts return no prose -> a fallback.
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_empty_prose_blocks()),
+                                     _result(_empty_prose_blocks()))), \
+         patch("app.services.coach.service.write_back_beliefs") as wb, \
+         patch("app.services.coach.service.enqueue_consolidation") as ec:
+        read = await generate_fuller(db, str(activity.id), force=True)
+
+    row = _stored(db, activity)
+    assert row.id == good_id                       # same row, untouched
+    assert row.is_fallback is False                # NOT downgraded to a fallback
+    assert row.report["message"] == "Good report."  # prior good prose preserved
+    assert read is not None                        # returns the preserved good report
+    # nothing new was stored, so the learning loop never fires
+    wb.assert_not_called()
+    ec.assert_not_called()
+
+
 async def test_generate_fuller_noops_under_single_shot_prompt(db, _v2, monkeypatch):
     # #216: generate_fuller is meaningful only under the two-stage prompt. After a
     # rollback to a single-shot id it must refuse to run — no LLM call, nothing

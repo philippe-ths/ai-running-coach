@@ -209,3 +209,27 @@ async def test_force_regen_worker_death_preserves_prior_report(db):
     assert survived is not None, \
         "single-shot force-regen interruption lost the report entirely (#273)"
     assert survived.report["key_takeaways"][0]["text"] == "Cached takeaway one."
+
+
+# --- #279: a failed force-regen must not clobber a prior good report ------
+
+
+@pytest.mark.asyncio
+async def test_force_regen_fallback_preserves_prior_good_report(db):
+    # #279: a force-regenerate whose generation fails (unparseable -> fallback) must
+    # KEEP the prior complete, non-fallback report rather than overwrite it.
+    activity = _seed_activity(db)
+    good = _insert_report(db, activity.id, ACTIVE_PROMPT_ID, SCHEMA_VERSION)
+    good_id = good.id
+
+    # generate_json returns unparseable content -> _generate_structured falls back.
+    fake = AsyncMock()
+    fake.generate_json = AsyncMock(return_value="not valid json")
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+        result = await get_or_generate_coach_report(db, str(activity.id), force=True)
+
+    survived = db.query(CoachReport).filter(CoachReport.id == good_id).first()
+    assert survived is not None
+    assert survived.is_fallback is False  # NOT downgraded to a fallback
+    assert survived.report["key_takeaways"][0]["text"] == "Cached takeaway one."
+    assert result is not None  # returns the preserved good report
