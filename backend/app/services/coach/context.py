@@ -42,6 +42,7 @@ from app.services.coach.prompts import (
     is_corpus_prompt,
     is_stance_prompt,
     is_training_load_prompt,
+    is_user_materials_prompt,
 )
 from app.services.coach.stance import StanceProfile, resolve_stance
 from app.services.readiness import build_readiness
@@ -227,6 +228,8 @@ def build_context_pack(
         # byte-stable, AC1); P1.3's stance — school AND emphasis — activates together
         # with v5. A non-stance/non-corpus prompt drops the corpus section entirely.
         corpus=_build_corpus_context(
+            db,
+            activity,
             prompt_id,
             school_id=stance.school_id if (stance and is_stance_prompt(prompt_id)) else None,
         ),
@@ -239,9 +242,14 @@ def build_context_pack(
 
 
 def _build_corpus_context(
-    prompt_id: Optional[str], *, school_id: Optional[str] = None
+    db: Session,
+    activity: Activity,
+    prompt_id: Optional[str],
+    *,
+    school_id: Optional[str] = None,
 ) -> Optional[CorpusContext]:
-    """The P1.2 coaching-corpus pack section (ADR 0014), or None.
+    """The P1.2 coaching-corpus pack section (ADR 0014), extended with P4 user
+    materials (#286, ADR 0017), or None.
 
     Emitted ONLY under a corpus-aware prompt id (`is_corpus_prompt`), so the pack is
     byte-stable for every other prompt (AC1) — the section is dropped from
@@ -250,12 +258,26 @@ def _build_corpus_context(
     when none is passed it falls back to the hardcoded `DEFAULT_SCHOOL_ID`, so a
     caller that passes no stance stays byte-stable against P1.2. Reads the corpus
     through the `fetch_corpus` seam, which degrades to house-core-only when no school
-    resolves (AC5). The corpus is judgment knowledge, never a fact — it never touches
-    the run's DerivedMetric.
+    resolves (AC5).
+
+    The runner's distilled `user_materials` are read AND attached ONLY under a
+    user-materials-aware prompt (`is_user_materials_prompt`, v7) — under v4/v5/v6 the
+    materials read is not even performed and `user_materials` stays None, so the
+    corpus section is byte-identical to its P1.2/P1.3 shape (the activation boundary).
+    Materials are the runner's chosen reference; they reweight emphasis/framing only
+    and never touch the run's DerivedMetric (validator rule 8, prompt rule 28). The
+    corpus is judgment knowledge, never a fact.
     """
     if not is_corpus_prompt(prompt_id):
         return None
-    resolved = fetch_corpus(school_id or DEFAULT_SCHOOL_ID)
+    materials_aware = is_user_materials_prompt(prompt_id)
+    # Read materials ONLY under a user-materials-aware prompt — a null db/user keeps
+    # the seam a pure school lookup (and byte-stable) under v4/v5/v6.
+    resolved = fetch_corpus(
+        db if materials_aware else None,
+        activity.user_id if materials_aware else None,
+        school_id or DEFAULT_SCHOOL_ID,
+    )
     school = resolved.school
     return CorpusContext(
         house_principles=list(resolved.house_core.principles),
@@ -271,6 +293,9 @@ def _build_corpus_context(
             if school is not None
             else None
         ),
+        # None under v4/v5/v6 (dropped from serialization → byte-stable); a list
+        # (possibly empty) under v7, where the materials are load-bearing.
+        user_materials=list(resolved.user_materials) if materials_aware else None,
     )
 
 
