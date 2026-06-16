@@ -774,6 +774,31 @@ def _opener_fallback_outcome() -> "_GenOutcome":
     )
 
 
+@dataclass
+class _MsgAttempt:
+    """One prose-message generation attempt, carrying the signals storage needs to
+    pick the best of several (#274): its report, the raw serialization that produced
+    it (so raw_llm_response always matches the STORED report, never a discarded
+    attempt), whether the model ran out of tokens (a truncated, half-written message),
+    and its surviving policy violations."""
+    report: CoachMessageReport
+    raw_response: str
+    truncated: bool
+    violations: List[PolicyViolation]
+
+
+def _choose_message_attempt(first: _MsgAttempt, retry: _MsgAttempt) -> _MsgAttempt:
+    """Pick the better of two attempts to store (#274). A complete (non-truncated)
+    attempt beats a truncated one — a runner is better served by a complete message
+    that trips a tolerated non-medical rule than by a half-sentence. Among
+    equally-(non-)truncated attempts, fewer surviving violations wins, and a tie goes
+    to the corrective `retry`. The medical-overreach-forces-fallback rule is applied
+    by the caller to whichever attempt this returns, so the safety floor is unaffected."""
+    if first.truncated != retry.truncated:
+        return retry if first.truncated else first
+    return retry if len(retry.violations) <= len(first.violations) else first
+
+
 async def _generate_message(
     client: AnthropicClient,
     system_prompt: str,
@@ -809,6 +834,7 @@ async def _generate_message(
     # failure; refusal / max_tokens / tail-skip keep their existing one-shot handling.
     report = None
     raw_response = ""
+    truncated = False
     for attempt in range(_EMPTY_PROSE_ATTEMPTS):
         try:
             result = await _call_message(client, system_prompt, user_message, max_tokens=max_tokens)
@@ -837,6 +863,7 @@ async def _generate_message(
                     parsed, result = parsed2, result2
 
             raw_response = _serialize_blocks(result.content_blocks)
+            truncated = result.stop_reason == "max_tokens"  # #274: a half-written msg
             report = merge(parsed)
             break
         except EmptyMessageError:
@@ -853,45 +880,51 @@ async def _generate_message(
             logger.error("coach message transport error: %s", e)
             return fallback()
 
-    violations = validate_message_policy(report, pack)
-    if violations:
+    # #274: track the first attempt with the raw serialization that produced it, so
+    # whichever attempt we store carries ITS OWN raw_llm_response (never a discarded
+    # one). The policy retry is judged against it rather than blindly replacing it.
+    chosen = _MsgAttempt(
+        report=report,
+        raw_response=raw_response,
+        truncated=truncated,
+        violations=validate_message_policy(report, pack),
+    )
+    if chosen.violations:
         logger.info(
             "Message policy violations detected: %s — attempting retry",
-            [v.rule for v in violations],
+            [v.rule for v in chosen.violations],
         )
-        report, remaining = await _retry_message_with_fixes(
-            client, system_prompt, user_message, pack, violations, report,
+        retry_attempt = await _retry_message_with_fixes(
+            client, system_prompt, user_message, pack, chosen.violations,
             is_opener=is_opener,
         )
-        if remaining:
-            # ADR 0009: medical overreach surviving the retry forces a fallback,
-            # because the prose renders verbatim to the runner. Use the
-            # STAGE-CORRECT fallback (the variable bound above), so an opener
-            # overreach yields an opener-shaped fallback (message empty,
-            # opener_message set) that stays opener-only — otherwise the
-            # safety-forced fuller turn would cache-hit a non-opener-only fallback
-            # and never regenerate, silently defeating the safety floor on exactly
-            # the red-flag runs that trip rule 5.
-            if any(v.rule == "medical_overreach" for v in remaining):
-                logger.warning("medical overreach survived retry; forcing fallback")
-                return fallback()
-            logger.warning(
-                "Message policy violations persisted after retry: %s",
-                [v.rule for v in remaining],
-            )
-            return _GenOutcome(
-                report_dump=report.model_dump(),
-                raw_response=raw_response,
-                is_fallback=False,
-                policy_violations=[v.rule for v in remaining],
-                tail_degraded=report.tail_degraded,
-            )
+        if retry_attempt is not None:
+            # #274: store the BETTER attempt — a complete attempt is not clobbered by
+            # a truncated retry, and raw_response follows the report we keep.
+            chosen = _choose_message_attempt(chosen, retry_attempt)
+
+    if any(v.rule == "medical_overreach" for v in chosen.violations):
+        # ADR 0009: medical overreach in the attempt we would store forces a fallback,
+        # because the prose renders verbatim to the runner. Use the STAGE-CORRECT
+        # fallback (the variable bound above), so an opener overreach yields an
+        # opener-shaped fallback (message empty, opener_message set) that stays
+        # opener-only — otherwise the safety-forced fuller turn would cache-hit a
+        # non-opener-only fallback and never regenerate, silently defeating the
+        # safety floor on exactly the red-flag runs that trip rule 5.
+        logger.warning("medical overreach in the stored attempt; forcing fallback")
+        return fallback()
+    if chosen.violations:
+        logger.warning(
+            "Message policy violations persisted: %s",
+            [v.rule for v in chosen.violations],
+        )
 
     return _GenOutcome(
-        report_dump=report.model_dump(),
-        raw_response=raw_response,
+        report_dump=chosen.report.model_dump(),
+        raw_response=chosen.raw_response,
         is_fallback=False,
-        tail_degraded=report.tail_degraded,
+        policy_violations=[v.rule for v in chosen.violations],
+        tail_degraded=chosen.report.tail_degraded,
     )
 
 
@@ -901,15 +934,14 @@ async def _retry_message_with_fixes(
     original_user_message: str,
     pack: CoachContextPack,
     violations: List[PolicyViolation],
-    prior: CoachMessageReport,
     *,
     is_opener: bool = False,
-) -> tuple[CoachMessageReport, List[PolicyViolation]]:
+) -> Optional[_MsgAttempt]:
     """Re-prompt once with fix instructions for the message-policy violations.
-    Returns (report, remaining_violations). If the retry produces nothing usable,
-    the prior report and its violations are kept (so a surviving overreach still
-    forces the fallback upstream). `is_opener` keeps the opener's merge + token
-    budget on the retry too."""
+    Returns the retry as a _MsgAttempt (#274), or None when the retry produced
+    nothing usable (refusal / empty prose / transport error) — the caller then keeps
+    the original attempt. `is_opener` keeps the opener's merge + token budget on the
+    retry too."""
     max_tokens = _OPENER_MAX_TOKENS if is_opener else _MESSAGE_MAX_TOKENS
     merge = merge_opener if is_opener else merge_report
     fix_instructions = "\n".join(
@@ -925,12 +957,17 @@ async def _retry_message_with_fixes(
             client, system_prompt, retry_message, max_tokens=max_tokens
         )
         if result.stop_reason == "refusal":
-            return prior, validate_message_policy(prior, pack)
+            return None
         report = merge(parse_blocks(result.content_blocks))
     except (EmptyMessageError, anthropic.APIError) as e:
         logger.error("Coach message retry error: %s", e)
-        return prior, validate_message_policy(prior, pack)
-    return report, validate_message_policy(report, pack)
+        return None
+    return _MsgAttempt(
+        report=report,
+        raw_response=_serialize_blocks(result.content_blocks),
+        truncated=result.stop_reason == "max_tokens",
+        violations=validate_message_policy(report, pack),
+    )
 
 
 async def _retry_with_fixes(

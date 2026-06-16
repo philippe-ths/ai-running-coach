@@ -465,3 +465,70 @@ async def test_generate_fuller_noops_under_single_shot_prompt(db, _v2, monkeypat
     assert read is None
     client_cls.assert_not_called()
     assert _stored(db, activity) is None  # nothing written under the rolled-back id
+
+
+# --- #274: the policy retry must not store a degraded attempt over a good one --
+
+
+def _no_question_fuller_blocks(prose):
+    # A COMPLETE fuller message + a valid tail, but NO questions -> trips validator
+    # rule 1 (a null check-in must be prompted) since the seeded activity has no
+    # CheckIn. This is what makes the first attempt provoke the policy retry.
+    return [_text(prose), _tail(
+        headline="Solid aerobic run",
+        next_steps=[{"action": "Easy run", "details": "30 min", "why": "Recovery"}],
+        risks=[], questions=[],
+    )]
+
+
+async def test_truncated_retry_does_not_clobber_complete_first_attempt(db, _v2):
+    # #274: the first attempt is COMPLETE but trips a non-medical rule (no questions
+    # for a null check-in); the policy retry comes back TRUNCATED (max_tokens, no
+    # tail). The stored report must be the COMPLETE first attempt, not the truncated
+    # retry — the runner must not get a half-sentence when the model wrote a full one.
+    activity = _seed(db)
+    complete = (
+        "At a sustained hard effort, that kind of drift is exactly what we expect, "
+        "and the back half held together well. Tomorrow needs to be easy."
+    )
+    fake = _client(
+        _result(_no_question_fuller_blocks(complete), stop_reason="end_turn"),
+        # the retry truncates: a short prefix, no tail
+        _result([_text("At a sustained hard effort, that kind of")],
+                stop_reason="max_tokens"),
+    )
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        await generate_fuller(db, str(activity.id))
+
+    assert fake.generate_coach_message.call_count == 2  # first attempt + policy retry
+    row = _stored(db, activity)
+    assert row.is_fallback is False
+    assert row.report["message"] == complete       # complete prose, not the truncation
+    assert row.report["tail_degraded"] is False     # the complete attempt carried a tail
+
+
+async def test_adopted_retry_keeps_raw_response_in_sync(db, _v2):
+    # #274: when the policy retry IS adopted (it fixes the violation and is complete),
+    # the stored raw_llm_response must reflect the RETRY (the report that was stored),
+    # not the first attempt — the debug column must not disagree with the report.
+    activity = _seed(db)
+    first = "First attempt prose that forgot to ask anything at all."
+    fixed = "Fixed attempt prose, complete and grounded."
+    fake = _client(
+        _result(_no_question_fuller_blocks(first), stop_reason="end_turn"),
+        # the retry is complete AND fixes rule 1 (carries a question)
+        _result(_fuller_blocks(fixed), stop_reason="end_turn"),
+    )
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        await generate_fuller(db, str(activity.id))
+
+    row = _stored(db, activity)
+    assert row.is_fallback is False
+    assert row.report["message"] == fixed           # the fixed retry was adopted
+    raw = row.raw_llm_response or ""
+    assert fixed[:20] in raw                          # raw reflects the stored retry
+    assert first[:20] not in raw                      # NOT the discarded first attempt
