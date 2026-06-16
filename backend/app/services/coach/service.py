@@ -244,10 +244,11 @@ async def get_or_generate_coach_report(
     existing = get_active_report_row(db, activity_uuid)
     if existing and not force:
         return _to_read(existing)
-    if force and existing:
-        # Replace only the active-version row; prior versions are untouched.
-        db.delete(existing)
-        db.commit()
+    # #273: a force regenerate does NOT delete the active row up front. The LLM call
+    # runs first and _persist_report updates the existing row in place (generate-
+    # then-swap), so the single content-swapping commit is atomic — a worker death
+    # mid-regen leaves the prior report intact instead of zero rows. Prior schema-
+    # versions are untouched (the in-place update keeps the same cache identity).
 
     # Load activity
     activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
@@ -295,7 +296,7 @@ async def get_or_generate_coach_report(
         pack_dict=pack_dict,
         input_hash=input_hash,
         outcome=outcome,
-        existing=None,
+        existing=existing,  # #273: in-place swap on force; None -> insert (first gen)
         fire_learning_loop=True,
     )
     return read
@@ -417,19 +418,18 @@ async def generate_fuller(
     activity_uuid = _coerce_uuid(activity_id)
 
     existing = get_active_report_row(db, activity_uuid)
-    # Capture the opener prose BEFORE any force-delete, so a force-regenerate of a
-    # complete two-line row still preserves the opener half of the thread (the
-    # brief's "preserving both halves" survives force too).
+    # Capture the opener prose up front, so a force-regenerate of a complete two-line
+    # row still preserves the opener half of the thread (the brief's "preserving both
+    # halves" survives force too) — the in-place swap below overwrites the report dict.
     opener_prose = (existing.report or {}).get("opener_message") if existing else None
-    if force and existing is not None:
-        # A manual regenerate produces a fresh complete report; prior versions are
-        # untouched (force replaces only the active-version row).
-        db.delete(existing)
-        db.commit()
-        existing = None
-    if existing is not None and not is_opener_only(existing.report):
+    if existing is not None and not is_opener_only(existing.report) and not force:
         # A complete fuller turn is already cached for this version.
         return _to_read(existing)
+    # #273: a force regenerate does NOT delete the active row up front. The fuller
+    # call runs first and _persist_report (existing=existing below) updates the SAME
+    # row in place (generate-then-swap), so a worker death mid-regen leaves the prior
+    # complete report intact instead of zero rows. Prior schema-versions are untouched
+    # (the in-place update keeps the same cache identity).
 
     activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
     if not activity or not activity.metrics:
