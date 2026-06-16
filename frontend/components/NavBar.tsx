@@ -16,7 +16,7 @@ export default function NavBar() {
     href === '/' ? pathname === '/' : pathname.startsWith(href);
 
   return (
-    <nav className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 sticky top-0 z-10 overflow-x-hidden">
+    <nav className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 sticky top-0 z-30 overflow-x-hidden">
       <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
         <Link
           href="/"

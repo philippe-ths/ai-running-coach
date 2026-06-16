@@ -21,40 +21,40 @@ export function SplitsPanel({ splits }: SplitsPanelProps) {
       <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">
         {isTimeBased ? 'Splits (5 min)' : 'Splits (1 km)'}
       </h3>
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto rounded-md border border-gray-200 dark:border-gray-700">
         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-          <thead className="bg-gray-50 dark:bg-gray-700/50">
+          <thead className="bg-gray-100 dark:bg-gray-700 shadow-sm">
             <tr>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              <th scope="col" className="px-6 py-3 text-left text-xs font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200 uppercase tracking-wider">
                 {isTimeBased ? '#' : 'Km'}
               </th>
               {!isTimeBased && (
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th scope="col" className="px-6 py-3 text-left text-xs font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200 uppercase tracking-wider">
                   Distance
                 </th>
               )}
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              <th scope="col" className="px-6 py-3 text-left text-xs font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200 uppercase tracking-wider">
                 {isTimeBased ? 'Duration' : 'Pace'}
               </th>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              <th scope="col" className="px-6 py-3 text-left text-xs font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200 uppercase tracking-wider">
                 Avg HR
               </th>
               {hasGrade && (
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th scope="col" className="px-6 py-3 text-left text-xs font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200 uppercase tracking-wider">
                   Avg Grade
                 </th>
               )}
               {hasElevGain && (
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th scope="col" className="px-6 py-3 text-left text-xs font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200 uppercase tracking-wider">
                   Elev Gain
                 </th>
               )}
               {hasPower && (
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th scope="col" className="px-6 py-3 text-left text-xs font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200 uppercase tracking-wider">
                   Avg Power
                 </th>
               )}
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              <th scope="col" className="px-6 py-3 text-left text-xs font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200 uppercase tracking-wider">
                 Avg Cadence
               </th>
             </tr>
