@@ -19,18 +19,30 @@ from app.services.coach import material_distiller as md
 
 
 class FakeClient:
-    """Injected stand-in for AnthropicClient.generate_structured (test setup)."""
+    """Injected stand-in for AnthropicClient.generate_structured (test setup).
 
-    def __init__(self, result=None, raise_exc=None):
-        self.result = result
-        self.raise_exc = raise_exc
+    `result`/`raise_exc` are the single-response shorthand (returned/raised on every
+    call). `results` is a per-call queue — each item a dict to return or an Exception
+    to raise — used to exercise the #291 corrective-retry path (first call omits a
+    field, second call complies). The last queued item repeats if called again."""
+
+    def __init__(self, result=None, raise_exc=None, results=None):
+        if results is not None:
+            self._queue = list(results)
+        elif raise_exc is not None:
+            self._queue = [raise_exc]
+        else:
+            self._queue = [result]
         self.calls = []
 
     async def generate_structured(self, *, system, user, tool, max_tokens=1024):
-        self.calls.append({"system": system, "user": user, "tool": tool})
-        if self.raise_exc:
-            raise self.raise_exc
-        return self.result
+        self.calls.append(
+            {"system": system, "user": user, "tool": tool, "max_tokens": max_tokens}
+        )
+        item = self._queue.pop(0) if len(self._queue) > 1 else self._queue[0]
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 def _make_material(db, **overrides):
@@ -89,6 +101,9 @@ async def test_offshape_output_marks_failed_and_stores_nothing(db):
     db.refresh(material)
     assert material.status == "failed"
     assert material.distilled is None
+    # A rogue extra key is a containment breach, not a benign omission: it must fail
+    # closed WITHOUT the #291 corrective retry, even though a field is also missing.
+    assert len(client.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -101,6 +116,51 @@ async def test_oversize_field_marks_failed(db):
     db.refresh(material)
     assert material.status == "failed"
     assert material.distilled is None
+    # Oversize is a containment signal (a payload trying to bloat the pack): fail
+    # closed without retry, never coach the input toward passing.
+    assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_corrective_retry_recovers_a_missing_required_field(db):
+    """#291: a realistic philosophy upload made Haiku return only `stance` (a verbose
+    field truncated the tool JSON / the cheap model omitted a field). One corrective
+    retry naming the omitted field recovers it, so the material distills to active."""
+    material = _make_material(db)
+    # method_framing omitted (it is required with no default); emphasis_hints defaults.
+    first = {"stance": "Patient aerobic base building.", "principles": ["Run easy"]}
+    client = FakeClient(results=[first, dict(_VALID)])
+
+    await md.distill_material(db, material.id, client=client)
+
+    db.refresh(material)
+    assert material.status == "active"
+    assert material.distilled["method_framing"] == _VALID["method_framing"]
+    assert len(client.calls) == 2
+    # The retry names the omitted field and still rides the same fenced material
+    # (containment unchanged: only our own field names are added, no new untrusted text).
+    retry_user = client.calls[1]["user"]
+    assert "method_framing" in retry_user
+    assert "BEGIN RUNNER MATERIAL" in retry_user
+    # Both attempts use the raised token budget (#291 truncation guard).
+    assert client.calls[0]["max_tokens"] == md._MAX_TOKENS
+    assert client.calls[1]["max_tokens"] == md._MAX_TOKENS
+
+
+@pytest.mark.asyncio
+async def test_corrective_retry_gives_up_after_one_attempt(db):
+    """The retry is bounded: if the model omits a required field twice, the material
+    fails closed (a visible status), it does not loop."""
+    material = _make_material(db)
+    omits = {"stance": "Aerobic base."}  # method_framing omitted both times
+    client = FakeClient(results=[dict(omits), dict(omits)])
+
+    await md.distill_material(db, material.id, client=client)
+
+    db.refresh(material)
+    assert material.status == "failed"
+    assert material.distilled is None
+    assert len(client.calls) == 2  # exactly one corrective retry, then give up
 
 
 @pytest.mark.asyncio
@@ -186,6 +246,27 @@ def test_distiller_tool_schema_is_strict_and_corpus_shaped():
         "method_framing",
         "emphasis_hints",
     }
+
+
+def test_max_tokens_has_headroom_for_the_four_fields():
+    """#291: a 1024-token budget truncated the tool JSON before method_framing on a
+    realistic upload. Pin a floor so the headroom is not silently shrunk back."""
+    assert md._MAX_TOKENS >= 2048
+
+
+def test_missing_required_fields_discriminates_omission_from_containment_breach():
+    """The retry gate: a pure missing-required-field omission is recoverable (names
+    the field); ANY non-`missing` error (rogue key, oversize, wrong type) is a
+    containment breach and signals no retry."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as omission:
+        md.DistilledMaterial.model_validate({"stance": "x"})
+    assert md._missing_required_fields(omission.value) == ["method_framing"]
+
+    with pytest.raises(ValidationError) as breach:
+        md.DistilledMaterial.model_validate({**_VALID, "rogue_key": "x"})
+    assert md._missing_required_fields(breach.value) == []
 
 
 @pytest.mark.asyncio
