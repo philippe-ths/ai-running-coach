@@ -383,6 +383,42 @@ async def test_fuller_persistent_fallback_stays_opener_only_and_recovers(db, _v2
     assert row2.report["opener_message"].startswith("Nice work")
 
 
+# --- #273: force-regen crash safety (no delete-then-die window) ---------------
+
+
+async def test_force_regen_worker_death_preserves_prior_report(db, _v2):
+    # #273: a worker death mid-force-regen must NOT lose the report. The old path
+    # deleted+committed the active-version row BEFORE the LLM call, so an
+    # interruption between the committed delete and the write left ZERO rows (the
+    # observed prod incident: a 404 on the activity). With generate-then-swap the
+    # prior row is held until the new content commits, so an interrupted
+    # regeneration leaves the prior report fully intact.
+    activity = _seed(db)
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_fuller_blocks("Original report.")))), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        await generate_fuller(db, str(activity.id))
+    original = _stored(db, activity)
+    assert original.report["message"] == "Original report."
+    original_id = original.id
+
+    # The worker is killed during the regeneration LLM step: _generate_message
+    # never returns (an uncaught interruption, not a handled fallback).
+    with patch("app.services.coach.service.AnthropicClient"), \
+         patch("app.services.coach.service._generate_message",
+               side_effect=RuntimeError("worker killed mid-regen")):
+        with pytest.raises(RuntimeError):
+            await generate_fuller(db, str(activity.id), force=True)
+
+    survived = _stored(db, activity)
+    assert survived is not None, \
+        "force-regen interruption lost the report entirely (#273)"
+    assert survived.id == original_id
+    assert survived.report["message"] == "Original report."
+    assert survived.is_fallback is False
+
+
 async def test_generate_fuller_noops_under_single_shot_prompt(db, _v2, monkeypatch):
     # #216: generate_fuller is meaningful only under the two-stage prompt. After a
     # rollback to a single-shot id it must refuse to run — no LLM call, nothing

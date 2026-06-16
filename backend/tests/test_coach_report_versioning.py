@@ -161,13 +161,15 @@ async def test_force_regenerates_active_and_retains_prior_versions(db):
     fake.generate_json.assert_called_once()
     # Prior (1.0) version survives the force.
     assert db.query(CoachReport).filter(CoachReport.id == old.id).first() is not None
-    # Exactly one active-version row, and it is a fresh one (old active row replaced).
+    # Exactly one active-version row, regenerated IN PLACE (#273 generate-then-swap:
+    # the active row is held and its content swapped atomically, so the row id is
+    # stable and a crash mid-regen can never leave zero rows). Content is refreshed.
     active_rows = db.query(CoachReport).filter(
         CoachReport.activity_id == activity.id,
         CoachReport.schema_version == SCHEMA_VERSION,
     ).all()
     assert len(active_rows) == 1
-    assert active_rows[0].id != active_id
+    assert active_rows[0].id == active_id  # same physical row, swapped in place
     assert result.report.key_takeaways[0].text == "Freshly generated one."
 
 
@@ -181,3 +183,29 @@ def test_force_via_api_does_not_destroy_prior_versions(client, db):
     assert resp.status_code == 200
     # The destructive old behaviour wiped the only report; versioning must retain 1.0.
     assert db.query(CoachReport).filter(CoachReport.id == old.id).first() is not None
+
+
+# --- #273: force-regen crash safety (no delete-then-die window) -----------
+
+
+@pytest.mark.asyncio
+async def test_force_regen_worker_death_preserves_prior_report(db):
+    # #273: an interrupted force-regen on the single-shot path must NOT lose the
+    # report. The old path deleted+committed the active row before the LLM call,
+    # so a worker death between the committed delete and the write left zero rows.
+    activity = _seed_activity(db)
+    active = _insert_report(db, activity.id, ACTIVE_PROMPT_ID, SCHEMA_VERSION)
+    active_id = active.id
+
+    # The worker is killed during the regeneration LLM step: _generate_structured
+    # never returns (an uncaught interruption, not a handled fallback).
+    with patch("app.services.coach.service.AnthropicClient"), \
+         patch("app.services.coach.service._generate_structured",
+               side_effect=RuntimeError("worker killed mid-regen")):
+        with pytest.raises(RuntimeError):
+            await get_or_generate_coach_report(db, str(activity.id), force=True)
+
+    survived = db.query(CoachReport).filter(CoachReport.id == active_id).first()
+    assert survived is not None, \
+        "single-shot force-regen interruption lost the report entirely (#273)"
+    assert survived.report["key_takeaways"][0]["text"] == "Cached takeaway one."
