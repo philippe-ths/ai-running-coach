@@ -517,6 +517,27 @@ def _persist_report(
     """
     activity_uuid = activity.id
 
+    # #279: never replace a prior GOOD report with a fallback. A fallback may only
+    # land where there is nothing good to protect — a first generation (existing is
+    # None) or a fuller fallback over an opener-only row (the #217 recovery; an
+    # opener-only row is not a complete report). A force-regenerate whose generation
+    # failed therefore keeps the runner's prior complete, non-fallback report instead
+    # of overwriting it with "analysis unavailable" (paired with the #273 generate-
+    # then-swap: the prior row is held, so it is here to preserve).
+    if (
+        outcome.is_fallback
+        and existing is not None
+        and not existing.is_fallback
+        and not is_opener_only(existing.report)
+    ):
+        logger.warning(
+            "coach_regen_fallback_preserved_prior: a regeneration yielded a fallback; "
+            "kept the prior good report (activity=%s, prompt=%s)",
+            activity_uuid,
+            prompt_id,
+        )
+        return _to_read(existing)
+
     if outcome.tail_degraded:
         # Monitoring (A3): one greppable WARNING per stored degraded tail.
         logger.warning(
