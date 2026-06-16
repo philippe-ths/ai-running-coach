@@ -192,6 +192,64 @@ def merge_blocks(db: Session, first: Block, second: Block) -> Block:
     return first
 
 
+def remove_activity_from_block(db: Session, activity: Activity) -> None:
+    """Remove a soft-deleted activity from its Block and recompute the survivor.
+
+    Called on the delete webhook path (ADR 0011, #238): after an activity is
+    soft-deleted (`is_deleted=True`) it must also leave its block so it no
+    longer shapes bounds, holds the primary anchor, counts as the last member
+    in the opener debounce, or attracts late arrivals.
+
+    Two outcomes:
+    - Survivors remain: detach the activity, recompute bounds and primary on
+      the surviving members. `force_primary=True` so the deletion of a primary
+      member is handled correctly even when the exchange is already open (the
+      opened exchange was anchored on the now-deleted primary; we re-anchor on
+      the best survivor so future reads are not keyed on a deleted row).
+    - Block is now empty: detach the activity and delete the block together
+      with its Exchange. The Exchange is removed rather than reset so the
+      at-most-once delivery guarantee is preserved by absence, not by a
+      sentinel value. No notification can re-fire against a row that no longer
+      exists.
+
+    Exchange sentinels are NEVER touched when survivors remain. The split/merge
+    corrections rule (corrections inherit sentinels, never re-fire) is the
+    model: removal inherits that posture.
+    """
+    if activity.block_id is None:
+        return  # already unassigned, nothing to do
+
+    block_id = activity.block_id
+    block = db.query(Block).filter(Block.id == block_id).first()
+    if block is None:
+        activity.block_id = None
+        db.add(activity)
+        db.commit()
+        return
+
+    # Detach the activity first so the member query below sees it as gone.
+    activity.block_id = None
+    db.add(activity)
+    db.flush()
+
+    survivors = db.query(Activity).filter(Activity.block_id == block_id).all()
+    if not survivors:
+        # Block is empty: clean it up so it cannot attract late arrivals or
+        # trigger an opener. Delete Exchange first (FK constraint order).
+        exchange = db.query(Exchange).filter(Exchange.block_id == block_id).first()
+        if exchange is not None:
+            db.delete(exchange)
+            db.flush()
+        db.delete(block)
+    else:
+        # Recompute bounds and primary from surviving members.
+        # force_primary=True because we may have removed the primary activity;
+        # a correction-level recomputation is the right posture here.
+        _recompute_block(db, block, force_primary=True)
+
+    db.commit()
+
+
 def _latest(a: Optional[datetime], b: Optional[datetime]) -> Optional[datetime]:
     """The most-advanced sentinel: non-null wins; both set, the later."""
     if a is None:
