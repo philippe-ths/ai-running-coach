@@ -17,9 +17,11 @@ from datetime import datetime, timezone, timedelta
 
 from app.models import Activity, DerivedMetric, User
 from app.models.coach_report import CoachReport
+from app.models.user_material import UserMaterial
 from app.schemas.coach_context import PriorReportDigest
 from app.services.coach.digest import build_report_digest
 from app.services.coach.retrieval import (
+    _MAX_USER_MATERIALS,
     fetch_corpus,
     fetch_prior_commitments,
     fetch_prior_digests,
@@ -332,34 +334,152 @@ def test_fetch_prior_commitments_skips_opener_only_rows(db):
     assert len(out.next_steps) == 1
 
 
-# --- P1.2: fetch_corpus (the keyed corpus lookup, ADR 0014) ------------------
-# Pure keyed lookup into the code-resident corpus.py — no DB read. Degrades to
-# house-core-only when no school resolves (the narrative-degrades-to-null idiom).
+# --- P1.2 / P4: fetch_corpus (keyed school lookup + the user-materials read) --
+# The seam resolves the keyed school from the code-resident corpus.py (degrading to
+# house-core-only) AND, since #286 (ADR 0017), reads the runner's ACTIVE distilled
+# UserMaterial rows into Corpus.user_materials. School resolution is unchanged; the
+# materials read degrades cleanly — a null db/user_id, no active materials, or a
+# malformed distilled row never raises (containment: a bad record degrades the pack,
+# it never breaks the exchange).
+
+_DISTILLED = {
+    "stance": "Run on feel; chase the joy of the trail.",
+    "principles": ["Time on feet over pace.", "Hills are strength work."],
+    "method_framing": "Frame every run by how sustainable and enjoyable it is.",
+    "emphasis_hints": ["enjoyment", "time on feet"],
+}
 
 
-def test_fetch_corpus_resolves_the_named_school():
-    """Every known school id returns the house core plus that exact school."""
+def _material(db, user_id, *, day: int, status: str = "active", distilled=None,
+              title: str = "My plan", hash_suffix: str = "") -> UserMaterial:
+    m = UserMaterial(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        kind="philosophy",
+        title=title,
+        filename=f"{title}.md",
+        raw_text="(untrusted source — never read into the pack)",
+        distilled=dict(_DISTILLED) if distilled is None else distilled,
+        status=status,
+        content_hash=f"hash-{user_id}-{day}-{hash_suffix}",
+        created_at=datetime(2026, 5, day, 8, 0, tzinfo=timezone.utc),
+    )
+    db.add(m)
+    db.flush()
+    return m
+
+
+def test_fetch_corpus_resolves_the_named_school(db):
+    """Every known school id returns the house core plus that exact school
+    (school resolution is unchanged by the P4 materials read)."""
+    uid = _user(db)
     for school_id in ("aerobic-base", "polarized", "enjoyment-and-consistency"):
-        result = fetch_corpus(school_id)
+        result = fetch_corpus(db, uid, school_id)
         assert result.house_core is corpus_lib.HOUSE_CORE
         assert result.school is corpus_lib.SCHOOLS[school_id]
 
 
-def test_fetch_corpus_house_core_is_always_present():
+def test_fetch_corpus_house_core_is_always_present(db):
     """Every lookup carries the always-present house core, school or not."""
+    uid = _user(db)
     for school_id in ("aerobic-base", "polarized", "enjoyment-and-consistency"):
-        assert fetch_corpus(school_id).house_core is corpus_lib.HOUSE_CORE
+        assert fetch_corpus(db, uid, school_id).house_core is corpus_lib.HOUSE_CORE
 
 
-def test_fetch_corpus_unknown_school_degrades_to_house_core_only():
+def test_fetch_corpus_unknown_school_degrades_to_house_core_only(db):
     """An unknown school id degrades to house-core-only (school is None), never raising."""
-    result = fetch_corpus("no-such-school")
+    uid = _user(db)
+    result = fetch_corpus(db, uid, "no-such-school")
     assert result.house_core is corpus_lib.HOUSE_CORE
     assert result.school is None
 
 
-def test_fetch_corpus_none_school_degrades_to_house_core_only():
+def test_fetch_corpus_none_school_degrades_to_house_core_only(db):
     """A null school id (the no-selection case) also degrades to house-core-only."""
-    result = fetch_corpus(None)
+    uid = _user(db)
+    result = fetch_corpus(db, uid, None)
     assert result.house_core is corpus_lib.HOUSE_CORE
     assert result.school is None
+
+
+# --- P4 (#286): the user-materials read --------------------------------------
+
+
+def test_fetch_corpus_reads_active_user_materials(db):
+    """Active distilled materials map into Corpus.user_materials as the typed
+    DistilledMaterial shape (stance/principles/method_framing/emphasis_hints)."""
+    uid = _user(db)
+    _material(db, uid, day=10)
+    result = fetch_corpus(db, uid, "aerobic-base")
+    assert len(result.user_materials) == 1
+    m = result.user_materials[0]
+    assert m.stance == _DISTILLED["stance"]
+    assert list(m.principles) == _DISTILLED["principles"]
+    assert m.method_framing == _DISTILLED["method_framing"]
+    assert list(m.emphasis_hints) == _DISTILLED["emphasis_hints"]
+
+
+def test_fetch_corpus_only_active_materials(db):
+    """processing / failed / archived rows are excluded; only active reaches the corpus."""
+    uid = _user(db)
+    _material(db, uid, day=10, status="active", title="active", hash_suffix="a")
+    _material(db, uid, day=11, status="processing", title="processing", hash_suffix="p")
+    _material(db, uid, day=12, status="failed", title="failed", hash_suffix="f")
+    _material(db, uid, day=13, status="archived", title="archived", hash_suffix="ar")
+    result = fetch_corpus(db, uid, "aerobic-base")
+    assert len(result.user_materials) == 1
+
+
+def test_fetch_corpus_materials_are_user_scoped(db):
+    """A different runner's materials never bleed into this runner's corpus."""
+    uid = _user(db)
+    other = _user(db)
+    _material(db, other, day=10, hash_suffix="other")
+    result = fetch_corpus(db, uid, "aerobic-base")
+    assert result.user_materials == ()
+
+
+def test_fetch_corpus_materials_newest_first(db):
+    """Materials are ordered newest-first so the most recent reference leads."""
+    uid = _user(db)
+    _material(db, uid, day=10, distilled={**_DISTILLED, "stance": "older"}, hash_suffix="old")
+    _material(db, uid, day=20, distilled={**_DISTILLED, "stance": "newer"}, hash_suffix="new")
+    result = fetch_corpus(db, uid, "aerobic-base")
+    assert [m.stance for m in result.user_materials] == ["newer", "older"]
+
+
+def test_fetch_corpus_soft_caps_materials(db):
+    """The seam soft-caps the active materials it carries (defence on pack size)."""
+    uid = _user(db)
+    for i in range(_MAX_USER_MATERIALS + 3):
+        _material(db, uid, day=1 + i, hash_suffix=str(i))
+    result = fetch_corpus(db, uid, "aerobic-base")
+    assert len(result.user_materials) == _MAX_USER_MATERIALS
+
+
+def test_fetch_corpus_skips_malformed_distilled(db):
+    """An off-shape distilled row is skipped, never raising — containment means a
+    bad record degrades the pack, it does not break the exchange."""
+    uid = _user(db)
+    _material(db, uid, day=10, distilled={"unexpected": "shape"}, title="bad", hash_suffix="bad")
+    _material(db, uid, day=11, title="good", hash_suffix="good")
+    result = fetch_corpus(db, uid, "aerobic-base")
+    assert len(result.user_materials) == 1
+    assert result.user_materials[0].stance == _DISTILLED["stance"]
+
+
+def test_fetch_corpus_no_materials_is_empty_tuple(db):
+    """A runner with no active materials gets an empty tuple, school intact."""
+    uid = _user(db)
+    result = fetch_corpus(db, uid, "aerobic-base")
+    assert result.user_materials == ()
+    assert result.school is corpus_lib.SCHOOLS["aerobic-base"]
+
+
+def test_fetch_corpus_degrades_without_db_or_user(db):
+    """A null db or user_id yields no materials (the seam's clean-degradation idiom),
+    while the school still resolves from the code-resident corpus."""
+    assert fetch_corpus(None, None, "aerobic-base").user_materials == ()
+    assert fetch_corpus(None, None, "aerobic-base").school is corpus_lib.SCHOOLS["aerobic-base"]
+    uid = _user(db)
+    assert fetch_corpus(db, None, "aerobic-base").user_materials == ()

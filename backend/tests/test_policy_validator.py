@@ -15,6 +15,7 @@ from app.services.coach.validator import (
     check_medical_overreach,
     check_narrative_evidence,
     check_corpus_evidence,
+    check_user_materials_evidence,
 )
 
 
@@ -745,3 +746,73 @@ class TestCorpusEvidenceRule:
         # violation even though the rule is wired into the validator.
         rules = [v.rule for v in validate_policy(_make_content(), _make_pack())]
         assert "corpus_cited_as_fact" not in rules
+
+
+class TestUserMaterialsEvidenceRule:
+    """Rule 8 (P4, #286, ADR 0017): the runner's uploaded materials are judgment
+    reference, never evidence — citing a `corpus.user_materials.*` field path as
+    report evidence is rejected. Materials carry the hardest Authority tiering tier
+    (they outrank house philosophy for stance) but, exactly like the corpus, can
+    never GROUND a factual claim. The rule is deliberately narrow (it matches ONLY
+    the user_materials sub-path, mirroring the rule-6/rule-7 precedent), so it never
+    forces a false-positive fallback."""
+
+    def test_user_materials_evidence_fires_on_materials_path(self):
+        v = check_user_materials_evidence(
+            ["metrics.hr_drift", "corpus.user_materials.0.stance"]
+        )
+        assert [x.rule for x in v] == ["user_materials_cited_as_fact"]
+        assert "corpus.user_materials.0.stance" in v[0].detail
+
+    def test_user_materials_evidence_fires_on_bare_bracket_and_case(self):
+        for path in (
+            "corpus.user_materials",
+            "corpus.user_materials.method_framing",
+            "corpus.user_materials[1]",
+            "CORPUS.USER_MATERIALS.0.stance",
+        ):
+            v = check_user_materials_evidence([path])
+            assert [x.rule for x in v] == ["user_materials_cited_as_fact"], path
+
+    def test_user_materials_evidence_silent_on_real_and_school_paths(self):
+        # A real metric, and a plain corpus/school path (rule 7's territory, not
+        # rule 8's), draw no user_materials violation.
+        assert check_user_materials_evidence(
+            ["metrics.hr_drift", "corpus.school.principles", "corpus.house_principles"]
+        ) == []
+
+    def test_user_materials_evidence_anchored_no_false_positive(self):
+        # Anchored, so a field that merely contains the substring never matches.
+        assert check_user_materials_evidence(
+            ["my_corpus.user_materials", "corpus.user_materials_extra", "metrics.user_materials"]
+        ) == []
+
+    def test_validate_policy_fires_user_materials_rule_on_citation(self):
+        content = _make_content(
+            key_takeaways=[
+                CoachTakeaway(text="My plan says go long.",
+                              evidence=[{"field": "corpus.user_materials.0.principles", "value": "x"}]),
+                CoachTakeaway(text="Good easy control.",
+                              evidence=[{"field": "metrics.effort_score", "value": 3.0}]),
+            ],
+        )
+        rules = [v.rule for v in validate_policy(content, _make_pack())]
+        assert "user_materials_cited_as_fact" in rules
+
+    def test_validate_message_policy_fires_user_materials_rule_on_tail_citation(self):
+        report = CoachMessageReport(
+            message="Solid easy run; the effort stayed in the easy band the whole way.",
+            headline="Easy run",
+            next_steps=[CoachNextStep(
+                action="Add easy volume", details="another easy 5k this week",
+                why="builds the base",
+                evidence=[{"field": "corpus.user_materials.0.method_framing", "value": "x"}],
+            )],
+            risks=[], questions=[],
+        )
+        rules = [v.rule for v in validate_message_policy(report, _make_pack())]
+        assert "user_materials_cited_as_fact" in rules
+
+    def test_user_materials_rule_silent_when_no_materials_citation(self):
+        rules = [v.rule for v in validate_policy(_make_content(), _make_pack())]
+        assert "user_materials_cited_as_fact" not in rules

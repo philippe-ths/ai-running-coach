@@ -26,8 +26,10 @@ never renders prompt text — that is `prompts.py`'s job.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
+
+from app.schemas.material import DistilledMaterial
 
 
 # ---------------------------------------------------------------------------
@@ -66,14 +68,21 @@ class School:
 
 @dataclass(frozen=True)
 class Corpus:
-    """The resolved corpus for one exchange: the always-present house core plus
-    the keyed school. `school` is None when no school resolves — the house-core-
-    only degradation (the `narrative`-degrades-to-null idiom). This is what the
-    `fetch_corpus` seam returns and what `_build_corpus_context` shapes into the
-    pack's `corpus` section."""
+    """The resolved corpus for one exchange: the always-present house core, the
+    keyed school, and (P4, #286) the runner's own uploaded materials. `school` is
+    None when no school resolves — the house-core-only degradation (the
+    `narrative`-degrades-to-null idiom). `user_materials` is the runner's ACTIVE
+    distilled materials (the `DistilledMaterial` shape, newest-first, soft-capped),
+    empty when the runner has none or the seam was called without a db/user; it
+    carries the hardest Authority tiering tier (it beats house philosophy for
+    stance) yet is still judgment reference, never fact (validator rule 8) and never
+    instructions (prompt rule 28). This is what the `fetch_corpus` seam returns and
+    what `_build_corpus_context` shapes into the pack's `corpus` section (the
+    materials sub-field emitted only under a user-materials-aware prompt)."""
 
     house_core: HouseCore
     school: Optional[School]
+    user_materials: Tuple[DistilledMaterial, ...] = field(default_factory=tuple)
 
 
 # ---------------------------------------------------------------------------

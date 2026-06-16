@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.material import DistilledMaterial
+
 
 class ActivityContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -431,11 +433,21 @@ class CorpusContext(BaseModel):
     fact and never grounding (validator rule 7 rejects citing a `corpus.*` path as
     evidence; prompt rule 25 keeps it from overriding the re-derived DerivedMetric
     or the safety floor). It rides the pack like `narrative` and is emitted ONLY
-    under a corpus-aware prompt id, so the pack stays byte-stable otherwise."""
+    under a corpus-aware prompt id, so the pack stays byte-stable otherwise.
+
+    `user_materials` (P4, #286) is the runner's own ACTIVE distilled materials (the
+    strict `DistilledMaterial` shape), carrying the hardest Authority tiering tier —
+    they beat house philosophy for stance (prompt rule 28) — yet are still judgment
+    reference, NEVER fact (validator rule 8 rejects citing a `corpus.user_materials.*`
+    path) and NEVER instructions. It is None under every non-user-materials prompt
+    and DROPPED from serialization when None, so the corpus section is byte-identical
+    to its P1.2/P1.3 shape under v4/v5/v6 (the activation boundary: materials take
+    effect only under v7); under v7 it is a list (empty when the runner has none)."""
     model_config = ConfigDict(extra="forbid")
 
     house_principles: List[str]
     school: Optional[CorpusSchoolContext] = None
+    user_materials: Optional[List[DistilledMaterial]] = None
 
 
 class StanceEmphasisAxis(BaseModel):
@@ -549,6 +561,14 @@ class CoachContextPack(BaseModel):
         if data.get("corpus") is None:
             # AC1: a non-corpus prompt emits nothing — not even a null key.
             data.pop("corpus", None)
+        else:
+            # P4 (#286): user_materials rides INSIDE the corpus section, but only
+            # under a user-materials-aware prompt. When None (every non-v7 corpus
+            # prompt) drop the nested key entirely, so the corpus section is
+            # byte-identical to its P1.2/P1.3 shape under v4/v5/v6 (the activation
+            # boundary), exactly as the top-level Optional-and-drop idiom does.
+            if data["corpus"].get("user_materials") is None:
+                data["corpus"].pop("user_materials", None)
         if data.get("stance") is None:
             # AC1: a non-stance prompt emits nothing — not even a null key.
             data.pop("stance", None)

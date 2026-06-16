@@ -133,13 +133,17 @@ def test_corpus_does_not_touch_the_facts(db):
 def test_corpus_degrades_to_house_core_only_when_no_school_resolves():
     """AC5: with no school resolvable the section is still built — house principles
     present, school None — so the exchange still generates."""
-    section = _build_corpus_context(V4, school_id="no-such-school")
+    # V4 is not a user-materials prompt, so the materials read is never performed —
+    # db/activity are unused and passing None exercises the pure school-lookup path.
+    section = _build_corpus_context(None, None, V4, school_id="no-such-school")
     assert section is not None
     assert list(section.house_principles) == list(HOUSE_CORE.principles)
     assert section.school is None
+    # P4 byte-stability: materials are inert under v4, so the sub-field stays None.
+    assert section.user_materials is None
 
 
 def test_build_corpus_context_returns_none_for_non_corpus_prompt():
     """The gate is the prompt id: a non-corpus prompt yields no section at all."""
-    assert _build_corpus_context("coach_message_v3") is None
-    assert _build_corpus_context(None) is None
+    assert _build_corpus_context(None, None, "coach_message_v3") is None
+    assert _build_corpus_context(None, None, None) is None

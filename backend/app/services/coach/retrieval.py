@@ -19,7 +19,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session, undefer
 
@@ -27,7 +27,9 @@ from app.models import Activity
 from app.models.coach_chat_message import CoachChatMessage
 from app.models.coach_report import CoachReport
 from app.models.derived_metric import DerivedMetric
+from app.models.user_material import UserMaterial
 from app.schemas.coach_context import PriorReportDigest
+from app.schemas.material import DistilledMaterial
 from app.services.coach.corpus import HOUSE_CORE, SCHOOLS, Corpus
 from app.services.coach.digest import build_report_digest
 from app.services.coach.output_contract import is_opener_only
@@ -49,18 +51,64 @@ def _as_uuid(value) -> uuid.UUID:
     return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
 
 
-def fetch_corpus(school_id: Optional[str]) -> Corpus:
-    """Pull the coaching corpus (P1.2, ADR 0014): the always-present house core
-    plus the keyed school of training thought.
+# Defence-in-depth cap on how many active materials ride the corpus (a pack-size
+# bound). Well below the per-user upload cap (USER_MATERIAL_MAX_COUNT = 50), so for a
+# single curating runner it effectively never bites; if it ever does, the NEWEST
+# materials win — a documented bound, not a silent truncation.
+_MAX_USER_MATERIALS = 10
 
-    A pure keyed LOOKUP into the code-resident `corpus.py` — no DB read, since the
-    corpus is house-authored and lives as code. This seam is the only place the
-    rest of the system reads the corpus. An unknown or null `school_id` degrades to
-    house-core-only (`school=None`), exactly as `narrative` degrades to null, so a
-    missing/unresolved school never breaks an exchange.
+
+def fetch_corpus(db: Optional[Session], user_id, school_id: Optional[str]) -> Corpus:
+    """Pull the coaching corpus (P1.2 ADR 0014, extended P4 #286): the always-present
+    house core, the keyed school of training thought, and the runner's own ACTIVE
+    distilled materials.
+
+    The SCHOOL half is a pure keyed LOOKUP into the code-resident `corpus.py` — an
+    unknown or null `school_id` degrades to house-core-only (`school=None`), exactly
+    as `narrative` degrades to null. The MATERIALS half (P4) reads the runner's
+    `status="active"` `UserMaterial` rows, newest-first and soft-capped at
+    `_MAX_USER_MATERIALS`, coercing each row's `distilled` JSON through the strict
+    `DistilledMaterial` schema. Both halves degrade cleanly: a null `db`/`user_id`
+    (the pre-P4 / non-user-materials call site) or a row whose `distilled` is null or
+    off-shape simply contributes no material — containment (ADR 0017) means a bad
+    record degrades the corpus, it never breaks the exchange. The materials are the
+    only thing this seam reads from the DB; the school never touches it. This is the
+    single place the rest of the system reads the corpus.
     """
     school = SCHOOLS.get(school_id) if school_id else None
-    return Corpus(house_core=HOUSE_CORE, school=school)
+    user_materials = _fetch_user_materials(db, user_id)
+    return Corpus(house_core=HOUSE_CORE, school=school, user_materials=user_materials)
+
+
+def _fetch_user_materials(db: Optional[Session], user_id) -> Tuple[DistilledMaterial, ...]:
+    """The runner's active distilled materials, newest-first, soft-capped, each
+    coerced through the strict `DistilledMaterial` schema (P4, #286).
+
+    Empty on a null `db`/`user_id` or when the runner has no active material; a row
+    whose stored `distilled` is null or off-shape is SKIPPED rather than raised
+    (ADR 0017 containment — an injection that produced an off-contract record can at
+    most cost itself a slot in the pack, never break the exchange)."""
+    if db is None or user_id is None:
+        return ()
+    rows = (
+        db.query(UserMaterial.distilled)
+        .filter(
+            UserMaterial.user_id == _as_uuid(user_id),
+            UserMaterial.status == "active",
+        )
+        .order_by(UserMaterial.created_at.desc(), UserMaterial.id.desc())
+        .limit(_MAX_USER_MATERIALS)
+        .all()
+    )
+    materials: List[DistilledMaterial] = []
+    for (distilled,) in rows:
+        if not distilled:
+            continue  # active but carrying no distilled record — nothing to add
+        try:
+            materials.append(DistilledMaterial.model_validate(distilled))
+        except Exception:  # noqa: BLE001 — an off-shape stored record is skipped, never fatal
+            continue
+    return tuple(materials)
 
 
 def fetch_stream_view(db: Session, activity_id) -> Optional[dict]:

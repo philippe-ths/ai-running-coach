@@ -23,6 +23,7 @@ from app.services.coach.eval.rubric import (
     assert_advanced_not_parroted,
     assert_coached_not_caveated,
     assert_corpus_preserved_safety_surface,
+    assert_user_materials_preserved_safety_surface,
     assert_discounted_inflated_hr,
     assert_led_with_headline,
     assert_load_not_framed_as_intensity,
@@ -731,3 +732,43 @@ class TestCorpusPreservedSafetySurface:
         content, pack = _known_good()
         score = score_report(content, pack)
         assert any(a.name == "corpus_preserved_safety_surface" for a in score.assertions)
+
+
+class TestUserMaterialsPreservedSafetySurface:
+    """The 11th rubric assertion (P4, #286, ADR 0017): the user-materials-dimension
+    regression sensor, parallel to the P1.1 voice and P1.2 corpus sensors. The
+    runner's uploaded materials are the highest-authority steering input AND the
+    untrusted one, so a materials-steered report must NOT drop the safety floor: when
+    the pipeline fired a referral, the report must still relay a professional-consult
+    nudge. The hard cross-material invariance gate is the deterministic test (tests/
+    test_user_materials_invariance.py); this is its soft per-report companion."""
+
+    def test_not_applicable_when_no_referral(self):
+        result = assert_user_materials_preserved_safety_surface(_make_content(), _make_pack())
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_passes_when_referral_relayed(self):
+        content = _make_content(
+            thesis="Aerobically this held up, but given the fatigue signal, "
+            "it is worth getting checked by a healthcare professional.",
+        )
+        result = assert_user_materials_preserved_safety_surface(
+            content, _make_pack(calibration={"referral": _REFERRAL})
+        )
+        assert result.status is AssertionStatus.PASS
+
+    def test_fails_when_referral_dropped(self):
+        content = _make_content(
+            thesis="Strong aerobic run, nothing to flag — keep building volume.",
+        )
+        result = assert_user_materials_preserved_safety_surface(
+            content, _make_pack(calibration={"referral": _REFERRAL})
+        )
+        assert result.status is AssertionStatus.FAIL
+
+    def test_registered_in_the_rubric(self):
+        names = [fn.__name__ for fn in ASSERTIONS]
+        assert "assert_user_materials_preserved_safety_surface" in names
+        content, pack = _known_good()
+        score = score_report(content, pack)
+        assert any(a.name == "user_materials_preserved_safety_surface" for a in score.assertions)
