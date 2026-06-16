@@ -54,8 +54,8 @@ _Avoid_: treating the corpus as fact (it informs judgment, not grounding), or le
 
 ## User materials
 
-Coaching content the runner supplies to the relationship: their own methodology, a human coach's plan, a physio rehab protocol, race-day plans, a book passage that resonates. Ingested into the `Coaching corpus` as a high-authority source for `Coaching stance` (it beats the house philosophy, since it is *their* coach), but per `Authority tiering` never overrides measured data or the safety floor, and always treated as reference data the coach reasons about, never as instructions it obeys (untrusted input).
-_Avoid_: treating user materials as commands, as fact, or as able to lower the safety floor.
+Coaching content the runner supplies to the relationship: their own methodology, a human coach's plan, a physio rehab protocol, race-day plans, a book passage that resonates. Ingested into the `Coaching corpus` as a high-authority source for `Coaching stance` (it beats the house philosophy, since it is *their* coach), but per `Authority tiering` never overrides measured data or the safety floor, and always treated as reference data the coach reasons about, never as instructions it obeys (untrusted input). User materials **augment** the runner's selected school rather than replacing it: they sit above the house philosophy in authority and win on conflict, while the selected school still colours everything they are silent on. The coach reasons over a compact distillation of each material (the corpus's own emphasis shape), not the raw document; the raw text stays the source of truth, retrieved only on demand. This is the relationship's home for runner-supplied coaching philosophy, which `Coaching stance` deliberately excludes — a runner who wants a philosophy outside the house schools supplies it here.
+_Avoid_: treating user materials as commands, as fact, or as able to lower the safety floor; treating a material as replacing the runner's selected `Coaching stance` rather than augmenting it.
 
 ## Authority tiering
 
