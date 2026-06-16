@@ -516,13 +516,16 @@ def build_b_baseline(
     # Recent training summary relative to this activity's date
     activity_date = activity.start_date.date()
     facts_7d = _query_activity_facts(
-        db, activity_date - timedelta(days=7), activity_date
+        db, activity_date - timedelta(days=7), activity_date,
+        user_id=activity.user_id,
     )
     facts_28d = _query_activity_facts(
-        db, activity_date - timedelta(days=28), activity_date
+        db, activity_date - timedelta(days=28), activity_date,
+        user_id=activity.user_id,
     )
     facts_prev_28d = _query_activity_facts(
-        db, activity_date - timedelta(days=56), activity_date - timedelta(days=28)
+        db, activity_date - timedelta(days=56), activity_date - timedelta(days=28),
+        user_id=activity.user_id,
     )
 
     return BBaseline(
