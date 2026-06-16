@@ -58,6 +58,17 @@ class Exchange(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # The receipt cadence (#296). `done_at` records the runner tapping "done" on a
+    # receipt — the explicit "this session is finished" signal that schedules the
+    # full report (idempotent with the block-quiet timer; both target +BLOCK_GAP).
+    # Under the receipt cadence `opener_sent_at` is unused (there is no LLM opener —
+    # the per-activity receipt opens the exchange via `opened_at` and dedups on the
+    # Activity), and `fuller_sent_at` keeps its meaning as the CLOSED sentinel (set
+    # when the full report has been sent). Nullable, zero-backfill.
+    done_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

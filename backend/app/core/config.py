@@ -88,10 +88,23 @@ class Settings(BaseSettings):
     IMPORT_PAGE_SIZE: int = 50
     IMPORT_BATCH_PAUSE_SECONDS: int = 5
 
+    # Receipt cadence (#296, ADR 0010/0011 delta). Orthogonal to COACH_PROMPT_ID:
+    # when True AND the active prompt is a two-stage message prompt, the post-activity
+    # touchpoint becomes an INSTANT deterministic per-activity receipt (RPE/pain +
+    # "done" taps, no LLM, cannot fall back) plus a single full LLM report ~30 min
+    # after the session (the block-complete debounce, or a "done" tap), retiring the
+    # debounced LLM opener and the 3h fuller timer. The full report reuses the
+    # configured prompt's fuller mode, so cadence and prompt content stay decoupled;
+    # flipping this back restores the prior two-stage opener/fuller cadence with zero
+    # code change. Inert under a single-shot prompt (there is no fuller mode to fire).
+    COACH_RECEIPT_CADENCE: bool = False
+
     # Two-stage Exchange cadence (A4, ADR 0010). The opener fires immediately on a
     # finished activity; the conditional fuller turn fires on the runner's reply or
     # this timer, whichever is first. Only the two-stage prompt (coach_message_v2)
-    # uses these; under a single-shot prompt the pipeline ignores them (AC8).
+    # uses these; under a single-shot prompt the pipeline ignores them (AC8). Under
+    # the receipt cadence (#296) the 3h timer is retired — the full report fires at
+    # +BLOCK_GAP_SECONDS instead — so EXCHANGE_STAGE2_DELAY_SECONDS is then unused.
     EXCHANGE_STAGE2_DELAY_SECONDS: int = 10800  # 3h fuller-turn timer fallback
     # How long after the opener a reply (a check-in or chat) still belongs to the
     # open exchange and triggers the fuller turn early. A reply on an activity whose

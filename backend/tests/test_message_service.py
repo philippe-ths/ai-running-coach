@@ -273,3 +273,68 @@ class TestMessageServicePath:
         stored = _stored(db, activity)
         assert stored.is_fallback is True
         assert stored.digest is None
+
+
+# --- #295: truncation retries at an escalated budget --------------------------
+
+
+def _good_blocks():
+    return [
+        _text("Nice steady aerobic run, you held your effort well throughout."),
+        _tail(
+            headline="Solid run",
+            next_steps=[{"action": "Easy run", "details": "30 min", "why": "Recovery"}],
+            risks=[],
+            questions=[{"question": "How did it feel?", "reason": "No RPE",
+                        "options": [{"id": "rpe", "label": "Rate 1-10", "kind": "rpe"}]}],
+        ),
+    ]
+
+
+class TestTruncationEscalation:
+    @pytest.mark.asyncio
+    async def test_truncation_retries_at_escalated_budget_and_recovers(
+        self, db, _message_prompt
+    ):
+        # #295: a max_tokens truncation must retry at a LARGER budget (not the same
+        # one that just truncated) and recover to a real non-fallback report.
+        activity = _seed_activity_with_metrics(db)
+        truncated = _result([_text("Half a sen")], stop_reason="max_tokens")
+        client = AsyncMock()
+        client.generate_coach_message = AsyncMock(
+            side_effect=[truncated, _result(_good_blocks(), stop_reason="end_turn")]
+        )
+        with patch("app.services.coach.service.AnthropicClient", return_value=client):
+            read = await get_or_generate_coach_report(db, str(activity.id))
+
+        stored = _stored(db, activity)
+        assert stored.is_fallback is False
+        assert read.report.message.startswith("Nice steady aerobic run")
+        calls = client.generate_coach_message.await_args_list
+        assert calls[0].kwargs["max_tokens"] == 8192   # first attempt: base budget
+        assert calls[1].kwargs["max_tokens"] == 16384  # truncation retry: escalated
+
+    @pytest.mark.asyncio
+    async def test_empty_prose_retry_uses_escalated_budget(self, db, _message_prompt):
+        # #217/#295: a no-prose first attempt (a tail block but no message text, the
+        # live failure) retries at the escalated budget and recovers rather than
+        # degrading to a fallback. A tail-only result raises EmptyMessageError in
+        # merge() directly (the tail-skip branch is skipped since a tail is present),
+        # exercising the #217 empty-prose loop.
+        activity = _seed_activity_with_metrics(db)
+        no_prose = _result(
+            [_tail(headline="x", next_steps=[], risks=[], questions=[])],
+            stop_reason="end_turn",
+        )
+        client = AsyncMock()
+        client.generate_coach_message = AsyncMock(
+            side_effect=[no_prose, _result(_good_blocks(), stop_reason="end_turn")]
+        )
+        with patch("app.services.coach.service.AnthropicClient", return_value=client):
+            read = await get_or_generate_coach_report(db, str(activity.id))
+
+        stored = _stored(db, activity)
+        assert stored.is_fallback is False
+        calls = client.generate_coach_message.await_args_list
+        assert calls[0].kwargs["max_tokens"] == 8192    # attempt 0: base
+        assert calls[-1].kwargs["max_tokens"] == 16384  # attempt 1: escalated

@@ -1,3 +1,4 @@
+from html import escape
 from typing import Optional
 
 from app.schemas.coach import CoachReportRead
@@ -165,6 +166,71 @@ def build_coach_notification(
     return None
 
 
+def _receipt_actions(activity_id: str) -> tuple[NotificationAction, ...]:
+    """Build the deterministic receipt tap keyboard (#296): the fixed RPE/pain
+    quick-replies plus the "done" control, each carrying its opaque callback token.
+    A tap whose token cannot be encoded is dropped rather than producing a dead
+    button (mirrors `_opener_actions`)."""
+    from app.services.coach.receipt import RECEIPT_TAPS
+
+    actions: list[NotificationAction] = []
+    for tap in RECEIPT_TAPS:
+        try:
+            token = encode_callback_token(
+                kind=tap.kind, activity_id=str(activity_id), value=tap.value
+            )
+        except ValueError:
+            continue
+        actions.append(NotificationAction(label=tap.label, token=token))
+    return tuple(actions)
+
+
+def build_receipt_notification(
+    *,
+    receipt_text: str,
+    headline: str,
+    activity_id: str,
+    distance_m: int,
+    app_base_url: str,
+) -> Optional[Notification]:
+    """Render a deterministic receipt (#296) into a Notification for the configured
+    channel, or None when no channel is configured.
+
+    Unlike `build_coach_notification`, this takes plain deterministic inputs (the
+    receipt has no CoachReport): the rendered receipt prose, the activity headline
+    for the title, and the activity id for the deep link + tap tokens. Telegram
+    carries the RPE/pain/done tap keyboard; email renders the prose only (it cannot
+    tap). The pipeline stays channel-agnostic; channel knowledge lives here."""
+    from app.core.config import settings
+
+    channel = _active_channel()
+    if channel is None:
+        return None
+
+    distance_km = round((distance_m or 0) / 1000.0, 1)
+    label = headline or "Activity"
+    title = f"{label} — {distance_km}km" if distance_km > 0 else label
+    url = f"{app_base_url.rstrip('/')}/activity/{activity_id}"
+
+    if channel == "telegram":
+        return Notification(
+            to=str(settings.TELEGRAM_CHAT_ID),
+            subject=title,
+            html="",
+            text=receipt_text,
+            url=url,
+            actions=_receipt_actions(activity_id),
+        )
+    # email: no tap affordances, render the prose + link in the body.
+    return Notification(
+        to=settings.NOTIFY_TO,
+        subject=title,
+        html=f"<p>{escape(receipt_text)}</p>",
+        text=receipt_text,
+        url=url,
+    )
+
+
 def set_notifier(notifier: NotifierPort | None) -> None:
     """Override the active notifier. Pass None to reset to the default."""
     global _active
@@ -177,6 +243,7 @@ __all__ = [
     "NoOpNotifier",
     "NotifierPort",
     "build_coach_notification",
+    "build_receipt_notification",
     "get_notifier",
     "set_notifier",
 ]

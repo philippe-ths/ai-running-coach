@@ -62,6 +62,16 @@ class Activity(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # The per-activity receipt sentinel (#296 receipt cadence): set once the instant
+    # deterministic receipt for THIS activity has been notified. Receipts are
+    # per-activity (one per activity is acceptable, owner decision) while the exchange
+    # is per-block, so dedup lives here on the Activity, mirroring the retired A4
+    # opener_notification_sent_at. Left null on send failure so the receipt stays
+    # re-sendable; never reset by a regeneration. Null under the prior cadences.
+    receipt_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Set once this activity's coach report has contributed its belief deltas to
     # the M8 CoachingContext store. The at-most-once-per-activity sentinel (like
     # coach_notification_sent_at) so a re-read or force-regeneration of the report

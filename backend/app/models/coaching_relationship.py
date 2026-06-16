@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, SmallInteger, String, Uuid
+from sqlalchemy import DateTime, ForeignKey, JSON, SmallInteger, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -54,5 +54,20 @@ class CoachingRelationship(Base):
     stance_school: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     stance_data_sentiment: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     stance_process_outcome: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+
+    # The #296 receipt cadence: pre-generated voiced receipt phrasings (one set of
+    # slotted variants per block-aware situation), produced OFFLINE through the
+    # runner's declared Voice (a small LLM job on PUT /api/coach/voice, lazily if
+    # missing) and validated so voice flexes delivery only — never the deterministic
+    # block facts or the safety floor (ADR 0013). Served deterministically at receipt
+    # time by filling the block facts into a picked variant. Null until generated;
+    # the house-default deterministic set is the FLOOR when null or generation fails.
+    # `receipt_templates_voice_key` is the fingerprint of the voice inputs the stored
+    # set was generated from, so a voice change is detectable and triggers regen.
+    receipt_templates: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    receipt_templates_voice_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    receipt_templates_generated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     user = relationship("User", backref="coaching_relationship")
