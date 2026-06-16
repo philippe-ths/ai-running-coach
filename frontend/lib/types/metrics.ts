@@ -34,6 +34,9 @@ export interface DerivedMetric {
   pace_variability?: number;
   hr_drift?: number;
   time_in_zones?: Record<string, number>;
+  /** "strava" when zones are binned from the runner's own Strava HR bounds;
+   *  null/undefined means the %-of-max-HR fallback was used (#301). */
+  hr_zones_source?: string | null;
   stops_analysis?: StopsAnalysis;
   efficiency_analysis?: EfficiencyAnalysis;
 }
