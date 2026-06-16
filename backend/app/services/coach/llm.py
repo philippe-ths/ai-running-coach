@@ -112,6 +112,81 @@ class AnthropicClient:
         """
         return await self.generate_json(system=system, user=user, max_tokens=max_tokens)
 
+    async def generate_structured(
+        self,
+        *,
+        system: str,
+        user: str,
+        tool: Dict[str, Any],
+        max_tokens: int = 1024,
+    ) -> Dict[str, Any]:
+        """A structured-output-only call: force the model to emit exactly the given
+        tool's input and return it as a dict.
+
+        The containment lever for untrusted input (P4, #285): `tool_choice` is FORCED
+        to the named tool and there is NO extended thinking, so the model has no
+        free-form text channel at all — its only output is the structured tool input,
+        which the caller then validates against a strict schema. Same retry / timeout
+        discipline as `generate_json`. Raises ValueError if no matching tool_use block
+        is returned (a logic error, not transient — not retried here; the caller
+        treats it as a failed distillation).
+        """
+        import anthropic
+
+        tool_name = tool["name"]
+        max_attempts = 2  # initial + one retry on transient transport failure
+        last_exc: Exception | None = None
+        for attempt in range(max_attempts):
+            try:
+                response = await self.client.messages.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    temperature=0,
+                    system=system,
+                    messages=[{"role": "user", "content": user}],
+                    tools=[tool],
+                    tool_choice={"type": "tool", "name": tool_name},
+                    timeout=_TIMEOUT_SECONDS,
+                )
+                for block in response.content:
+                    btype = (
+                        block.get("type") if isinstance(block, dict)
+                        else getattr(block, "type", None)
+                    )
+                    bname = (
+                        block.get("name") if isinstance(block, dict)
+                        else getattr(block, "name", None)
+                    )
+                    if btype == "tool_use" and bname == tool_name:
+                        tool_input = (
+                            block.get("input") if isinstance(block, dict)
+                            else getattr(block, "input", None)
+                        )
+                        return dict(tool_input) if isinstance(tool_input, dict) else {}
+                raise ValueError(f"no {tool_name} tool_use block in response")
+            except (anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
+                last_exc = exc
+                logger.warning(
+                    "anthropic_structured_transient_failure",
+                    extra={"attempt": attempt + 1, "kind": type(exc).__name__},
+                )
+                if attempt + 1 < max_attempts:
+                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+                    continue
+                raise
+            except anthropic.APIStatusError as exc:
+                if exc.status_code >= 500 and attempt + 1 < max_attempts:
+                    last_exc = exc
+                    logger.warning(
+                        "anthropic_structured_5xx_retry",
+                        extra={"attempt": attempt + 1, "status": exc.status_code},
+                    )
+                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+                    continue
+                raise
+        assert last_exc is not None
+        raise last_exc
+
     async def generate_coach_message(
         self,
         *,

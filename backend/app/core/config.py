@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     # joins it; a block with no new member for this long is complete.
     BLOCK_GAP_SECONDS: int = 1800
 
+    # User materials (P4, #285, ADR 0017). The first untrusted-input surface, so
+    # the ingestion guards are STRUCTURAL: a per-file byte cap and a per-user count
+    # cap on non-archived materials. Generous for a single runner; tunable later.
+    USER_MATERIAL_MAX_BYTES: int = 262144  # 256 KB per uploaded .md file
+    USER_MATERIAL_MAX_COUNT: int = 50  # max non-archived materials per user
+
     # Phase 1 deployment: throwaway basic auth in front of /api/*.
     # Both must be set for the middleware to enforce; either empty disables it.
     # TODO(phase-2): remove when session auth lands.

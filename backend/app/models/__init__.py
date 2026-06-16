@@ -23,6 +23,7 @@ from app.models.block import Block  # noqa: F401
 from app.models.exchange import Exchange  # noqa: F401
 from app.models.coaching_relationship import CoachingRelationship  # noqa: F401
 from app.models.strava_import import StravaImport  # noqa: F401
+from app.models.user_material import UserMaterial  # noqa: F401
 
 __all__ = [
     "generate_uuid",
@@ -42,4 +43,5 @@ __all__ = [
     "Exchange",
     "CoachingRelationship",
     "StravaImport",
+    "UserMaterial",
 ]
