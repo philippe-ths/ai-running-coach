@@ -198,14 +198,20 @@ def regenerate_coach_report(activity_id: UUID, db: Session = Depends(get_db)):
     # the read endpoints (and out of test collection that does not touch Redis).
     from app.core.config import settings
     from app.core.queue import queue
-    from app.jobs.process_new_activity import regenerate_report_job
+    from app.jobs.process_new_activity import PIPELINE_RETRY, regenerate_report_job
 
     # job_timeout (#264): the two-stage regeneration runs ~120-360s, past RQ's 180s
     # default; without this the worker's death penalty kills it before it stores the
     # report. (The queue default_timeout also covers it; explicit here documents it.)
+    #
+    # retry (#302): give the regeneration the same bounded PIPELINE_RETRY policy
+    # (3 attempts, 60/300/900s backoffs) used by the create/poll paths, so a
+    # transient streaming disconnect (httpx.RemoteProtocolError) retries at the
+    # RQ level rather than silently leaving the runner with a stale fallback report.
     queue.enqueue(
         regenerate_report_job, str(activity_id),
         job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
+        retry=PIPELINE_RETRY,
     )
     return {"status": "regenerating"}
 
