@@ -8,6 +8,7 @@ import ImportStravaHistory from '@/components/ImportStravaHistory';
 import ThemeToggle from '@/components/ThemeToggle';
 import VoiceDialsPanel from '@/components/VoiceDialsPanel';
 import StanceDialsPanel from '@/components/StanceDialsPanel';
+import UserMaterialsPanel from '@/components/UserMaterialsPanel';
 import { fetchFromAPI } from '@/lib/api';
 
 export default function ProfilePage() {
@@ -192,6 +193,10 @@ export default function ProfilePage() {
 
       <div className="mt-6">
         <StanceDialsPanel />
+      </div>
+
+      <div className="mt-6">
+        <UserMaterialsPanel />
       </div>
     </div>
   );

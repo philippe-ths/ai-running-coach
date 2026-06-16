@@ -60,4 +60,10 @@ export type {
   StanceConfig,
   EmphasisKey,
 } from "./types/stance";
+export type {
+  MaterialKind,
+  MaterialStatus,
+  DistilledMaterial,
+  UserMaterial,
+} from "./types/material";
 

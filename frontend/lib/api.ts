@@ -26,6 +26,13 @@ export async function fetchFromAPI(endpoint: string, options: RequestInit = {}) 
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> | undefined),
   };
+  // A multipart FormData upload must carry its own `multipart/form-data;
+  // boundary=...` content-type, which only the browser can set. Forcing
+  // application/json here breaks the backend's multipart parse, so drop it and
+  // let fetch populate the boundary header itself.
+  if (options.body instanceof FormData) {
+    delete headers['Content-Type'];
+  }
   if (isServer) {
     const auth = buildAuthHeader();
     if (auth) headers.Authorization = auth;
@@ -41,5 +48,7 @@ export async function fetchFromAPI(endpoint: string, options: RequestInit = {}) 
     throw new Error(`API Error: ${res.statusText}`);
   }
 
+  // 204 No Content (e.g. a DELETE) has no body to parse.
+  if (res.status === 204) return null;
   return res.json();
 }
