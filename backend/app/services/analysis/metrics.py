@@ -3,9 +3,19 @@ from typing import Optional, List, Dict, Any
 from app.models import Activity
 from app.services.analysis.stops import analyze_stops
 
-def calculate_time_in_zones(streams: Dict[str, List[any]], max_hr: int = 190) -> Optional[Dict[str, int]]:
+def calculate_time_in_zones(
+    streams: Dict[str, List[any]],
+    max_hr: int = 190,
+    zone_boundaries: Optional[List[int]] = None,
+) -> Optional[Dict[str, int]]:
     """
     Calculates time spent in 5 heart rate zones.
+
+    When ``zone_boundaries`` is supplied (the runner's own 5 ascending HR-zone
+    lower bounds in bpm, e.g. from their Strava athlete zones), readings are
+    binned against those boundaries so the distribution matches what the runner
+    sees on Strava (#297). Without it, the metric falls back to a generic
+    %-of-max-HR scheme:
     Z1: 50-60%
     Z2: 60-70%
     Z3: 70-80%
@@ -16,37 +26,49 @@ def calculate_time_in_zones(streams: Dict[str, List[any]], max_hr: int = 190) ->
     hr_list = streams.get("heartrate", [])
     if not hr_list:
         return None
-    
+
     # Filter out zeros if any
-    hr_arr = np.array([h for h in hr_list if h > 30]) 
+    hr_arr = np.array([h for h in hr_list if h > 30])
     if len(hr_arr) == 0:
         return None
 
     zones = {
         "Z1": 0, "Z2": 0, "Z3": 0, "Z4": 0, "Z5": 0
     }
-    
-    # Calculate thresholds
+
+    # Preferred path (#297): bin against the runner's own zone boundaries. The 5
+    # lower bounds are ascending; the 4 internal cut points (bounds[1:5]) split
+    # Z1..Z5. Anything below Z2's floor counts as Z1, mirroring Strava, where Z1
+    # is the catch-all low zone. A large finite top edge stands in for "open".
+    if zone_boundaries and len(zone_boundaries) >= 5:
+        cuts = [float(b) for b in zone_boundaries[1:5]]
+        bins = [0.0, *cuts, 10_000.0]
+        hist, _ = np.histogram(hr_arr, bins=bins)
+        for i in range(5):
+            zones[f"Z{i + 1}"] = int(hist[i])
+        return zones
+
+    # Fallback: generic %-of-max-HR thresholds.
     t = [0.5 * max_hr, 0.6 * max_hr, 0.7 * max_hr, 0.8 * max_hr, 0.9 * max_hr]
-    
+
     # Binning
     # Counts of HR readings (assuming 1 reading = 1 second for 'time' stream usually.
     # Ideally should use the 'time' stream deltas, but simple count is close enough for MVP.
-    
+
     # Optimized numpy binning
     # bins: [0, t0, t1, t2, t3, t4, max_possible]
     # invalid (<50%), Z1, Z2, Z3, Z4, Z5
-    bins = [0, t[0], t[1], t[2], t[3], t[4], 250] 
-    
+    bins = [0, t[0], t[1], t[2], t[3], t[4], 250]
+
     hist, _ = np.histogram(hr_arr, bins=bins)
-    
+
     # hist[0] is garbage (<50%), hist[1] is Z1, etc.
     zones["Z1"] = int(hist[1])
     zones["Z2"] = int(hist[2])
     zones["Z3"] = int(hist[3])
     zones["Z4"] = int(hist[4])
     zones["Z5"] = int(hist[5])
-    
+
     return zones
 
 def calculate_pace_variability(streams: Dict[str, List[any]]) -> Optional[float]:
@@ -277,9 +299,14 @@ def compute_derived_metrics_data(
     streams_dict: Dict[str, List[any]] = {},
     max_hr: int = 190,
     rpe: Optional[int] = None,
+    zone_boundaries: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     """
     Aggregates metrics for the DerivedMetric model.
+
+    ``zone_boundaries`` (the runner's own HR-zone lower bounds, #297) is passed
+    through to the time-in-zone binning so the distribution matches Strava when
+    available; it falls back to the %-of-max-HR scheme when absent.
     """
     drift = None
     pace_var = None
@@ -296,7 +323,9 @@ def compute_derived_metrics_data(
         # Use provided max_hr if reasonable, else default
         effective_max = max_hr if max_hr and max_hr > 150 else 190
 
-        zones = calculate_time_in_zones(streams_dict, effective_max)
+        zones = calculate_time_in_zones(
+            streams_dict, effective_max, zone_boundaries=zone_boundaries
+        )
 
     # Training-load primitive (#186): comparable zone-minutes across HR/no-HR.
     # Tier A uses the zone distribution; Tier B the summary HR against the

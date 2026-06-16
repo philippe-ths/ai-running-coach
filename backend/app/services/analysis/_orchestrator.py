@@ -150,10 +150,18 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     if profile and profile.max_hr and profile.max_hr > 100:
         max_hr = profile.max_hr
 
+    # The runner's own Strava HR zones, when synced, drive the time-in-zone
+    # binning so it matches Strava (#297). Absent, binning falls back to %max.
+    zone_boundaries = profile.hr_zones if profile and profile.hr_zones else None
+
     # 5. Compute metrics. Pass the check-in RPE so the training-load primitive
     # (#186) can fall back to session-RPE on a strap-less run.
     metrics_data = compute_derived_metrics_data(
-        activity, streams_dict, max_hr=max_hr, rpe=check_in.rpe if check_in else None
+        activity,
+        streams_dict,
+        max_hr=max_hr,
+        rpe=check_in.rpe if check_in else None,
+        zone_boundaries=zone_boundaries,
     )
 
     # 6. Classify into orthogonal axes (ADR 0007). Probe interval structure so
@@ -195,7 +203,9 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
 
     # 6.7 Interval-specific KPIs
     if interval_structure:
-        zones_calibrated = bool(profile and profile.max_hr and profile.max_hr > 100)
+        zones_calibrated = bool(
+            profile and (profile.hr_zones or (profile.max_hr and profile.max_hr > 100))
+        )
         interval_kpis = build_interval_kpis(
             interval_structure,
             max_hr=max_hr,

@@ -16,6 +16,7 @@ class InMemoryStravaAdapter:
     def __init__(self) -> None:
         self.activities: list[dict] = []
         self.streams: dict[int, dict] = {}
+        self.athlete_zones: dict | None = None
         self.next_tokens: Tokens | None = None
         self.exchange_response: Tokens | None = None
         # Call log for assertions.
@@ -33,6 +34,9 @@ class InMemoryStravaAdapter:
 
     def seed_streams(self, activity_id: int, streams: dict) -> None:
         self.streams[activity_id] = streams
+
+    def seed_athlete_zones(self, zones: dict) -> None:
+        self.athlete_zones = zones
 
     def seed_refresh_response(self, tokens: Tokens) -> None:
         self.next_tokens = tokens
@@ -108,3 +112,6 @@ class InMemoryStravaAdapter:
     ) -> dict | None:
         self.stream_calls.append((activity_id, list(stream_types)))
         return self.streams.get(activity_id)
+
+    async def get_athlete_zones(self, access_token: str) -> dict | None:
+        return self.athlete_zones

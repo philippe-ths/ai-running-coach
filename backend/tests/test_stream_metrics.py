@@ -52,7 +52,7 @@ def test_calculate_time_in_zones():
     }
     
     zones = calculate_time_in_zones(streams, max_hr=200)
-    
+
     assert zones is not None
     assert zones["Z1"] == 3
     assert zones["Z2"] == 2
@@ -61,3 +61,83 @@ def test_calculate_time_in_zones():
     assert zones["Z5"] == 1
     # Total sum check
     assert sum(zones.values()) == 6
+
+
+def test_calculate_time_in_zones_uses_runner_boundaries():
+    """#297: when the runner's own Strava zone bounds are supplied, binning
+    follows those boundaries instead of the %-of-max-HR scheme, so the result
+    lines up with Strava. Oracle: the runner's real Strava zones
+    0-124 / 125-154 / 155-169 / 170-184 / 185+ (lower bounds below)."""
+    from app.services.analysis.metrics import calculate_time_in_zones
+
+    bounds = [0, 125, 155, 170, 185]
+    # One reading squarely inside each Strava zone, plus a boundary value (155)
+    # that must land in Z3 (Strava Z3 is 155-169).
+    streams = {"heartrate": [120, 140, 155, 160, 175, 190]}
+
+    zones = calculate_time_in_zones(streams, max_hr=190, zone_boundaries=bounds)
+
+    assert zones is not None
+    assert zones["Z1"] == 1   # 120  -> 0-124
+    assert zones["Z2"] == 1   # 140  -> 125-154
+    assert zones["Z3"] == 2   # 155, 160 -> 155-169
+    assert zones["Z4"] == 1   # 175  -> 170-184
+    assert zones["Z5"] == 1   # 190  -> 185+
+    assert sum(zones.values()) == 6
+
+
+def test_runner_boundaries_reclassify_aerobic_run_below_strava_threshold():
+    """#297 regression: a run sitting at 155-169 bpm read as Z4 under the old
+    %max scheme (Z4 floor 152 at max 190) but is Z3 on Strava. With the runner's
+    bounds it must land in Z3, not Z4."""
+    from app.services.analysis.metrics import calculate_time_in_zones
+
+    bounds = [0, 125, 155, 170, 185]
+    streams = {"heartrate": [160] * 100}  # steady aerobic effort
+
+    with_bounds = calculate_time_in_zones(streams, max_hr=190, zone_boundaries=bounds)
+    fallback = calculate_time_in_zones(streams, max_hr=190)
+
+    assert with_bounds["Z3"] == 100 and with_bounds["Z4"] == 0
+    # The old/fallback scheme misfiles the same effort as Z4.
+    assert fallback["Z4"] == 100
+
+
+def test_extract_hr_zone_bounds_parses_strava_payload():
+    """#297: pull the 5 ascending HR-zone lower bounds from a Strava
+    /athlete/zones payload (real shape: heart_rate.zones with min/max)."""
+    from app.services.strava_ingestion.ingestion import extract_hr_zone_bounds
+
+    payload = {
+        "heart_rate": {
+            "custom_zones": False,
+            "zones": [
+                {"min": 0, "max": 124},
+                {"min": 125, "max": 154},
+                {"min": 155, "max": 169},
+                {"min": 170, "max": 184},
+                {"min": 185, "max": -1},
+            ],
+        },
+        "power": {"zones": [{"min": 0, "max": 100}]},
+    }
+
+    assert extract_hr_zone_bounds(payload) == [0, 125, 155, 170, 185]
+
+
+def test_extract_hr_zone_bounds_rejects_bad_shapes():
+    """Off-shape payloads return None so analysis falls back to the %max scheme
+    rather than binning against garbage."""
+    from app.services.strava_ingestion.ingestion import extract_hr_zone_bounds
+
+    assert extract_hr_zone_bounds(None) is None
+    assert extract_hr_zone_bounds({}) is None
+    assert extract_hr_zone_bounds({"heart_rate": {"zones": []}}) is None
+    # Only 4 zones.
+    assert extract_hr_zone_bounds(
+        {"heart_rate": {"zones": [{"min": 0}, {"min": 1}, {"min": 2}, {"min": 3}]}}
+    ) is None
+    # Non-ascending bounds.
+    assert extract_hr_zone_bounds(
+        {"heart_rate": {"zones": [{"min": 0}, {"min": 9}, {"min": 5}, {"min": 7}, {"min": 8}]}}
+    ) is None
