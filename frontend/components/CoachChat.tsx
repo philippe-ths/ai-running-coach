@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChatMessage } from '@/lib/types';
-import { MessageCircle, Send, Loader2, RotateCcw } from 'lucide-react';
+import { ChatMessage, CoachReport, isMessageReport } from '@/lib/types';
+import { MessageCircle, Send, Loader2, RotateCcw, Sparkles } from 'lucide-react';
 import Markdown from 'react-markdown';
 
 interface Props {
@@ -15,6 +15,9 @@ export default function CoachChat({ activityId }: Props) {
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [expanded, setExpanded] = useState(false);
+  // I3: the coach's own next-steps, offered as one-tap conversation starters so
+  // the chat reads as a continuation of the report rather than a blank box.
+  const [starters, setStarters] = useState<string[]>([]);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -51,15 +54,42 @@ export default function CoachChat({ activityId }: Props) {
     loadHistory();
   }, [activityId]);
 
+  // Pull the coach's next-steps from the existing report to seed tappable
+  // conversation starters (I3). Read-only (generate=false): if there is no report
+  // yet, or it is the legacy structured shape, there are simply no starters.
+  useEffect(() => {
+    async function loadStarters() {
+      try {
+        const res = await fetch(
+          `/api/activities/${activityId}/coach-report?generate=false&force=false`,
+        );
+        if (!res.ok) return;
+        const data: CoachReport = await res.json();
+        const body = data.report;
+        if (body && isMessageReport(body)) {
+          const actions = (body.next_steps ?? [])
+            .map((s) => s.action?.trim())
+            .filter((a): a is string => Boolean(a))
+            .slice(0, 3);
+          setStarters(actions);
+        }
+      } catch {
+        // Starters are progressive enhancement — never block the chat on them.
+      }
+    }
+    loadStarters();
+  }, [activityId]);
+
   useEffect(() => {
     if (expanded) scrollToBottom();
   }, [messages, streamingText, expanded, scrollToBottom]);
 
-  const sendMessage = async () => {
-    const text = input.trim();
+  const sendMessage = async (textArg?: string) => {
+    // textArg lets a tapped starter chip send without going through the input box.
+    const text = (textArg ?? input).trim();
     if (!text || streaming) return;
 
-    setInput('');
+    if (textArg === undefined) setInput('');
     setStreaming(true);
     setStreamingText('');
 
@@ -164,23 +194,60 @@ export default function CoachChat({ activityId }: Props) {
     }
   };
 
+  // I3: tap a coach suggestion to open the conversation already pointed at it.
+  const startConversation = (action: string) => {
+    if (streaming) return;
+    setExpanded(true);
+    void sendMessage(`Tell me more about this suggestion: ${action}`);
+  };
+
+  const renderStarters = () => {
+    if (starters.length === 0) return null;
+    return (
+      <div className="flex flex-wrap gap-2">
+        {starters.map((action, i) => (
+          <button
+            key={i}
+            onClick={() => startConversation(action)}
+            disabled={streaming}
+            title={action}
+            className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/30 px-3 py-1.5 text-xs font-medium text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors text-left disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Sparkles className="w-3 h-3 shrink-0" />
+            <span>{action.length > 48 ? `${action.slice(0, 47).trimEnd()}…` : action}</span>
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   if (!expanded) {
     return (
-      <button
-        onClick={() => {
-          setExpanded(true);
-          // Bring the input into view before focusing it (#226). focus() with
-          // preventScroll avoids the browser's own scroll jump fighting ours.
-          setTimeout(() => {
-            inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            inputRef.current?.focus({ preventScroll: true });
-          }, 100);
-        }}
-        className="w-full bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-md transition-all flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
-      >
-        <MessageCircle className="w-4 h-4" />
-        <span className="text-sm font-medium">Ask your coach a follow-up question</span>
-      </button>
+      <div className="space-y-2">
+        <button
+          onClick={() => {
+            setExpanded(true);
+            // Bring the input into view before focusing it (#226). focus() with
+            // preventScroll avoids the browser's own scroll jump fighting ours.
+            setTimeout(() => {
+              inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              inputRef.current?.focus({ preventScroll: true });
+            }, 100);
+          }}
+          className="w-full bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-md transition-all flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
+        >
+          <MessageCircle className="w-4 h-4" />
+          <span className="text-sm font-medium">Continue the conversation with your coach</span>
+        </button>
+        {starters.length > 0 && (
+          <div className="px-1">
+            <p className="text-xs text-gray-400 dark:text-gray-500 mb-1.5">
+              Or pick up where your coach left off:
+            </p>
+            {renderStarters()}
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -217,9 +284,12 @@ export default function CoachChat({ activityId }: Props) {
       {/* Messages */}
       <div ref={messagesContainerRef} className="max-h-96 overflow-y-auto px-4 py-3 space-y-3">
         {messages.length === 0 && !streaming && (
-          <p className="text-sm text-gray-400 dark:text-gray-500 text-center py-4">
-            Ask about your workout, training plan, or anything about this session.
-          </p>
+          <div className="py-2 space-y-3">
+            <p className="text-sm text-gray-400 dark:text-gray-500 text-center">
+              Ask about your workout, training plan, or anything about this session.
+            </p>
+            {renderStarters()}
+          </div>
         )}
         {messages.map((msg) => (
           <div
@@ -274,7 +344,7 @@ export default function CoachChat({ activityId }: Props) {
             disabled={streaming}
           />
           <button
-            onClick={sendMessage}
+            onClick={() => sendMessage()}
             disabled={!input.trim() || streaming}
             className="rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
