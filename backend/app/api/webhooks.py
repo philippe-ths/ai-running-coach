@@ -17,6 +17,7 @@ from app.jobs.process_new_activity import (
 )
 from app.jobs.strava_sync import sync_activity_job
 from app.schemas import CheckInCreate
+from app.services.blocks import remove_activity_from_block
 from app.services.checkins import write_checkin
 from app.services.notifications import get_notifier
 from app.services.notifications.callback_token import decode as decode_callback_token
@@ -125,12 +126,31 @@ async def receive_webhook(
         return {"status": "ignored", "reason": "not_activity"}
 
     if event.aspect_type == "delete":
-        # Soft delete
+        # Soft delete: mark the activity deleted and commit, then remove it from
+        # its Block so it no longer shapes bounds, holds the primary anchor,
+        # counts in the opener debounce, or attracts late arrivals (#238, ADR 0011).
         stmt = update(Activity).where(
             Activity.strava_activity_id == event.object_id
         ).values(is_deleted=True)
         db.execute(stmt)
         db.commit()
+        activity = (
+            db.query(Activity)
+            .filter(Activity.strava_activity_id == event.object_id)
+            .first()
+        )
+        if activity is not None and activity.block_id is not None:
+            try:
+                remove_activity_from_block(db, activity)
+            except Exception:
+                # Block removal failed: the soft-delete already committed, so
+                # the activity is correctly hidden from users. The block
+                # membership is stale but not user-visible; it will not cause
+                # data loss. Log and continue.
+                logger.exception(
+                    "strava_delete_block_removal_failed strava_id=%s",
+                    event.object_id,
+                )
         return {"status": "processed", "action": "deleted"}
 
     elif event.aspect_type == "create":
