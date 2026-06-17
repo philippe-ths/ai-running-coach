@@ -1,5 +1,8 @@
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from app.schemas.coach import CoachReportRead
 
 
 @dataclass(frozen=True)
@@ -35,3 +38,42 @@ class NotifierPort(Protocol):
     """Transport interface for outbound notifications. Pure side effects."""
 
     def send(self, notification: Notification) -> None: ...
+
+
+class NotificationRenderer(Protocol):
+    """Rendering interface for a delivery channel (#333).
+
+    A channel adapter that knows how to turn a coach report or a deterministic
+    receipt into its own wire-shaped `Notification` implements this. It is the
+    one place each channel handles BOTH report shapes (prose vs structured) and
+    both stages (opener vs fuller), so the composer stays a thin channel
+    dispatcher and a new output shape is handled in one place per adapter.
+
+    Separate from `NotifierPort` (transport / `send`) on purpose: rendering is a
+    pure transformation with no side effects, and the in-memory / no-op
+    transports carry no rendering of their own. `render_*` are class methods on
+    the real channel adapters so the composer can render for the active channel
+    without constructing a transport (and independent of any `set_notifier`
+    test override)."""
+
+    def render_coach_report(
+        self,
+        *,
+        report: "CoachReportRead",
+        headline: str,
+        distance_m: int,
+        app_base_url: str,
+        stage: str,
+        to: str,
+    ) -> Notification: ...
+
+    def render_receipt(
+        self,
+        *,
+        receipt_text: str,
+        headline: str,
+        activity_id: str,
+        distance_m: int,
+        app_base_url: str,
+        to: str,
+    ) -> Notification: ...

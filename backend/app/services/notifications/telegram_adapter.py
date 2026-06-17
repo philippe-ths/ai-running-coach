@@ -1,9 +1,13 @@
 import logging
 from html import escape
+from typing import TYPE_CHECKING
 
 import httpx
 
 from app.services.notifications.port import Notification
+
+if TYPE_CHECKING:
+    from app.schemas.coach import CoachReportRead
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +19,78 @@ class TelegramNotifier:
     """Telegram Bot API transport over HTTPS.
 
     Railway blocks outbound SMTP from deployed services, so coach reports are
-    delivered as Telegram messages over the Bot API (port 443) instead. Pure
-    transport: message content is rendered upstream; this adapter only formats
-    the wire payload (HTML mode) and performs the send.
+    delivered as Telegram messages over the Bot API (port 443) instead. The
+    adapter owns BOTH halves of the channel: rendering (the `render_*` class
+    methods turn a coach report or a deterministic receipt into a Telegram-shaped
+    Notification, including the tappable inline keyboard) and transport (`send`
+    formats the wire payload in HTML mode and POSTs it). Rendering is stateless,
+    so `render_*` are class methods the composer calls without a transport.
     """
+
+    @classmethod
+    def render_coach_report(
+        cls,
+        *,
+        report: "CoachReportRead",
+        headline: str,
+        distance_m: int,
+        app_base_url: str,
+        stage: str,
+        to: str,
+    ) -> Notification:
+        """Render a coach report into a Telegram Notification (#333).
+
+        The body is the channel template's plain-text rendering of the report
+        (prose or structured, opener or fuller). Only the opener carries tappable
+        RPE/pain buttons; the fuller turn is the response to that input, so it has
+        no quick-reply affordances. HTML/title/link wire formatting stays in
+        `send`."""
+        from app.services.notifications._prose import opener_actions
+        from app.services.notifications.telegram_template import (
+            render_coach_report_telegram,
+        )
+
+        subject, text, url = render_coach_report_telegram(
+            report=report,
+            headline=headline,
+            distance_m=distance_m,
+            app_base_url=app_base_url,
+            stage=stage,
+        )
+        actions = opener_actions(report) if stage == "opener" else ()
+        return Notification(
+            to=to, subject=subject, html="", text=text, url=url, actions=actions
+        )
+
+    @classmethod
+    def render_receipt(
+        cls,
+        *,
+        receipt_text: str,
+        headline: str,
+        activity_id: str,
+        distance_m: int,
+        app_base_url: str,
+        to: str,
+    ) -> Notification:
+        """Render a deterministic receipt (#296) into a Telegram Notification.
+
+        Carries the fixed RPE/pain/done tap keyboard; the body is the receipt
+        prose verbatim, the title the activity headline + distance."""
+        from app.services.notifications._prose import (
+            activity_url,
+            receipt_actions,
+            receipt_title,
+        )
+
+        return Notification(
+            to=to,
+            subject=receipt_title(headline, distance_m),
+            html="",
+            text=receipt_text,
+            url=activity_url(app_base_url, activity_id),
+            actions=receipt_actions(activity_id),
+        )
 
     def __init__(
         self,
