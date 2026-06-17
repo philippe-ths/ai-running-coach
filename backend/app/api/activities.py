@@ -53,6 +53,25 @@ def backfill_streams(db: Session = Depends(get_db)):
         "status": "scheduled" if eligible else "nothing_to_do",
     }
 
+@router.post("/activities/reanalyze")
+def reanalyze_history(db: Session = Depends(get_db)):
+    """Kick off a paced bulk re-analysis of already-analyzed history (#300).
+
+    After a change to how analysis derives a stored signal (e.g. #297's Strava
+    zone binning), only newly-synced activities pick it up. This enqueues a
+    self-pacing job that re-runs analysis from the streams already stored in the
+    database — no Strava calls — a batch at a time, so the change propagates to
+    historical DerivedMetric rows. It is resumable and never notifies. Returns
+    how many activities are currently eligible.
+    """
+    from app.jobs.reanalyze_history import enqueue_reanalyze
+
+    eligible = enqueue_reanalyze(db)
+    return {
+        "eligible": eligible,
+        "status": "scheduled" if eligible else "nothing_to_do",
+    }
+
 
 @router.put("/activities/{activity_id}/intent", response_model=ActivityRead)
 def update_activity_intent(
