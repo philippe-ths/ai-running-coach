@@ -25,6 +25,12 @@ import numpy as np
 # Shared by the stream heuristic and the lap-based splitter.
 _MIN_CLUSTER_SEPARATION = 1.3
 
+# When the only rest evidence is a SINGLE standing-stop lap (zero speed), the
+# work cluster must show meaningful pace variation to distinguish interval work
+# from a steady run with a brief pause (#189 shape 2). A CV below this
+# threshold means the runner was simply running at one pace with a stop.
+_STEADY_STATE_CV_THRESHOLD = 10.0
+
 
 def detect_intervals(
     streams_dict: Dict[str, List],
@@ -303,6 +309,10 @@ def _split_laps_work_rest(speeds: List[float]) -> Optional[List[bool]]:
     (>= `_MIN_CLUSTER_SEPARATION`) and there are at least two work laps and one
     slow lap. Returns a per-lap work mask, or None when the laps show no
     work/rest pattern (e.g. uniform auto-distance laps, a steady run).
+
+    Additional guard (#189): a single standing-rest lap (zero-speed) with a
+    tight fast cluster (CV < 10%) is a steady run with a brief stop, not an
+    interval session -- the standing-rest special case must not fire here.
     """
     n = len(speeds)
     if n < _MIN_LAPS_FOR_PATTERN:
@@ -332,6 +342,19 @@ def _split_laps_work_rest(speeds: List[float]) -> Optional[List[bool]]:
     # ratio gate only applies when the slow cluster is itself moving.
     if slow_mean > 0 and fast_mean < slow_mean * _MIN_CLUSTER_SEPARATION:
         return None
+
+    # Guard: a SINGLE standing-rest lap with a uniformly-paced fast cluster is
+    # a steady run with a brief stop, not an interval session. Require meaningful
+    # pace variance in the work cluster when the only rest evidence is one
+    # standing stop (#189 shape 2: easy-run-with-pause mis-segmentation).
+    if (
+        len(slow) == 1
+        and slow[0] == 0.0
+        and len(fast) >= 2
+    ):
+        fast_cv = _cv_percent(fast)
+        if fast_cv is not None and fast_cv < _STEADY_STATE_CV_THRESHOLD:
+            return None
 
     threshold = ordered[split_at]  # first speed in the fast cluster
     return [s >= threshold for s in speeds]
@@ -384,6 +407,21 @@ def detect_intervals_from_laps(raw_summary: Optional[dict]) -> Optional[dict]:
     # progression run, not an interval session -> fall back to stream detection.
     if not any(i not in work_set for i in range(first_work + 1, last_work)):
         return None
+
+    # Guard: an interior consecutive pair of work laps (two adjacent work laps
+    # where neither is at the very start nor the very end of the work window)
+    # indicates a rest lap was promoted into the work cluster by an ambiguous
+    # split -- e.g. heterogeneous recoveries where the largest speed gap falls
+    # BETWEEN two recovery speeds rather than between all recoveries and the
+    # work laps (#189 shape 1). Edge-consecutive pairs (warmup or cooldown
+    # adjacent to the first/last rep) are the documented #188 limitation and
+    # are left to that follow-up.
+    for j in range(len(work_mask) - 1):
+        if work_mask[j] and work_mask[j + 1]:
+            # The pair (j, j+1) is interior when it is not the edge-start
+            # (j == first_work) AND not the edge-end (j + 1 == last_work).
+            if j > first_work and j + 1 < last_work:
+                return None
 
     # Start offset (seconds from activity start) for each lap.
     starts: List[int] = []
