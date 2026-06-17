@@ -23,7 +23,9 @@ export function SplitsPanel({ splits }: SplitsPanelProps) {
       </h3>
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-          <thead className="bg-gray-50 dark:bg-gray-700/50">
+          {/* Header style is kept identical to LapsPanel's thead/th so the two
+              activity tables read as one UI (#293). */}
+          <thead className="bg-gray-100 dark:bg-gray-700">
             <tr>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 {isTimeBased ? '#' : 'Km'}

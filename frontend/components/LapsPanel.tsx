@@ -142,13 +142,16 @@ export function LapsPanel({ laps }: LapsPanelProps) {
 
       <div className="overflow-x-auto max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700">
         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-          <thead className="sticky top-0 z-10 bg-gray-100 dark:bg-gray-700 shadow-sm">
+          {/* Header style is kept identical to SplitsPanel's thead/th so the two
+              activity tables read as one UI (#293). The sticky positioning sits
+              below the NavBar (z-30) so the header never paints over it. */}
+          <thead className="sticky top-0 z-10 bg-gray-100 dark:bg-gray-700">
             <tr>
               {['Lap', 'Distance', 'Time', 'Pace', 'Avg HR'].map((label) => (
                 <th
                   key={label}
                   scope="col"
-                  className="px-6 py-3 text-left text-xs font-semibold whitespace-nowrap text-gray-700 dark:text-gray-200 uppercase tracking-wider"
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider"
                 >
                   {label}
                 </th>
