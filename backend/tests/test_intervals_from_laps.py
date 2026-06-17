@@ -477,3 +477,138 @@ class TestLapSpeedAndSeparationGuard:
         # slow cluster is all standing rest (mean 0): accepted on a positive
         # fast cluster alone, the ratio gate does not apply.
         assert _split_laps_work_rest([0.0, 0.0, 5.0, 5.0]) == [False, False, True, True]
+
+
+class TestAmbiguousSplitAbstain:
+    """Guards added by #189: the single-largest-gap split is under-determined
+    for two documented failure shapes. The fix abstains (returns None from
+    detect_intervals_from_laps) rather than asserting a high-confidence
+    mis-segmentation as ground truth.
+
+    The existing TestKnownLimitationBriskWarmup tests (brisk warmup/cooldown
+    adjacent to reps) are UNAFFECTED because those consecutive-work pairs occur
+    only at the edge of the work window, not in the interior (#188 covers that
+    root cause separately).
+    """
+
+    # ------------------------------------------------------------------
+    # Shape 1: heterogeneous recoveries (#189 finding F6)
+    # One walked recovery (~1.2 m/s), one jogged recovery (~3.6 m/s).
+    # The largest gap falls BETWEEN the two recovery speeds rather than
+    # between all recoveries and the work laps, so the jogged recovery is
+    # promoted into the work cluster. The result: rep count off by one,
+    # two adjacent work segments, inflated work-speed CV.
+    # ------------------------------------------------------------------
+
+    def test_heterogeneous_recoveries_abstains(self):
+        """Walk + jog recoveries: the interior jog-rest lap must not be
+        classified as a work rep. The lap split is under-determined and
+        should abstain rather than emit a confident mis-segmentation.
+        """
+        laps = [
+            _lap(1, 400, 5.0, average_heartrate=178.0, max_heartrate=188.0),
+            _lap(2, 200, 1.2, average_heartrate=135.0, max_heartrate=145.0),  # walk recovery
+            _lap(3, 400, 5.0, average_heartrate=180.0, max_heartrate=190.0),
+            _lap(4, 200, 3.6, average_heartrate=155.0, max_heartrate=165.0),  # jog recovery
+            _lap(5, 400, 5.0, average_heartrate=179.0, max_heartrate=189.0),
+        ]
+        result = detect_intervals_from_laps({"laps": laps})
+        assert result is None, (
+            "heterogeneous recoveries (walk 1.2 m/s + jog 3.6 m/s) should abstain; "
+            f"got rep_count={result['summary']['rep_count'] if result else None}"
+        )
+
+    def test_heterogeneous_recoveries_larger_session_abstains(self):
+        """Same shape with more reps: the ambiguous walk-vs-jog recovery
+        classification still causes abstention regardless of total rep count.
+        """
+        # 4 reps: rest0=walk, rest1=jog, rest2=walk, rest3=jog
+        laps = [
+            _lap(1, 400, 5.0, average_heartrate=178.0, max_heartrate=188.0),
+            _lap(2, 200, 1.2, average_heartrate=133.0, max_heartrate=143.0),  # walk
+            _lap(3, 400, 5.0, average_heartrate=180.0, max_heartrate=190.0),
+            _lap(4, 200, 3.6, average_heartrate=155.0, max_heartrate=165.0),  # jog
+            _lap(5, 400, 5.0, average_heartrate=179.0, max_heartrate=189.0),
+            _lap(6, 200, 1.2, average_heartrate=133.0, max_heartrate=143.0),  # walk
+            _lap(7, 400, 5.0, average_heartrate=181.0, max_heartrate=191.0),
+        ]
+        result = detect_intervals_from_laps({"laps": laps})
+        assert result is None, (
+            "heterogeneous recoveries in a larger session should still abstain"
+        )
+
+    # ------------------------------------------------------------------
+    # Shape 2: easy run with one mid-run standing stop (#189, residual from F2)
+    # A steady easy-pace run where the runner pressed the lap button during
+    # a brief standing stop. The standing stop is the sole 'rest' lap;
+    # everything else is the same easy running pace.
+    # ------------------------------------------------------------------
+
+    def test_easy_run_with_single_standing_stop_abstains(self):
+        """A steady easy run with one mid-run standing stop should not be
+        detected as a 4-rep interval session. The standing-rest special case
+        must not fire when the 'work' cluster is just a uniform steady pace.
+        """
+        laps = [
+            _lap(1, 1000, 3.0, average_heartrate=145.0, max_heartrate=155.0),
+            _lap(2, 1000, 3.1, average_heartrate=147.0, max_heartrate=157.0),
+            _standing_rest_lap(3),                                              # brief stop
+            _lap(4, 1000, 3.0, average_heartrate=145.0, max_heartrate=155.0),
+            _lap(5, 1000, 3.1, average_heartrate=147.0, max_heartrate=157.0),
+        ]
+        result = detect_intervals_from_laps({"laps": laps})
+        assert result is None, (
+            "easy run with one standing stop should abstain; "
+            f"got rep_count={result['summary']['rep_count'] if result else None}"
+        )
+
+    def test_standing_stop_mid_faster_easy_run_abstains(self):
+        """Slightly faster easy pace (still easy running, not interval work):
+        the abstain condition must not depend on any absolute-pace threshold.
+        """
+        laps = [
+            _lap(1, 1000, 3.5, average_heartrate=150.0, max_heartrate=160.0),
+            _lap(2, 1000, 3.5, average_heartrate=151.0, max_heartrate=161.0),
+            _standing_rest_lap(3),
+            _lap(4, 1000, 3.5, average_heartrate=150.0, max_heartrate=160.0),
+            _lap(5, 1000, 3.5, average_heartrate=151.0, max_heartrate=161.0),
+        ]
+        result = detect_intervals_from_laps({"laps": laps})
+        assert result is None, (
+            "slightly faster easy run with one standing stop should also abstain"
+        )
+
+    # ------------------------------------------------------------------
+    # Preservation: clean interval sessions must still be detected.
+    # ------------------------------------------------------------------
+
+    def test_homogeneous_recoveries_detected(self):
+        """When ALL recoveries are at the same pace (uniformly jogged), the
+        split is unambiguous and the session must still be detected.
+        """
+        laps = [
+            _lap(1, 400, 5.0, average_heartrate=178.0, max_heartrate=188.0),
+            _lap(2, 200, 2.0, average_heartrate=145.0, max_heartrate=155.0),
+            _lap(3, 400, 5.0, average_heartrate=180.0, max_heartrate=190.0),
+            _lap(4, 200, 2.0, average_heartrate=145.0, max_heartrate=155.0),
+            _lap(5, 400, 5.0, average_heartrate=179.0, max_heartrate=189.0),
+        ]
+        result = detect_intervals_from_laps({"laps": laps})
+        assert result is not None
+        assert result["summary"]["rep_count"] == 3
+
+    def test_standing_rest_clean_interval_still_detected(self):
+        """A genuine track session with standing recoveries AND clear work
+        pace must not be abstained by the standing-rest guard.
+        The work speeds (5.0 m/s) are well above typical easy-running pace.
+        """
+        laps = [
+            _lap(1, 400, 5.0, average_heartrate=178.0, max_heartrate=186.0),
+            _standing_rest_lap(2),
+            _lap(3, 400, 5.0, average_heartrate=179.0, max_heartrate=187.0),
+            _standing_rest_lap(4),
+            _lap(5, 400, 5.0, average_heartrate=180.0, max_heartrate=188.0),
+        ]
+        result = detect_intervals_from_laps({"laps": laps})
+        assert result is not None
+        assert result["summary"]["rep_count"] == 3
