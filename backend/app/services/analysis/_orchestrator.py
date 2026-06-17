@@ -118,10 +118,50 @@ def compute_confidence(activity, streams_dict, check_in, interval_structure=None
     return level, reasons
 
 
+def _post_commit_baseline(db: Session, user_id) -> None:
+    """Post-commit phase: recompute the runner baseline trend substrate (M2).
+
+    ORDERING INVARIANT: this MUST run AFTER the DerivedMetric commit. The
+    baseline is recomputed over a rolling window that includes the
+    just-analysed activity, so the activity's DerivedMetric has to be visible
+    in the DB before this reads. Calling it before the commit would silently
+    exclude the current run from its own baseline.
+
+    Best-effort by contract: the baseline is a derived convenience, not part of
+    the activity's own analysis result, so a failure here is logged and
+    swallowed and never breaks analyze().
+    """
+    try:
+        from app.services.analysis.baseline import recompute_runner_baseline
+        recompute_runner_baseline(db, user_id)
+    except Exception:  # noqa: BLE001 baseline is best-effort, must not break analyze
+        logger.exception("runner baseline recompute failed for user %s", user_id)
+
+
 def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     """
     Main entry point.
     Loads activity, history, computes all metrics, saves DerivedMetric.
+
+    How a DerivedMetric is assembled (the composition contract):
+
+      A. Load phase (steps 1-4): activity, recent history, streams, check-in,
+         profile-derived max_hr / HR zones. Pure DB reads.
+      B. Pre-commit metrics phase (steps 5-9.6): build the `metrics_data` dict
+         from the pure analysis stages, then upsert + commit it. This phase
+         carries the two real intra-phase ordering invariants, both flagged
+         INVARIANT inline below:
+           1. The interval-structure PROBE precedes classification, and the
+              probed structure feeds the classifier's structure axis.
+           2. The kept `interval_structure` (nulled unless the structure axis
+              resolved to "intervals") GATES interval matching/KPIs and the
+              interval confidence checks.
+      C. Post-commit phase (step 11): the runner-baseline recompute, which by
+         INVARIANT must follow the commit (see `_post_commit_baseline`).
+
+    A new stage should be placed in the phase whose inputs it depends on, and
+    should state any new ordering dependency here rather than relying on
+    placement.
     """
     activity_uuid = _coerce_uuid(activity_id)
 
@@ -169,6 +209,11 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     # work/rest" half of the predicate (the other half, genuine pace
     # variability, is applied in the classifier).
     #
+    # ORDERING INVARIANT 1 (probe-before-classify): the interval-structure probe
+    # must run BEFORE classify_activity, because the classifier consumes
+    # `has_interval_structure` to resolve its structure axis. Reordering these
+    # two would feed the classifier a stale/missing structure signal.
+    #
     # Prefer the runner's recorded laps (their own lap-button marks) as the
     # authoritative segmentation; fall back to the stream heuristic only when no
     # usable laps are present (#170). The stream re-segmentation can smear short
@@ -192,6 +237,13 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
 
     # 6.5 Interval segmentation — keep the probed structure only when the
     # structure axis resolved to intervals.
+    #
+    # ORDERING INVARIANT 2 (structure-axis gates interval KPIs): this null-out
+    # turns the post-classification `interval_structure` local into the single
+    # "is this an interval session" gate. Every downstream interval-only stage
+    # (6.6 workout matching, 6.7 KPIs, and the interval confidence checks in
+    # compute_confidence) keys off this gated value, so it must be applied here,
+    # AFTER classification and BEFORE those stages read it.
     if classification.structure != "intervals":
         interval_structure = None
     metrics_data["interval_structure"] = interval_structure
@@ -201,7 +253,8 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     workout_match = match_planned_to_detected(interval_structure, planned_workout)
     metrics_data["workout_match"] = workout_match
 
-    # 6.7 Interval-specific KPIs
+    # 6.7 Interval-specific KPIs, gated on the structure axis via the
+    # interval_structure nulled at 6.5 (INVARIANT 2).
     if interval_structure:
         zones_calibrated = bool(
             profile and (profile.hr_zones or (profile.max_hr and profile.max_hr > 100))
@@ -288,14 +341,10 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     db.commit()
     db.refresh(dm)
 
-    # 11. Recompute the runner baseline trend substrate (M2). Runs after the
-    # DerivedMetric commit so the just-analysed activity is included. Wrapped so
-    # a baseline failure never breaks analysis — the baseline is a derived
-    # convenience, not part of the activity's own analysis contract.
-    try:
-        from app.services.analysis.baseline import recompute_runner_baseline
-        recompute_runner_baseline(db, activity.user_id)
-    except Exception:  # noqa: BLE001 — baseline is best-effort, must not break analyze
-        logger.exception("runner baseline recompute failed for user %s", activity.user_id)
+    # 11. Post-commit phase. ORDERING INVARIANT 3 (commit-before-baseline): the
+    # runner-baseline recompute must follow the commit above so the
+    # just-analysed activity is included in its rolling window. See
+    # `_post_commit_baseline`.
+    _post_commit_baseline(db, activity.user_id)
 
     return dm
