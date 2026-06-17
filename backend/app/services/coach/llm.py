@@ -7,6 +7,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional, Protocol
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 # Cap any single Anthropic call. The SDK default is 600s; the RQ worker
@@ -228,7 +230,19 @@ class AnthropicClient:
                     content_blocks=list(final.content),
                     stop_reason=final.stop_reason,
                 )
-            except (anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
+            except (
+                anthropic.APITimeoutError,
+                anthropic.APIConnectionError,
+                # httpx.RemoteProtocolError is raised mid-stream when the peer
+                # closes the connection before the chunked response body is
+                # complete ("incomplete chunked read"). The SDK wraps httpx
+                # errors that occur during the *initial* HTTP call into
+                # APIConnectionError, but errors that surface during SSE
+                # stream iteration (inside stream.get_final_message()) escape
+                # unwrapped. Treat them as the same transient transport class
+                # so they follow the same retry-then-propagate path (#302).
+                httpx.RemoteProtocolError,
+            ) as exc:
                 last_exc = exc
                 logger.warning(
                     "anthropic_message_transient_failure",
