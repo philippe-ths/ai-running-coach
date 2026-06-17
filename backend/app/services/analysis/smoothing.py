@@ -29,21 +29,27 @@ def smooth_cadence(
     # If partial data, min length is used or we assume aligned.
     # Strava streams are typically consistently length-aligned.
     
-    # Convert to numpy for easier handling
+    # Convert to numpy for easier handling. velocity_data / moving_data are part
+    # of the contract but no longer consulted for the dropout rule (#325): a raw
+    # cadence of 0 is a dropout regardless of moving state.
     cad_arr = np.array(cadence_data, dtype=float)
-    vel_arr = np.array(velocity_data, dtype=float) if velocity_data else np.zeros(n)
-    mov_arr = np.array(moving_data, dtype=bool) if moving_data else np.ones(n, dtype=bool) # Assume moving if no stream
     time_arr = np.array(time_data, dtype=float)
     
     # 1. Clean dropouts & Spikes
-    # Rule: If cadence == 0 AND (moving == true OR velocity > 0.3), set to NaN
+    # Rule: If cadence == 0, set to NaN (a dropout, never a measurement)
     # Rule: If cadence > 220, set to NaN
-    
-    # Create a mask for "physically moving"
-    is_moving_physically = (mov_arr) | (vel_arr > MIN_VELOCITY_MOVING)
-    
+    #
+    # A raw cadence of 0 is always a dropout, not a reading: Strava reports 0
+    # before the first detected step and while not running / paused, and you
+    # cannot run at 0 spm. Treating it as missing (NaN -> None downstream) keeps
+    # the rolling median from averaging dropout zeros together with the first
+    # real cadence, which previously bled a physiologically meaningless low ramp
+    # value into smoothed_cadence at the dropout/real boundary (#325). The
+    # earlier guard only NaN'd zeros while "physically moving", so a leading
+    # not-yet-moving dropout survived as 0.0 and corrupted the boundary window.
+
     # Zero dropouts
-    dropout_mask = (cad_arr == 0) & is_moving_physically
+    dropout_mask = cad_arr == 0
     cad_arr[dropout_mask] = np.nan
     
     # Unrealistic spikes
