@@ -69,7 +69,7 @@ def _build_trends_summary(db: Session, activity: Activity) -> dict:
     end = min(today, activity_date + timedelta(days=1))
     start_30d = end - timedelta(days=30)
 
-    facts = _query_activity_facts(db, start_30d, end)
+    facts = _query_activity_facts(db, start_30d, end, user_id=activity.user_id)
 
     if not facts:
         return {"period": "30d", "activity_count": 0}
