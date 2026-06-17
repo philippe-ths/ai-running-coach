@@ -79,6 +79,16 @@ class Settings(BaseSettings):
     BACKFILL_BATCH_SIZE: int = 20
     BACKFILL_BATCH_PAUSE_SECONDS: int = 300
 
+    # Bulk re-analysis of already-analyzed history (#300). A self-pacing job
+    # re-runs the analysis pipeline from streams ALREADY stored in the database
+    # (no Strava calls), so a derivation change (e.g. #297 zone binning)
+    # propagates to historical DerivedMetric rows. Unlike the stream backfill the
+    # pacing is not rate-limit driven (re-analysis is local compute) — the pause
+    # just yields the single worker to webhooks/polling between batches, so the
+    # batch can be large and the pause short.
+    REANALYZE_BATCH_SIZE: int = 100
+    REANALYZE_BATCH_PAUSE_SECONDS: int = 5
+
     # Historical Strava import (#239). A self-pacing background job walks a
     # runner's Strava history backward in time, ingesting one page of activity
     # summaries per batch (no streams, no AI coach analysis, no notifications).
