@@ -89,7 +89,9 @@ export default function AdvancedMetrics({ metrics }: Props) {
                          );
                      })}
                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-2 text-right">
-                         Based on Max HR (Default 190 if not set)
+                         {metrics.hr_zones_source === 'strava'
+                           ? 'Based on your Strava HR zones'
+                           : 'Based on % of max HR (default 190 bpm if not set)'}
                      </p>
                  </div>
              ) : (

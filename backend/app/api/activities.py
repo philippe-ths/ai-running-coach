@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.db.session import get_db
 from app.models import Activity, StravaAccount, CheckIn
+from app.models.user_profile import UserProfile
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead, TrainingLoadRead
 from app.services import activity_queries, analysis
 from app.services.checkins import write_checkin
@@ -181,6 +182,13 @@ def read_activity(
         response.metrics.headline = compose_headline(
             activity, Classification.from_metrics(activity.metrics)
         )
+        # Inject the zone-binning source so the UI can caption time-in-zones
+        # accurately (#301). Queried from UserProfile; not stored on DerivedMetric.
+        profile = db.query(UserProfile).filter(
+            UserProfile.user_id == activity.user_id
+        ).first()
+        if profile is not None:
+            response.metrics.hr_zones_source = profile.hr_zones_source
 
     # P3 readiness (ADR 0016): the current-condition read as of this activity,
     # computed read-time from the user's windowed history. Shown regardless of the

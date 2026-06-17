@@ -24,6 +24,11 @@ class DerivedMetricRead(BaseModel):
     confidence: str
     confidence_reasons: List[str] = []
     time_in_zones: Optional[Dict] = None
+    # Source used to bin time_in_zones: "strava" when the runner's own Strava HR
+    # zone bounds are stored on UserProfile.hr_zones, else None (%-of-max-HR
+    # fallback). Injected by the detail endpoint from UserProfile; never stored
+    # on DerivedMetric itself (#301).
+    hr_zones_source: Optional[str] = None
     stops_analysis: Optional[Dict] = None
     efficiency_analysis: Optional[Dict] = None
     model_config = ConfigDict(from_attributes=True)
