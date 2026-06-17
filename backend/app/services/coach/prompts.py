@@ -7,6 +7,8 @@ The active prompt_id is set in config (COACH_PROMPT_ID).
 
 from typing import Optional
 
+from app.services.coach.prompt_features import PromptFeature, has_feature, ids_with
+
 SYSTEM_PROMPT_V1 = """You are a running coach assistant. Your job is to translate factual training data into concise, actionable coaching language.
 
 RULES:
@@ -598,11 +600,10 @@ MESSAGE_PROMPT_PREFIX = "coach_message"
 
 # The A4 two-stage prompt ids. Both stages of each share one cache identity / one
 # row; the MODE (opener vs fuller) is chosen by the caller/job, not derived from
-# the id. coach_message_v3 (P1.1) is two-stage exactly like v2.
-TWO_STAGE_PROMPT_IDS = frozenset(
-    {"coach_message_v2", "coach_message_v3", "coach_message_v4", "coach_message_v5",
-     "coach_message_v6", "coach_message_v7"}
-)
+# the id. Derived from the prompt-feature manifest (prompt_features.PROMPT_FEATURES),
+# the single source of truth for which capabilities each prompt id carries — edit the
+# manifest row to change what a prompt activates, never this derived view.
+TWO_STAGE_PROMPT_IDS = ids_with(PromptFeature.TWO_STAGE)
 
 # Retained for back-compat references (the A4 default two-stage id). Membership
 # checks use TWO_STAGE_PROMPT_IDS so coach_message_v3 is covered everywhere.
@@ -620,59 +621,50 @@ _OPENER_PROMPTS = {
     "coach_message_v7": SYSTEM_PROMPT_MESSAGE_V7_OPENER,
 }
 
-# Prompt ids that consume a per-runner VOICE block (P1.1). Only these get the
-# runtime voice block appended; every other prompt stays byte-stable. v4 (P1.2)
-# and v5 (P1.3) build on v3, so they are voice-aware too.
-VOICE_PROMPT_IDS = frozenset(
-    {"coach_message_v3", "coach_message_v4", "coach_message_v5", "coach_message_v6",
-     "coach_message_v7"}
-)
+# The capability-gated prompt-id sets and predicates below are DERIVED VIEWS over
+# the prompt-feature manifest (prompt_features.PROMPT_FEATURES), the single source of
+# truth for which capabilities each prompt id carries. Their names and semantics are
+# unchanged so every call site stays byte-stable; to change what a prompt activates,
+# edit the manifest row, never these views. Each capability is inert under a rollback:
+# flipping COACH_PROMPT_ID off a capability-bearing id drops it from the derived set,
+# so the gated addendum and pack section go silent with zero code change.
+
+# Prompt ids that consume a per-runner VOICE block (P1.1); only these get the runtime
+# voice block appended (render_voice_block), every other prompt stays byte-stable.
+VOICE_PROMPT_IDS = ids_with(PromptFeature.VOICE)
 
 # Prompt ids that carry the P1.2 coaching-corpus addendum AND the `corpus` context-
-# pack section. Membership implies voice-aware and two-stage (v4 builds on v3), and
-# gates BOTH the prompt addendum (above) and _build_corpus_context, so flipping
-# COACH_PROMPT_ID off a corpus-aware id leaves the corpus inert with zero code change.
-# v5 (P1.3) builds on v4, so it is corpus-aware too (it threads the runner's school).
-CORPUS_PROMPT_IDS = frozenset(
-    {"coach_message_v4", "coach_message_v5", "coach_message_v6", "coach_message_v7"}
-)
+# pack section (gates _build_corpus_context).
+CORPUS_PROMPT_IDS = ids_with(PromptFeature.CORPUS)
 
-# Prompt ids that carry the P1.3 emphasis addendum (rule 26) AND the `stance`
-# context-pack section. Membership implies corpus-aware, voice-aware, and two-stage
-# (v5 builds on v4). Gates BOTH the emphasis addendum (above) and
-# _build_stance_context, so flipping COACH_PROMPT_ID off coach_message_v5 leaves the
-# emphasis axes inert with zero code change. (The selected school rides the `corpus`
-# section, gated by CORPUS_PROMPT_IDS; only the emphasis half is stance-gated here.)
-STANCE_PROMPT_IDS = frozenset({"coach_message_v5", "coach_message_v6", "coach_message_v7"})
+# Prompt ids that carry the P1.3 emphasis addendum (rule 26) AND the `stance` context-
+# pack section (gates _build_stance_context). The selected school rides the `corpus`
+# section, gated by CORPUS_PROMPT_IDS; only the emphasis half is stance-gated here.
+STANCE_PROMPT_IDS = ids_with(PromptFeature.STANCE)
 
 # Prompt ids that carry the P3 readiness addendum (rule 27) AND the `training_load`
-# context-pack section. Membership implies stance-, corpus-, voice-aware, and
-# two-stage (v6 builds on v5). Gates BOTH the readiness addendum (above) and
-# _build_training_load_context, so flipping COACH_PROMPT_ID off coach_message_v6
-# leaves the readiness model inert with zero code change.
-TRAINING_LOAD_PROMPT_IDS = frozenset({"coach_message_v6", "coach_message_v7"})
+# context-pack section (gates _build_training_load_context).
+TRAINING_LOAD_PROMPT_IDS = ids_with(PromptFeature.TRAINING_LOAD)
 
 # Prompt ids that carry the P4 user-materials addendum (rule 28) AND the
-# `corpus.user_materials` pack sub-field. Membership implies training-load-, stance-,
-# corpus-, voice-aware, and two-stage (v7 builds on v6). Gates BOTH the addendum
-# (above) and the materials read in _build_corpus_context, so flipping COACH_PROMPT_ID
-# off coach_message_v7 leaves the runner's materials inert with zero code change (the
-# corpus section keeps its P1.2/P1.3 byte-stable shape under v4/v5/v6).
-USER_MATERIALS_PROMPT_IDS = frozenset({"coach_message_v7"})
+# `corpus.user_materials` pack sub-field (gates the materials read in
+# _build_corpus_context; the corpus section keeps its P1.2/P1.3 byte-stable shape
+# under v4/v5/v6).
+USER_MATERIALS_PROMPT_IDS = ids_with(PromptFeature.USER_MATERIALS)
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
     """True when the active prompt is corpus-aware (P1.2+): it carries the corpus
     addendum and its context pack carries the `corpus` section. False for every
     other prompt, so the corpus substrate is wholly inert under a rollback."""
-    return prompt_id in CORPUS_PROMPT_IDS
+    return has_feature(prompt_id, PromptFeature.CORPUS)
 
 
 def is_stance_prompt(prompt_id: Optional[str]) -> bool:
     """True when the active prompt is stance-aware (P1.3): it carries the emphasis
     addendum (rule 26) and its context pack carries the `stance` section. False for
     every other prompt, so the emphasis axes are wholly inert under a rollback."""
-    return prompt_id in STANCE_PROMPT_IDS
+    return has_feature(prompt_id, PromptFeature.STANCE)
 
 
 def is_training_load_prompt(prompt_id: Optional[str]) -> bool:
@@ -680,7 +672,7 @@ def is_training_load_prompt(prompt_id: Optional[str]) -> bool:
     readiness addendum (rule 27) and its context pack carries the `training_load`
     section. False for every other prompt, so the readiness model is wholly inert
     under a rollback."""
-    return prompt_id in TRAINING_LOAD_PROMPT_IDS
+    return has_feature(prompt_id, PromptFeature.TRAINING_LOAD)
 
 
 def is_user_materials_prompt(prompt_id: Optional[str]) -> bool:
@@ -689,7 +681,7 @@ def is_user_materials_prompt(prompt_id: Optional[str]) -> bool:
     the `user_materials` sub-field. False for every other prompt, so the runner's
     distilled materials are wholly inert under a rollback (the corpus section keeps
     its P1.2/P1.3 byte-stable shape under v4/v5/v6)."""
-    return prompt_id in USER_MATERIALS_PROMPT_IDS
+    return has_feature(prompt_id, PromptFeature.USER_MATERIALS)
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook
