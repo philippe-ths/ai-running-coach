@@ -2,7 +2,7 @@
 
 Status: drafted 2026-06-09 from an interactive design session (grill-with-docs). Holds the owner's vision, the decisions taken, the layered map of how they link, and a dependency-ordered roadmap. Glossary terms resolved in this session live in `CONTEXT.md`; this doc is the why and the plan, not the vocabulary.
 
-This supersedes nothing yet. The M0-M10 build (see `project-context.md`) is the shipped baseline. Everything here is forward-looking and not started.
+**Build status (updated 2026-06-17): COMPLETE.** Every milestone in the §5 roadmap, across Phases 0 through 3, is built and merged (epic #177), and production runs the final prompt `coach_message_v7`. The M0-M10 build was the prior baseline; this north-star's reframe (relationship spine, `Block` event unit, two-stage `Exchange` + receipt cadence, prose output, split `Durable memory` with pull retrieval, `Voice`/`Coaching stance`/`Coaching corpus`, `Training load`, `User materials`, conversation-first surface) is now the shipped system. The vision and decisions below are retained as the design record. Net-new work beyond this roadmap is tracked separately (the §6 open leaf-questions, follow-ons #339 cross-activity chat threading and #340 streamed-chat validation, the Phase-2 multi-user track, and deterministic-correctness as an ongoing discipline). §9 maps the original essence dump to where each concern landed.
 
 ---
 
@@ -132,3 +132,21 @@ Write each when its milestone is picked up, not before. Each meets the bar (hard
 In `CONTEXT.md`: `Coaching relationship`, `Exchange`, `Working context`, `Durable memory`, `Consolidation`, `Voice`, `Coaching stance`, `Coaching corpus`, `User materials`, `Authority tiering`, `Training load`, `Block`.
 
 Reconciliation pending: the existing `Notification`, `Process new activity`, and `CoachReport`-centric entries are written with the artifact as protagonist and will need updating once the reframe lands.
+
+---
+
+## 9. Essence coverage (reconciliation, 2026-06-17)
+
+The owner's one stated fear in the §1 dump was "I don't want to lose the essence." This maps each substantive concern in that verbatim dump to where it landed. Every concern is addressed by shipped, merged work; the residual threads are net-new, not lost.
+
+- **Samey / not useful / entertaining / instructive reports; build a relationship; more personality; rethink the interface.** The relationship spine (decision 1), A3 prose output (ADR 0009), `Voice` (P1.1), and the two-stage `Exchange` plus receipt cadence (A4 / ADR 0010 / 0018). Entertaining is literally dial-able (e.g. the high-humor "roast" voice preset).
+- **Different users need different coaches (the five personas); sentiment vs data, encouragement vs accountability.** `Voice` dials (warmth / humor / directness / energy) plus `Coaching stance` emphasis axes (Data vs Sentiment, Process vs Outcome) plus `Coaching corpus` schools. Serving many distinct people at once is the separate multi-user track (ADR 0005), not this roadmap.
+- **Immediate Telegram message; chat as a continuation; low cognitive capacity post-run; the report should not require RPE / pain but should offer them; a light input-free message.** A4 two-stage `Exchange` and the #296 receipt cadence (an instant deterministic receipt that needs no input, with the full report later); I1 tappable RPE / pain; I2 / I3 chat-as-continuation.
+- **Pre-prepared tappable options / a "chat about this" option.** I1 Telegram inline buttons; the report's tappable question options; I3 starter chips on the chat surface.
+- **Reproduce Strava / Garmin training load to read current condition.** P3 `Training load`, our own deterministic acute / chronic / form model (ADR 0016), built on the corrected F1 `effort_score` primitive; platform numbers stay validation-only.
+- **Stateful memory; make best use of the raw data without context bloat; reason before structure; summarisation / compaction.** A2 four-layer pull memory (working context, split durable memory, `Consolidation`; ADR 0008); A2a consolidated stream view pulled on demand; A3 reason then message then thin tail (directly the owner's "structured output before thinking can hurt" research).
+- **Deterministic correctness (the terrain-discount and splits-label examples).** Phase 0 (F2 / #176 magnitude gate for the terrain-discount; F5 / #174 splits label vs duration; F1 / F3 / F4). This stays an ongoing discipline, not a finished task: deterministic bugs are still found and fixed (#297, #310, #189; #325 open).
+- **Coaching philosophy / schools of thought / Born to Run / system prompt too conservative and not human.** P1.2 `Coaching corpus` (house schools, including enjoyment-and-consistency) plus P1.3 `Coaching stance` selection plus `Voice`. Partial: retuning the base-prompt philosophy into the corpus house-core is still open (#266).
+- **Multi-activity sessions understood without being told.** A1 `Block` (deterministic time-gap grouping; the coach reasons and speaks about the block). Verified live on the owner's own walk + row + bike block, where a v7 report discussed the combined ~98-minute session.
+
+Net-new (tracked, not lost): channelling the owner's ongoing AI research into milestones (§6, open-ended); the full cross-activity conversation unification (#339); streamed-chat validation (#340); multi-user so the personas literally coexist (Phase-2 track); deterministic correctness as a permanent ongoing effort.
