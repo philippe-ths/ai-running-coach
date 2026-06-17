@@ -8,15 +8,17 @@ the coach must honor the annotation but never invent confounders not listed here
 
 from typing import Optional
 
+from app.services.analysis.thresholds import ELEVATED_HR_DRIFT_PCT
+
 HEAT_TEMP_C = 25.0
 
 # A confounder only warrants discounting the HR drift when the drift is actually
 # elevated. Below this, there is nothing to discount, so the stage abstains rather
 # than handing the coach a contradictory "discount this drift as fatigue"
-# instruction on a run whose drift is negligible (#176). Mirrors the fatigue
-# threshold in flags.py (drift > 5% -> fatigue_possible) and the M9 population
-# guideline (calibration.POPULATION_DRIFT_THRESHOLD_PCT).
-ELEVATED_DRIFT_THRESHOLD_PCT = 5.0
+# instruction on a run whose drift is negligible (#176). The threshold is the one
+# shared invariant in thresholds.py, aliased here under the name this module's
+# callers (eval/rubric.py) already import.
+ELEVATED_DRIFT_THRESHOLD_PCT = ELEVATED_HR_DRIFT_PCT
 
 
 def compute_discount_signals(
