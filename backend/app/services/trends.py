@@ -192,10 +192,11 @@ def _period_window(range_key: str) -> Optional[tuple[date, date]]:
     return current_start, previous_start
 
 
-def get_available_types(db: Session) -> List[str]:
+def get_available_types(db: Session, *, user_id=None) -> List[str]:
     """
     Return the distinct activity types present in the database,
     sorted alphabetically.
+    Pass ``user_id`` to restrict results to a single owner.
     """
     from sqlalchemy import distinct
 
@@ -204,6 +205,8 @@ def get_available_types(db: Session) -> List[str]:
         .where(Activity.is_deleted == False)  # noqa: E712
         .order_by(Activity.type)
     )
+    if user_id is not None:
+        stmt = stmt.where(Activity.user_id == user_id)
     return [row for row in db.execute(stmt).scalars().all()]
 
 
@@ -212,9 +215,17 @@ def _query_activity_facts(
     start_date: Optional[date],
     end_date: Optional[date],
     types: Optional[List[str]] = None,
+    *,
+    user_id=None,
 ) -> List[ActivityFact]:
     """
     Internal helper to query activities by exact date range (start inclusive, end exclusive).
+
+    ``user_id`` scopes the query to a single owner.  Pass it at every call site
+    so that when multi-user lands (Phase 2) there is no accidental cross-user leak.
+    Currently optional so callers that do not yet have a user_id available can
+    continue working; the intent is to make it required once the API auth layer
+    provides a resolved user at every endpoint (ADR 0005 / Phase 2).
     """
     from sqlalchemy.orm import selectinload
 
@@ -224,6 +235,8 @@ def _query_activity_facts(
         .where(Activity.is_deleted == False)  # noqa: E712
         .order_by(Activity.start_date.asc())
     )
+    if user_id is not None:
+        stmt = stmt.where(Activity.user_id == user_id)
     if start_date:
         stmt = stmt.where(Activity.start_date >= datetime.combine(start_date, datetime.min.time()))
     if end_date:
@@ -243,13 +256,16 @@ def build_activity_facts(
     db: Session,
     range_key: str = "30D",
     types: Optional[List[str]] = None,
+    *,
+    user_id=None,
 ) -> List[ActivityFact]:
     """
     Query activities within the given range and project them into ActivityFact rows.
     Optionally filter by activity type (case-insensitive).
+    Pass ``user_id`` to restrict results to a single owner.
     """
     since = _resolve_since(range_key)
-    return _query_activity_facts(db, since, None, types)
+    return _query_activity_facts(db, since, None, types, user_id=user_id)
 
 
 def build_daily_facts(activity_facts: List[ActivityFact]) -> List[DailyFact]:
@@ -519,7 +535,7 @@ def _summarise_window(facts: List[ActivityFact]) -> WeeklyStatsSummary:
     )
 
 
-def get_weekly_stats(db: Session) -> WeeklyStatsResponse:
+def get_weekly_stats(db: Session, *, user_id=None) -> WeeklyStatsResponse:
     """
     Rolling 7-day summary for the dashboard, plus the prior 7 days for comparison.
 
@@ -527,11 +543,12 @@ def get_weekly_stats(db: Session) -> WeeklyStatsResponse:
     ``_period_window``) so the dashboard cards and Trends 7D can never drift
     (#246, #179). "Hard days" is derived from the effort axis rather than an
     HR/name heuristic.
+    Pass ``user_id`` to restrict results to a single owner.
     """
     current_start, prev_start = _period_window("7D")  # type: ignore[misc]
 
-    current = _query_activity_facts(db, current_start, None)
-    previous = _query_activity_facts(db, prev_start, current_start)
+    current = _query_activity_facts(db, current_start, None, user_id=user_id)
+    previous = _query_activity_facts(db, prev_start, current_start, user_id=user_id)
 
     return WeeklyStatsResponse(
         summary=_summarise_window(current),
@@ -543,17 +560,20 @@ def get_trends_report(
     db: Session,
     range_key: str = "30D",
     types: Optional[List[str]] = None,
+    *,
+    user_id=None,
 ) -> TrendsResponse:
     """
     Main entry point for generating the complete trends report.
     Orchestrates data fetching and aggregation.
+    Pass ``user_id`` to restrict results to a single owner.
     """
     range_upper = range_key.upper()
     if range_upper not in ALLOWED_RANGES:
         range_upper = "30D"
 
     # 1. Activity-level facts (filtered by types if provided)
-    activity_facts = build_activity_facts(db, range_upper, types=types)
+    activity_facts = build_activity_facts(db, range_upper, types=types, user_id=user_id)
 
     # 2. Daily facts (sum per local date)
     daily_facts = build_daily_facts(activity_facts)
@@ -571,7 +591,7 @@ def get_trends_report(
     window = _period_window(range_upper)
     if window is not None:
         current_start, prev_start = window
-        prev_facts = _query_activity_facts(db, prev_start, current_start, types=types)
+        prev_facts = _query_activity_facts(db, prev_start, current_start, types=types, user_id=user_id)
         previous_summary = TrendsSummary(
             total_distance_m=sum(f.distance_m for f in prev_facts),
             total_moving_time_s=sum(f.moving_time_s for f in prev_facts),
