@@ -59,19 +59,27 @@ function SimpleChart({ type, data, secondaryData, scrubFraction, onScrub, timeDa
 
   // Compute stats for scaling using only valid data
   const { pathD, secondaryPathD, primaryData, min, max, avg, range } = useMemo(() => {
-    // Zero-cadence is a DROPOUT, not a measurement: Strava reports 0 cadence
-    // before the watch detects the first step (and during pauses). Treat those
-    // zeros as gaps (null) for cadence charts, on BOTH the primary and the
-    // secondary series, BEFORE scaling and path generation. Leaving them in
-    // pulls the y-axis min to 0 and draws the line down to the plot floor,
-    // compressing the real ~150-180 spm signal into a sliver and leaving a dark
-    // empty band below it (#310). Cadence-type only: 0 is a legitimate value for
-    // altitude / grade / power, so this must never be a blanket normalisation.
+    // Cadence dropouts/ramps must not set the chart scale (#310). Strava reports
+    // 0 cadence before the first detected step (and during pauses), and the
+    // smoothing of that region emits LOW NON-ZERO ramp values (real data observed:
+    // smoothed_cadence = [0, 0, 76, 152, ...]). Dropping only exact zeros leaves
+    // the ramp (76) as the scale minimum, compressing the real ~150-180 spm signal
+    // into a sliver with a dark empty band below. So gap any cadence sample below
+    // half the median of real (>0) cadence: this catches both the zeros and the
+    // ramp while keeping genuine low cadence. Cadence-type ONLY: 0 is a legitimate
+    // value for altitude / grade / power, so this is never a blanket normalisation.
     const isCadence = type === 'cadence' || type === 'smoothed_cadence';
-    const dropZeros = (arr: (number | null)[]) => arr.map((v) => (v === 0 ? null : v));
-    const primaryData = isCadence ? dropZeros(data) : data;
+    const dropCadenceDropouts = (arr: (number | null)[]) => {
+      const positives = arr.filter((v): v is number => v !== null && v > 0);
+      if (!positives.length) return arr;
+      const sorted = [...positives].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)];
+      const floor = median * 0.5;
+      return arr.map((v) => (v !== null && v < floor ? null : v));
+    };
+    const primaryData = isCadence ? dropCadenceDropouts(data) : data;
     const secondaryDataNormalized = secondaryData
-      ? (isCadence ? dropZeros(secondaryData) : secondaryData)
+      ? (isCadence ? dropCadenceDropouts(secondaryData) : secondaryData)
       : undefined;
 
     // Filter out nulls for stats
