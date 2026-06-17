@@ -63,10 +63,20 @@ function SimpleChart({ type, data, secondaryData, scrubFraction, onScrub, timeDa
     const validData = data.filter((v): v is number => v !== null);
     if (!validData.length) return { pathD: '', secondaryPathD: '', min: 0, max: 0, avg: 0, range: 1 };
 
+    // Secondary data with zero-cadence dropouts treated as gaps (null).
+    // Strava sends 0 for cadence when the watch hasn't detected a step yet;
+    // the smoothing pipeline already converts these to null, so the raw
+    // secondary line should do the same. Including raw zeros in the min/max
+    // drives min → 0 and compresses the entire chart to the top ~5%,
+    // leaving a dark empty rectangle in the lower portion of the plot (#310).
+    const secondaryDataNormalized = secondaryData
+      ? secondaryData.map((v) => (v === 0 ? null : v))
+      : undefined;
+
     // Include secondary data in min/max calc so it fits in the chart
     const allValues = [...validData];
-    if (secondaryData) {
-        allValues.push(...secondaryData.filter((v): v is number => v !== null));
+    if (secondaryDataNormalized) {
+        allValues.push(...secondaryDataNormalized.filter((v): v is number => v !== null));
     }
 
     let min = Infinity;
@@ -108,7 +118,7 @@ function SimpleChart({ type, data, secondaryData, scrubFraction, onScrub, timeDa
     };
 
     const pathD = generatePath(data);
-    const secondaryPathD = secondaryData ? generatePath(secondaryData) : '';
+    const secondaryPathD = secondaryDataNormalized ? generatePath(secondaryDataNormalized) : '';
 
     return {
       pathD,
