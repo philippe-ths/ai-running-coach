@@ -604,7 +604,16 @@ def _recent_pain_scores(db: Session, activity: Activity) -> list[int]:
     THIS run's pain location so the trend never conflates distinct injuries (a
     knee easing while a shin builds is not one trend). Returns an empty list when
     this run has no pain location to anchor on, so the trend degrades to absent.
-    Reads existing rows only."""
+    Reads existing rows only.
+
+    INTENTIONAL DESIGN (#303): a receipt pain tap (from the Telegram receipt
+    keyboard, #296 / ADR 0018) records a pain score with NO body location because
+    the coarse tap set has no place to capture one. When this function encounters
+    no location it returns [] and the M6 location-scoped trend stays absent for
+    that run -- that is the correct behaviour. The receipt pain is NOT lost: it IS
+    visible to the location-agnostic M9 referral / red-flag path via
+    `_recent_pain_scores_any`, so a flagged niggle still drives the safety check.
+    The gap between the two paths is a deliberate choice, not a silent drop."""
     current = getattr(activity, "check_in", None)
     location = (current.pain_location or "").strip() if current else ""
     if not location:
@@ -820,7 +829,15 @@ def _recent_pain_scores_any(db: Session, activity: Activity) -> list[int]:
     (the referral persistence check is about sustained pain in general, not one
     injury). The window matters: without it, three unrelated niggles spread over
     a year would read as 'persistent' and fire a false referral. Reads existing
-    rows only; bounded scan."""
+    rows only; bounded scan.
+
+    INTENTIONAL DESIGN (#303): this query has NO location filter, so a receipt
+    pain tap (which records pain_score with pain_location=None, #296 / ADR 0018)
+    IS included here. That is deliberate: the M9 referral fires on SUSTAINED pain
+    in general, and a coarse "felt a niggle" tap carries exactly the signal it
+    needs for that check. Compare with `_recent_pain_scores`, which requires a
+    location and intentionally excludes location-free receipt pains from the
+    stricter M6 per-location trend."""
     window_start = activity.start_date - timedelta(days=_PERSISTENT_PAIN_WINDOW_DAYS)
     rows = (
         db.query(CheckIn.pain_score)

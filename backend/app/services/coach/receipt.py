@@ -120,6 +120,15 @@ class ReceiptTap:
 # The fixed receipt quick-replies: a coarse RPE scale, one pain flag, and the
 # "done" control. Coarse RPE buckets are enough for the band-level RPE-vs-HR read
 # the full report does (M6); the in-app form remains the place for fine input.
+#
+# PAIN TAP SCOPING (#303): the pain tap records a CheckIn with pain_score but
+# NO pain_location (the coarse tap set has no place to capture one, and expanding
+# it with per-location buttons would be a UX change out of scope here). This is
+# INTENTIONAL: the tap feeds the location-agnostic M9 referral / red-flag safety
+# check (which only needs a score), but deliberately does NOT feed the M6
+# per-location pain trend (which requires a body location to avoid conflating
+# distinct niggles). The in-app check-in form remains the place for a runner to
+# supply a location and contribute to the location-scoped trend.
 RECEIPT_TAPS: tuple[ReceiptTap, ...] = (
     ReceiptTap("Easy", "rpe", 3),
     ReceiptTap("Moderate", "rpe", 5),
