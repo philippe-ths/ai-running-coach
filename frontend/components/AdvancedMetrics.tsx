@@ -46,17 +46,17 @@ export default function AdvancedMetrics({ metrics }: Props) {
                 <div className="text-xs text-gray-400 dark:text-gray-500 italic">Not enough data for Cardiac Drift.</div>
             )}
 
-            {metrics.pace_variability !== undefined && (
-                <div className="bg-slate-50 dark:bg-gray-700/50 p-4 rounded-lg">
-                    <div className="flex justify-between items-center mb-1">
-                        <span className="text-sm text-gray-600 dark:text-gray-400">Pace Variability</span>
-                        <span className="font-bold text-slate-700 dark:text-gray-300">{metrics.pace_variability}%</span>
-                    </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                        Coefficient of Variation. Lower means a steadier, more consistent effort.
-                    </p>
+            <div className="bg-slate-50 dark:bg-gray-700/50 p-4 rounded-lg">
+                <div className="flex justify-between items-center mb-1">
+                    <span className="text-sm text-gray-600 dark:text-gray-400">Pace Variability</span>
+                    <span className="font-bold text-slate-700 dark:text-gray-300">
+                        {metrics.pace_variability != null ? `${metrics.pace_variability}%` : '—'}
+                    </span>
                 </div>
-            )}
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Coefficient of Variation. Lower means a steadier, more consistent effort.
+                </p>
+            </div>
         </div>
 
         {/* Right Col: Zones */}

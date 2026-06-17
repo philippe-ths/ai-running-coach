@@ -185,7 +185,7 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
             value={effort}
             onChange={(e) => setEffort(e.target.value === '' ? '' : Number(e.target.value))}
             className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-            placeholder="Difficuty"
+            placeholder="Difficulty"
             required
             />
         </div>
