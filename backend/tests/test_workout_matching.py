@@ -180,6 +180,39 @@ class TestMatchPlannedToDetected:
         assert result["match_score"] == 1.0
         assert result["detection_confidence"] == "high"
 
+    def test_recorded_laps_confidence_high_even_with_plan_deviation(self):
+        """When a planned workout is present AND source is recorded_laps, detection
+        confidence must stay 'high' and variability/outlier reasons must not appear
+        (#190). The runner's own lap marks are ground-truth detection regardless of
+        how far the run deviated from the plan. match_score reflecting plan adherence
+        (plan deviation → low adherence) is acceptable."""
+        # Build a ladder: reps vary a lot so variability reasons would fire
+        structure = _make_interval_structure(reps=4, distance_per_rep=400)
+        structure["source"] = "recorded_laps"
+        # Force high distance variability by injecting extreme rep distances
+        structure["work_segments"][0]["distance_m"] = 200.0
+        structure["work_segments"][1]["distance_m"] = 400.0
+        structure["work_segments"][2]["distance_m"] = 800.0
+        structure["work_segments"][3]["distance_m"] = 1200.0
+        # Planned workout that differs from the execution (e.g. 8x400 planned, 4 reps done)
+        planned = {"reps_planned": 8, "rep_distance_m": 400, "rest_s": 60}
+        result = match_planned_to_detected(structure, planned)
+        # Detection certainty: the laps are ground truth, must be high
+        assert result["detection_confidence"] == "high", (
+            f"Expected 'high' but got {result['detection_confidence']!r}; "
+            f"reasons: {result['confidence_reasons']}"
+        )
+        # Variability and outlier reasons must not appear (they are plan-adherence noise)
+        reasons = result["confidence_reasons"]
+        assert not any("variability" in r for r in reasons), (
+            f"Variability reason leaked: {reasons}"
+        )
+        assert not any("outlier" in r for r in reasons), (
+            f"Outlier reason leaked: {reasons}"
+        )
+        # match_score may reflect plan deviation (low adherence is fine here)
+        assert result["match_score"] is not None
+
 
 class TestBuildIntervalKPIs:
     def test_basic_kpis(self):
