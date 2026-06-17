@@ -45,7 +45,6 @@ from app.services.coach.service import (
     generate_opener,
     get_active_report_row,
     get_or_generate_coach_report,
-    is_receipt_cadence,
     is_two_stage_prompt,
 )
 from app.schemas.coach import CoachReportRead
@@ -154,30 +153,13 @@ async def process_new_activity(
 
     block = _ensure_block(db, activity)
 
-    if is_receipt_cadence(settings.COACH_PROMPT_ID):
-        # #296: an INSTANT deterministic receipt fires now (per activity, no LLM,
-        # cannot fall back); the full LLM report fires ~BLOCK_GAP_SECONDS later via
-        # the block-complete debounce (the no-"done" path) or a "done" tap. The
-        # block-complete gap doubles as the full-report timer, retiring the 3h timer.
-        receipt = await _send_receipt(
-            db=db, activity=activity, block=block, notifier=notifier
-        )
-        _schedule_block_complete(str(block.id), str(activity.id))
-        logger.info(
-            "Sent receipt + scheduled full-report check for block %s (activity %s) in %ds",
-            block.id, strava_activity_id, settings.BLOCK_GAP_SECONDS,
-        )
-        return receipt
+    # The post-activity cadence (single-shot / opener-fuller / receipt) is resolved
+    # from config at dispatch time and owns what happens next — see app/jobs/cadence.py.
+    # Lazy import keeps the cadence -> process_new_activity dependency one-directional.
+    from app.jobs.cadence import get_active_cadence
 
-    if is_two_stage_prompt(settings.COACH_PROMPT_ID):
-        _schedule_block_complete(str(block.id), str(activity.id))
-        logger.info(
-            "Scheduled block-complete check for block %s (activity %s) in %ds",
-            block.id, strava_activity_id, settings.BLOCK_GAP_SECONDS,
-        )
-        return None
-    return await _run_single_shot(
-        db=db, activity=activity, strava_activity_id=strava_activity_id, notifier=notifier
+    return await get_active_cadence(settings).on_ingest(
+        db=db, activity=activity, block=block, notifier=notifier
     )
 
 
@@ -335,13 +317,22 @@ async def process_block_complete(
     FIRE time, so a check pending across a cadence-flag flip does the now-current
     thing rather than a stale one.
     """
-    if not is_two_stage_prompt(settings.COACH_PROMPT_ID):
-        logger.info(
-            "Skipping block-complete check for block %s: active prompt %s is single-shot",
-            block_id, settings.COACH_PROMPT_ID,
-        )
-        return None
+    from app.jobs.cadence import get_active_cadence
 
+    return await get_active_cadence(settings).on_block_complete(
+        db=db, block_id=block_id, activity_id=activity_id, notifier=notifier
+    )
+
+
+def _resolve_completed_block(
+    db: Session, block_id: str, activity_id: str
+) -> Optional[tuple[Activity, Exchange]]:
+    """Shared block-complete setup for the two-stage cadences: resolve the block,
+    no-op (return None) when this check is superseded — a newer member now owns the
+    block (idempotency over cancellation) — or the block is gone or empty, ensure the
+    exchange row (defensive; blocks are created with theirs), and return the block's
+    PRIMARY activity plus its exchange. The single-shot cadence never reaches here; it
+    no-ops before any DB work."""
     block = db.query(Block).filter(Block.id == uuid.UUID(str(block_id))).first()
     if block is None:
         logger.warning("block_complete: unknown block %s", block_id)
@@ -366,12 +357,7 @@ async def process_block_complete(
         db.commit()
 
     primary = db.query(Activity).filter(Activity.id == block.primary_activity_id).one()
-    if is_receipt_cadence(settings.COACH_PROMPT_ID):
-        # #296: the receipt already fired on ingest; this debounce fires the deep
-        # FULL report covering the whole block (anchored on the primary), closing
-        # the exchange on fuller_sent_at. No LLM opener stage under this cadence.
-        return await process_fuller_turn(db=db, activity=primary, notifier=notifier)
-    return await _run_opener_stage(db=db, activity=primary, exchange=exchange, notifier=notifier)
+    return primary, exchange
 
 
 async def _run_opener_stage(
@@ -465,9 +451,20 @@ def _schedule_fuller_turn(activity_id: str) -> None:
 
 
 def maybe_enqueue_fuller_turn(db: Session, activity_id) -> bool:
-    """Reply path: if the exchange owning this activity's block is OPEN, enqueue
-    the fuller turn early. Called when a runner replies — a CheckIn or a
-    CoachChatMessage, on ANY member of the block.
+    """Reply path entry point — called when a runner replies (a CheckIn or a
+    CoachChatMessage) on ANY block member. Delegates to the active cadence: only the
+    opener/fuller cadence fires the fuller turn early; single-shot has no exchange and
+    the #296 receipt cadence waits for the block-complete timer or a "done" tap (so the
+    report covers the whole session). Kept here as the stable import for checkins.py /
+    chat.py and as the patch target their tests use."""
+    from app.jobs.cadence import get_active_cadence
+
+    return get_active_cadence(settings).on_reply(db=db, activity_id=activity_id)
+
+
+def _enqueue_reply_fuller(db: Session, activity_id) -> bool:
+    """Enqueue the fuller turn early when the exchange owning this activity's block is
+    OPEN (the opener/fuller cadence only).
 
     The exchange is open when (read from the exchanges row, A1): the opener has
     generated (`opened_at` set — independent of delivery, so it works for a NoOp
@@ -480,13 +477,6 @@ def maybe_enqueue_fuller_turn(db: Session, activity_id) -> bool:
     queued. Best-effort: a Redis hiccup never breaks the reply request. Returns
     True if it enqueued the fuller turn.
     """
-    if is_receipt_cadence(settings.COACH_PROMPT_ID):
-        # #296: an RPE/pain reply only records the check-in; the full report fires
-        # via the block-complete timer or a "done" tap so it covers the whole
-        # session, never early off a single activity's reply.
-        return False
-    if not is_two_stage_prompt(settings.COACH_PROMPT_ID):
-        return False
     activity_uuid = activity_id if isinstance(activity_id, uuid.UUID) else uuid.UUID(str(activity_id))
     activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
     if activity is None or activity.block_id is None:
@@ -519,19 +509,26 @@ def maybe_enqueue_fuller_turn(db: Session, activity_id) -> bool:
 
 
 def mark_done_and_schedule(db: Session, activity_id) -> bool:
-    """#296 "done" tap: record the runner's explicit completion signal and schedule
-    the full report at +BLOCK_GAP_SECONDS (owner-locked: "done" -> full report in
-    30 min). Called from the Telegram "done" callback on any block member.
+    """#296 "done" tap entry point — called from the Telegram "done" callback on any
+    block member. Delegates to the active cadence: only the receipt cadence records the
+    completion and schedules the full report (single-shot and opener/fuller have no
+    "done" affordance). Kept here as the stable import for webhooks.py."""
+    from app.jobs.cadence import get_active_cadence
 
-    Only under the receipt cadence and only while the exchange is OPEN, not yet
-    CLOSED (`fuller_sent_at` null), and within the reply window — so a "done" tap on
-    a stale exchange never spins one up. The full-report check is scheduled on the
-    block's CURRENT last member, so a straggler that syncs before it fires still
-    supersedes it and is folded into the report (idempotent over cancellation, and
-    idempotent with the ingest-time check via `fuller_sent_at`). Best-effort: a
-    Redis hiccup never breaks the tap. Returns True if it scheduled the report."""
-    if not is_receipt_cadence(settings.COACH_PROMPT_ID):
-        return False
+    return get_active_cadence(settings).on_done(db=db, activity_id=activity_id)
+
+
+def _record_done_and_schedule(db: Session, activity_id) -> bool:
+    """Record the runner's explicit completion signal and schedule the full report at
+    +BLOCK_GAP_SECONDS (owner-locked: "done" -> full report in 30 min; receipt cadence).
+
+    Only while the exchange is OPEN, not yet CLOSED (`fuller_sent_at` null), and within
+    the reply window — so a "done" tap on a stale exchange never spins one up. The
+    full-report check is scheduled on the block's CURRENT last member, so a straggler
+    that syncs before it fires still supersedes it and is folded into the report
+    (idempotent over cancellation, and idempotent with the ingest-time check via
+    `fuller_sent_at`). Best-effort: a Redis hiccup never breaks the tap. Returns True if
+    it scheduled the report."""
     activity_uuid = activity_id if isinstance(activity_id, uuid.UUID) else uuid.UUID(str(activity_id))
     activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
     if activity is None or activity.block_id is None:
