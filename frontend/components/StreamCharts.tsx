@@ -58,20 +58,25 @@ function SimpleChart({ type, data, secondaryData, scrubFraction, onScrub, timeDa
   const areaRef = useRef<HTMLDivElement>(null);
 
   // Compute stats for scaling using only valid data
-  const { pathD, secondaryPathD, min, max, avg, range } = useMemo(() => {
-    // Filter out nulls for stats
-    const validData = data.filter((v): v is number => v !== null);
-    if (!validData.length) return { pathD: '', secondaryPathD: '', min: 0, max: 0, avg: 0, range: 1 };
-
-    // Secondary data with zero-cadence dropouts treated as gaps (null).
-    // Strava sends 0 for cadence when the watch hasn't detected a step yet;
-    // the smoothing pipeline already converts these to null, so the raw
-    // secondary line should do the same. Including raw zeros in the min/max
-    // drives min → 0 and compresses the entire chart to the top ~5%,
-    // leaving a dark empty rectangle in the lower portion of the plot (#310).
+  const { pathD, secondaryPathD, primaryData, min, max, avg, range } = useMemo(() => {
+    // Zero-cadence is a DROPOUT, not a measurement: Strava reports 0 cadence
+    // before the watch detects the first step (and during pauses). Treat those
+    // zeros as gaps (null) for cadence charts, on BOTH the primary and the
+    // secondary series, BEFORE scaling and path generation. Leaving them in
+    // pulls the y-axis min to 0 and draws the line down to the plot floor,
+    // compressing the real ~150-180 spm signal into a sliver and leaving a dark
+    // empty band below it (#310). Cadence-type only: 0 is a legitimate value for
+    // altitude / grade / power, so this must never be a blanket normalisation.
+    const isCadence = type === 'cadence' || type === 'smoothed_cadence';
+    const dropZeros = (arr: (number | null)[]) => arr.map((v) => (v === 0 ? null : v));
+    const primaryData = isCadence ? dropZeros(data) : data;
     const secondaryDataNormalized = secondaryData
-      ? secondaryData.map((v) => (v === 0 ? null : v))
+      ? (isCadence ? dropZeros(secondaryData) : secondaryData)
       : undefined;
+
+    // Filter out nulls for stats
+    const validData = primaryData.filter((v): v is number => v !== null);
+    if (!validData.length) return { pathD: '', secondaryPathD: '', primaryData, min: 0, max: 0, avg: 0, range: 1 };
 
     // Include secondary data in min/max calc so it fits in the chart
     const allValues = [...validData];
@@ -117,18 +122,19 @@ function SimpleChart({ type, data, secondaryData, scrubFraction, onScrub, timeDa
         return commands.join(' ');
     };
 
-    const pathD = generatePath(data);
+    const pathD = generatePath(primaryData);
     const secondaryPathD = secondaryDataNormalized ? generatePath(secondaryDataNormalized) : '';
 
     return {
       pathD,
       secondaryPathD,
+      primaryData,
       min,
       max,
       avg,
       range
     };
-  }, [data, secondaryData]);
+  }, [data, secondaryData, type]);
 
   const validCount = data.filter(x => x !== null).length;
   if (validCount === 0) return null;
@@ -141,7 +147,7 @@ function SimpleChart({ type, data, secondaryData, scrubFraction, onScrub, timeDa
   const scrubIndex = scrubFraction === null
     ? null
     : Math.min(data.length - 1, Math.max(0, Math.round(scrubFraction * (data.length - 1))));
-  const scrubValue = scrubIndex === null ? null : data[scrubIndex];
+  const scrubValue = scrubIndex === null ? null : primaryData[scrubIndex];
   const scrubTime = scrubIndex === null || !timeData ? null : timeData[scrubIndex];
   const scrubX = scrubIndex === null ? null : (scrubIndex / (data.length - 1)) * CHART_WIDTH;
   const scrubY = scrubValue === null || scrubValue === undefined
