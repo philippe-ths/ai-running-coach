@@ -2,7 +2,7 @@
 
 Status: drafted 2026-06-16 from a grill-with-docs design session. Decisions settled; ready to decompose into implementation issues. Sits under the north-star (`coach-north-star.md` §5 P4, epic #177) and ADR 0017. Glossary terms (`User materials`, `Coaching corpus`, `Coaching stance`, `Authority tiering`) live in `CONTEXT.md` and constrain everything here.
 
-Production runs `coach_message_v6` (P3 Training Load). P4 is the last Phase-2 milestone and the first to ingest genuinely untrusted input, so `aiw-security-testing` applies.
+Production runs `coach_message_v7` (P4 User materials, activated #288). P4 is the last Phase-2 milestone and the first to ingest genuinely untrusted input, so `aiw-security-testing` applies.
 
 ---
 
