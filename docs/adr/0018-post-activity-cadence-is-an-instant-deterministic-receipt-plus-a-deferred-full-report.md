@@ -103,3 +103,11 @@ truncated turn is logged loudly rather than silently shipped as canned text.
   reply-fires-the-report rule, or a prompt-id gate for the cadence: the deterministic
   receipt, the block-gap full-report timer, the explicit "done" tap, and the
   orthogonal flag are the design, not accidents.
+- **Receipt pain is intentionally location-agnostic (#303).** The pain tap records a
+  `CheckIn` with `pain_score` and no `pain_location`. The coarse tap set has no place
+  to capture a body location, and adding per-location buttons would be a UX change out
+  of scope for the receipt. This means receipt pain feeds the location-agnostic M9
+  referral / red-flag check (which only needs a score) but NOT the M6 per-location pain
+  trend (which requires a location to avoid conflating distinct niggles). This is a
+  deliberate choice, not a silent data drop. The in-app check-in form remains the
+  place for a runner to supply a location and contribute to the location-scoped trend.
