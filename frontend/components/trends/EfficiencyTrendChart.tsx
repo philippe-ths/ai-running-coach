@@ -106,8 +106,7 @@ export default function EfficiencyTrendChart({ data, granularity }: Props) {
           No sufficient heart rate data for this range.
         </p>
       ) : (
-        <div className="h-[300px] w-full">
-          <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height={300}>
             <ComposedChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis
@@ -163,8 +162,7 @@ export default function EfficiencyTrendChart({ data, granularity }: Props) {
               ))}
 
             </ComposedChart>
-          </ResponsiveContainer>
-        </div>
+        </ResponsiveContainer>
       )}
       
       <div className="mt-3 text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 p-2 rounded">
