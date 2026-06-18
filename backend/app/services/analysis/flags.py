@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 from app.models import Activity, CheckIn, DerivedMetric
+from app.services.analysis.thresholds import ELEVATED_HR_DRIFT_PCT
 
 
 def generate_flags(
@@ -32,7 +33,7 @@ def generate_flags(
 
     # --- Fatigue Possible (was cardiac_drift_high) ---
     drift = metric_data.get("hr_drift")
-    if drift is not None and drift > 5.0:
+    if drift is not None and drift > ELEVATED_HR_DRIFT_PCT:
         flags.append("fatigue_possible")
 
     # --- Pace Unstable ---
