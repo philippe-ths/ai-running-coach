@@ -486,6 +486,9 @@ async def test_truncated_retry_does_not_clobber_complete_first_attempt(db, _v2):
     # for a null check-in); the policy retry comes back TRUNCATED (max_tokens, no
     # tail). The stored report must be the COMPLETE first attempt, not the truncated
     # retry — the runner must not get a half-sentence when the model wrote a full one.
+    # #282: a truncated policy retry now re-attempts ONCE at a larger budget before
+    # being judged; when that re-attempt ALSO truncates, the complete first attempt is
+    # still the one stored (the #274 invariant holds). So this case now makes 3 calls.
     activity = _seed(db)
     complete = (
         "At a sustained hard effort, that kind of drift is exactly what we expect, "
@@ -496,13 +499,16 @@ async def test_truncated_retry_does_not_clobber_complete_first_attempt(db, _v2):
         # the retry truncates: a short prefix, no tail
         _result([_text("At a sustained hard effort, that kind of")],
                 stop_reason="max_tokens"),
+        # #282 re-attempt of the truncated retry — also truncates here
+        _result([_text("At a sustained hard")], stop_reason="max_tokens"),
     )
     with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
          patch("app.services.coach.service.write_back_beliefs"), \
          patch("app.services.coach.service.enqueue_consolidation"):
         await generate_fuller(db, str(activity.id))
 
-    assert fake.generate_coach_message.call_count == 2  # first attempt + policy retry
+    # first attempt + policy retry + the #282 re-attempt of the truncated retry
+    assert fake.generate_coach_message.call_count == 3
     row = _stored(db, activity)
     assert row.is_fallback is False
     assert row.report["message"] == complete       # complete prose, not the truncation
@@ -532,3 +538,79 @@ async def test_adopted_retry_keeps_raw_response_in_sync(db, _v2):
     raw = row.raw_llm_response or ""
     assert fixed[:20] in raw                          # raw reflects the stored retry
     assert first[:20] not in raw                      # NOT the discarded first attempt
+
+
+# --- #282: re-attempt the policy-fix retry once when it truncates --------------
+
+
+async def test_truncated_policy_retry_is_reattempted_once_then_adopted(db, _v2):
+    # #282 AC1: a policy-fix retry that stops on the token ceiling is re-attempted
+    # ONCE before being judged. Here the first attempt is COMPLETE but trips rule 1
+    # (no questions for a null check-in); the policy retry TRUNCATES; its re-attempt
+    # comes back COMPLETE and fixes the violation, so it is the one stored. That can
+    # only happen if the truncated retry was re-attempted (without #282 the truncated
+    # retry would be discarded for the first attempt and the fix would never land).
+    activity = _seed(db)
+    first = "First attempt prose that forgot to ask the runner anything at all."
+    fixed = "Re-attempt of the corrective retry, complete and grounded with a question."
+    fake = _client(
+        _result(_no_question_fuller_blocks(first), stop_reason="end_turn"),
+        # the corrective policy retry truncates (max_tokens, a short prefix, no tail)
+        _result([_text("Re-attempt of the")], stop_reason="max_tokens"),
+        # #282 re-attempt of the truncated retry: complete AND fixes rule 1
+        _result(_fuller_blocks(fixed), stop_reason="end_turn"),
+    )
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        await generate_fuller(db, str(activity.id))
+
+    # first attempt + truncated policy retry + the single #282 re-attempt
+    assert fake.generate_coach_message.call_count == 3
+    # the re-attempt's complete, fixed prose is what was stored
+    row = _stored(db, activity)
+    assert row.is_fallback is False
+    assert row.report["message"] == fixed
+    # and the re-attempt ran at the ESCALATED budget, mirroring the first phase
+    calls = fake.generate_coach_message.await_args_list
+    assert calls[2].kwargs["max_tokens"] == 16384
+
+
+async def test_complete_policy_retry_is_not_reattempted(db, _v2):
+    # #282 AC2: a policy-fix retry that completes normally is unchanged — NO extra
+    # call. First attempt trips rule 1; the policy retry completes and fixes it.
+    activity = _seed(db)
+    first = "First attempt prose that forgot to ask anything at all."
+    fixed = "Fixed attempt prose, complete and grounded."
+    fake = _client(
+        _result(_no_question_fuller_blocks(first), stop_reason="end_turn"),
+        # the policy retry completes cleanly (end_turn) and carries a question
+        _result(_fuller_blocks(fixed), stop_reason="end_turn"),
+    )
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        await generate_fuller(db, str(activity.id))
+
+    # first attempt + policy retry only — the completed retry is not re-attempted
+    assert fake.generate_coach_message.call_count == 2
+    row = _stored(db, activity)
+    assert row.is_fallback is False
+    assert row.report["message"] == fixed
+
+
+async def test_no_policy_retry_means_no_reattempt(db, _v2):
+    # #282 AC3: the extra call happens ONLY on a truncated RETRY — never when there is
+    # no policy violation at all. A clean, complete first attempt (carries a question,
+    # so rule 1 does not fire) makes exactly ONE call: no policy retry, no re-attempt.
+    activity = _seed(db)
+    fake = _client(_result(_fuller_blocks("Clean complete first attempt."),
+                           stop_reason="end_turn"))
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        await generate_fuller(db, str(activity.id))
+
+    assert fake.generate_coach_message.call_count == 1
+    row = _stored(db, activity)
+    assert row.is_fallback is False
