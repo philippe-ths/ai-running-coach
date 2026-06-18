@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Running Coach — Performance Audit (2026-06-18)</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --ink: #1c2430;
+    --muted: #5b6776;
+    --line: #e4e8ee;
+    --strong: #1f9d57;
+    --strong-bg: #e9f8ef;
+    --consider: #c98a00;
+    --consider-bg: #fcf3e0;
+    --dnt: #8a93a0;
+    --dnt-bg: #eef0f3;
+    --speed: #2563eb;
+    --memory: #7c3aed;
+    --processing: #0891b2;
+    --accent: #111826;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  header.masthead {
+    background: var(--accent);
+    color: #fff;
+    padding: 40px 28px 32px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header.masthead h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: -0.02em; }
+  header.masthead .sub { color: #aeb7c5; font-size: 15px; }
+  header.masthead .meta { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 13px; color: #c7cedb; }
+  header.masthead .meta b { color: #fff; font-weight: 600; }
+
+  main { padding: 28px; }
+  section { margin: 0 0 34px; }
+  h2.section-title {
+    font-size: 20px; letter-spacing: -0.01em; margin: 8px 0 4px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2.section-title .count {
+    font-size: 13px; font-weight: 600; color: var(--muted);
+    background: #fff; border: 1px solid var(--line); border-radius: 20px; padding: 2px 11px;
+  }
+  .section-blurb { color: var(--muted); font-size: 14px; margin: 0 0 16px; max-width: 760px; }
+
+  /* Summary / exec */
+  .panel {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px 24px; margin-bottom: 18px;
+  }
+  .panel h3 { margin: 0 0 10px; font-size: 16px; }
+  .scorecards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 4px 0 0; }
+  .scorecard { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: #fff; }
+  .scorecard .n { font-size: 30px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+  .scorecard .l { font-size: 12.5px; color: var(--muted); margin-top: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .scorecard.s .n { color: var(--strong); }
+  .scorecard.c .n { color: var(--consider); }
+  .scorecard.d .n { color: var(--dnt); }
+
+  ul.tight { margin: 8px 0 0; padding-left: 18px; }
+  ul.tight li { margin: 5px 0; }
+  .dim-split { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .dim-split .pill { font-size: 12.5px; }
+
+  /* Filters */
+  .filters {
+    position: sticky; top: 0; z-index: 5;
+    background: rgba(246,247,249,0.92); backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--line);
+    padding: 12px 28px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  }
+  .filters .lbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 2px; }
+  .fbtn {
+    border: 1px solid var(--line); background: #fff; color: var(--ink);
+    font-size: 13px; padding: 5px 12px; border-radius: 20px; cursor: pointer; font-weight: 500;
+  }
+  .fbtn[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .fbtn.sep { margin-left: 10px; }
+
+  /* Cards */
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--dnt);
+    border-radius: 10px; padding: 18px 20px; margin-bottom: 14px;
+  }
+  .card.r-strong { border-left-color: var(--strong); }
+  .card.r-consider { border-left-color: var(--consider); }
+  .card.r-do_not_touch { border-left-color: var(--dnt); }
+  .card .top { display: flex; align-items: flex-start; gap: 12px; }
+  .card .idx { font-size: 12px; font-weight: 700; color: var(--muted); padding-top: 2px; min-width: 30px; }
+  .card h4 { margin: 0; font-size: 16px; letter-spacing: -0.01em; flex: 1; }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 12px 42px; }
+  .badge {
+    font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 6px; border: 1px solid transparent;
+    text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .badge.speed { color: var(--speed); background: #eaf1fe; }
+  .badge.memory { color: var(--memory); background: #f1eafe; }
+  .badge.processing { color: var(--processing); background: #e4f6fb; }
+  .badge.conf-high { color: #166534; background: #e7f6ec; }
+  .badge.conf-medium { color: #92600a; background: #fdf2dd; }
+  .badge.conf-low { color: #9a3412; background: #fdeadf; }
+  .badge.effort { color: #374151; background: #eef0f3; }
+  .badge.verified { color: #fff; background: var(--strong); }
+  .pill {
+    font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 6px;
+  }
+  .pill.strong { color: var(--strong); background: var(--strong-bg); }
+  .pill.consider { color: var(--consider); background: var(--consider-bg); }
+  .pill.do_not_touch { color: #4b5563; background: var(--dnt-bg); }
+
+  .card .body { margin-left: 42px; }
+  .loc { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; color: #334155;
+    background: #f3f5f8; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin: 0 0 12px;
+    word-break: break-all; }
+  .field { margin: 9px 0; font-size: 14px; }
+  .field .k { font-weight: 700; color: var(--accent); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 2px; }
+  .field code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; background: #f3f5f8; padding: 1px 5px; border-radius: 4px; }
+  .field.fix .k { color: var(--strong); }
+  .field.why { background: #fafbfc; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+
+  footer { padding: 26px 28px 60px; color: var(--muted); font-size: 13px; }
+  footer .wrap { border-top: 1px solid var(--line); padding-top: 18px; }
+  a.toplink { color: var(--speed); text-decoration: none; font-size: 13px; }
+  .hidden { display: none !important; }
+
+  @media print {
+    .filters { display: none; }
+    header.masthead { background: #fff; color: #000; border-bottom: 2px solid #000; }
+    header.masthead .sub, header.masthead .meta, header.masthead .meta b { color: #333; }
+    .card { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="wrap">
+    <h1>Running Coach — Performance Audit</h1>
+    <div class="sub">Speed, memory, and processing efficiency. Backend + frontend.</div>
+    <div class="meta">
+      <span><b>Date:</b> 2026-06-18</span>
+      <span><b>Scope:</b> performance only (not correctness / security / style)</span>
+      <span><b>Branch:</b> main</span>
+      <span><b>Findings:</b> 35 across 6 dimensions</span>
+    </div>
+  </div>
+</header>
+
+<nav class="filters">
+  <span class="lbl">Rating</span>
+  <button class="fbtn r-filter" data-r="all" aria-pressed="true">All</button>
+  <button class="fbtn r-filter" data-r="strong" aria-pressed="false">Strong</button>
+  <button class="fbtn r-filter" data-r="consider" aria-pressed="false">Worth considering</button>
+  <button class="fbtn r-filter" data-r="do_not_touch" aria-pressed="false">Do not touch</button>
+  <span class="lbl sep">Dimension</span>
+  <button class="fbtn d-filter" data-d="all" aria-pressed="true">All</button>
+  <button class="fbtn d-filter" data-d="speed" aria-pressed="false">Speed</button>
+  <button class="fbtn d-filter" data-d="memory" aria-pressed="false">Memory</button>
+  <button class="fbtn d-filter" data-d="processing" aria-pressed="false">Processing</button>
+</nav>
+
+<main>
+  <div class="wrap">
+
+    <section id="summary">
+      <div class="panel">
+        <h3>Executive summary</h3>
+        <p class="section-blurb" style="max-width:820px">
+          The app is in good shape for its stated scale (a single recreational runner). There are no hot-path
+          disasters: the analysis pipeline is bounded per activity, the read-time learning loop is windowed by
+          design (#167 holds up), and the frontend polling loops are correctly bounded. The performance debt that
+          exists is concentrated in two places: <b>missing database indexes</b> on the most-queried table, and
+          <b>over-fetching</b> (full ORM rows and large JSON blobs pulled for reads that need a few scalars). Most
+          fixes are small, self-contained, and grow in value as activity history accumulates.
+        </p>
+        <div class="scorecards">
+          <div class="scorecard s"><div class="n">12</div><div class="l">Strong</div></div>
+          <div class="scorecard c"><div class="n">15</div><div class="l">Worth considering</div></div>
+          <div class="scorecard d"><div class="n">8</div><div class="l">Do not touch</div></div>
+          <div class="scorecard"><div class="n">8</div><div class="l">Independently verified</div></div>
+        </div>
+        <div class="dim-split">
+          <span class="pill" style="background:#eaf1fe;color:var(--speed)">Speed: 14</span>
+          <span class="pill" style="background:#f1eafe;color:var(--memory)">Memory: 8</span>
+          <span class="pill" style="background:#e4f6fb;color:var(--processing)">Processing: 13</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>If you do nothing else, do these three</h3>
+        <ul class="tight">
+          <li><b>Add the composite index on <code>activities(user_id, start_date, is_deleted)</code></b> (S1). Two
+            independent auditors found this separately. Every read-time path scans this table, and there is no index
+            on <code>user_id</code> or <code>start_date</code> today. One migration, zero code change, benefit grows
+            with history.</li>
+          <li><b>Add the FK index on <code>activity_streams(activity_id)</code></b> (S2). Streams are always fetched
+            by this column and it was never indexed. One migration.</li>
+          <li><b>Stop shipping <code>raw_summary</code> and full streams where they are not used</b> (S8, S9, S12).
+            The activity list returns the full Strava JSON blob per item, the model never defers it, and the detail
+            page dumps every stream into the SSR HTML behind no env guard.</li>
+        </ul>
+      </div>
+
+      <div class="panel">
+        <h3>Scale assumptions behind every impact estimate</h3>
+        <p class="section-blurb" style="margin:0">
+          Single-user MVP, one recreational runner: history is hundreds to low-thousands of activities accumulated
+          over years; per-activity stream length is ~1 Hz, so ~1,000–7,000 samples for a typical run; Postgres; one
+          RQ worker. A loop over a 60-point downsampled view is not a problem; a loop over every raw sample on every
+          read might be. "Grows with history" is the recurring theme: several findings are noise today and material
+          at a year or two of daily running.
+        </p>
+      </div>
+
+      <div class="panel">
+        <h3>Method &amp; trust</h3>
+        <p class="section-blurb" style="margin:0">
+          Produced by six parallel auditors, each scoped to a non-overlapping dimension (analysis-pipeline compute,
+          coach read-time assembly, DB access patterns, background-job throughput, stream/memory footprint, frontend
+          rendering). Every finding was required to cite <code>file:line</code> read from the actual code, not the
+          docs. The eight highest-leverage "strong" findings were then re-verified by hand against the source; all
+          eight matched exactly, which is why the remaining findings carry credibility. Findings the author
+          personally re-read carry a <span class="badge verified">verified</span> badge. This is an
+          <em>Investigate</em>-modality report: it recommends scoped changes, it does not make them. Per the project
+          performance-profiling discipline, any of these that gets implemented should be anchored to a baseline
+          measurement and a regression test, not a round-number threshold.
+        </p>
+      </div>
+    </section>
+
+    <section id="strong">
+      <h2 class="section-title">Strong <span class="count">12 findings</span></h2>
+      <p class="section-blurb">Clear, well-scoped performance wins with real impact at this scale. Low correctness
+        risk. Worth filing as issues.</p>
+      <div id="cards-strong"></div>
+    </section>
+
+    <section id="consider">
+      <h2 class="section-title">Worth considering <span class="count">15 findings</span></h2>
+      <p class="section-blurb">Real inefficiencies, but with a tradeoff, marginal/conditional impact at current
+        scale, or a fix that touches a sensitive path. Good candidates to batch into a single cleanup pass.</p>
+      <div id="cards-consider"></div>
+    </section>
+
+    <section id="do_not_touch">
+      <h2 class="section-title">Do not touch <span class="count">8 findings</span></h2>
+      <p class="section-blurb">Things that look like performance problems or tempting optimizations but should be
+        left alone: intentional design, structurally bounded cost, premature for this scale, or a fix that trades a
+        microsecond for a correctness risk. Recorded so a future contributor does not "fix" them.</p>
+      <div id="cards-do_not_touch"></div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    Generated from a 6-agent performance audit, 2026-06-18. Findings are candidate scoped issues, not applied
+    changes. Impact figures are order-of-magnitude estimates against the stated single-user scale, not measured
+    benchmarks. <a class="toplink" href="#summary">Back to top ↑</a>
+  </div>
+</footer>
+
+<script id="findings-data" type="application/json">
+[
+  {
+    "id": "S1", "rating": "strong", "dimension": "speed", "confidence": "high", "effort": "S", "verified": true,
+    "title": "Add a composite index on activities(user_id, start_date, is_deleted)",
+    "loc": "backend/app/models/activity.py:19,22 · readiness.py:202-221 · trends.py:205-243 · coach/context.py:714,802,891 · coach/retrieval.py:147-217",
+    "problem": "activities.user_id and start_date have no index (only block_id is indexed). A FK constraint does NOT create an index in Postgres. Every hot read path filters (user_id, is_deleted) and orders by start_date DESC with a LIMIT: readiness (2 queries/detail render), trends (2-3/dashboard), and 6+ coach context sub-builders per report. Without the index each is a full table scan filtered in memory.",
+    "evidence": "Confirmed by hand: activity.py:19 declares user_id with no index=True; line 22 same for start_date. grep over alembic/versions finds create_index only for block_id, primary_activity_id, coach_chat_messages, strava_imports — none on activities(user_id,*). Found independently by the coach-readtime AND db-access auditors.",
+    "impact": "Bounded today (small dataset) but already a seq-scan on every coach report, every detail page, and every trends load — and it grows linearly with history. A runner with two years of daily runs (~700 rows) already pays it on every read. A composite (user_id, start_date) satisfies both the filter and the ORDER BY from one index range scan: O(N) → O(log N + k) on 8+ query sites.",
+    "fix": "One migration: op.create_index('ix_activities_user_start_deleted', 'activities', ['user_id', 'start_date', 'is_deleted']). No application code change — the ORM queries are already shaped to use it. Add index=True on the model column as documentation.",
+    "why": "Highest leverage single change in the audit. Found independently by two auditors. Fixes the dominant query pattern across three subsystems at once, zero code change, no correctness risk, benefit compounds with history."
+  },
+  {
+    "id": "S2", "rating": "strong", "dimension": "speed", "confidence": "high", "effort": "S", "verified": true,
+    "title": "Add the missing FK index on activity_streams(activity_id)",
+    "loc": "backend/app/models/activity_stream.py:14 · analysis/_orchestrator.py:181 · activity_queries.py:26-28",
+    "problem": "ActivityStream rows are ALWAYS fetched by activity_id, but the column was never indexed. Every analysis run and every detail page load scans the activity_streams table to gather one activity's streams.",
+    "evidence": "Confirmed by hand: activity_stream.py:14 declares activity_id with no index=True; no migration creates an index on the table. _orchestrator.py:181 does db.query(ActivityStream).filter(ActivityStream.activity_id == activity.id).all().",
+    "impact": "A runner with ~1,400 activities × ~4-8 stream types is ~6,000-11,000 rows. Each seq-scan is still fast at MVP scale but bites hardest on the backfill and reanalyze batch jobs, which issue this query for hundreds of activities in a row on the single worker.",
+    "fix": "One migration: op.create_index('ix_activity_streams_activity_id', 'activity_streams', ['activity_id']). Add index=True on the mapped_column.",
+    "why": "A canonical FK index omitted from the initial schema and never caught. One migration, zero code change, impact already real on batch paths."
+  },
+  {
+    "id": "S3", "rating": "strong", "dimension": "processing", "confidence": "high", "effort": "S", "verified": true,
+    "title": "Bound get_load_report (GET /api/trends/load) to MAX_WEEKS in SQL and project only needed columns",
+    "loc": "backend/app/services/training_load.py:117-138 · 62-70",
+    "problem": "get_load_report queries EVERY non-deleted activity with joinedload(Activity.metrics) and no date window, then discards anything older than 52 weeks in build_load_report. The full Activity row (including the raw_summary JSON blob) and a full DerivedMetric are materialized per activity, then thrown away beyond the cap. Only effort_score, name, start_date are used.",
+    "evidence": "Confirmed by hand: training_load.py:118-123 is db.query(Activity).options(joinedload(Activity.metrics)).filter(is_deleted==False).all() with no .filter(start_date >= ...). The 52-week cap (MAX_WEEKS) is applied only when building the chart, not the query.",
+    "impact": "Loads every activity's raw_summary (~5-20 KB JSONB each) just to drop most of it. At 500 activities that is 2.5-10 MB deserialized and discarded per request; unbounded as history grows past a year.",
+    "fix": "Add .filter(Activity.start_date >= now - timedelta(weeks=MAX_WEEKS)) before .all(); and replace the full ORM load with a column projection (select Activity.id, name, start_date, DerivedMetric.effort_score join ...). The 52-week cap is already the documented intent — just enforce it in the query.",
+    "why": "Removes both the unbounded scan and the wasted JSON deserialization with a small, safe, bounded change. The intent (52-week cap) already exists in code."
+  },
+  {
+    "id": "S4", "rating": "strong", "dimension": "processing", "confidence": "high", "effort": "S", "verified": true,
+    "title": "Vectorize the per-sample median filter in smooth_cadence",
+    "loc": "backend/app/services/analysis/smoothing.py:72-81",
+    "problem": "The NaN-aware rolling median is a Python for i in range(n) loop: per sample it slices a 7-wide window, strips NaNs, and calls np.median. For a 7,000-sample stream that is 7,000 iterations each paying Python→C dispatch overhead.",
+    "evidence": "Confirmed by hand: smoothing.py:72-81 is exactly that loop; the comment at 66-67 acknowledges scipy/loop and that only numpy is declared.",
+    "impact": "~20 ms per activity on the hot ingest path, dominated by dispatch not compute. On a bulk reanalyze of 1,000 activities, ~20 s cumulative for this stage alone.",
+    "fix": "np.lib.stride_tricks.sliding_window_view(cad_arr, MEDIAN_FILTER_WINDOW) → np.nanmedian(windows, axis=1), one C-level call. Pad boundaries with np.pad(mode='edge'). Pure numpy, no new dependency, no semantic change.",
+    "why": "O(n) Python loop (n up to 7,000) collapses to one vectorized call. Contained to one function, no new deps, no behavior change. Scales linearly on bulk reanalysis."
+  },
+  {
+    "id": "S5", "rating": "strong", "dimension": "processing", "confidence": "high", "effort": "S", "verified": true,
+    "title": "Replace the per-sample split-boundary loop with np.searchsorted",
+    "loc": "backend/app/services/analysis/splits.py:75-113 · 282-298",
+    "problem": "calculate_splits walks every stream sample in a Python loop to find km-split boundaries (distance[i] >= target). For a 7,000-sample stream that is up to 7,000 comparisons to find ~10-30 boundaries. The time-split loop at 282-298 is identical.",
+    "evidence": "Confirmed by hand: the comment at splits.py:73 literally says 'Optimization could be done with numpy searchsorted if data was guaranteed numpy arrays', then a plain for-loop follows at 75-80.",
+    "impact": "~7 ms per activity; ~7 s cumulative across a 1,000-activity reanalysis. Boundary detection is a single C call.",
+    "fix": "Build targets = np.arange(split_distance_m, total+step, step) and call np.searchsorted(distance_arr, targets) once for all boundary indices; slice numpy arrays for per-split means (np.mean) instead of sum()/len() on Python lists.",
+    "why": "A self-identified gap (the comment names the fix). Pure O(n) Python loop → one C call, self-contained, semantics unchanged."
+  },
+  {
+    "id": "S6", "rating": "strong", "dimension": "speed", "confidence": "high", "effort": "M", "verified": false,
+    "title": "Collapse the three sequential recent-training-summary queries in build_b_baseline into one",
+    "loc": "backend/app/services/coach/context.py:518-529 · trends.py:213",
+    "problem": "build_b_baseline issues three separate _query_activity_facts calls (7d, 28d, prev_28d windows), each a select(Activity).options(selectinload(Activity.metrics)) — that is 6 SQL statements (3 mains + 3 selectinload follow-ups). _summarize_period only reads four aggregates per window: count, sum(distance_m), sum(moving_time_s), sum(effort_score). The full Activity + metrics rows are materialized and discarded.",
+    "evidence": "context.py:518-529 makes the three calls; _summarize_period (578-584) reads only those scalars. The three windows are within a fixed 56-day span. Reported high-confidence by the coach-readtime auditor (not re-verified by hand).",
+    "impact": "6 SQL round-trips reduced to 1 aggregate, plus ~20 Activity + 20 DerivedMetric objects no longer materialized per context build. Compounds with the other sequential queries in the same synchronous report assembly.",
+    "fix": "Either one SQL GROUP BY over the 56-day window returning per-bucket aggregates, or one ORM query over 56 days split in Python (halves SQL count, drops selectinload from 6 round-trips to 2) keeping _summarize_period unchanged.",
+    "why": "Six round-trips for four scalars per window is structurally wasteful, the window is fixed, and the summaries are used nowhere else — so the change is localized. Mark M because it touches the _query_activity_facts contract."
+  },
+  {
+    "id": "S7", "rating": "strong", "dimension": "processing", "confidence": "high", "effort": "M", "verified": false,
+    "title": "Recompute the runner baseline once per reanalyze batch, not once per activity",
+    "loc": "backend/app/jobs/reanalyze_history.py:99-101 · analysis/_orchestrator.py:347-348",
+    "problem": "reanalyze_history_batch calls analyze() for up to REANALYZE_BATCH_SIZE (100) activities, and analyze() unconditionally calls _post_commit_baseline at the end. So the baseline — a multi-row 182-day window scan with selectinload — is recomputed 100 times per batch when only the final state is needed.",
+    "evidence": "_orchestrator.py:348 calls _post_commit_baseline on every analyze(); reanalyze_history.py:101 calls analyze() per activity in the loop. Reported high-confidence by the jobs-throughput auditor (not re-verified by hand).",
+    "impact": "~100 unnecessary baseline window scans per batch (each eager-loading metrics over ~26 weeks of activities) on the single worker — the heaviest redundant work in the batch path.",
+    "fix": "Add skip_baseline=True to analyze(), have the batch loop pass it, then call recompute_runner_baseline(db, user_id) once after the loop. Final result is identical to today's last-iteration recompute — no correctness change. Note: the per-activity recompute on the normal ingest path is correct and must stay (see D4).",
+    "why": "Clear O(batch_size) overhead on a DB-heavy op, structurally avoidable, scope bounded to a flag + one post-loop call, no correctness risk."
+  },
+  {
+    "id": "S8", "rating": "strong", "dimension": "memory", "confidence": "high", "effort": "S", "verified": true,
+    "title": "Stop returning raw_summary in the activity list payload",
+    "loc": "backend/app/schemas/activity.py:21 · backend/app/api/activities.py:160-179",
+    "problem": "raw_summary lives on ActivityBase, which ActivityRead inherits, so GET /activities ships the full Strava JSON blob for every activity. The home list renders only headline, distance, time, date — none from raw_summary. Only the single-activity detail page reads a few of its fields.",
+    "evidence": "Confirmed by hand: activity.py:21 raw_summary in ActivityBase; ActivityRead (line 28) inherits it; the list endpoint uses response_model=List[ActivityRead]. No frontend list component references raw_summary.",
+    "impact": "5-15 KB per activity × a 10+ item list = 50-150 KB of unused JSON serialized, transferred, and held per home-page load — the hottest read path.",
+    "fix": "Move raw_summary out of ActivityBase into a detail-only schema (ActivityDetailRead already exists). Pure schema split, no logic change.",
+    "why": "Zero-logic change moving one field. Eliminates the largest unnecessary serialization on the most-called endpoint, no correctness risk (list view never reads it)."
+  },
+  {
+    "id": "S9", "rating": "strong", "dimension": "memory", "confidence": "high", "effort": "M", "verified": false,
+    "title": "Mark Activity.raw_summary deferred=True (mirroring DerivedMetric.stream_view)",
+    "loc": "backend/app/models/activity.py:38 · derived_metric.py:51 · trends.py:234-245 · baseline.py:334-341",
+    "problem": "raw_summary is a JSON column with no deferred=True, so it is loaded by every ORM SELECT that materializes an Activity — including the trends ALL-range selectinload over full history, which never reads raw_summary. DerivedMetric.stream_view already uses deferred=True for exactly this reason.",
+    "evidence": "activity.py:38 raw_summary JSON, not deferred; derived_metric.py:51 stream_view is deferred=True. trends ActivityFact reads only scalars + metrics. Reported high-confidence by the memory auditor (the raw_summary over-fetch is hand-verified via S8; the deferral itself was not).",
+    "impact": "For ~700 activities on the ALL range, 3.5-10 MB of raw_summary held simultaneously and discarded. The baseline recompute applies the same pattern over its 182-day window after every analyze().",
+    "fix": "Add deferred=True to raw_summary; add undefer(Activity.raw_summary) to the few queries that need it (orchestrator, baseline, context, laps, splits). Low risk — a missed undefer triggers a lazy SELECT, not an error.",
+    "why": "Follows the project's own established pattern. Largest win on the trends ALL-range path (the one genuinely unbounded query). M only because the undefer call sites must be found."
+  },
+  {
+    "id": "S10", "rating": "strong", "dimension": "memory", "confidence": "high", "effort": "M", "verified": false,
+    "title": "Project columns instead of materializing full Activity ORM objects on the trends ALL range",
+    "loc": "backend/app/services/trends.py:213-252 · readiness.py:215-222",
+    "problem": "_query_activity_facts runs select(Activity).options(selectinload(Activity.metrics)) with NO date bound for the ALL range, materializing every non-deleted Activity ORM object (plus raw_summary). ActivityFact extracts ~13 scalar fields; the rest is discarded. readiness.py already does the right thing with a column-projection join.",
+    "evidence": "trends.py:234-245 materializes scalars().all() then builds ActivityFact per row; readiness.py:215-222 selects (Activity.start_date, DerivedMetric.effort_score) — no ORM object. Reported high-confidence by the memory auditor (not re-verified by hand).",
+    "impact": "~5-10 MB peak from ORM overhead + raw_summary blobs on the ALL range, discarded after the response. Grows with history.",
+    "fix": "Rewrite _query_activity_facts as a column projection over (Activity scalars + DerivedMetric.effort_score/effort/time_in_zones) with an outerjoin, building ActivityFact from the row tuple — the exact pattern readiness.py already uses.",
+    "why": "Reuses an in-repo proven pattern, makes the query immune to new Activity columns, and is the clearest memory win on the largest read window. Partly overlaps with S9 (deferral) — do them together."
+  },
+  {
+    "id": "S11", "rating": "strong", "dimension": "speed", "confidence": "high", "effort": "S", "verified": true,
+    "title": "Wrap SimpleChart in React.memo so scrubbing re-renders only the active chart",
+    "loc": "frontend/components/StreamCharts.tsx:55,259,297",
+    "problem": "scrubFraction state lives in the StreamCharts parent. Every onPointerMove calls setScrubFraction, re-rendering the parent and all N SimpleChart children. SimpleChart is a plain function with no React.memo, so all 4-6 charts re-run their render on every pixel of drag, even those whose scrub indicator did not move.",
+    "evidence": "Confirmed by hand: StreamCharts.tsx:55 is a plain function SimpleChart(...); the useMemo at 61 caches path geometry, but the JSX still re-executes for every chart on every pointer event.",
+    "impact": "Scrubbing on a 5-chart activity page fires 5 re-renders per pointer-move; at 60-120 events/s on a trackpad that is 300-600 render cycles/s. Visible jank on mid-range devices — the hottest interaction in the app.",
+    "fix": "const SimpleChart = React.memo(function SimpleChart(...) {...}). Optionally useCallback for the pointer handler. With path geometry already memoized, only the chart whose indicator changes updates.",
+    "why": "One-line fix, clear impact on the hottest interaction path, no tradeoff, correctness unchanged."
+  },
+  {
+    "id": "S12", "rating": "strong", "dimension": "speed", "confidence": "high", "effort": "S", "verified": true,
+    "title": "Gate the activity-detail debug dump behind an env var (it ships full streams in prod HTML)",
+    "loc": "frontend/app/activity/[id]/page.tsx:203-216",
+    "problem": "An always-rendered <details> block calls JSON.stringify(activity.streams, null, 2) and JSON.stringify(activity.raw_summary, null, 2) directly into the server-rendered HTML. The page is a force-dynamic server component, so this is in the SSR payload on every load, with no env guard — even though CoachReportPanel already gates its debug panel on NEXT_PUBLIC_SHOW_DEBUG_PANEL.",
+    "evidence": "Confirmed by hand: page.tsx:203 unconditional <details>; line 216 stringifies all streams, line 209 stringifies raw_summary. No env check. CoachReportPanel.tsx:24-26 shows the established gating pattern.",
+    "impact": "200-400 KB of extra JSON text in the HTML body per activity page (≈50-80 KB gzipped), plus the browser parsing and DOM-inserting a huge <pre> node before the user ever opens it. Pure waste in production.",
+    "fix": "const SHOW_DEBUG_PANEL = process.env.NEXT_PUBLIC_SHOW_DEBUG_PANEL === 'true'; wrap the <details> in {SHOW_DEBUG_PANEL && (...)}. Removes it from production builds entirely. Matches CoachReportPanel.",
+    "why": "One condition around existing code; unconditional payload bloat on every prod page load; the gating pattern already exists in the codebase."
+  },
+
+  {
+    "id": "C1", "rating": "consider", "dimension": "processing", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Vectorize stream_view._bucket_means (drop the per-element isinstance check and list copy)",
+    "loc": "backend/app/services/analysis/stream_view.py:56-72 · 115-145",
+    "problem": "_bucket_means runs 5×/activity (one per channel) with [v for v in values[start:end] if isinstance(v,(int,float))] — a Python isinstance check on every element of every one of 60 buckets. The time channel also does a redundant full list copy ([t for t in time[:common_len]]) before bucketing.",
+    "evidence": "stream_view.py:70 isinstance comprehension inside the bucket loop; line 115 copies the whole time array into a new list.",
+    "impact": "~1-2 ms per activity at single-activity scale; the isinstance check runs ~35,000 times for a 7,000-sample stream. Small alone, compounds on bulk reanalysis.",
+    "fix": "Convert each channel to a numpy float array once (np.asarray) before bucketing and use np.nanmean(arr[start:end]); drop the redundant time list copy.",
+    "why": "Trivial fix, modest but real gain, classic 'isinstance in a tight loop' overhead. Lower impact than S4/S5, so worth-considering rather than strong."
+  },
+  {
+    "id": "C2", "rating": "consider", "dimension": "speed", "confidence": "medium", "effort": "M", "verified": false,
+    "title": "Fuse analyze()'s three history queries via selectinload(Activity.metrics)",
+    "loc": "backend/app/services/analysis/_orchestrator.py:175-178,273-277 · _training_context.py:20-38",
+    "problem": "analyze() makes three round-trips that overlap on recent history: (1) last-20 Activity query, (2) a separate DerivedMetric query for those 20, (3) build_training_context's own 7-day window query. (2) is fusable into (1) with selectinload; (1) and (3) overlap.",
+    "evidence": "_orchestrator.py:175 loads 20 activities; :273 re-queries their metrics by id IN (...); _training_context.py:22-35 issues a third independent 7-day query with its own selectinload.",
+    "impact": "3 round-trips per analyze() on the hot ingest path (~30-45 ms over a network DB); ~30-45 s across a 1,000-activity reanalysis.",
+    "fix": "Load history with selectinload(Activity.metrics) and pass the loaded objects to generate_flags and build_training_context instead of re-querying. Caveat: build_training_context's window is time-based (7d) while history is count-based (20), so reuse needs a coverage check.",
+    "why": "Real saving but the count-vs-time window mismatch means it touches the analyze()/_training_context contract — medium confidence, medium effort. Not as clean as the index/projection wins."
+  },
+  {
+    "id": "C3", "rating": "consider", "dimension": "processing", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Retrieve beliefs once per context build, not twice",
+    "loc": "backend/app/services/coach/context.py:555,919 · belief_store.py:136",
+    "problem": "build_believed_facts and _build_preference_profile each call retrieve_beliefs(db, user_id) independently, issuing the same CoachingContext query twice per report. The _build_preference_profile docstring even says it 'reuses the belief retrieval', but the code re-queries.",
+    "evidence": "belief_store.py:136 db.query(CoachingContext).filter(user_id==...).all(); triggered at context.py:555 and again at :919.",
+    "impact": "One redundant round-trip per report generation. Bounded table (<= 8 rows returned), so small absolute cost — pure waste.",
+    "fix": "Call retrieve_beliefs once in build_b_baseline and pass the result into both sub-builders via a parameter.",
+    "why": "Genuine duplicate, trivially fixable, but low absolute cost. Bundle with C4 into one cleanup."
+  },
+  {
+    "id": "C4", "rating": "consider", "dimension": "processing", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Compute _recent_pain_scores_any once per context build, not twice",
+    "loc": "backend/app/services/coach/context.py:786,877,827",
+    "problem": "_build_calibration_context and _build_salience_context both call _recent_pain_scores_any with identical args (same user, same 42-day window, same filter), issuing the same CheckIn JOIN Activity query twice per context pack.",
+    "evidence": "context.py:786 and :877 both call it; the query body (827-856) is identical both times.",
+    "impact": "One redundant round-trip per report. Small (sparse check-ins, 50-row cap), trivially removable.",
+    "fix": "Compute pain_scores_any once in build_b_baseline and thread it into both callers (both already accept a list).",
+    "why": "Same shape as C3 — real duplicate, low impact, batch them together."
+  },
+  {
+    "id": "C5", "rating": "consider", "dimension": "memory", "confidence": "medium", "effort": "S", "verified": false,
+    "title": "Project columns in _comparable_bucket_drifts instead of joinedloading 60 full rows",
+    "loc": "backend/app/services/coach/context.py:801-823",
+    "problem": "Fetches up to 60 full Activity ORM objects with joinedload(Activity.metrics) but the loop reads only 4 values per row (average_temp from raw_summary, effort, is_hilly, hr_drift). The large JSONB DerivedMetric columns (flags, time_in_zones, interval_structure, stream_view) are all materialized then discarded.",
+    "evidence": "context.py:801-814 issues the joinedload with .limit(60); the loop at 817-823 touches only those four fields.",
+    "impact": "60 full Activity + 60 DerivedMetric objects (with large JSONB) in the identity map per report, all discarded after the bucket filter. ~95% heap reduction possible via projection. Absolute wall-clock cost modest at 60 rows.",
+    "fix": "Query (DerivedMetric.hr_drift, DerivedMetric.effort, DerivedMetric.is_hilly, Activity.raw_summary) with a join and destructure tuples in the loop.",
+    "why": "Hygiene + a hedge against history growth, and it touches the same query site as S1. Medium confidence on the absolute payoff."
+  },
+  {
+    "id": "C6", "rating": "consider", "dimension": "memory", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Defer CoachReport.context_pack and raw_llm_response; the retrieval scans never need them",
+    "loc": "backend/app/services/coach/retrieval.py:146-275 · models/coach_report.py:36-37",
+    "problem": "fetch_prior_digests / fetch_prior_commitments / fetch_recent_user_digests load full CoachReport rows (limit 50) including context_pack (the whole assembled pack, ~10-50 KB) and raw_llm_response — but only use report, digest, is_fallback, created_at, activity_id, schema_version.",
+    "evidence": "coach_report.py:36-37: context_pack and raw_llm_response are not deferred; retrieval.py:163 scans up to 50 rows; _resolve_digest touches only digest/report.",
+    "impact": "Up to ~1-3 MB of JSON deserialized and discarded per non-cached coach generation. Bounded by the 50-row cap; payoff grows with report history.",
+    "fix": "Declare context_pack and raw_llm_response deferred=True on the model, and/or add load_only(...) to the three queries.",
+    "why": "Structurally wasteful, easy fix (deferred=True on two columns), but coach generation is already dominated by LLM latency so the user-visible win is small."
+  },
+  {
+    "id": "C7", "rating": "consider", "dimension": "speed", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Avoid the second UserProfile fetch on the activity-detail endpoint",
+    "loc": "backend/app/api/activities.py:205-210 · readiness.py:188",
+    "problem": "GET /api/activities/{id} loads the Activity, then issues a standalone UserProfile query for hr_zones_source, and build_readiness queries UserProfile again internally — two avoidable round-trips per detail render.",
+    "evidence": "activities.py:206 queries UserProfile after get_activity(); readiness.py:188 queries it again inside build_readiness.",
+    "impact": "Two indexed PK lookups on a single-row table per detail load. Negligible at single-user scale; matters under Phase 2 multi-user load.",
+    "fix": "Load the profile once and pass it into build_readiness, or eager-load via the activity's user relationship.",
+    "why": "Real redundancy but the cost is two PK lookups on a one-row table today. Worth noting for Phase 2; not worth churn on a sensitive read path now."
+  },
+  {
+    "id": "C8", "rating": "consider", "dimension": "processing", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Use SQL COUNT instead of materializing rows in count_eligible",
+    "loc": "backend/app/jobs/reanalyze_history.py:69-71,117 · backfill_streams.py:64-66,103",
+    "problem": "Both count_eligible implementations run the full eligible query, materialize every matching Activity ORM row (each with raw_summary), and call len(). No field is read — only the count. reanalyze calls it twice per batch.",
+    "evidence": "reanalyze_history.py:71 len(...scalars().all()); same at backfill_streams.py:66.",
+    "impact": "Worst case is the first call on a fresh trigger when all activities are eligible: ~1,000 rows materialized just to count. Steady state (0-20 eligible) is negligible.",
+    "fix": "db.execute(select(func.count()).select_from(_eligible_stmt().subquery())).scalar_one() — pushes COUNT to Postgres, returns one int.",
+    "why": "One-liner, the pattern is wrong regardless of scale, but the pain only shows on a bulk re-analysis trigger over a large history."
+  },
+  {
+    "id": "C9", "rating": "consider", "dimension": "speed", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Reuse the module-level Redis connection in the scheduler helpers",
+    "loc": "backend/app/jobs/process_new_activity.py:418-442 · reanalyze_history.py:131-134 · backfill_streams.py:116-119",
+    "problem": "Every _schedule_* helper creates a fresh Redis.from_url(REDIS_URL) connection (new socket, auth, teardown) rather than reusing the module-level redis_conn from core/queue.py. _schedule_block_complete runs on every ingested activity.",
+    "evidence": "process_new_activity.py:421 Scheduler(connection=Redis.from_url(...)); same at :442, reanalyze:134, backfill:119. core/queue.py:7 redis_conn is unused by these callers.",
+    "impact": "~1 ms connection churn per scheduling action; dwarfed by the Strava/Anthropic HTTP calls on the same job. Not a bottleneck at low volume.",
+    "fix": "Import redis_conn from app.core.queue and pass Scheduler(connection=redis_conn) in each helper.",
+    "why": "Trivial hygiene fix (one import, four call sites); small impact at current scale — do it when touching nearby code."
+  },
+  {
+    "id": "C10", "rating": "consider", "dimension": "processing", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Drop the redundant primary-activity query in _resolve_completed_block",
+    "loc": "backend/app/jobs/process_new_activity.py:341-359",
+    "problem": "Loads all block members (.all()), finds the last via Python max(), then issues a separate query to load the primary by id — even though the primary is already in the loaded members list.",
+    "evidence": "process_new_activity.py:341 loads members; :359 db.query(Activity).filter(id==block.primary_activity_id).one() despite members already containing it.",
+    "impact": "One always-redundant round-trip per block-complete event. Blocks are typically 1-2 members, so minor.",
+    "fix": "primary = next(m for m in members if m.id == block.primary_activity_id) — eliminates the second query.",
+    "why": "Clear micro-inefficiency, safe one-line fix, but tiny practical impact at expected block sizes."
+  },
+  {
+    "id": "C11", "rating": "consider", "dimension": "memory", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Stop fetching/storing the 'temp' stream — nothing consumes it",
+    "loc": "backend/app/services/strava_ingestion/ingestion.py:83-95 · analysis/_orchestrator.py:181-182",
+    "problem": "Ingestion fetches 11 stream types including 'temp', and the orchestrator loads all streams into streams_dict, but no analysis stage reads streams_dict['temp'] — temperature comes from the raw_summary average_temp scalar.",
+    "evidence": "ingestion.py:92 lists 'temp' in _STREAM_TYPES; grep for streams_dict['temp']/.get('temp') across analysis returns zero hits.",
+    "impact": "~3,600 ints (~130 KB) per activity materialized on every analyze() and detail view, plus a wasted DB row and a wasted Strava stream call per activity.",
+    "fix": "Remove 'temp' from _STREAM_TYPES; optionally a one-off cleanup of existing temp rows. No analysis change.",
+    "why": "Low-risk removal, modest waste at MVP scale — but confirm no near-term feature plans to use the per-sample temp series before deleting."
+  },
+  {
+    "id": "C12", "rating": "consider", "dimension": "memory", "confidence": "high", "effort": "M", "verified": false,
+    "title": "Don't joinedload all 11 streams on every chat turn just to compute splits",
+    "loc": "backend/app/services/coach/chat.py:197 · activity_queries.py:28",
+    "problem": "The streaming chat endpoint joinedloads every stream array per turn solely to call calculate_splits(), which needs only distance, velocity_smooth, heartrate, cadence, altitude, watts. Streams are not cached between turns.",
+    "evidence": "chat.py:197 joinedload(Activity.streams); :211 calculate_splits(activity.streams, ...). The full ~1.5 MB payload reloads every turn.",
+    "impact": "~1.5 MB reloaded per chat turn for a 1-hour run; repeated every turn of a multi-turn session on what should be a low-latency streaming endpoint.",
+    "fix": "Either read splits from DerivedMetric (already computed during analysis) or query only the six stream types calculate_splits needs.",
+    "why": "Straightforward, but bounded to single-activity chat sessions at MVP scale. The detail endpoint's full-stream load is justified (the chart needs it); chat is the softer target."
+  },
+  {
+    "id": "C13", "rating": "consider", "dimension": "processing", "confidence": "medium", "effort": "S", "verified": false,
+    "title": "Throttle CoachChat streaming updates to avoid a full Markdown re-parse per token",
+    "loc": "frontend/components/CoachChat.tsx:134-135,316",
+    "problem": "Each decoded SSE chunk calls setStreamingText(fullResponse) with the entire accumulated string, re-rendering <Markdown>{streamingText}</Markdown>. react-markdown re-parses the whole (growing) string on every chunk: O(length) per chunk, tens of chunks/s.",
+    "evidence": "CoachChat.tsx:134-135 fullResponse += chunk; setStreamingText(fullResponse); :316 renders Markdown of it with no memoization.",
+    "impact": "An ~800-word response at ~20 chunks/s does ~80 full re-parses of an ever-growing string. Perceptible jitter on mobile during the one moment the user is actively watching. Bounded to the streaming window.",
+    "fix": "Batch updates with requestAnimationFrame or a ~50 ms timer (~20 fps), or render plain whitespace-pre-wrap text during stream and swap to <Markdown> on completion.",
+    "why": "Real but only during active streaming; the plain-text-during-stream option changes the visual reveal slightly, so it's a UX call. Medium confidence."
+  },
+  {
+    "id": "C14", "rating": "consider", "dimension": "speed", "confidence": "high", "effort": "M", "verified": false,
+    "title": "Serve the existing 60-point stream_view to the chart instead of full 1Hz arrays",
+    "loc": "backend/app/schemas/detail.py:92 · analysis/stream_view.py · frontend/components/StreamCharts.tsx:257",
+    "problem": "The detail endpoint sends all raw 1Hz stream arrays (up to ~57,600 floats for an 8-stream 2-hour run); StreamCharts scales them into a 600px SVG viewBox, where 60 vs 3,600 points look identical. The backend already computes and stores a bounded <=60-point stream_view on DerivedMetric (A2a) but never exposes it via the API.",
+    "evidence": "detail.py:92 streams: List[ActivityStreamRead] = [] carries raw arrays; grep 'stream_view' in backend/app/schemas returns nothing; StreamCharts.tsx:257 scales raw streams into CHART_WIDTH=600.",
+    "impact": "~200-800 KB per detail response (≈40-150 KB gzipped) plus the full arrays held in JS heap. Small on fast desktop, measurable on mobile/slow links. Infrastructure to avoid it already exists.",
+    "fix": "Expose DerivedMetric.stream_view in ActivityDetailRead (null when absent); use it in StreamCharts when present, fall back to raw streams otherwise.",
+    "why": "Real architectural waste with the avoidance infra already built, but the chart correctness + scrubbing path depends on raw streams today, so it's M and conditional on connection speed. Cheaper the sooner it's done."
+  },
+  {
+    "id": "C15", "rating": "consider", "dimension": "speed", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Dedup the two concurrent coach-report fetches on the activity page",
+    "loc": "frontend/components/CoachChat.tsx:61 · CoachReportPanel.tsx:71",
+    "problem": "CoachChat fetches /coach-report on mount for next_steps starter chips; CoachReportPanel fetches the identical URL on mount for the report. Both render on every detail page, so two identical requests fire concurrently per load.",
+    "evidence": "Both call /api/activities/{id}/coach-report?generate=false&force=false in a mount useEffect with no shared state.",
+    "impact": "Two proxy round-trips (Vercel→Railway) instead of one per page load; ~50-200 ms duplicate latency hidden behind parallel loading, plus unnecessary backend load.",
+    "fix": "Lift report state to the page and pass next_steps to CoachChat as a prop, or add a small client cache keyed on activity id.",
+    "why": "Real duplication, simple to fix, but minor impact at this scale and it needs a small prop-interface refactor."
+  },
+
+  {
+    "id": "D1", "rating": "do_not_touch", "dimension": "processing", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Do NOT vectorize the stops.py moving/stop-segmentation loop",
+    "loc": "backend/app/services/analysis/stops.py:28-59",
+    "problem": "analyze_stops walks the moving stream in a Python loop to segment run/stop boundaries — looks like an O(n) loop begging for numpy.",
+    "evidence": "stops.py:28 for i, is_moving in enumerate(moving): ... builds one event per contiguous stopped segment.",
+    "impact": "O(n) but the per-iteration body is a single boolean test; ~0.5 ms at 7,000 samples; stops are rare (0-5/run) so the inner branch almost never runs.",
+    "fix": "Leave it. A np.diff-on-boolean approach saves ~0.4 ms and buys the complexity of contiguous-run index arithmetic plus careful start/end edge-case retesting.",
+    "why": "Near-zero work per step; the only vectorizable part is boundary detection worth ~0.4 ms. At this scale that is noise, and the correctness surface (stop boundaries) isn't worth disturbing."
+  },
+  {
+    "id": "D2", "rating": "do_not_touch", "dimension": "processing", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Do NOT numpy-ify baseline.compute_trend's least-squares",
+    "loc": "backend/app/services/analysis/baseline.py:126-173",
+    "problem": "compute_trend uses Python generator sums for a least-squares slope — looks like an O(n) loop to replace with np.polyfit.",
+    "evidence": "baseline.py:143-144 sum((x-x_mean)*(y-y_mean) ...) over zip(xs, values).",
+    "impact": "n is the bucket size over a 26-week window: ~4-80 activities, typically 4-20. Sub-millisecond; numpy's per-call allocation overhead can exceed the loop itself at this size.",
+    "fix": "Leave it. The input is handful-sized; the Python loop is clear, correct, and < 0.1 ms.",
+    "why": "The loop iterates over baseline buckets (tens of values), not stream samples. numpy would add complexity with no measurable benefit at this size."
+  },
+  {
+    "id": "D3", "rating": "do_not_touch", "dimension": "speed", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Do NOT merge build_readiness's two queries into one",
+    "loc": "backend/app/services/readiness.py:201-222",
+    "problem": "build_readiness fires a MIN(start_date) aggregate (all history) then a windowed (182-day) fetch of (start_date, effort_score). Tempting to fold the MIN into the windowed query.",
+    "evidence": "readiness.py:201-206 MIN(start_date) unbounded; :215-222 bounded to READINESS_WINDOW_DAYS=182. Different scopes by design.",
+    "impact": "Merging is a correctness trap: history_span_days must cover ALL history to set warming_up correctly, while the load series must stay windowed to keep per-read cost flat (#167).",
+    "fix": "Leave as-is. Once S1's composite index lands, both queries benefit automatically.",
+    "why": "Reading the all-time MIN from the bounded window would mislabel a long-history runner as warming_up; removing the window re-introduces an unbounded scan. The two-query split holds both invariants intentionally."
+  },
+  {
+    "id": "D4", "rating": "do_not_touch", "dimension": "processing", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Do NOT debounce/skip the per-activity baseline recompute on the normal ingest path",
+    "loc": "backend/app/services/analysis/_orchestrator.py:121-138,347-348",
+    "problem": "The baseline recompute runs after every analyze(), including normal one-at-a-time ingest, scanning up to 182 days with selectinload — looks expensive to do per activity.",
+    "evidence": "_orchestrator.py:348 unconditional _post_commit_baseline; baseline.py:47-55 comment documents the window-cap invariant.",
+    "impact": "On the ingest path (one activity per run) the 182-day window is O(1) by design (#167) — it does not grow with history. It is one selectinload query.",
+    "fix": "Leave the ingest path alone. The only legitimate target is the BATCH path (see S7), where the same scan runs 100× per batch.",
+    "why": "The cost is bounded by BASELINE_COMPARISON_WINDOW_DAYS by design; skipping it would stale the M4/M9 calibration context. Optimize the batch loop (S7), not the per-event path."
+  },
+  {
+    "id": "D5", "rating": "do_not_touch", "dimension": "speed", "confidence": "high", "effort": "M", "verified": false,
+    "title": "Do NOT rewrite the per-candidate Exchange lookup in _find_joinable_block as a join (yet)",
+    "loc": "backend/app/services/blocks.py:96-111",
+    "problem": "Loads candidate blocks in one query, then issues one Exchange query per candidate to check closed-state — a textbook N+1.",
+    "evidence": "blocks.py:96-104 one Block query; :107 db.query(Exchange).filter(block_id==block.id).first() inside the loop.",
+    "impact": "Candidates within the 30-minute window for a single runner are ~1-3 (a brick or same-day double). Exchange.block_id is UNIQUE-indexed, so each extra query is an index seek, not a scan. Runs at ingestion only, not on reads.",
+    "fix": "Leave it. A join would add complexity to a correctness-critical block-assignment path for a microsecond win.",
+    "why": "Structurally bounded candidate set + indexed seeks. The N+1 is real but the impact is microseconds on a non-read path, and the assignment invariant is delicate."
+  },
+  {
+    "id": "D6", "rating": "do_not_touch", "dimension": "speed", "confidence": "high", "effort": "M", "verified": false,
+    "title": "Do NOT restructure polling's all-accounts fetch now (it's a Phase 2 concern)",
+    "loc": "backend/app/jobs/polling.py:35",
+    "problem": "poll_for_new_activities queries all StravaAccount rows unscoped and loops sequential Strava HTTP calls. At multi-user scale this would stall the single worker for N× the per-call latency each cycle.",
+    "evidence": "polling.py:35 db.query(StravaAccount).all() with no limit; :42 sequential awaited HTTP call per account.",
+    "impact": "Zero at single-user scale (always one row, one call). Only a problem at N users — which ADR 0005/0006 explicitly defers to Phase 2 (and 0006 drops polling for user-triggered self-healing anyway).",
+    "fix": "No change now. In Phase 2, enqueue one short per-account job rather than one monolithic fan-out.",
+    "why": "Correct and zero-impact at the stated scale; the failure mode only exists in a future architecture that itself plans to remove polling. Fixing it now is premature."
+  },
+  {
+    "id": "D7", "rating": "do_not_touch", "dimension": "memory", "confidence": "high", "effort": "L", "verified": false,
+    "title": "Do NOT move the detail-view cadence smoothing out of the Pydantic validators",
+    "loc": "backend/app/schemas/detail.py:103-176",
+    "problem": "Two model_validator(after) hooks run per ActivityDetailRead: cadence normalization may double the array, and smoothed-cadence generation runs smooth_cadence over the full arrays and appends a new full-length stream — looks like heavy work to precompute and store instead.",
+    "evidence": "detail.py:121-132 doubles cadence elements; 164-168 generates a full-length smoothed stream appended to self.streams.",
+    "impact": "~200-300 KB extra array per detail request, GC'd right after the response. One activity, one request at a time.",
+    "fix": "Leave it. Precomputing would require a new analysis stage, another deferred column, and a backfill migration for a per-request allocation that is already the smallest memory concern in scope.",
+    "why": "Bounded, immediately freed cost. The stream_view already covers the coach's needs; these validators serve the chart. Storing it is L-effort for negligible benefit."
+  },
+  {
+    "id": "D8", "rating": "do_not_touch", "dimension": "speed", "confidence": "high", "effort": "S", "verified": false,
+    "title": "Do NOT touch the CoachReportPanel / UserMaterialsPanel polling loops",
+    "loc": "frontend/components/CoachReportPanel.tsx:104 · UserMaterialsPanel.tsx:100",
+    "problem": "setTimeout poll chains at 8s/30s (report regen, opener) and 4s (materials distill) might look like runaway timers.",
+    "evidence": "Both use setTimeout (not setInterval), return clearTimeout cleanups, track attempts in refs that survive re-renders, and cap attempts (40/90/45); the materials loop resets its counter when nothing is processing.",
+    "impact": "None. Bounded, self-terminating, correctly cleaned up. The opener poller is the only mechanism that surfaces the fuller turn without a reload.",
+    "fix": "No change. Correct as designed.",
+    "why": "Bounds, cleanup, and ref-based attempt tracking are all correct, and the intervals match the underlying LLM/Haiku latencies. Touching it risks breaking the no-reload update UX for nothing."
+  }
+]
+</script>
+
+<script>
+  (function () {
+    var data = JSON.parse(document.getElementById('findings-data').textContent);
+    var DIM_LABEL = { speed: 'Speed', memory: 'Memory', processing: 'Processing' };
+
+    function el(tag, cls, txt) {
+      var e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (txt != null) e.textContent = txt;
+      return e;
+    }
+    function field(label, value, extraCls) {
+      var f = el('div', 'field' + (extraCls ? ' ' + extraCls : ''));
+      f.appendChild(el('span', 'k', label));
+      f.appendChild(document.createTextNode(value));
+      return f;
+    }
+
+    function card(f) {
+      var c = el('div', 'card r-' + f.rating);
+      c.setAttribute('data-rating', f.rating);
+      c.setAttribute('data-dim', f.dimension);
+
+      var top = el('div', 'top');
+      top.appendChild(el('span', 'idx', f.id));
+      top.appendChild(el('h4', null, f.title));
+      c.appendChild(top);
+
+      var badges = el('div', 'badges');
+      var rp = el('span', 'pill ' + (f.rating === 'consider' ? 'consider' : f.rating),
+        f.rating === 'strong' ? 'Strong' : f.rating === 'consider' ? 'Worth considering' : 'Do not touch');
+      badges.appendChild(rp);
+      badges.appendChild(el('span', 'badge ' + f.dimension, DIM_LABEL[f.dimension]));
+      badges.appendChild(el('span', 'badge conf-' + f.confidence, 'Confidence: ' + f.confidence));
+      badges.appendChild(el('span', 'badge effort', 'Effort: ' + f.effort));
+      if (f.verified) badges.appendChild(el('span', 'badge verified', '✓ Verified'));
+      c.appendChild(badges);
+
+      var body = el('div', 'body');
+      body.appendChild(el('div', 'loc', f.loc));
+      body.appendChild(field('Problem', f.problem));
+      body.appendChild(field('Evidence', f.evidence));
+      body.appendChild(field('Impact', f.impact));
+      body.appendChild(field('Proposed fix', f.fix, 'fix'));
+      body.appendChild(field('Why this rating', f.why, 'why'));
+      c.appendChild(body);
+      return c;
+    }
+
+    var buckets = { strong: 'cards-strong', consider: 'cards-consider', do_not_touch: 'cards-do_not_touch' };
+    data.forEach(function (f) {
+      var target = document.getElementById(buckets[f.rating]);
+      if (target) target.appendChild(card(f));
+    });
+
+    // Filtering
+    var rFilter = 'all', dFilter = 'all';
+    function apply() {
+      document.querySelectorAll('.card').forEach(function (c) {
+        var okR = rFilter === 'all' || c.getAttribute('data-rating') === rFilter;
+        var okD = dFilter === 'all' || c.getAttribute('data-dim') === dFilter;
+        c.classList.toggle('hidden', !(okR && okD));
+      });
+      // Hide a whole section if it has no visible cards
+      ['strong', 'consider', 'do_not_touch'].forEach(function (r) {
+        var sec = document.getElementById(r);
+        if (!sec) return;
+        var anyVisible = sec.querySelectorAll('.card:not(.hidden)').length > 0;
+        sec.classList.toggle('hidden', !anyVisible);
+      });
+    }
+    document.querySelectorAll('.r-filter').forEach(function (b) {
+      b.addEventListener('click', function () {
+        rFilter = b.getAttribute('data-r');
+        document.querySelectorAll('.r-filter').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+        apply();
+      });
+    });
+    document.querySelectorAll('.d-filter').forEach(function (b) {
+      b.addEventListener('click', function () {
+        dFilter = b.getAttribute('data-d');
+        document.querySelectorAll('.d-filter').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+        apply();
+      });
+    });
+  })();
+</script>
+</body>
+</html>
