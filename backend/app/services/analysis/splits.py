@@ -61,75 +61,58 @@ def calculate_splits(
     n_points = len(distance)
     if len(time) != n_points:
         return [] # Mismatch
-    
+
+    # Boundary detection, vectorized (#364). The split boundary for each km
+    # target is the first sample whose cumulative distance reaches that target.
+    # For a monotonic cumulative-distance stream np.searchsorted(side="left")
+    # returns exactly the index the prior per-sample scan stopped at (the first
+    # i with distance[i] >= target), in one C call instead of ~n_points Python
+    # iterations. Per-split metrics are still computed by the unchanged
+    # _compute_split_metrics over the same [start, end) index pairs, so the
+    # split boundaries and every per-split metric are identical.
+    distance_arr = np.asarray(distance, dtype=float)
+    total_dist = distance[-1]
+    n_full = int(total_dist // split_distance_m)  # full km splits crossed
+
     splits = []
-    
     current_split_start_idx = 0
-    current_split_target_dist = split_distance_m
-    
     split_number = 1
-    
-    # We iterate through points. When distance exceeds current target, we verify the split.
-    # Note: Optimization could be done with numpy searchsorted if data was guaranteed numpy arrays.
-    
-    for i in range(1, n_points):
-        d_curr = distance[i]
-        
-        # Check if we crossed a split boundary
-        # We handle multiple splits in one step if gaps are huge (unlikely in streams, but possible)
-        while d_curr >= current_split_target_dist:
-            # Found a split boundary at index i (inclusive or exclusive? let's say up to i)
-            # Actually, the point i is AFTER the boundary.
-            # Interpolation would be precise, but nearest point is usually fine for dense streams.
-            # Let's use index i as the end of the split.
-            
-            # Slice range: [current_split_start_idx, i+1) involves points that might be past the mark.
-            # Using 'i' as end index means data[current_split_start_idx : i]
-            
-            # Refine: if distance[i] is 1005 and distance[i-1] is 998, the cut is between i-1 and i.
-            # Including i in the average might bias slightly, but effectively standard for app-level analysis.
-            
-            end_idx = i
-            
-            # Calculate metrics for this range
-            split_data = _compute_split_metrics(
-                split_number,
-                current_split_start_idx, 
-                end_idx, 
-                distance, 
-                time, 
-                heartrate, 
-                grade, 
-                cadence,
-                watts,
-                altitude,
+
+    if n_full > 0:
+        targets = np.arange(1, n_full + 1) * split_distance_m
+        boundaries = np.searchsorted(distance_arr, targets, side="left")
+        for boundary in boundaries:
+            end_idx = int(boundary)
+            splits.append(
+                _compute_split_metrics(
+                    split_number,
+                    current_split_start_idx,
+                    end_idx,
+                    distance,
+                    time,
+                    heartrate,
+                    grade,
+                    cadence,
+                    watts,
+                    altitude,
+                )
             )
-            splits.append(split_data)
-            
-            # Next split setup
-            prev_split_dist = current_split_target_dist
-            current_split_target_dist += split_distance_m
             current_split_start_idx = end_idx
             split_number += 1
-            
-            # If we reached the end of data inside the loop (perfect finish), break
-            if current_split_start_idx >= n_points:
-                break
-                
+
     # Handle partial last split if there is remaining distance meaningful
     # e.g. if > 100m left
     if current_split_start_idx < n_points - 1:
-        total_dist = distance[-1]
         last_split_dist_start = (split_number - 1) * split_distance_m
         if total_dist - last_split_dist_start > 100: # Show partial if > 100m
              split_data = _compute_split_metrics(
                 split_number,
-                current_split_start_idx, 
-                n_points, 
-                distance, 
-                time, 
-                heartrate, 
-                grade, 
+                current_split_start_idx,
+                n_points,
+                distance,
+                time,
+                heartrate,
+                grade,
                 cadence,
                 watts,
                 altitude,
@@ -274,30 +257,34 @@ def _calculate_time_splits(
     if n_points < 2:
         return []
 
+    # Boundary detection, vectorized (#364) — same searchsorted equivalence as
+    # the distance path, over the (monotonic) time stream.
+    time_arr = np.asarray(time, dtype=float)
+    total_time = time[-1]
+    n_full = int(total_time // split_time_s)
+
     splits: List[Dict[str, Any]] = []
     split_number = 1
     start_idx = 0
-    target_time = split_time_s
 
-    for i in range(1, n_points):
-        t_curr = time[i]
-        while t_curr >= target_time:
-            end_idx = i
-            split_data = _compute_time_split_metrics(
-                split_number,
-                start_idx,
-                end_idx,
-                time,
-                heartrate,
-                cadence,
-                watts,
+    if n_full > 0:
+        targets = np.arange(1, n_full + 1) * split_time_s
+        boundaries = np.searchsorted(time_arr, targets, side="left")
+        for boundary in boundaries:
+            end_idx = int(boundary)
+            splits.append(
+                _compute_time_split_metrics(
+                    split_number,
+                    start_idx,
+                    end_idx,
+                    time,
+                    heartrate,
+                    cadence,
+                    watts,
+                )
             )
-            splits.append(split_data)
-            target_time += split_time_s
             start_idx = end_idx
             split_number += 1
-            if start_idx >= n_points:
-                break
 
     # Partial last split – include if > 30 s remain
     if start_idx < n_points - 1:
