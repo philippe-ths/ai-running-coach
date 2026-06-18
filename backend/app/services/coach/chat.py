@@ -24,13 +24,69 @@ from app.models.coach_chat_message import CoachChatMessage
 from app.models.coach_report import CoachReport
 from app.models.coaching_relationship import CoachingRelationship
 from app.schemas.chat import ChatMessageRead
+from app.schemas.coach_context import CoachContextPack
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.prompts import render_voice_block
+from app.services.coach.validator import (
+    PolicyViolation,
+    check_medical_overreach,
+    check_ungated_interval_claim,
+    check_uncalibrated_zones,
+)
 from app.services.coach.voice import resolve_voice
 from app.services.analysis.splits import calculate_splits
 from app.services.trends import _query_activity_facts
 
 logger = logging.getLogger(__name__)
+
+
+# #340: the safe, non-diagnostic redirect that replaces a chat turn the medical-scope
+# rule rejects. It is the chat analogue of the report path's forced fallback: the
+# runner never sees the raw overreach, only this. It is itself written to pass
+# `check_medical_overreach` (no dose, no diagnosis verb, no asserted condition, no
+# medication directive) — pinned by test so a future reword can never ship a redirect
+# that trips the very rule it stands in for.
+MEDICAL_REDIRECT_MESSAGE = (
+    "I want to be careful here: anything involving pain, symptoms, or your health "
+    "sits outside what I can responsibly speak to, so please check in with a "
+    "clinician or physiotherapist about that. I'm glad to keep talking through your "
+    "training, pacing, or how this run went."
+)
+
+# Re-streaming the validated reply to the client in modest slices keeps the typing
+# effect alive after the buffer-then-validate step (#340, fork (a)). The client
+# JSON-decodes and concatenates every frame, so the slice boundary is cosmetic.
+_STREAM_SLICE_CHARS = 40
+
+
+def _validate_chat_text(text: str, context_pack: dict) -> List[PolicyViolation]:
+    """Run the deterministic policy rules that apply to a free-form chat turn (#340).
+
+    A chat reply is plain prose with no structured tail, so only the text-surface
+    rules bind: medical-scope (rule 5, the hard safety floor, pack-independent) and —
+    when the stored context pack parses — uncalibrated-zone language (rule 2) and
+    ungated interval-execution claims (rule 4). The structured-surface rules
+    (rule 1 questions, rule 3 risk flags, rules 6-8 evidence field paths) have no
+    surface in a chat turn. Reuses the SAME shared `check_*` bodies the report path
+    runs, so chat and report are policed by one rule set.
+
+    The pack is the stored `CoachReport.context_pack` dict and may be empty or an
+    older shape; rules 2/4 degrade off if it cannot be parsed, but rule 5 always
+    runs, so the safety floor holds regardless of pack state."""
+    violations: List[PolicyViolation] = []
+    violations += check_medical_overreach(text)
+    try:
+        pack = CoachContextPack.model_validate(context_pack)
+    except Exception:
+        return violations
+    violations += check_uncalibrated_zones(pack.metrics.zones_calibrated, text)
+    violations += check_ungated_interval_claim(pack.metrics.workout_match, text)
+    return violations
+
+
+def _slice_for_stream(text: str) -> List[str]:
+    """Split the validated reply into modest slices for re-streaming (#340)."""
+    return [text[i:i + _STREAM_SLICE_CHARS] for i in range(0, len(text), _STREAM_SLICE_CHARS)]
 
 
 CHAT_SYSTEM_TEMPLATE = """You are a running coach continuing a conversation with this runner. This is one touchpoint in an ongoing coaching relationship, not a standalone chatbot session: you are the SAME coach who wrote the analysis below and who remembers them between runs. The athlete has already received your initial analysis and may have follow-up questions.
@@ -294,7 +350,15 @@ async def stream_chat_response(
         model=settings.COACH_MODEL_ID,
     )
 
+    # #340: buffer the LLM stream rather than forwarding raw tokens. A streamed
+    # token cannot be un-sent, and the medical-scope floor must gate the FULL
+    # assembled reply before any of it reaches the runner (token boundaries do not
+    # align with the rule patterns, so an incremental "stream-then-kill" leaks
+    # partial dangerous text). We assemble, validate, then re-stream the validated
+    # text — the connection's already established via the route's keepalive frame
+    # (#223), so the only cost is time-to-first-token.
     full_response = []
+    stream_failed = False
     try:
         async for chunk in client.stream_chat(
             system=system_prompt,
@@ -302,18 +366,45 @@ async def stream_chat_response(
             max_tokens=1024,
         ):
             full_response.append(chunk)
-            yield chunk
     except Exception as e:
         logger.error("Chat streaming error: %s", e)
-        error_msg = "Sorry, I encountered an error. Please try again."
-        full_response = [error_msg]
-        yield error_msg
+        stream_failed = True
 
-    # Save the assistant response
+    if stream_failed:
+        # A transport-level error message is safe by construction; no gating needed.
+        assistant_text = "Sorry, I encountered an error. Please try again."
+    else:
+        assistant_text = "".join(full_response)
+        # Deterministic policy gate over the assembled reply (#340). Medical
+        # overreach is the hard floor: withhold the raw text and serve the safe
+        # redirect (the chat analogue of the report path's forced fallback). Soft
+        # violations (zone language, ungated interval claims) are logged and let
+        # through, mirroring the report path's tolerate-non-medical behaviour.
+        violations = _validate_chat_text(assistant_text, context_pack)
+        if any(v.rule == "medical_overreach" for v in violations):
+            logger.warning(
+                "chat reply gated for medical overreach (activity %s): %s",
+                activity_id,
+                [v.rule for v in violations],
+            )
+            assistant_text = MEDICAL_REDIRECT_MESSAGE
+        elif violations:
+            logger.warning(
+                "chat reply has tolerated policy violations (activity %s): %s",
+                activity_id,
+                [v.rule for v in violations],
+            )
+
+    # Re-stream the validated reply in slices so the typing effect survives the
+    # buffering (fork (a)).
+    for piece in _slice_for_stream(assistant_text):
+        yield piece
+
+    # Save the validated assistant response (never the raw gated text).
     assistant_msg = CoachChatMessage(
         activity_id=activity_id,
         role="assistant",
-        content="".join(full_response),
+        content=assistant_text,
     )
     db.add(assistant_msg)
     db.commit()
