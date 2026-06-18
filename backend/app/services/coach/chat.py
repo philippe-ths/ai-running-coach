@@ -13,6 +13,8 @@ heard from, while measured data and the safety floor still win over everything.
 
 import json
 import logging
+import time
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import AsyncIterator, List
 
@@ -87,6 +89,31 @@ def _validate_chat_text(text: str, context_pack: dict) -> List[PolicyViolation]:
 def _slice_for_stream(text: str) -> List[str]:
     """Split the validated reply into modest slices for re-streaming (#340)."""
     return [text[i:i + _STREAM_SLICE_CHARS] for i in range(0, len(text), _STREAM_SLICE_CHARS)]
+
+
+@dataclass
+class ChatStreamEvent:
+    """One item the route renders to SSE: a content slice (a `data:` frame) or a
+    content-free heartbeat (an SSE comment frame the client ignores).
+
+    #375: #340's buffer-then-validate left a long silent gap between the route's
+    `: ok` frame and the post-generation content, where token streaming used to keep
+    bytes flowing. A proxy idle timeout then severed the stream. Heartbeats restore
+    that byte-flow during buffering WITHOUT revealing unvalidated content."""
+    text: str = ""
+    is_heartbeat: bool = False
+
+
+# How often a keepalive heartbeat is emitted while the reply is being buffered
+# (#375). Tokens arrive from the model throughout generation, so this throttles the
+# per-token heartbeat to a steady cadence. Kept well below any plausible proxy idle
+# timeout: a real ~9.6s reply was observed to leave a silent gap long enough to sever
+# the connection, so the max gap between keepalive bytes is bounded to a few seconds.
+_HEARTBEAT_INTERVAL_SECONDS = 2.0
+
+
+def _heartbeat() -> ChatStreamEvent:
+    return ChatStreamEvent(is_heartbeat=True)
 
 
 CHAT_SYSTEM_TEMPLATE = """You are a running coach continuing a conversation with this runner. This is one touchpoint in an ongoing coaching relationship, not a standalone chatbot session: you are the SAME coach who wrote the analysis below and who remembers them between runs. The athlete has already received your initial analysis and may have follow-up questions.
@@ -221,7 +248,7 @@ def get_chat_history(db: Session, activity_id: str) -> List[ChatMessageRead]:
 
 async def stream_chat_response(
     db: Session, activity_id: str, user_message: str
-) -> AsyncIterator[str]:
+) -> AsyncIterator[ChatStreamEvent]:
     """
     Process a user message and stream the assistant response.
 
@@ -245,7 +272,9 @@ async def stream_chat_response(
         .first()
     )
     if not report_row:
-        yield "I don't have an analysis for this activity yet. Please generate the coach report first."
+        yield ChatStreamEvent(
+            text="I don't have an analysis for this activity yet. Please generate the coach report first."
+        )
         return
 
     activity = (
@@ -255,7 +284,7 @@ async def stream_chat_response(
         .first()
     )
     if not activity:
-        yield "Activity not found."
+        yield ChatStreamEvent(text="Activity not found.")
         return
 
     # Build context from the stored context pack
@@ -355,10 +384,18 @@ async def stream_chat_response(
     # assembled reply before any of it reaches the runner (token boundaries do not
     # align with the rule patterns, so an incremental "stream-then-kill" leaks
     # partial dangerous text). We assemble, validate, then re-stream the validated
-    # text — the connection's already established via the route's keepalive frame
-    # (#223), so the only cost is time-to-first-token.
+    # text.
+    #
+    # #375: buffering created a long silent gap between the route's `: ok` frame and
+    # the post-generation content, where token streaming used to keep bytes flowing;
+    # a proxy idle timeout then severed the connection. Emit content-free heartbeats
+    # throughout buffering (an initial one for the model's time-to-first-token, then
+    # throttled per-token) so the byte-flow cadence matches the pre-#340 streaming
+    # path — without revealing any unvalidated content.
+    yield _heartbeat()
     full_response = []
     stream_failed = False
+    last_heartbeat = time.monotonic()
     try:
         async for chunk in client.stream_chat(
             system=system_prompt,
@@ -366,6 +403,10 @@ async def stream_chat_response(
             max_tokens=1024,
         ):
             full_response.append(chunk)
+            now = time.monotonic()
+            if now - last_heartbeat >= _HEARTBEAT_INTERVAL_SECONDS:
+                last_heartbeat = now
+                yield _heartbeat()
     except Exception as e:
         logger.error("Chat streaming error: %s", e)
         stream_failed = True
@@ -398,7 +439,7 @@ async def stream_chat_response(
     # Re-stream the validated reply in slices so the typing effect survives the
     # buffering (fork (a)).
     for piece in _slice_for_stream(assistant_text):
-        yield piece
+        yield ChatStreamEvent(text=piece)
 
     # Save the validated assistant response (never the raw gated text).
     assistant_msg = CoachChatMessage(
