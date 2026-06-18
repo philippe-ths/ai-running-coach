@@ -788,6 +788,50 @@ async def _call_message(
     )
 
 
+async def _reattempt_if_truncated(
+    client: AnthropicClient,
+    system_prompt: str,
+    user_message: str,
+    result,
+    *,
+    escalated: int,
+    context: str,
+):
+    """If a prose-message call stopped on the token ceiling, re-attempt it ONCE at
+    a larger budget and return whichever result is better (#295/#282).
+
+    The same single re-attempt the first generation phase already does, factored out
+    so the policy-fix RETRY can reuse it identically (#282): the corrective retry
+    re-sends the full original context PLUS the fix instructions, so it is a longer
+    prompt than the first call and truncates more readily — without this, a complete
+    first attempt is preferred over a truncated retry (#274) and the fix never lands.
+
+    Truncation is detected uniformly by `stop_reason == "max_tokens"`. The extra
+    call happens ONLY on a truncated result (one re-attempt, at most). The retried
+    result replaces the original unless it refuses (a refusal is worse than a
+    truncated turn — the caller still has prose to fall back on). A turn that is
+    STILL truncated after the escalation is surfaced loudly rather than silently
+    shipped half-written. `context` tags the log line (first / policy retry)."""
+    if result.stop_reason != "max_tokens":
+        return result
+    logger.info(
+        "coach message truncated (max_tokens) on %s; retrying at a larger budget (#295/#282)",
+        context,
+    )
+    retried = await _call_message(
+        client, system_prompt, user_message, max_tokens=escalated
+    )
+    if retried.stop_reason != "refusal":
+        result = retried
+    if result.stop_reason == "max_tokens":
+        logger.warning(
+            "coach message STILL truncated after budget escalation on %s (#295/#282); "
+            "the turn may degrade — investigate the pack size / thinking spend",
+            context,
+        )
+    return result
+
+
 def _opener_fallback_outcome() -> "_GenOutcome":
     """A4 opener fallback: a templated brief reaction in opener_message (message
     empty), a degraded tail, no schedule judgment. The deterministic safety
@@ -875,22 +919,12 @@ async def _generate_message(
             if result.stop_reason == "refusal":
                 logger.warning("coach message refused; storing fallback")
                 return fallback()
-            if result.stop_reason == "max_tokens":
-                logger.info(
-                    "coach message truncated (max_tokens); retrying at a larger budget (#295)"
-                )
-                retried = await _call_message(
-                    client, system_prompt, user_message, max_tokens=escalated
-                )
-                if retried.stop_reason != "refusal":
-                    result = retried
-                if result.stop_reason == "max_tokens":
-                    # The budget escalation did not help: surface it loudly rather
-                    # than silently shipping a half-written turn (#295 AC).
-                    logger.warning(
-                        "coach message STILL truncated after budget escalation (#295); "
-                        "the turn may degrade — investigate the pack size / thinking spend"
-                    )
+            # #295: a truncated first attempt re-attempts ONCE at a larger budget.
+            # Shared with the policy-fix retry's truncation re-attempt (#282).
+            result = await _reattempt_if_truncated(
+                client, system_prompt, user_message, result,
+                escalated=escalated, context="first attempt",
+            )
 
             parsed = parse_blocks(result.content_blocks)
             # Tail-skip corrective retry: the model is allowed to skip the tool under
@@ -984,8 +1018,17 @@ async def _retry_message_with_fixes(
     Returns the retry as a _MsgAttempt (#274), or None when the retry produced
     nothing usable (refusal / empty prose / transport error) — the caller then keeps
     the original attempt. `is_opener` keeps the opener's merge + token budget on the
-    retry too."""
+    retry too.
+
+    #282: the corrective retry re-sends the full original context PLUS the fix
+    instructions, so it is a longer prompt than the first call and truncates more
+    readily. When this retry itself stops on the token ceiling, re-attempt it ONCE at
+    the escalated budget before its result is judged — mirroring the first-generation
+    phase's truncation re-attempt — so the corrective attempt is less likely to come
+    back truncated and discarded by the #274 prefer-complete-over-truncated rule. The
+    extra call happens ONLY on a truncated retry."""
     max_tokens = _OPENER_MAX_TOKENS if is_opener else _MESSAGE_MAX_TOKENS
+    escalated = _OPENER_MAX_TOKENS_ESCALATED if is_opener else _MESSAGE_MAX_TOKENS_ESCALATED
     merge = merge_opener if is_opener else merge_report
     fix_instructions = "\n".join(
         f"- {v.rule}: {v.fix_instruction}" for v in violations
@@ -1001,6 +1044,14 @@ async def _retry_message_with_fixes(
         )
         if result.stop_reason == "refusal":
             return None
+        # #282: a truncated policy-fix retry re-attempts ONCE at a larger budget
+        # before being judged, exactly as the first generation phase does.
+        # _reattempt_if_truncated keeps the original (truncated) result when the
+        # re-attempt refuses, so the refusal check above still covers that case.
+        result = await _reattempt_if_truncated(
+            client, system_prompt, retry_message, result,
+            escalated=escalated, context="policy retry",
+        )
         report = merge(parse_blocks(result.content_blocks))
     except (EmptyMessageError, anthropic.APIError) as e:
         logger.error("Coach message retry error: %s", e)
