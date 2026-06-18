@@ -75,7 +75,8 @@ class TestEmailMessageRender:
             report=read, headline="Easy Run", distance_m=5000,
             app_base_url="https://app.example.com",
         )
-        assert subject == "Easy Run — 5.0km · high confidence"
+        # #338: confidence rating no longer surfaced in the subject (still in meta)
+        assert subject == "Easy Run — 5.0km"
 
 
 class TestTelegramMessageRender:
@@ -88,6 +89,17 @@ class TestTelegramMessageRender:
         assert body == "Great session today. You nailed the easy effort."
         assert "Key takeaways" not in body
         assert url.endswith(f"/activity/{read.activity_id}")
+
+    def test_title_omits_confidence_rating(self):
+        # #338 (widened): the confidence rating must not surface in the Telegram
+        # title either; it reads as the coach hedging its own advice.
+        read = _message_read("Great session.")
+        title, _body, _url = render_coach_report_telegram(
+            report=read, headline="Easy Run", distance_m=5000,
+            app_base_url="https://app.example.com",
+        )
+        assert title == "Easy Run — 5.0km"
+        assert "confidence" not in title.lower()
 
     def test_long_body_truncated_under_4096(self):
         long_message = "\n\n".join(f"Paragraph {i} " + ("w" * 200) for i in range(50))
