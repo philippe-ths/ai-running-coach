@@ -21,26 +21,26 @@ def render_coach_report_email(
     `stage` ("fuller" default, or "opener" for the A4 stage-one email) selects the
     fuller `message` or the opener_message + reply-invite line. Default keeps every
     existing caller byte-stable."""
+    # #338: the internal confidence rating is no longer surfaced to the runner,
+    # including in the email subject and body (it still lives in report.meta).
     distance_km = round((distance_m or 0) / 1000.0, 1)
-    confidence = report.meta.confidence
     activity_label = headline or "Activity"
-    # Subject shape: "{label} — {dist}km · {conf} confidence" for activities
-    # with distance, "{label} — {conf} confidence" for those without (indoor
-    # rides record 0m). The label already includes the noun (e.g. "Easy Run",
-    # "Indoor Ride"), so we don't append it.
+    # Subject shape: "{label} — {dist}km" for activities with distance, "{label}"
+    # for those without (indoor rides record 0m). The label already includes the
+    # noun (e.g. "Easy Run", "Indoor Ride"), so we don't append it.
     if distance_km > 0:
-        subject = f"{activity_label} — {distance_km}km · {confidence} confidence"
+        subject = f"{activity_label} — {distance_km}km"
     else:
-        subject = f"{activity_label} — {confidence} confidence"
+        subject = activity_label
 
     activity_url = f"{app_base_url.rstrip('/')}/activity/{report.activity_id}"
 
-    html = _render_html(report, activity_label, distance_km, confidence, activity_url, stage)
-    text = _render_text(report, activity_label, distance_km, confidence, activity_url, stage)
+    html = _render_html(report, activity_label, distance_km, activity_url, stage)
+    text = _render_text(report, activity_label, distance_km, activity_url, stage)
     return subject, html, text
 
 
-def _render_html(report, activity_label, distance_km, confidence, activity_url, stage="fuller") -> str:
+def _render_html(report, activity_label, distance_km, activity_url, stage="fuller") -> str:
     content = report.report
     heading_distance = f" · {distance_km}km" if distance_km > 0 else ""
 
@@ -55,7 +55,6 @@ def _render_html(report, activity_label, distance_km, confidence, activity_url, 
         return (
             "<!doctype html><html><body style=\"font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:16px;\">"
             f"<h2>{escape(activity_label)}{heading_distance}</h2>"
-            f"<p style=\"color:#666;\">Confidence: <strong>{escape(confidence)}</strong></p>"
             f"{paragraphs}"
             f"<p><a href=\"{escape(activity_url)}\">View in app</a></p>"
             "</body></html>"
@@ -103,7 +102,6 @@ def _render_html(report, activity_label, distance_km, confidence, activity_url, 
     return (
         "<!doctype html><html><body style=\"font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:16px;\">"
         f"<h2>{escape(activity_label)}{heading_distance}</h2>"
-        f"<p style=\"color:#666;\">Confidence: <strong>{escape(confidence)}</strong></p>"
         "<h3>Key takeaways</h3>"
         f"<ul>{takeaways_items}</ul>"
         "<h3>Next steps</h3>"
@@ -115,13 +113,13 @@ def _render_html(report, activity_label, distance_km, confidence, activity_url, 
     )
 
 
-def _render_text(report, activity_label, distance_km, confidence, activity_url, stage="fuller") -> str:
+def _render_text(report, activity_label, distance_km, activity_url, stage="fuller") -> str:
     content = report.report
 
     if distance_km > 0:
-        header = f"{activity_label} — {distance_km}km · {confidence} confidence"
+        header = f"{activity_label} — {distance_km}km"
     else:
-        header = f"{activity_label} — {confidence} confidence"
+        header = activity_label
 
     # A3 (ADR 0009): the plain-text body is the prose message. A4: the opener
     # renders its opener_message + the reply-invite line instead.
