@@ -262,8 +262,14 @@ async def post_chat(
         # through proxies that would otherwise time the request out (#223).
         yield ": ok\n\n"
         try:
-            async for chunk in stream_chat_response(db, activity_id, body.message):
-                yield _sse_data(chunk)
+            async for event in stream_chat_response(db, activity_id, body.message):
+                if event.is_heartbeat:
+                    # A content-free SSE comment frame: keeps the proxy connection
+                    # alive during the buffer-then-validate gap (#375). The client
+                    # ignores any line that does not start with `data: `.
+                    yield ": hb\n\n"
+                else:
+                    yield _sse_data(event.text)
         except Exception:
             # The stream is already open (status + headers sent), so a raised
             # exception here would just sever the connection — the browser
