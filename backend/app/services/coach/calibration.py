@@ -26,13 +26,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from app.services.analysis.thresholds import ELEVATED_HR_DRIFT_PCT
+
 # Enough like-for-like comparable runs before a personal expected drift is
 # trusted; mirrors the M2 baseline abstention threshold.
 MIN_SAMPLES_FOR_CALIBRATION = 4
 
 # The legacy population heuristic (flags.py: drift > 5% -> fatigue_possible),
-# surfaced as a LABELED fallback when personal history is too thin.
-POPULATION_DRIFT_THRESHOLD_PCT = 5.0
+# surfaced as a LABELED fallback when personal history is too thin. Aliases the
+# shared invariant in thresholds.py under the name kept for this module's
+# readable user-facing f-strings (which render "~5.0%").
+POPULATION_DRIFT_THRESHOLD_PCT = ELEVATED_HR_DRIFT_PCT
 
 # How far this run's drift must sit from the personal norm to read as notable
 # (rather than within run-to-run noise).
