@@ -223,7 +223,7 @@ class TestTelegramProse:
         n = _coach(_prose_fuller(), stage="fuller")
         assert n is not None
         assert n.to == "42"
-        assert n.subject == "Easy Run — 8.2km · medium confidence"
+        assert n.subject == "Easy Run — 8.2km"
         assert n.html == ""
         assert n.text == (
             "Strong steady effort today.\n\n"
@@ -240,7 +240,7 @@ class TestTelegramProse:
         assert body["parse_mode"] == "HTML"
         assert body["disable_web_page_preview"] is True
         assert body["text"] == (
-            "<b>Easy Run — 8.2km · medium confidence</b>\n\n"
+            "<b>Easy Run — 8.2km</b>\n\n"
             "Strong steady effort today.\n\n"
             "Your drift held under 3% the whole way.\n\n"
             f'<a href="{_BASE}/activity/{_AID}">View in app</a>'
@@ -250,7 +250,7 @@ class TestTelegramProse:
     def test_opener_composer_output(self, telegram):
         n = _coach(_prose_opener(), stage="opener")
         assert n is not None
-        assert n.subject == "Easy Run — 8.2km · medium confidence"
+        assert n.subject == "Easy Run — 8.2km"
         assert n.text == (
             "Nice work getting that one in!\n\n"
             "Let me know how it felt and I'll follow up with the full breakdown."
@@ -268,7 +268,7 @@ class TestTelegramProse:
         # The adapter HTML-escapes the body text, so the apostrophe in "I'll"
         # is encoded as &#x27; on the wire (current behaviour, pinned).
         assert body["text"] == (
-            "<b>Easy Run — 8.2km · medium confidence</b>\n\n"
+            "<b>Easy Run — 8.2km</b>\n\n"
             "Nice work getting that one in!\n\n"
             "Let me know how it felt and I&#x27;ll follow up with the full breakdown.\n\n"
             f'<a href="{_BASE}/activity/{_AID}">View in app</a>'
@@ -294,7 +294,7 @@ class TestTelegramStructured:
     def test_composer_output(self, telegram):
         n = _coach(_structured())
         assert n is not None
-        assert n.subject == "Easy Run — 8.2km · medium confidence"
+        assert n.subject == "Easy Run — 8.2km"
         assert n.html == ""
         assert n.text == (
             "Key takeaways:\n"
@@ -326,20 +326,18 @@ class TestEmailProse:
         n = _coach(_prose_fuller(), stage="fuller")
         assert n is not None
         assert n.to == "runner@example.com"
-        assert n.subject == "Easy Run — 8.2km · medium confidence"
+        assert n.subject == "Easy Run — 8.2km"
         assert n.actions == ()
         assert n.html == (
             '<!doctype html><html><body style="font-family:-apple-system,sans-serif;'
             'max-width:600px;margin:0 auto;padding:16px;">'
-            "<h2>Easy Run · 8.2km</h2>"
-            '<p style="color:#666;">Confidence: <strong>medium</strong></p>'
-            "<p>Strong steady effort today.</p>"
+            "<h2>Easy Run · 8.2km</h2>"            "<p>Strong steady effort today.</p>"
             "<p>Your drift held under 3% the whole way.</p>"
             f'<p><a href="{_BASE}/activity/{_AID}">View in app</a></p>'
             "</body></html>"
         )
         assert n.text == (
-            "Easy Run — 8.2km · medium confidence\n"
+            "Easy Run — 8.2km\n"
             "\n"
             "Strong steady effort today.\n\n"
             "Your drift held under 3% the whole way.\n"
@@ -353,15 +351,13 @@ class TestEmailProse:
         assert n.html == (
             '<!doctype html><html><body style="font-family:-apple-system,sans-serif;'
             'max-width:600px;margin:0 auto;padding:16px;">'
-            "<h2>Easy Run · 8.2km</h2>"
-            '<p style="color:#666;">Confidence: <strong>medium</strong></p>'
-            "<p>Nice work getting that one in!</p>"
+            "<h2>Easy Run · 8.2km</h2>"            "<p>Nice work getting that one in!</p>"
             "<p>Let me know how it felt and I&#x27;ll follow up with the full breakdown.</p>"
             f'<p><a href="{_BASE}/activity/{_AID}">View in app</a></p>'
             "</body></html>"
         )
         assert n.text == (
-            "Easy Run — 8.2km · medium confidence\n"
+            "Easy Run — 8.2km\n"
             "\n"
             "Nice work getting that one in!\n\n"
             "Let me know how it felt and I'll follow up with the full breakdown.\n"
@@ -377,13 +373,11 @@ class TestEmailStructured:
     def test_composer_output(self, email):
         n = _coach(_structured())
         assert n is not None
-        assert n.subject == "Easy Run — 8.2km · medium confidence"
+        assert n.subject == "Easy Run — 8.2km"
         assert n.html == (
             '<!doctype html><html><body style="font-family:-apple-system,sans-serif;'
             'max-width:600px;margin:0 auto;padding:16px;">'
-            "<h2>Easy Run · 8.2km</h2>"
-            '<p style="color:#666;">Confidence: <strong>medium</strong></p>'
-            "<h3>Key takeaways</h3>"
+            "<h2>Easy Run · 8.2km</h2>"            "<h3>Key takeaways</h3>"
             "<ul><li>Effort stayed in zone 2 throughout.</li>"
             "<li>HR drift was minimal at 2.1%.</li></ul>"
             "<h3>Next steps</h3>"
@@ -401,7 +395,7 @@ class TestEmailStructured:
             "</body></html>"
         )
         assert n.text == (
-            "Easy Run — 8.2km · medium confidence\n"
+            "Easy Run — 8.2km\n"
             "\n"
             "Key takeaways:\n"
             "  - Effort stayed in zone 2 throughout.\n"
