@@ -25,13 +25,14 @@ def render_coach_report_telegram(
     selects which prose to render: the fuller `message` or the opener_message plus
     the reply-invite line. Default keeps every existing caller byte-stable.
     """
+    # #338: the internal confidence rating is no longer surfaced to the runner,
+    # including in the notification title (it still lives in report.meta).
     distance_km = round((distance_m or 0) / 1000.0, 1)
-    confidence = report.meta.confidence
     activity_label = headline or "Activity"
     if distance_km > 0:
-        title = f"{activity_label} — {distance_km}km · {confidence} confidence"
+        title = f"{activity_label} — {distance_km}km"
     else:
-        title = f"{activity_label} — {confidence} confidence"
+        title = activity_label
 
     activity_url = f"{app_base_url.rstrip('/')}/activity/{report.activity_id}"
 
