@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    String, Integer, Float, ForeignKey, DateTime, Boolean, BigInteger, JSON, Uuid,
+    String, Integer, Float, ForeignKey, DateTime, Boolean, BigInteger, JSON, Uuid, Index,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -14,6 +14,14 @@ from app.models.base import generate_uuid
 
 class Activity(Base):
     __tablename__ = "activities"
+
+    # Every per-runner history scan (coach context, readiness, trends, retrieval)
+    # filters user_id then orders by start_date DESC; is_deleted rides along as an
+    # in-index filter. user_id is the load-bearing leading column once the table is
+    # multi-tenant. See migration b1f4a7c9d2e3.
+    __table_args__ = (
+        Index("ix_activities_user_start_deleted", "user_id", "start_date", "is_deleted"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=generate_uuid)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
