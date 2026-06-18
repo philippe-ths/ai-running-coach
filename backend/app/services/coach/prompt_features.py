@@ -68,6 +68,19 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.USER_MATERIALS,
         }
     ),
+    # #266 — v8 is a philosophy retune, NOT a new capability: it carries exactly v7's
+    # feature set (the first message version to add no capability). Its novelty is the
+    # retuned base prose; every gated surface behaves identically to v7.
+    "coach_message_v8": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.TRAINING_LOAD,
+            _F.USER_MATERIALS,
+        }
+    ),
 }
 
 
