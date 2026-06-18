@@ -16,6 +16,13 @@ import TrainingLoadCard from '@/components/TrainingLoadCard';
 
 export const dynamic = 'force-dynamic';
 
+// Dev-only raw-data/streams dump. Inlined at build time; set
+// NEXT_PUBLIC_SHOW_DEBUG_PANEL=true (or "1") to expose it. Off in production so
+// the full stream arrays do not ship in every activity page's SSR HTML (#359).
+const SHOW_DEBUG_PANEL =
+  process.env.NEXT_PUBLIC_SHOW_DEBUG_PANEL === 'true' ||
+  process.env.NEXT_PUBLIC_SHOW_DEBUG_PANEL === '1';
+
 export default async function ActivityDetail({ params }: { params: { id: string } }) {
   const activity: Activity | null = await fetchFromAPI(`/api/activities/${params.id}`);
   
@@ -199,7 +206,8 @@ export default async function ActivityDetail({ params }: { params: { id: string 
         </div>
       </div>
 
-      {/* Debug Section */}
+      {/* Debug Section (dev only; gated by NEXT_PUBLIC_SHOW_DEBUG_PANEL, #359) */}
+      {SHOW_DEBUG_PANEL && (
       <details className="mt-8 text-xs text-slate-400 dark:text-gray-500">
         <summary className="cursor-pointer mb-2">Debug: Raw Strava Data & Streams</summary>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -223,6 +231,7 @@ export default async function ActivityDetail({ params }: { params: { id: string 
             </div>
         </div>
       </details>
+      )}
 
     </div>
   );

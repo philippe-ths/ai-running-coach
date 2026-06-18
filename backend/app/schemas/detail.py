@@ -87,6 +87,10 @@ class TrainingLoadRead(BaseModel):
 
 
 class ActivityDetailRead(ActivityRead):
+    # The full Strava summary JSON, carried only on the per-activity detail view
+    # (the home list omits it, #359). The detail page renders elapsed_time,
+    # max_heartrate, suffer_score, power, and device fields from here.
+    raw_summary: Dict[str, Any] = {}
     metrics: Optional[DerivedMetricRead] = None
     check_in: Optional[CheckInRead] = None
     streams: List[ActivityStreamRead] = []

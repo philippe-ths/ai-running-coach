@@ -18,11 +18,13 @@ class ActivityBase(BaseModel):
     elev_gain_m: float
     avg_hr: Optional[float] = None
     max_hr: Optional[float] = None
-    raw_summary: Dict[str, Any] = {}
 
 
 class ActivityCreate(ActivityBase):
-    pass
+    # The full Strava summary JSON, persisted on create. Deliberately NOT on the
+    # list read model (ActivityRead): that payload ships per item on the home page
+    # and never reads raw_summary (#359). The detail read model re-adds it.
+    raw_summary: Dict[str, Any] = {}
 
 
 class ActivityRead(ActivityBase):
