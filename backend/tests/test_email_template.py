@@ -57,7 +57,9 @@ def _build_report(*, headline: str = "Easy", confidence: str = "medium") -> Coac
     )
 
 
-def test_subject_includes_class_distance_confidence():
+def test_subject_includes_class_and_distance():
+    # #338: the confidence rating is no longer surfaced to the runner, so the
+    # subject is the label plus distance only (the value still lives in meta).
     report = _build_report(headline="Easy Run", confidence="medium")
     subject, _html, _text = render_coach_report_email(
         report=report,
@@ -65,7 +67,7 @@ def test_subject_includes_class_distance_confidence():
         distance_m=8200,
         app_base_url="http://localhost:3000",
     )
-    assert subject == "Easy Run — 8.2km · medium confidence"
+    assert subject == "Easy Run — 8.2km"
 
 
 def test_subject_does_not_append_literal_run_word():
@@ -91,7 +93,7 @@ def test_subject_drops_distance_when_zero():
         distance_m=0,
         app_base_url="http://localhost:3000",
     )
-    assert subject == "Indoor Ride — medium confidence"
+    assert subject == "Indoor Ride"
     assert "0.0km" not in subject
     assert "0.0km" not in html
     assert "0.0km" not in text
@@ -136,4 +138,20 @@ def test_distance_rounded_to_one_decimal():
         distance_m=5347,
         app_base_url="http://localhost:3000",
     )
-    assert subject == "Tempo Run — 5.3km · medium confidence"
+    assert subject == "Tempo Run — 5.3km"
+
+
+def test_confidence_rating_is_not_surfaced_anywhere():
+    """#338 (widened): the internal confidence rating must not reach the runner
+    through the email channel either, in the subject, the HTML body, or the text
+    body. The value still exists in report.meta; it is just never rendered."""
+    report = _build_report(headline="Easy Run", confidence="high")
+    subject, html, text = render_coach_report_email(
+        report=report,
+        headline="Easy Run",
+        distance_m=8200,
+        app_base_url="http://localhost:3000",
+    )
+    assert "confidence" not in subject.lower()
+    assert "confidence" not in html.lower()
+    assert "confidence" not in text.lower()
