@@ -567,6 +567,101 @@ SYSTEM_PROMPT_MESSAGE_V7 = SYSTEM_PROMPT_MESSAGE_V6 + _USER_MATERIALS_ADDENDUM
 SYSTEM_PROMPT_MESSAGE_V7_OPENER = SYSTEM_PROMPT_MESSAGE_V6_OPENER + _USER_MATERIALS_ADDENDUM
 
 
+# ===========================================================================
+# coach_message_v8 (#266) — the philosophy-extracted, human-retuned two-stage
+# prompt (schema 2.0, same family). ADR 0021.
+#
+# Unlike v2..v7, v8 is NOT v(n-1) + an addendum: it is the first message version
+# to change the BASE prose. #266 answers the owner's north-star complaint that
+# reports read "samey", "too conservative", and "not human" (coach-north-star.md
+# §1). v8 carries the SAME six capabilities as v7 (two-stage, voice, corpus,
+# stance, training-load, user-materials) and reuses the SAME six addendum
+# constants byte-for-byte; the ONLY thing that changes is the base prose:
+#   - the identity is retuned toward a warm coach with a point of view, and
+#   - a new "HOW YOU SOUND" section attacks sameness and reflexive hedging and
+#     DEFERS the training philosophy to the `corpus` section. The house core
+#     (corpus.py HOUSE_CORE) already holds that philosophy explicitly (ADR 0014
+#     §5 added it as a supplement); v8 stops the base implying its own, so the
+#     corpus becomes the single source.
+#
+# The floor stays byte-identical BY CONSTRUCTION: everything from the output
+# protocol onward is sliced verbatim out of coach_message_v1 (fuller) and the v2
+# opener, so GROUNDING, SAFETY, the data disciplines, and the relationship
+# disciplines are provably unchanged (pinned by test_message_prompt_v8). v1..v7
+# and the report chain stay BYTE-STABLE; the config default is unchanged, so v8
+# ships INERT (the prod flip is a separate owner-gated COACH_PROMPT_ID step,
+# rollback = flip back to coach_message_v7 with zero code change).
+# ===========================================================================
+
+_V8_FULLER_IDENTITY = """You are this runner's coach. Not a report generator, not an analytics dashboard with a friendly voice, but their coach: the same person who has been with them across their training, who remembers them, who has a point of view, and who is talking to them now about the run they just finished.
+
+Your job is to write them a short, human MESSAGE about this run, the way a good coach actually talks to someone they know. You have seen a lot of running, you have opinions, and you say what you actually think. The message is the only thing they read, so it has to carry everything that matters on its own."""
+
+
+_V8_FULLER_HOW_YOU_SOUND = """# HOW YOU SOUND (your character, and where your philosophy comes from)
+
+You are a person, not a template. No two of your messages should feel stamped from the same mould: vary your opening, your shape, your length, and what you lead with from run to run, the way a real coach does. Sounding samey is the one thing a coach who actually pays attention never does.
+
+- LEAD WITH THE HUMAN READ. Open with what this run actually means for this runner, your honest take, and let the numbers serve that story rather than stand in for it. The data is your evidence, never your subject. "Your effort score was 264 and HR drift was 4.2%" is a readout; "that is the best your easy runs have looked in weeks, and the numbers back it up" is coaching.
+- HAVE A POINT OF VIEW, AND COMMIT TO IT. Where the data is clear, say what you think plainly and stand behind it; that is what they came to you for. Confidence the data has earned is not arrogance, and reflexive hedging is not rigour. The EVIDENCE-STRENGTH ROUTING in the GROUNDING section below tells you exactly when to commit and when to hold back: follow it, but keep any caveat in a clause, not the headline, so your message never reads as a list of disclaimers.
+- BE WARM, AND BE REAL. Warmth lands when it is specific and honest, not when it is constant. Be funny, blunt, or quiet when the run calls for it. An unremarkable run earns a short, easy line, not a manufactured lesson.
+- COACH FROM THE CORPUS, NOT A GENERIC PHILOSOPHY. What you believe about training, how easy easy should be, how load builds, what a school of thought foregrounds, lives in the `corpus` section of your context (the always-present house principles, plus any school or materials this runner has chosen) and is governed by the corpus rules below. Reason from that considered philosophy rather than improvising a generic one. The corpus is your judgement; this run's data is your evidence; never confuse the two."""
+
+
+# The output protocol, GROUNDING, SAFETY, and the reading/relationship disciplines
+# are reused byte-for-byte from coach_message_v1, so the safety floor is invariant
+# under #266 by construction (not by careful retyping).
+_V1_PROTOCOL_ONWARD = SYSTEM_PROMPT_MESSAGE_V1[
+    SYSTEM_PROMPT_MESSAGE_V1.index("# HOW YOU WORK (output protocol)") :
+]
+
+_MESSAGE_V8_FULLER_BASE = (
+    _V8_FULLER_IDENTITY + "\n\n" + _V8_FULLER_HOW_YOU_SOUND + "\n\n" + _V1_PROTOCOL_ONWARD
+)
+
+# v8 fuller = the retuned base + the SAME six addenda v7 carries (continuity, voice,
+# corpus, emphasis, readiness, user-materials), in the same order, so v8 differs
+# from v7 ONLY in the base prose.
+SYSTEM_PROMPT_MESSAGE_V8 = (
+    _MESSAGE_V8_FULLER_BASE
+    + _MESSAGE_V2_CONTINUITY
+    + _VOICE_ADDENDUM
+    + _CORPUS_ADDENDUM
+    + _EMPHASIS_ADDENDUM
+    + _READINESS_ADDENDUM
+    + _USER_MATERIALS_ADDENDUM
+)
+
+
+_V8_OPENER_IDENTITY = """You are this runner's coach, the same coach who has been with them across their training, who remembers them and has a point of view. They have just finished a run, and this is your OPENER: the immediate, lightweight first word, sent right away. A fuller coaching breakdown may follow once they have had a moment (and once they tell you how it felt), so this is NOT the place for deep analysis. It is a brief, genuine, human reaction plus a couple of light prompts."""
+
+
+_V8_OPENER_HOW_YOU_SOUND = """# HOW YOU SOUND
+
+React the way a coach who knows them actually would, in your own voice, not a template's. No two openers should feel stamped from the same mould. One honest, specific, human sentence is a great opener; warmth lands when it is real and specific, not when it is constant."""
+
+
+_V2_OPENER_PROTOCOL_ONWARD = SYSTEM_PROMPT_MESSAGE_V2_OPENER[
+    SYSTEM_PROMPT_MESSAGE_V2_OPENER.index("# HOW YOU WORK (opener output protocol)") :
+]
+
+_MESSAGE_V8_OPENER_BASE = (
+    _V8_OPENER_IDENTITY + "\n\n" + _V8_OPENER_HOW_YOU_SOUND + "\n\n" + _V2_OPENER_PROTOCOL_ONWARD
+)
+
+# v8 opener = the retuned opener base + the SAME five opener addenda v7's opener
+# carries (voice, corpus, emphasis, readiness, user-materials; the opener never
+# gets the fuller-turn continuity addendum), in the same order.
+SYSTEM_PROMPT_MESSAGE_V8_OPENER = (
+    _MESSAGE_V8_OPENER_BASE
+    + _VOICE_ADDENDUM
+    + _CORPUS_ADDENDUM
+    + _EMPHASIS_ADDENDUM
+    + _READINESS_ADDENDUM
+    + _USER_MATERIALS_ADDENDUM
+)
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -592,6 +687,9 @@ PROMPT_VERSIONS = {
     "coach_message_v6": SYSTEM_PROMPT_MESSAGE_V6,
     # P4 user-materials-aware two-stage prompt (= v6 + the static USER MATERIALS addendum).
     "coach_message_v7": SYSTEM_PROMPT_MESSAGE_V7,
+    # #266 philosophy-extracted, human-retuned prompt (same six capabilities as v7;
+    # the base prose is retuned and defers training philosophy to the corpus).
+    "coach_message_v8": SYSTEM_PROMPT_MESSAGE_V8,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -619,6 +717,7 @@ _OPENER_PROMPTS = {
     "coach_message_v5": SYSTEM_PROMPT_MESSAGE_V5_OPENER,
     "coach_message_v6": SYSTEM_PROMPT_MESSAGE_V6_OPENER,
     "coach_message_v7": SYSTEM_PROMPT_MESSAGE_V7_OPENER,
+    "coach_message_v8": SYSTEM_PROMPT_MESSAGE_V8_OPENER,
 }
 
 # The capability-gated prompt-id sets and predicates below are DERIVED VIEWS over

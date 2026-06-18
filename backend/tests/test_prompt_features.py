@@ -35,6 +35,15 @@ EXPECTED_CAPABILITIES = {
         F.TRAINING_LOAD,
         F.USER_MATERIALS,
     },
+    # #266 — v8 carries exactly v7's capabilities (a philosophy retune, not a new feature).
+    "coach_message_v8": {
+        F.TWO_STAGE,
+        F.VOICE,
+        F.CORPUS,
+        F.STANCE,
+        F.TRAINING_LOAD,
+        F.USER_MATERIALS,
+    },
 }
 
 # Ids that must carry NO capabilities (the inert-under-rollback set).
@@ -72,20 +81,23 @@ def test_derived_sets_match_captured_membership():
     """Belt-and-suspenders: the derived sets equal the explicit captured membership."""
     assert prompts.TWO_STAGE_PROMPT_IDS == {
         "coach_message_v2", "coach_message_v3", "coach_message_v4",
-        "coach_message_v5", "coach_message_v6", "coach_message_v7",
+        "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
     }
     assert prompts.VOICE_PROMPT_IDS == {
         "coach_message_v3", "coach_message_v4", "coach_message_v5",
-        "coach_message_v6", "coach_message_v7",
+        "coach_message_v6", "coach_message_v7", "coach_message_v8",
     }
     assert prompts.CORPUS_PROMPT_IDS == {
-        "coach_message_v4", "coach_message_v5", "coach_message_v6", "coach_message_v7",
+        "coach_message_v4", "coach_message_v5", "coach_message_v6",
+        "coach_message_v7", "coach_message_v8",
     }
     assert prompts.STANCE_PROMPT_IDS == {
-        "coach_message_v5", "coach_message_v6", "coach_message_v7",
+        "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
     }
-    assert prompts.TRAINING_LOAD_PROMPT_IDS == {"coach_message_v6", "coach_message_v7"}
-    assert prompts.USER_MATERIALS_PROMPT_IDS == {"coach_message_v7"}
+    assert prompts.TRAINING_LOAD_PROMPT_IDS == {
+        "coach_message_v6", "coach_message_v7", "coach_message_v8",
+    }
+    assert prompts.USER_MATERIALS_PROMPT_IDS == {"coach_message_v7", "coach_message_v8"}
 
 
 def test_predicates_agree_with_has_feature():
@@ -109,10 +121,15 @@ def test_manifest_ids_are_registered_prompts():
 
 
 def test_message_version_capabilities_are_monotonic():
-    """Each coach_message_vN is a superset of vN-1: the family only ever adds."""
+    """Each coach_message_vN up to v7 is a strict superset of vN-1: the family added one
+    capability per version. v8 (#266) is the first to add NONE — it carries exactly
+    v7's feature set (a philosophy/tone retune, not a capability), so the strict chain
+    stops at v7 and v8 equals it."""
     ordered = [
         "coach_message_v2", "coach_message_v3", "coach_message_v4",
         "coach_message_v5", "coach_message_v6", "coach_message_v7",
     ]
     for earlier, later in zip(ordered, ordered[1:]):
         assert PROMPT_FEATURES[earlier] < PROMPT_FEATURES[later], (earlier, later)
+    # v8 adds no capability: exactly v7's feature set.
+    assert PROMPT_FEATURES["coach_message_v8"] == PROMPT_FEATURES["coach_message_v7"]
