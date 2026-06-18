@@ -1,0 +1,30 @@
+# Voice, Stance, and Corpus stay parallel sibling domains; copy the pattern, do not unify
+
+Status: Accepted.
+
+The three personalization domains the coach reasons through (`coach/voice.py` from ADR 0012/0013, `coach/stance.py` from ADR 0015, and `coach/corpus.py` from ADR 0014) landed one milestone apart and mirror a surface shape: a frozen `Profile` dataclass, some dials or axes, a default, and a `resolve_*` function over a `CoachingRelationship` row. Each architecture scan re-notices the mirror and re-proposes the same move: fold them into one "runner-declared coaching dimension" seam (a generic `Dimension`/`Profile` type with a shared resolver). The 2026-06-17 scan filed it as an explicit anti-recommendation. It is the wrong move, and a future review will re-suggest it unless the decision is recorded.
+
+**The decision.** Voice, Stance, and Corpus stay **parallel sibling domains**: three small files, each owning its own frozen `Profile`, its own dials/axes/library, and its own `resolve_*`, sharing only the two trivial helpers (`_clamp`, `as_ordered`). When a fourth personalization dimension lands, **copy the pattern** into a fourth sibling file rather than extracting a unifying seam. The mirror is intentional symmetry between deliberately-distinct domains, not duplication to be concentrated.
+
+The rationale, the four reasons the unification fails:
+
+1. **The shapes genuinely diverge.** Voice has four 1-5 dials plus a six-preset cast, 1-2 example messages per preset, and a free-text escape-hatch. Stance has two emphasis axes plus a selected school, and carries no presets, no examples, and no free-text (ADR 0015 deliberately refused the free-text hatch). Corpus has zero runner dials at all: it is house-authored knowledge the runner reaches only indirectly via the stance school key. A single `Dimension` type would have to model all three, so each domain would immediately escape it through domain-specific fields.
+
+2. **It fails the deletion test.** The only truly-shared code is `_clamp` and `as_ordered`, about four lines each. A unifying seam would add ~200 lines of indirection that buys no concentration of complexity, because there is no shared complexity to concentrate: the bodies that look alike are each a handful of lines that diverge the moment you read past the signature. Removing the abstraction would lose nothing and simplify the code, which is the signal that the abstraction should not exist.
+
+3. **It would flatten a deliberate authority asymmetry.** ADR 0014 made the authority tiering explicit: Voice and Stance are **runner-sovereign** (the runner declares them, the only writers are `PUT /api/coach/voice` / `PUT /api/coach/stance`, and no background job ever infers them). The Corpus is **house-authored** knowledge the coach reasons over, lower in the authority tier than measured data and never the runner's to write. One "dimension" type obscures the runner-sovereign vs house-authored split that three ADRs were careful to keep visible in the type system, and an architecture should make that asymmetry legible, not hide it behind a shared shape.
+
+4. **The friction is not real enough to reopen the decisions.** Per ADRs 0012-0015 each domain's storage, authority, and runtime model is a settled, separately-ratified call. The shared-shape "temptation" is an aesthetic observation, not an emerging cost: nothing is harder to change, test, or navigate because the three files rhyme. Reopening four ADRs to remove four lines of duplication is negative-value work. (P4's `User materials`, ADR 0017, sit *inside* the corpus shape rather than as a fourth sibling, and are themselves the untrusted-input store ADR 0014 anticipated would get its own design, so they do not change this calculus.)
+
+## Considered options
+
+- **Keep them parallel; copy the pattern for a fourth dimension (chosen).** The symmetry is the point: three sibling domains that read the same way without sharing a type. A new dimension is a new small file with its own `Profile`/dials/`resolve_*`, the same way Stance copied Voice's shape without inheriting it.
+- **Extract a generic `Dimension`/`Profile` seam with a shared resolver.** Rejected: it fails the deletion test (~200 lines of indirection over ~8 lines of genuinely-shared helper code), each domain escapes it through domain-specific fields, and it flattens the runner-sovereign vs house-authored authority asymmetry ADR 0014 made deliberate.
+- **Hoist only `_clamp` / `as_ordered` into a shared util.** Rejected as not worth a module: they are four-line pure helpers with no coupling, and a shared `_util` would create a new dependency edge between three otherwise-independent domains for a saving that does not pay for the edge. If a fourth domain wants them, copying four lines is cheaper than the import.
+- **Leave it undocumented and re-litigate each scan.** Rejected: this is the third time the unification has surfaced; without a recorded decision a future review re-proposes it and re-spends the analysis. The whole point of this ADR is to make the next scan cite it and move on.
+
+## Consequences
+
+- This ADR records a **do-not-unify / copy-the-pattern** decision. It is a structural ADR: it changes **no code**, adds no file beyond itself, and amends none of ADRs 0012-0015 or 0017; those decisions stand exactly as written.
+- `coach/voice.py`, `coach/stance.py`, and `coach/corpus.py` stay three independent files. A future fourth personalization dimension is added as a fourth sibling file with its own `Profile`/dials/`resolve_*`, copying the shape rather than extracting a shared seam.
+- A future architecture scan that re-proposes "unify the personalization domains into one seam" should cite this ADR and stop, unless one of the four reasons above has materially changed: for example, a fourth dimension that genuinely shares non-trivial complexity (not just a mirrored signature), or a deliberate decision to collapse the runner-sovereign vs house-authored authority split. Either of those reopens this ADR.
