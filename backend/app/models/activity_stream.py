@@ -11,7 +11,9 @@ class ActivityStream(Base):
     __tablename__ = "activity_streams"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=generate_uuid)
-    activity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("activities.id"))
+    # Streams are always fetched by activity_id; a Postgres FK does not create an
+    # index, so declare one explicitly (see migration b1f4a7c9d2e3).
+    activity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("activities.id"), index=True)
     stream_type: Mapped[str] = mapped_column(String)  # time, distance, watts, heartrate
     data: Mapped[list] = mapped_column(JSON)
 
