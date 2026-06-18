@@ -228,7 +228,9 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   if (!report) return null;
 
   const body = report.report;
-  const { confidence, generated_at } = report.meta;
+  // #338: the internal confidence rating is no longer surfaced to the runner
+  // (it still flows over the API in report.meta.confidence; display-only change).
+  const { generated_at } = report.meta;
 
   // A3 (ADR 0009): the prose-message shape (schema 2.0) renders the message as
   // markdown with tappable-option chips; the legacy structured shape renders the
@@ -486,17 +488,6 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
 
       {/* Meta footer */}
       <div className="flex items-center gap-3 text-xs text-gray-400 dark:text-gray-500 px-1">
-        <span
-          className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
-            confidence === 'high'
-              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
-              : confidence === 'medium'
-              ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300'
-              : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
-          }`}
-        >
-          {confidence} confidence
-        </span>
         <span>
           {new Date(generated_at).toLocaleDateString(undefined, {
             month: 'short',
