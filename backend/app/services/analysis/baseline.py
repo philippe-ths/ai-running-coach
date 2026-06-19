@@ -34,7 +34,7 @@ from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, undefer
 
 from app.models import Activity, DerivedMetric, RunnerBaseline
 
@@ -332,7 +332,10 @@ def recompute_runner_baseline(db: Session, user_id) -> Optional[RunnerBaseline]:
 
     stmt = (
         select(Activity)
-        .options(selectinload(Activity.metrics))
+        # undefer raw_summary (#359): the per-activity sample loop below reads
+        # average_temp from it, so without this the deferred column lazy-loads
+        # once per windowed activity -> N+1 over the rolling window.
+        .options(selectinload(Activity.metrics), undefer(Activity.raw_summary))
         .where(Activity.user_id == user_id)
         .where(Activity.is_deleted == False)  # noqa: E712
         .where(Activity.start_date >= window_start)

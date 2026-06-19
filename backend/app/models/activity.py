@@ -43,7 +43,13 @@ class Activity(Base):
 
     user_intent: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
-    raw_summary: Mapped[dict] = mapped_column(JSON, default={})
+    # Deferred (#359/S9): the full Strava summary blob (5-15 KB) is read by only
+    # a handful of paths (classifier sport_type/trainer, laps projection,
+    # average_temp). Loading it on every ORM materialization wasted bandwidth on
+    # bulk scans that never touch it. Like DerivedMetric.stream_view it is pulled
+    # on demand; queries that DO read it add undefer(Activity.raw_summary) to
+    # avoid a per-row lazy load (see the undefer sites + the query-count tests).
+    raw_summary: Mapped[dict] = mapped_column(JSON, default={}, deferred=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # The Block this activity belongs to (A1, ADR 0011). Nullable: an activity
