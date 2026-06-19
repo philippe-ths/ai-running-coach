@@ -15,6 +15,11 @@ interface StatDiffProps {
    * Defaults to false — for distance/time/count/load, more is treated as active.
    */
   lowerIsBetter?: boolean;
+  /**
+   * Optional neutral-coloured prefix (e.g. a zone name) so several deltas can be
+   * told apart when stacked, as on the Zone-Load card.
+   */
+  label?: string;
 }
 
 export default function StatDiff({
@@ -22,13 +27,22 @@ export default function StatDiff({
   previous,
   format,
   lowerIsBetter = false,
+  label,
 }: StatDiffProps) {
   if (previous === undefined || previous === null) return null;
+
+  const prefix = label ? (
+    <span className="text-gray-500 dark:text-gray-400 font-normal">{label} </span>
+  ) : null;
 
   const diff = current - previous;
   // Small epsilon so float noise doesn't render as a spurious change.
   if (Math.abs(diff) < 0.001) {
-    return <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">No change</div>;
+    return (
+      <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+        {prefix}No change
+      </div>
+    );
   }
 
   const isIncrease = diff > 0;
@@ -45,7 +59,7 @@ export default function StatDiff({
 
   return (
     <div className={`text-xs ${color} mt-1 font-medium`}>
-      {arrow} {format(Math.abs(diff))}
+      {prefix}{arrow} {format(Math.abs(diff))}
       {pct !== null && <span className="opacity-75"> · {pct}%</span>}
     </div>
   );

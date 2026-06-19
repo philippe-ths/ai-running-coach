@@ -198,11 +198,26 @@ export default function TrendsPage() {
             data={isDaily ? data.daily_zone_load : data.weekly_zone_load}
             granularity={granularity}
             delta={
-              <StatDiff
-                current={data.summary.total_zone_minutes ?? 0}
-                previous={data.previous_summary?.total_zone_minutes}
-                format={(v) => formatDuration(v * 60)}
-              />
+              <div>
+                <StatDiff
+                  label="Easy"
+                  current={data.summary.zone_easy_minutes ?? 0}
+                  previous={data.previous_summary?.zone_easy_minutes}
+                  format={(v) => formatDuration(v * 60)}
+                />
+                <StatDiff
+                  label="Moderate"
+                  current={data.summary.zone_moderate_minutes ?? 0}
+                  previous={data.previous_summary?.zone_moderate_minutes}
+                  format={(v) => formatDuration(v * 60)}
+                />
+                <StatDiff
+                  label="Hard"
+                  current={data.summary.zone_hard_minutes ?? 0}
+                  previous={data.previous_summary?.zone_hard_minutes}
+                  format={(v) => formatDuration(v * 60)}
+                />
+              </div>
             }
           />
         </div>

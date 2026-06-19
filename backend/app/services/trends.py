@@ -579,15 +579,17 @@ def _avg_efficiency(facts: List[ActivityFact]) -> Optional[float]:
     return round(sum(p["efficiency_mps_per_bpm"] for p in points) / len(points), 4)
 
 
-def _total_zone_minutes(facts: List[ActivityFact]) -> float:
-    """Total minutes across all three HR zones over the window (#385)."""
-    total_s = 0
+def _zone_minutes(facts: List[ActivityFact]) -> tuple[float, float, float]:
+    """Minutes in each HR band (easy, moderate, hard) over the window (#385)."""
+    easy_s = mod_s = hard_s = 0
     for af in facts:
         if not af.time_in_zones:
             continue
-        easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
-        total_s += easy_s + mod_s + hard_s
-    return round(total_s / 60, 1)
+        e, m, h = _collapse_to_3_zones(af.time_in_zones)
+        easy_s += e
+        mod_s += m
+        hard_s += h
+    return round(easy_s / 60, 1), round(mod_s / 60, 1), round(hard_s / 60, 1)
 
 
 def _summarise_window(facts: List[ActivityFact]) -> WeeklyStatsSummary:
@@ -646,13 +648,16 @@ def get_trends_report(
     daily_facts = build_daily_facts(activity_facts)
 
     # Summary totals across the entire range
+    cur_easy, cur_mod, cur_hard = _zone_minutes(activity_facts)
     summary = TrendsSummary(
         total_distance_m=sum(d.total_distance_m for d in daily_facts),
         total_moving_time_s=sum(d.total_moving_time_s for d in daily_facts),
         activity_count=sum(d.activity_count for d in daily_facts),
         total_suffer_score=sum(d.total_effort_score for d in daily_facts),
         avg_efficiency_mps_per_bpm=_avg_efficiency(activity_facts),
-        total_zone_minutes=_total_zone_minutes(activity_facts),
+        zone_easy_minutes=cur_easy,
+        zone_moderate_minutes=cur_mod,
+        zone_hard_minutes=cur_hard,
     )
 
     # Previous period summary
@@ -661,13 +666,16 @@ def get_trends_report(
     if window is not None:
         current_start, prev_start = window
         prev_facts = _query_activity_facts(db, prev_start, current_start, types=types, user_id=user_id)
+        prev_easy, prev_mod, prev_hard = _zone_minutes(prev_facts)
         previous_summary = TrendsSummary(
             total_distance_m=sum(f.distance_m for f in prev_facts),
             total_moving_time_s=sum(f.moving_time_s for f in prev_facts),
             activity_count=len(prev_facts),
             total_suffer_score=sum(f.effort_score or 0.0 for f in prev_facts),
             avg_efficiency_mps_per_bpm=_avg_efficiency(prev_facts),
-            total_zone_minutes=_total_zone_minutes(prev_facts),
+            zone_easy_minutes=prev_easy,
+            zone_moderate_minutes=prev_mod,
+            zone_hard_minutes=prev_hard,
         )
 
     # 3. Continuous daily facts (every day filled)
