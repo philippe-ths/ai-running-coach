@@ -513,20 +513,24 @@ def build_b_baseline(
     if profile is None:
         profile = _load_profile(db, activity.user_id)
 
-    # Recent training summary relative to this activity's date
+    # Recent training summary relative to this activity's date. The three
+    # windows (7d, 28d, prev_28d) all fall within [activity_date-56d,
+    # activity_date), so fetch that span once and partition in Python (#365)
+    # instead of issuing three queries (each was a select + selectinload = 6 SQL
+    # statements). The window edges are date midnights and a fact's local_date
+    # is start_date.date(), so partitioning by local_date reproduces the prior
+    # per-window start_date bounds exactly — and _summarize_period is unchanged,
+    # so every summary value is byte-identical.
     activity_date = activity.start_date.date()
-    facts_7d = _query_activity_facts(
-        db, activity_date - timedelta(days=7), activity_date,
+    facts_56d = _query_activity_facts(
+        db, activity_date - timedelta(days=56), activity_date,
         user_id=activity.user_id,
     )
-    facts_28d = _query_activity_facts(
-        db, activity_date - timedelta(days=28), activity_date,
-        user_id=activity.user_id,
-    )
-    facts_prev_28d = _query_activity_facts(
-        db, activity_date - timedelta(days=56), activity_date - timedelta(days=28),
-        user_id=activity.user_id,
-    )
+    since_7d = activity_date - timedelta(days=7)
+    since_28d = activity_date - timedelta(days=28)
+    facts_7d = [f for f in facts_56d if f.local_date >= since_7d]
+    facts_28d = [f for f in facts_56d if f.local_date >= since_28d]
+    facts_prev_28d = [f for f in facts_56d if f.local_date < since_28d]
 
     return BBaseline(
         profile=ProfileContext(
