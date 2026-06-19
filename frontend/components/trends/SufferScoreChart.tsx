@@ -9,6 +9,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import { ReactNode } from "react";
 import { SufferScorePoint, DailySufferScorePoint, WeeklySufferScorePoint } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
 import ChartTooltip from "@/components/charts/ChartTooltip";
@@ -16,9 +17,11 @@ import ChartTooltip from "@/components/charts/ChartTooltip";
 interface Props {
   data: SufferScorePoint[] | DailySufferScorePoint[] | WeeklySufferScorePoint[];
   granularity: "daily" | "weekly";
+  /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
+  delta?: ReactNode;
 }
 
-export default function SufferScoreChart({ data, granularity }: Props) {
+export default function SufferScoreChart({ data, granularity, delta }: Props) {
   const chartData = data.map((d: any) => ({
     ...d,
     label: formatDateLabel(d.date ?? d.week_start),
@@ -31,6 +34,7 @@ export default function SufferScoreChart({ data, granularity }: Props) {
       <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
         {title}
       </h3>
+      {delta && <div className="mb-1">{delta}</div>}
       <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
         Accumulates with both duration and intensity. Not a measure of how hard you ran.
       </p>

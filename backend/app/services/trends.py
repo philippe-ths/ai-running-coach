@@ -569,6 +569,27 @@ def build_zone_load_daily(
     return result
 
 
+def _avg_efficiency(facts: List[ActivityFact]) -> Optional[float]:
+    """Mean HR-efficiency (m/s per bpm) over the window, or None when no
+    activity qualifies. Reuses build_efficiency_trend so the average is taken
+    over exactly the activities the efficiency chart plots (#385)."""
+    points = build_efficiency_trend(facts)
+    if not points:
+        return None
+    return round(sum(p["efficiency_mps_per_bpm"] for p in points) / len(points), 4)
+
+
+def _total_zone_minutes(facts: List[ActivityFact]) -> float:
+    """Total minutes across all three HR zones over the window (#385)."""
+    total_s = 0
+    for af in facts:
+        if not af.time_in_zones:
+            continue
+        easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
+        total_s += easy_s + mod_s + hard_s
+    return round(total_s / 60, 1)
+
+
 def _summarise_window(facts: List[ActivityFact]) -> WeeklyStatsSummary:
     """Collapse activity facts for one window into the dashboard summary card totals."""
     hard_days = len({f.local_date for f in facts if f.effort in _HARD_EFFORTS})
@@ -630,6 +651,8 @@ def get_trends_report(
         total_moving_time_s=sum(d.total_moving_time_s for d in daily_facts),
         activity_count=sum(d.activity_count for d in daily_facts),
         total_suffer_score=sum(d.total_effort_score for d in daily_facts),
+        avg_efficiency_mps_per_bpm=_avg_efficiency(activity_facts),
+        total_zone_minutes=_total_zone_minutes(activity_facts),
     )
 
     # Previous period summary
@@ -643,6 +666,8 @@ def get_trends_report(
             total_moving_time_s=sum(f.moving_time_s for f in prev_facts),
             activity_count=len(prev_facts),
             total_suffer_score=sum(f.effort_score or 0.0 for f in prev_facts),
+            avg_efficiency_mps_per_bpm=_avg_efficiency(prev_facts),
+            total_zone_minutes=_total_zone_minutes(prev_facts),
         )
 
     # 3. Continuous daily facts (every day filled)
