@@ -52,7 +52,15 @@ interface SimpleChartProps {
   timeData?: (number | null)[];
 }
 
-function SimpleChart({ type, data, secondaryData, scrubFraction, onScrub, timeData }: SimpleChartProps) {
+// Memoized so a parent re-render that does not change this chart's props is a
+// no-op (#368). The activity-detail page re-renders on unrelated state — most
+// often the coach-report poll (#260) — and without memo every such tick re-ran
+// all 4-6 charts. The data/secondaryData/timeData props are referentially
+// stable (the same stream `.data` references) and onScrub is the stable
+// useState setter, so only scrubFraction changes during a scrub; that fraction
+// is shared, so all charts still update their synced indicator together (#207),
+// which is intended.
+const SimpleChart = React.memo(function SimpleChart({ type, data, secondaryData, scrubFraction, onScrub, timeData }: SimpleChartProps) {
   const preset = PRESETS[type] || { label: type, color: 'text-gray-500', icon: Activity };
   const Icon = preset.icon;
   const areaRef = useRef<HTMLDivElement>(null);
@@ -252,7 +260,7 @@ function SimpleChart({ type, data, secondaryData, scrubFraction, onScrub, timeDa
       </div>
     </div>
   );
-}
+});
 
 export default function StreamCharts({ streams }: StreamChartsProps) {
   // One scrub position shared by every chart, as a fraction of the run.
