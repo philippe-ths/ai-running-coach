@@ -33,3 +33,10 @@ textarea,
 .selectable {
   user-select: text;
 }
+
+/* Display headings carry the serif voice (Fraunces); body and UI stay sans
+   (Hanken). Components keep their own size/weight utilities; only the family
+   changes here. */
+h1 {
+  font-family: var(--font-fraunces), Georgia, serif;
+}
