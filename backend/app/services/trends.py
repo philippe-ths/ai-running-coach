@@ -11,7 +11,7 @@ from typing import List, Optional
 from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
 
-from app.models import Activity
+from app.models import Activity, DerivedMetric
 from app.schemas.trends import (
     TrendsResponse,
     TrendsSummary,
@@ -73,6 +73,33 @@ class ActivityFact:
         self.time_in_zones: Optional[dict] = (
             activity.metrics.time_in_zones if activity.metrics else None
         )
+
+    @classmethod
+    def from_row(cls, row) -> "ActivityFact":
+        """Build from a column-projection Row instead of a full Activity ORM
+        object (#367). The trends queries only read the ~14 scalar fields below,
+        so projecting them (mirroring readiness.py) avoids materializing the
+        Activity/DerivedMetric JSON blobs (raw_summary, interval_structure,
+        discount_signals, ...) the trend charts never touch. The LEFT join makes
+        the three metric columns NULL for an activity without a DerivedMetric,
+        reproducing the prior `activity.metrics ... else None`.
+        """
+        self = cls.__new__(cls)
+        self.activity_id = row.id
+        self.local_date = row.start_date.date()
+        self.activity_type = row.type
+        self.user_intent = row.user_intent
+        self.distance_m = row.distance_m or 0
+        self.moving_time_s = row.moving_time_s or 0
+        self.elapsed_time_s = row.elapsed_time_s or 0
+        self.elev_gain_m = row.elev_gain_m or 0.0
+        self.avg_hr = row.avg_hr
+        self.avg_cadence = row.avg_cadence
+        self.average_speed_mps = row.average_speed_mps
+        self.effort_score = row.effort_score
+        self.effort = row.effort
+        self.time_in_zones = row.time_in_zones
+        return self
 
     @property
     def effective_type(self) -> str:
@@ -227,11 +254,30 @@ def _query_activity_facts(
     continue working; the intent is to make it required once the API auth layer
     provides a resolved user at every endpoint (ADR 0005 / Phase 2).
     """
-    from sqlalchemy.orm import selectinload
-
+    # Project only the columns ActivityFact reads instead of materializing full
+    # Activity ORM objects + a selectinload of DerivedMetric (#367). The LEFT
+    # outer join keeps activities without a DerivedMetric (their metric columns
+    # come back NULL); DerivedMetric.activity_id is unique, so the join never
+    # duplicates a row. This avoids loading the Activity/DerivedMetric JSON
+    # blobs the trend charts never touch — the worst over-fetch on the ALL range.
     stmt = (
-        select(Activity)
-        .options(selectinload(Activity.metrics))
+        select(
+            Activity.id,
+            Activity.start_date,
+            Activity.type,
+            Activity.user_intent,
+            Activity.distance_m,
+            Activity.moving_time_s,
+            Activity.elapsed_time_s,
+            Activity.elev_gain_m,
+            Activity.avg_hr,
+            Activity.avg_cadence,
+            Activity.average_speed_mps,
+            DerivedMetric.effort_score,
+            DerivedMetric.effort,
+            DerivedMetric.time_in_zones,
+        )
+        .outerjoin(DerivedMetric, DerivedMetric.activity_id == Activity.id)
         .where(Activity.is_deleted == False)  # noqa: E712
         .order_by(Activity.start_date.asc())
     )
@@ -242,8 +288,8 @@ def _query_activity_facts(
     if end_date:
         stmt = stmt.where(Activity.start_date < datetime.combine(end_date, datetime.min.time()))
 
-    activities = db.execute(stmt).scalars().all()
-    facts = [ActivityFact(a) for a in activities]
+    rows = db.execute(stmt).all()
+    facts = [ActivityFact.from_row(r) for r in rows]
 
     if types:
         type_set = {t.lower() for t in types}
