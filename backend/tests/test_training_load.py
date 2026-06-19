@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime, timezone, timedelta
 
 from app.models import Activity, DerivedMetric, User
-from app.services.training_load import LoadFact, build_load_report, week_start
+from app.services.training_load import MAX_WEEKS, LoadFact, build_load_report, week_start
 
 
 TODAY = date(2026, 6, 12)  # a Friday; week starts Mon 2026-06-08
@@ -107,3 +107,89 @@ def test_endpoint_returns_load_report(client, db):
     weeks = resp.json()["weeks"]
     assert weeks[-1]["score"] == 72.0
     assert weeks[-1]["activities"][0]["name"] == "Morning Run"
+
+
+def test_endpoint_composes_headline_through_projection(client, db):
+    """The headline depends on raw_summary (sport_type/trainer) plus the
+    classification axes; the column projection (#362) must still produce the
+    same headline the full ORM load did. A hilly long run exercises both the
+    metric axes and the run-noun composition."""
+    user_id = uuid.uuid4()
+    db.add(User(id=user_id, email=f"hl_{user_id}@example.com"))
+    db.flush()
+    a = Activity(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        strava_activity_id=abs(hash("hl" + str(uuid.uuid4()))) % 10**9,
+        name="Big Sunday Long Run",
+        type="Run",
+        start_date=datetime.now(timezone.utc),
+        distance_m=25000,
+        moving_time_s=9000,
+        elapsed_time_s=9200,
+        elev_gain_m=400.0,
+        raw_summary={"sport_type": "Run"},
+    )
+    db.add(a)
+    db.flush()
+    db.add(
+        DerivedMetric(
+            activity_id=a.id,
+            effort_score=180.0,
+            confidence="high",
+            effort="moderate",
+            duration_class="long",
+            structure="continuous",
+            is_hilly=True,
+            is_race=False,
+        )
+    )
+    db.commit()
+
+    resp = client.get("/api/trends/load")
+    assert resp.status_code == 200, resp.text
+    point = resp.json()["weeks"][-1]["activities"][0]
+    assert point["name"] == "Big Sunday Long Run"
+    assert point["headline"] == "Hilly long run (moderate)"
+
+
+def test_endpoint_excludes_old_activity_but_preserves_series_length(client, db):
+    """An activity older than MAX_WEEKS is dropped from the served weeks, yet
+    its existence still anchors the series to the full MAX_WEEKS window — the
+    series-start probe (#362) reproduces the prior unbounded build's length."""
+    user_id = uuid.uuid4()
+    db.add(User(id=user_id, email=f"old_{user_id}@example.com"))
+    db.flush()
+    now = datetime.now(timezone.utc)
+
+    def _run(name, when):
+        return Activity(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            strava_activity_id=abs(hash(name + str(uuid.uuid4()))) % 10**9,
+            name=name,
+            type="Run",
+            start_date=when,
+            distance_m=8000,
+            moving_time_s=2400,
+            elapsed_time_s=2500,
+            elev_gain_m=20.0,
+        )
+
+    recent = _run("Recent Run", now)
+    old = _run("Ancient Run", now - timedelta(weeks=60))
+    db.add_all([recent, old])
+    db.flush()
+    db.add_all(
+        [
+            DerivedMetric(activity_id=recent.id, effort_score=60.0, confidence="high"),
+            DerivedMetric(activity_id=old.id, effort_score=99.0, confidence="high"),
+        ]
+    )
+    db.commit()
+
+    weeks = client.get("/api/trends/load").json()["weeks"]
+    assert len(weeks) == MAX_WEEKS  # old history anchors the full window
+    names = [p["name"] for w in weeks for p in w["activities"]]
+    assert "Recent Run" in names
+    assert "Ancient Run" not in names  # older than the window -> not served
