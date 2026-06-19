@@ -25,6 +25,17 @@ const SHOW_DEBUG_PANEL =
   process.env.NEXT_PUBLIC_SHOW_DEBUG_PANEL === 'true' ||
   process.env.NEXT_PUBLIC_SHOW_DEBUG_PANEL === '1';
 
+// #283: the policy rule whose surviving violation forces a templated fallback
+// rather than a stored report (degrade-not-withhold does NOT apply to it). It can
+// never reach a stored, rendered report, but we exclude it defensively so the
+// advisory below is provably scoped to the non-medical "kept anyway" case.
+const MEDICAL_OVERREACH_RULE = 'medical_overreach';
+
+// #283: turn a backend policy-rule id (e.g. "uncalibrated_zone") into reader text.
+function humanizeRule(rule: string): string {
+  return rule.replace(/_/g, ' ');
+}
+
 interface Props {
   activityId: string;
   hasMetrics: boolean;
@@ -231,6 +242,13 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   // #338: the internal confidence rating is no longer surfaced to the runner
   // (it still flows over the API in report.meta.confidence; display-only change).
   const { generated_at } = report.meta;
+
+  // #283: a report can trip a non-medical policy rule and still be stored and
+  // rendered (degrade-not-withhold). Surface that so a known-imperfect report is
+  // distinguishable from a clean one instead of looking fully authoritative.
+  const surfacedViolations = (report.meta.policy_violations ?? []).filter(
+    (rule) => rule !== MEDICAL_OVERREACH_RULE,
+  );
 
   // A3 (ADR 0009): the prose-message shape (schema 2.0) renders the message as
   // markdown with tappable-option chips; the legacy structured shape renders the
@@ -484,6 +502,28 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
             </div>
           )}
         </>
+      )}
+
+      {/* #283: surviving (non-medical) policy violations — the report was kept
+          despite an automated quality check flagging it, so mark it as such
+          rather than rendering it identically to a clean report. Renders nothing
+          when the report is clean. Placed once here so it covers both the prose
+          and the legacy structured shapes. */}
+      {surfacedViolations.length > 0 && (
+        <div
+          role="note"
+          title={`Policy rules flagged: ${surfacedViolations.join(', ')}`}
+          className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-300"
+        >
+          <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>
+            Heads up — an automated quality check flagged this analysis
+            {' ('}
+            {surfacedViolations.map(humanizeRule).join(', ')}
+            {'). '}
+            It was kept as written, so read it with extra care.
+          </span>
+        </div>
       )}
 
       {/* Meta footer */}
