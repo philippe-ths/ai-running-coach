@@ -283,3 +283,60 @@ def test_endpoint_triggers_reanalyze_and_reports_eligible(client, db):
     assert resp.json()["eligible"] == 2
     assert resp.json()["status"] == "scheduled"
     fake_queue.enqueue.assert_called_once()
+
+
+# --- The synchronous run-to-completion CLI (#326) -------------------------------
+# `scripts.reanalyze_all` is the offline eval-rebuild path. It reuses the job's
+# `reanalyze_history_batch`, so the two re-analysis paths share one contract and
+# cannot drift. These tests pin the run-to-completion loop and that the shared
+# eligibility/limit semantics carry through.
+
+
+def test_cli_reanalyzes_whole_set_across_batch_boundaries(db):
+    """The CLI drains every eligible activity even when the eligible set spans
+    several batches, reusing the job's cursor-paged batch function."""
+    from scripts.reanalyze_all import reanalyze_all
+
+    user = _seed_user(db)
+    activities = [_seed_activity(db, user, sid) for sid in (9201, 9202, 9203)]
+
+    # batch_size=2 forces two batches (2 + 1) over the 3 eligible activities.
+    processed = reanalyze_all(db, batch_size=2)
+
+    assert processed == 3
+    assert all(_has_metric(db, a) for a in activities)
+
+
+def test_cli_limit_bounds_the_total_processed(db):
+    """`--limit N` stops after N activities (newest first), leaving the rest
+    untouched, even when a single batch could hold more."""
+    from scripts.reanalyze_all import reanalyze_all
+
+    user = _seed_user(db)
+    a1 = _seed_activity(db, user, 9301)  # oldest by strava id
+    a2 = _seed_activity(db, user, 9302)
+    a3 = _seed_activity(db, user, 9303)  # newest by strava id
+
+    processed = reanalyze_all(db, limit=2, batch_size=10)
+
+    assert processed == 2
+    # Newest two re-analyzed; the oldest left untouched.
+    assert _has_metric(db, a3)
+    assert _has_metric(db, a2)
+    assert not _has_metric(db, a1)
+
+
+def test_cli_inherits_eligibility_excludes_streamless(db):
+    """Eligibility is the job's: streamless activities are not processed, so the
+    CLI cannot drift from the operational path on which rows it touches."""
+    from scripts.reanalyze_all import reanalyze_all
+
+    user = _seed_user(db)
+    streamed = _seed_activity(db, user, 9401, with_streams=True)
+    streamless = _seed_activity(db, user, 9402, with_streams=False)
+
+    processed = reanalyze_all(db)
+
+    assert processed == 1
+    assert _has_metric(db, streamed)
+    assert not _has_metric(db, streamless)
