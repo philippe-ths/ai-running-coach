@@ -129,3 +129,36 @@ def test_deleted_activities_are_ignored(db):
     assert stats.summary.activity_count == 1
     assert stats.summary.total_distance_m == 5000
     assert keep.is_deleted is False
+
+
+def test_activity_without_metrics_is_still_counted(db):
+    """An activity with no DerivedMetric row (e.g. summary-only, not yet
+    analyzed) must still appear in the totals with a null effort_score. The
+    column projection's LEFT join (#367) reproduces the prior ORM behavior
+    where activity.metrics was None."""
+    user_id = _user(db)
+    _activity(db, user_id, days_ago=1, distance_m=5000, moving_time_s=1500, effort_score=10.0)
+
+    bare = Activity(
+        user_id=user_id,
+        strava_activity_id=int(uuid.uuid4().int % 1_000_000_000),
+        start_date=datetime.now() - timedelta(days=2),
+        type="Run",
+        name="Unanalyzed run",
+        distance_m=6000,
+        moving_time_s=1800,
+        elapsed_time_s=1800,
+        elev_gain_m=0.0,
+        raw_summary={},
+    )
+    db.add(bare)
+    db.flush()
+
+    stats = get_weekly_stats(db)
+
+    # Both counted, distance summed across both.
+    assert stats.summary.activity_count == 2
+    assert stats.summary.total_distance_m == 11000
+    # The metrics-less activity contributes no load and is not a hard day.
+    assert stats.summary.total_load == 10.0
+    assert stats.summary.hard_days == 0

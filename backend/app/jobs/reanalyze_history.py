@@ -38,6 +38,7 @@ from app.core.queue import queue
 from app.db.session import SessionLocal
 from app.models import Activity, ActivityStream
 from app.services.analysis import analyze
+from app.services.analysis.baseline import recompute_runner_baseline
 
 logger = logging.getLogger(__name__)
 
@@ -91,14 +92,23 @@ def reanalyze_history_batch(
     batch = db.execute(_eligible_stmt(cursor=cursor).limit(limit)).scalars().all()
     # Snapshot identity up front: a per-activity failure rolls the session back,
     # which expires the ORM instances in `batch`, so re-reading their attributes
-    # afterwards would re-query (or raise on a now-absent row). The id and strava
-    # id are all we need downstream.
-    items = [(activity.id, activity.strava_activity_id) for activity in batch]
+    # afterwards would re-query (or raise on a now-absent row). The id, strava
+    # id, and user id are all we need downstream.
+    items = [
+        (activity.id, activity.strava_activity_id, activity.user_id)
+        for activity in batch
+    ]
     result = ReanalyzeBatchResult()
 
-    for activity_id, strava_id in items:
+    # Defer the runner-baseline recompute to once per touched user after the
+    # batch (#366): analyze() recomputes it per call by default, which redid the
+    # 182-day windowed scan up to REANALYZE_BATCH_SIZE times per batch. We pass
+    # skip_baseline=True here and recompute once per user below; the recompute
+    # is a full idempotent pass, so the final baseline is identical.
+    recompute_user_ids: list = []
+    for activity_id, strava_id, user_id in items:
         try:
-            analyze(db, str(activity_id))
+            analyze(db, str(activity_id), skip_baseline=True)
         except Exception as exc:  # noqa: BLE001 - convergence over completeness
             db.rollback()
             logger.error(
@@ -107,7 +117,21 @@ def reanalyze_history_batch(
                 strava_id,
                 exc,
             )
+        else:
+            if user_id not in recompute_user_ids:
+                recompute_user_ids.append(user_id)
         result.processed.append(strava_id)
+
+    # One baseline recompute per user that had at least one activity succeed.
+    # Best-effort, mirroring analyze()'s _post_commit_baseline: a failure is
+    # logged and the session rolled back so the next user starts clean, never
+    # aborting the chain.
+    for user_id in recompute_user_ids:
+        try:
+            recompute_runner_baseline(db, user_id)
+        except Exception:  # noqa: BLE001 - baseline is best-effort
+            logger.exception("runner baseline recompute failed for user %s", user_id)
+            db.rollback()
 
     # A full batch means there may be more; a short batch means we drained the
     # set. Advance the cursor to the last id seen so the next batch continues

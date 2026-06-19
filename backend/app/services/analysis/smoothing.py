@@ -1,3 +1,4 @@
+import warnings
 from typing import List, Optional
 import numpy as np
 
@@ -55,31 +56,28 @@ def smooth_cadence(
     # Unrealistic spikes
     cad_arr[cad_arr > MAX_VALID_CADENCE] = np.nan
     
-    # 2. Median Filter
-    # Rolling median ignores NaNs if possible, but standard rolling median might not.
-    # We can skip NaNs or treat them. 
-    # Better approach: 
-    # For the median filter, we usually want to operate on valid data. 
-    # However, preserving the gaps is important.
-    # Let's run a window over the data.
-    
-    # To use a moving median robustly with NaNs, we can use a loop or scipy.ndimage.generic_filter
-    # Since we only have numpy, let's implement a simple sliding window median that ignores NaNs.
-    
-    smoothed = np.full(n, np.nan)
+    # 2. Median Filter (NaN-aware rolling median, vectorized — #363)
+    # The prior implementation was a per-sample Python loop that sliced a
+    # MEDIAN_FILTER_WINDOW-wide window, stripped NaNs, and called np.median —
+    # ~n iterations dominated by dispatch overhead. The vectorized form is
+    # exactly equivalent: NaN-pad the series by half_window on each side so
+    # every output index has a full window, build all windows in one C call
+    # with sliding_window_view, then take the NaN-ignoring median per row.
+    #  - Interior dropout NaNs are stripped by nanmedian just as the loop's
+    #    valid_window stripped them.
+    #  - The NaN edge padding reproduces the loop's shrinking edge window (the
+    #    out-of-range samples the loop omitted are NaN here, and nanmedian
+    #    ignores them), so edge outputs are identical.
+    #  - An all-NaN window yields NaN (a preserved gap), matching the loop's
+    #    len(valid_window) == 0 branch; nanmedian's expected All-NaN
+    #    RuntimeWarning for that case is suppressed.
     half_window = MEDIAN_FILTER_WINDOW // 2
-    
-    for i in range(n):
-        start = max(0, i - half_window)
-        end = min(n, i + half_window + 1)
-        window = cad_arr[start:end]
-        valid_window = window[~np.isnan(window)]
-        
-        if len(valid_window) > 0:
-            smoothed[i] = np.median(valid_window)
-        else:
-            smoothed[i] = np.nan
-            
+    padded = np.pad(cad_arr, half_window, mode="constant", constant_values=np.nan)
+    windows = np.lib.stride_tricks.sliding_window_view(padded, MEDIAN_FILTER_WINDOW)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        smoothed = np.nanmedian(windows, axis=1)
+
     # 3. Fill short gaps (Linear Interpolation)
     # logic: identify gaps (sequences of NaNs). If gap duration <= MAX_GAP_INTERPOLATE_S, interpolate.
     
