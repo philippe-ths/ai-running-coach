@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { fetchFromAPI } from '@/lib/api';
 import { WeeklyStatsData } from '@/lib/types';
 import { formatDistanceKm, formatDuration } from '@/lib/format';
@@ -109,7 +110,12 @@ export default async function Dashboard() {
       <section>
         <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200">Recent Activities</h2>
-            {/* Sync trigger could go here */}
+            <Link
+              href="/activities"
+              className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
+            >
+              See all
+            </Link>
         </div>
         <ActivityList activities={activities} />
       </section>

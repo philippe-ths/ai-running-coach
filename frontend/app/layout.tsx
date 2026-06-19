@@ -1,10 +1,28 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
-import { Inter } from 'next/font/google';
+import { Fraunces, Hanken_Grotesk, IBM_Plex_Mono } from 'next/font/google';
 import NavBar from '@/components/NavBar';
 import ThemeProvider from '@/components/ThemeProvider';
 
-const inter = Inter({ subsets: ['latin'] });
+// Three deliberate type roles: Fraunces (serif) is the coach's voice + display
+// headings, Hanken Grotesk (sans) is body + UI, IBM Plex Mono is numbers/data.
+const fraunces = Fraunces({
+  subsets: ['latin'],
+  style: ['normal', 'italic'],
+  variable: '--font-fraunces',
+  display: 'swap',
+});
+const hanken = Hanken_Grotesk({
+  subsets: ['latin'],
+  variable: '--font-hanken',
+  display: 'swap',
+});
+const plexMono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  variable: '--font-plex-mono',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'AI Running Coach',
@@ -26,8 +44,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.className} min-h-screen flex flex-col`}>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${hanken.variable} ${fraunces.variable} ${plexMono.variable}`}
+    >
+      <body className="font-sans min-h-screen flex flex-col">
         <ThemeProvider>
           <NavBar />
           <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-8">
