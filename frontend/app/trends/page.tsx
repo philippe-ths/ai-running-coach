@@ -142,26 +142,68 @@ export default function TrendsPage() {
             type="distance"
             data={isDaily ? data.daily_distance : data.weekly_distance}
             granularity={granularity}
+            delta={
+              <StatDiff
+                current={data.summary.total_distance_m}
+                previous={data.previous_summary?.total_distance_m}
+                format={formatDistanceKm}
+              />
+            }
           />
           <TrendBarChart
             type="time"
             data={isDaily ? data.daily_time : data.weekly_time}
             granularity={granularity}
+            delta={
+              <StatDiff
+                current={data.summary.total_moving_time_s}
+                previous={data.previous_summary?.total_moving_time_s}
+                format={formatDuration}
+              />
+            }
           />
 
           <SufferScoreChart
             data={isDaily ? data.daily_suffer_score : data.weekly_suffer_score}
             granularity={granularity}
+            delta={
+              <StatDiff
+                current={data.summary.total_suffer_score}
+                previous={data.previous_summary?.total_suffer_score}
+                format={(v) => Math.round(v).toLocaleString()}
+              />
+            }
           />
           {data.efficiency_trend && (
             <EfficiencyTrendChart
               data={data.efficiency_trend}
               granularity={granularity}
+              delta={
+                data.summary.avg_efficiency_mps_per_bpm != null ? (
+                  <StatDiff
+                    // Display in meters-per-heartbeat (×60), matching the chart.
+                    current={data.summary.avg_efficiency_mps_per_bpm * 60}
+                    previous={
+                      data.previous_summary?.avg_efficiency_mps_per_bpm != null
+                        ? data.previous_summary.avg_efficiency_mps_per_bpm * 60
+                        : undefined
+                    }
+                    format={(v) => `${v.toFixed(2)} m/beat`}
+                  />
+                ) : undefined
+              }
             />
           )}
           <ZoneLoadChart
             data={isDaily ? data.daily_zone_load : data.weekly_zone_load}
             granularity={granularity}
+            delta={
+              <StatDiff
+                current={data.summary.total_zone_minutes ?? 0}
+                previous={data.previous_summary?.total_zone_minutes}
+                format={(v) => formatDuration(v * 60)}
+              />
+            }
           />
         </div>
       )}

@@ -9,6 +9,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import { ReactNode } from "react";
 import { formatDateLabel } from "@/lib/format";
 import ChartTooltip from "@/components/charts/ChartTooltip";
 
@@ -16,6 +17,8 @@ interface TrendBarChartProps {
   data: any[];
   type: "distance" | "time";
   granularity: "daily" | "weekly";
+  /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
+  delta?: ReactNode;
 }
 
 function formatMinutes(seconds: number): string {
@@ -29,6 +32,7 @@ export default function TrendBarChart({
   data,
   type,
   granularity,
+  delta,
 }: TrendBarChartProps) {
   // Configuration based on type
   const isDistance = type === "distance";
@@ -64,7 +68,10 @@ export default function TrendBarChart({
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
-      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">{title}</h3>
+      <div className="mb-4">
+        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">{title}</h3>
+        {delta}
+      </div>
       {chartData.length === 0 ? (
         <p className="text-gray-400 dark:text-gray-500 text-sm py-8 text-center">
           No data for this range.

@@ -63,6 +63,10 @@ export interface TrendsSummary {
   total_moving_time_s: number;
   activity_count: number;
   total_suffer_score: number;
+  // Period aggregates backing the graph-card deltas (#385). Efficiency is null
+  // when no activity in the window has usable HR/distance.
+  avg_efficiency_mps_per_bpm?: number | null;
+  total_zone_minutes?: number;
 }
 
 export interface TrendsData {
