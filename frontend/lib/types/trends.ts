@@ -64,9 +64,12 @@ export interface TrendsSummary {
   activity_count: number;
   total_suffer_score: number;
   // Period aggregates backing the graph-card deltas (#385). Efficiency is null
-  // when no activity in the window has usable HR/distance.
+  // when no activity in the window has usable HR/distance. Zone minutes are
+  // split per HR band for the Zone-Load card's Easy / Moderate / Hard deltas.
   avg_efficiency_mps_per_bpm?: number | null;
-  total_zone_minutes?: number;
+  zone_easy_minutes?: number;
+  zone_moderate_minutes?: number;
+  zone_hard_minutes?: number;
 }
 
 export interface TrendsData {

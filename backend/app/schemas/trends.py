@@ -78,9 +78,12 @@ class TrendsSummary(BaseModel):
     total_suffer_score: float
     # Period aggregates backing the graph-card deltas (#385). Efficiency is an
     # average (a rate, not a sum) and is None when no activity in the window has
-    # usable HR/distance. Zone minutes is the total across all three HR zones.
+    # usable HR/distance. Zone minutes are split per HR band so the Zone-Load
+    # card can show an Easy / Moderate / Hard delta.
     avg_efficiency_mps_per_bpm: Optional[float] = None
-    total_zone_minutes: float = 0.0
+    zone_easy_minutes: float = 0.0
+    zone_moderate_minutes: float = 0.0
+    zone_hard_minutes: float = 0.0
 
 
 class TrendsResponse(BaseModel):
