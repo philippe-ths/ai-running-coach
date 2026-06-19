@@ -21,7 +21,7 @@ from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, undefer
 
 from app.models import Activity, Block, DerivedMetric, RunnerBaseline, UserProfile
 from app.models.checkin import CheckIn
@@ -804,7 +804,10 @@ def _comparable_bucket_drifts(db: Session, activity: Activity) -> list[float]:
 
     rows = (
         db.query(Activity)
-        .options(joinedload(Activity.metrics))
+        # undefer raw_summary (#359): the loop below reads average_temp from each
+        # scanned row for bucket matching, so a deferred column would lazy-load
+        # once per row -> N+1 across the calibration scan.
+        .options(joinedload(Activity.metrics), undefer(Activity.raw_summary))
         .filter(
             Activity.user_id == activity.user_id,
             Activity.id != activity.id,

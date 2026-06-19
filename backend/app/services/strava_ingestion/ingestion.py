@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, undefer
 
 from app.models import Activity, ActivityStream, StravaAccount, UserProfile
 from app.schemas import SyncResponse
@@ -121,7 +121,14 @@ def _apply_tokens(account: StravaAccount, tokens: Tokens) -> None:
 
 def upsert_activity(db: Session, raw: dict, user_id) -> Activity:
     """Parse raw Strava JSON and upsert an Activity row. Caller commits."""
-    stmt = select(Activity).where(Activity.strava_activity_id == raw["id"])
+    # undefer raw_summary (#359): the lap-preservation check below reads
+    # existing.raw_summary["laps"], so load it with the row on this hot
+    # (per-sync) upsert path rather than as a follow-up query.
+    stmt = (
+        select(Activity)
+        .where(Activity.strava_activity_id == raw["id"])
+        .options(undefer(Activity.raw_summary))
+    )
     existing = db.execute(stmt).scalars().first()
 
     # Preserve recorded laps across a lap-less re-sync. The detail endpoint

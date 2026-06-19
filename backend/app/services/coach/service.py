@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, undefer
 
 from app.core.config import settings
 from app.models import Activity
@@ -278,8 +278,14 @@ async def get_or_generate_coach_report(
     # mid-regen leaves the prior report intact instead of zero rows. Prior schema-
     # versions are untouched (the in-place update keeps the same cache identity).
 
-    # Load activity
-    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
+    # Load activity. undefer raw_summary (#359): the context pack reads the
+    # subject's raw_summary (headline, average_temp), so load it with the row.
+    activity = (
+        db.query(Activity)
+        .options(undefer(Activity.raw_summary))
+        .filter(Activity.id == activity_uuid)
+        .first()
+    )
     if not activity or not activity.metrics:
         return None
 
@@ -357,7 +363,12 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     has no metrics (nothing to react to).
     """
     activity_uuid = _coerce_uuid(activity_id)
-    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
+    activity = (
+        db.query(Activity)
+        .options(undefer(Activity.raw_summary))  # #359: context reads subject raw_summary
+        .filter(Activity.id == activity_uuid)
+        .first()
+    )
     if not activity or not activity.metrics:
         return None
 
@@ -459,7 +470,12 @@ async def generate_fuller(
     # complete report intact instead of zero rows. Prior schema-versions are untouched
     # (the in-place update keeps the same cache identity).
 
-    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
+    activity = (
+        db.query(Activity)
+        .options(undefer(Activity.raw_summary))  # #359: context reads subject raw_summary
+        .filter(Activity.id == activity_uuid)
+        .first()
+    )
     if not activity or not activity.metrics:
         return None
 

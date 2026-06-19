@@ -1,7 +1,7 @@
 import logging
 import uuid
 from typing import Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, undefer
 from sqlalchemy import select
 
 from app.models import Activity, DerivedMetric, CheckIn, ActivityStream, StravaAccount, UserProfile
@@ -165,14 +165,21 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     """
     activity_uuid = _coerce_uuid(activity_id)
 
-    # 1. Load Activity
-    stmt = select(Activity).where(Activity.id == activity_uuid)
+    # 1. Load Activity. undefer raw_summary (#359): analyze reads it (lap-based
+    # interval detection + average_temp), so load it with the row.
+    stmt = (
+        select(Activity)
+        .where(Activity.id == activity_uuid)
+        .options(undefer(Activity.raw_summary))
+    )
     activity = db.execute(stmt).scalars().first()
     if not activity:
         return None
 
-    # 2. Load History (last 20 activities before this one)
-    history = db.query(Activity).filter(
+    # 2. Load History (last 20 activities before this one). undefer raw_summary
+    # (#359): the classifier calls _is_run(a) (-> sport_type -> raw_summary) on
+    # every history row, so a deferred column would lazy-load per row -> N+1.
+    history = db.query(Activity).options(undefer(Activity.raw_summary)).filter(
         Activity.user_id == activity.user_id,
         Activity.start_date < activity.start_date
     ).order_by(Activity.start_date.desc()).limit(20).all()
