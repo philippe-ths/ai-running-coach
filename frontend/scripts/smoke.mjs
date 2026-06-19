@@ -87,6 +87,7 @@ const mockTrends = {
 
 const routesToCheck = [
   { path: "/", expectedText: "Weekly Summary" },
+  { path: "/activities", expectedText: "All Activities" },
   { path: "/trends", expectedText: "Track your progress over time." },
   { path: "/profile", expectedText: "Loading profile..." },
   { path: "/activity/42", expectedText: "Morning Tempo" },
@@ -105,6 +106,13 @@ function createMockApiServer() {
 
     if (pathname === "/api/activities" && searchParams.get("limit") === "10") {
       return sendJson(res, 200, [mockActivity]);
+    }
+
+    // The All Activities view (#240) pages with skip/limit. Return one page, then
+    // empty, so the "Load more" terminator is exercised.
+    if (pathname === "/api/activities" && searchParams.has("skip")) {
+      const skip = Number(searchParams.get("skip") ?? "0");
+      return sendJson(res, 200, skip === 0 ? [mockActivity] : []);
     }
 
     if (pathname === "/api/activities/42") {
