@@ -10,12 +10,15 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import { ReactNode } from "react";
 import { ZoneLoadWeekPoint, DailyZoneLoadPoint } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
 
 interface ZoneLoadChartProps {
   data: ZoneLoadWeekPoint[] | DailyZoneLoadPoint[];
   granularity: "daily" | "weekly";
+  /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
+  delta?: ReactNode;
 }
 
 const ZONE_COLORS = {
@@ -61,7 +64,7 @@ function CustomTooltip({
   );
 }
 
-export default function ZoneLoadChart({ data, granularity }: ZoneLoadChartProps) {
+export default function ZoneLoadChart({ data, granularity, delta }: ZoneLoadChartProps) {
   const title =
     granularity === "daily"
       ? "Training Load by Zone per Day"
@@ -99,6 +102,7 @@ export default function ZoneLoadChart({ data, granularity }: ZoneLoadChartProps)
         <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
           Easy (&lt;70% HR) · Moderate (70-80%) · Hard (&gt;80%)
         </p>
+        {delta}
       </div>
       <ResponsiveContainer width="100%" height={260}>
         <BarChart data={chartData} barCategoryGap="20%">

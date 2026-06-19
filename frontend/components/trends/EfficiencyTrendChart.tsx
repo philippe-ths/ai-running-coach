@@ -13,13 +13,15 @@ import {
 } from "recharts";
 import { EfficiencyPoint } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
-import { useMemo, useState } from "react";
+import { ReactNode, useMemo, useState } from "react";
 import ActivityTypeFilter from "./ActivityTypeFilter";
 import ChartTooltip from "@/components/charts/ChartTooltip";
 
 interface Props {
   data: EfficiencyPoint[];
   granularity: "daily" | "weekly";
+  /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
+  delta?: ReactNode;
 }
 
 function calculateSMA(data: EfficiencyPoint[], window: number = 5): (number | null)[] {
@@ -33,7 +35,7 @@ function calculateSMA(data: EfficiencyPoint[], window: number = 5): (number | nu
   return result;
 }
 
-export default function EfficiencyTrendChart({ data, granularity }: Props) {
+export default function EfficiencyTrendChart({ data, granularity, delta }: Props) {
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
 
   // Derive available types from the dataset
@@ -91,6 +93,7 @@ export default function EfficiencyTrendChart({ data, granularity }: Props) {
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             Meters per heartbeat. Higher is better.
           </p>
+          {delta}
         </div>
         <div>
           <ActivityTypeFilter

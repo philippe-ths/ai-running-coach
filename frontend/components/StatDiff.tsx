@@ -38,9 +38,15 @@ export default function StatDiff({
     : "text-red-600 dark:text-red-400";
   const arrow = isIncrease ? "↑" : "↓";
 
+  // Percentage change alongside the absolute amount. The arrow already conveys
+  // direction, so the percentage is shown as a magnitude. Omitted when there is
+  // no positive baseline to divide by (a 0 → N jump has no finite percentage).
+  const pct = previous > 0 ? Math.round((Math.abs(diff) / previous) * 100) : null;
+
   return (
     <div className={`text-xs ${color} mt-1 font-medium`}>
       {arrow} {format(Math.abs(diff))}
+      {pct !== null && <span className="opacity-75"> · {pct}%</span>}
     </div>
   );
 }
