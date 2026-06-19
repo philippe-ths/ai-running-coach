@@ -2,8 +2,54 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Markdown from 'react-markdown';
-import { CoachReport, isMessageReport, isOpenerOnly } from '@/lib/types';
-import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2, RefreshCw } from 'lucide-react';
+import { CoachReport, CoachReportBody, isMessageReport, isOpenerOnly } from '@/lib/types';
+import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2, RefreshCw, Copy, Check } from 'lucide-react';
+
+// Flatten a coach report (either output shape) into plain text for copy-to-clipboard.
+// Mirrors what the panel renders: prose first, then the structured tail as labelled
+// sections, so the copied text reads like the on-screen analysis.
+function buildReportText(body: CoachReportBody): string {
+  const parts: string[] = [];
+  if (isMessageReport(body)) {
+    if (body.opener_message) parts.push(body.opener_message.trim());
+    if (body.headline) parts.push(body.headline.trim());
+    if ((body.message ?? '').trim()) parts.push(body.message.trim());
+  } else {
+    if (body.headline) parts.push(body.headline.trim());
+    if (body.thesis) parts.push(body.thesis.trim());
+    if (body.lead_argument?.text) parts.push(body.lead_argument.text.trim());
+    if (body.key_takeaways.length > 0) {
+      parts.push(
+        body.key_takeaways
+          .map((item) => `- ${typeof item === 'string' ? item : item.text}`)
+          .join('\n'),
+      );
+    }
+  }
+  if (body.next_steps.length > 0) {
+    parts.push(
+      'Next steps:\n' +
+        body.next_steps
+          .map((s) => `- ${s.action}: ${s.details} (${s.why})`)
+          .join('\n'),
+    );
+  }
+  if (body.risks.length > 0) {
+    parts.push(
+      'Risks:\n' +
+        body.risks
+          .map((r) => `- ${r.flag.replace(/_/g, ' ')}: ${r.explanation} (${r.mitigation})`)
+          .join('\n'),
+    );
+  }
+  if (body.questions.length > 0) {
+    parts.push(
+      'Questions:\n' +
+        body.questions.map((q) => `- ${q.question} (${q.reason})`).join('\n'),
+    );
+  }
+  return parts.join('\n\n');
+}
 
 // While an exchange is in its opener-only state (A4), the fuller turn lands later
 // server-side (on the runner's reply or a ~3h timer). The panel re-checks for it
@@ -41,6 +87,18 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   // out of scope here (they belong to I2 chat-as-continuation).
   const [tapState, setTapState] = useState<Record<number, 'sending' | 'sent' | 'error'>>({});
   const [chosenOption, setChosenOption] = useState<Record<number, string>>({});
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    if (!report) return;
+    try {
+      await navigator.clipboard.writeText(buildReportText(report.report));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard unavailable (e.g. insecure context); silently ignore
+    }
+  }, [report]);
 
   const handleOptionTap = useCallback(
     async (qIndex: number, opt: { id: string; kind: string; payload?: unknown }) => {
@@ -235,15 +293,25 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   // A3 (ADR 0009): the prose-message shape (schema 2.0) renders the message as
   // markdown with tappable-option chips; the legacy structured shape renders the
   // verdict/takeaway panel below, untouched.
-  const reRunButton = (
-    <button
-      onClick={regenerate}
-      className="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1 transition-colors"
-      title="Re-run coach analysis"
-    >
-      <RefreshCw className="w-3.5 h-3.5" />
-      Re-run
-    </button>
+  const headerActions = (
+    <div className="flex items-center gap-3">
+      <button
+        onClick={handleCopy}
+        className="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1 transition-colors"
+        title="Copy coach analysis"
+      >
+        {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+      <button
+        onClick={regenerate}
+        className="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1 transition-colors"
+        title="Re-run coach analysis"
+      >
+        <RefreshCw className="w-3.5 h-3.5" />
+        Re-run
+      </button>
+    </div>
   );
 
   return (
@@ -263,7 +331,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                     <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                     Coach Analysis
                   </h2>
-                  {reRunButton}
+                  {headerActions}
                 </div>
 
                 {/* Opener turn (stage one) */}
@@ -286,7 +354,7 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                   <>
                     {hasOpener && <hr className="my-4 border-gray-100 dark:border-gray-700" />}
                     {body.headline && (
-                      <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">{body.headline}</h3>
+                      <h3 className="text-lg font-serif font-semibold text-gray-900 dark:text-gray-100 mb-2">{body.headline}</h3>
                     )}
                     <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
                       <Markdown>{body.message}</Markdown>
@@ -402,10 +470,10 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                 <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                 Coach Analysis
               </h2>
-              {reRunButton}
+              {headerActions}
             </div>
             {body.headline && (
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">{body.headline}</h3>
+              <h3 className="text-lg font-serif font-semibold text-gray-900 dark:text-gray-100 mb-2">{body.headline}</h3>
             )}
             {body.thesis && (
               <p className="text-sm text-gray-700 dark:text-gray-300 mb-3 leading-relaxed">{body.thesis}</p>
