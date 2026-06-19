@@ -152,7 +152,7 @@ def test_failure_on_one_activity_does_not_halt_the_batch(db):
 
     calls = {"n": 0}
 
-    def flaky_analyze(db_, activity_id):
+    def flaky_analyze(db_, activity_id, skip_baseline=False):
         calls["n"] += 1
         if calls["n"] == 1:  # newest (7002) blows up
             raise RuntimeError("boom")
@@ -164,6 +164,36 @@ def test_failure_on_one_activity_does_not_halt_the_batch(db):
     # Both activities were attempted and reported despite the first failing.
     assert calls["n"] == 2
     assert sorted(result.processed) == [7001, 7002]
+
+
+def test_baseline_recomputed_once_per_user_after_the_batch(db):
+    """#366: the runner baseline is recomputed once per touched user after the
+    batch, not once per activity. analyze() is invoked with skip_baseline=True,
+    so the only recompute is the job's single end-of-batch pass."""
+    from app.jobs import reanalyze_history as mod
+
+    user = _seed_user(db)
+    _seed_activity(db, user, 8001)
+    _seed_activity(db, user, 8002)
+    _seed_activity(db, user, 8003)
+
+    seen_skip = []
+
+    def tracking_analyze(db_, activity_id, skip_baseline=False):
+        seen_skip.append(skip_baseline)
+        return MagicMock()
+
+    with patch.object(mod, "analyze", side_effect=tracking_analyze), patch.object(
+        mod, "recompute_runner_baseline", wraps=mod.recompute_runner_baseline
+    ) as spy:
+        result = mod.reanalyze_history_batch(db, limit=100)
+
+    assert sorted(result.processed) == [8001, 8002, 8003]
+    # analyze deferred the baseline on every activity...
+    assert seen_skip == [True, True, True]
+    # ...and the job recomputed it exactly once, for that one user.
+    assert spy.call_count == 1
+    assert spy.call_args.args[1] == user.id
 
 
 def test_reanalysis_never_notifies(db):

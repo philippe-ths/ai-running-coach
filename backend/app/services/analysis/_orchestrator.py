@@ -138,7 +138,7 @@ def _post_commit_baseline(db: Session, user_id) -> None:
         logger.exception("runner baseline recompute failed for user %s", user_id)
 
 
-def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
+def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optional[DerivedMetric]:
     """
     Main entry point.
     Loads activity, history, computes all metrics, saves DerivedMetric.
@@ -345,6 +345,13 @@ def analyze(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     # runner-baseline recompute must follow the commit above so the
     # just-analysed activity is included in its rolling window. See
     # `_post_commit_baseline`.
-    _post_commit_baseline(db, activity.user_id)
+    #
+    # `skip_baseline` lets a bulk caller (the reanalyze job, #366) defer the
+    # recompute to once-per-user after its whole batch instead of paying it on
+    # every activity. recompute_runner_baseline is a full idempotent pass over
+    # the rolling window, so the deferred result is identical. The per-activity
+    # ingest path leaves it False and recomputes per activity as before.
+    if not skip_baseline:
+        _post_commit_baseline(db, activity.user_id)
 
     return dm
