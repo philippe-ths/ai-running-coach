@@ -301,6 +301,19 @@ def _lap_speed(lap: dict) -> Optional[float]:
     return None
 
 
+def _largest_speed_gap_split(ordered: List[float], upper: int) -> Optional[int]:
+    """Index of the largest consecutive gap in sorted ``ordered`` speeds over the
+    candidate splits ``range(1, upper)``. None when no positive gap exists."""
+    best_gap = 0.0
+    at: Optional[int] = None
+    for i in range(1, upper):
+        gap = ordered[i] - ordered[i - 1]
+        if gap > best_gap:
+            best_gap = gap
+            at = i
+    return at
+
+
 def _split_laps_work_rest(speeds: List[float]) -> Optional[List[bool]]:
     """Classify each lap as work (fast) or rest (slow) by speed.
 
@@ -309,6 +322,14 @@ def _split_laps_work_rest(speeds: List[float]) -> Optional[List[bool]]:
     (>= `_MIN_CLUSTER_SEPARATION`) and there are at least two work laps and one
     slow lap. Returns a per-lap work mask, or None when the laps show no
     work/rest pattern (e.g. uniform auto-distance laps, a steady run).
+
+    Fast-finisher fallback (#389): when the largest gap isolates a single very
+    fast lap (a sprint finish far quicker than the reps), the session would
+    otherwise abstain. Instead it falls back to the largest gap that leaves at
+    least two work laps, merging the outlier into the work cluster -- but only
+    when the clusters are genuinely separated (the slowest work lap is clearly
+    faster than the fastest rest lap), so a steady run with one fast surge is not
+    manufactured into an interval session. The normal split path is unchanged.
 
     Additional guard (#189): a single standing-rest lap (zero-speed) with a
     tight fast cluster (CV < 10%) is a steady run with a brief stop, not an
@@ -319,15 +340,19 @@ def _split_laps_work_rest(speeds: List[float]) -> Optional[List[bool]]:
         return None
 
     ordered = sorted(speeds)
-    best_gap = 0.0
-    split_at: Optional[int] = None
-    for i in range(1, n):
-        gap = ordered[i] - ordered[i - 1]
-        if gap > best_gap:
-            best_gap = gap
-            split_at = i
+    split_at = _largest_speed_gap_split(ordered, n)
     if split_at is None:
         return None
+
+    fallback = False
+    if n - split_at < 2:
+        # The largest gap isolates a single very fast lap (a sprint finisher).
+        # Rather than abstain, fall back to the largest gap that leaves >= 2 work
+        # laps, so the outlier joins the work cluster above the boundary (#389).
+        split_at = _largest_speed_gap_split(ordered, n - 1)
+        if split_at is None:
+            return None
+        fallback = True
 
     slow, fast = ordered[:split_at], ordered[split_at:]
     if len(fast) < 2 or len(slow) < 1:
@@ -341,6 +366,14 @@ def _split_laps_work_rest(speeds: List[float]) -> Optional[List[bool]]:
     # work/rest signal, so it is accepted on a positive fast cluster alone; the
     # ratio gate only applies when the slow cluster is itself moving.
     if slow_mean > 0 and fast_mean < slow_mean * _MIN_CLUSTER_SEPARATION:
+        return None
+
+    # On the fallback path only, require a genuinely separated boundary so a
+    # steady run with a lone fast surge is not manufactured into an interval
+    # session: the slowest work lap must be clearly faster than the fastest rest
+    # lap (#389). The mean gate above can be fooled by one outlier inflating the
+    # fast-cluster mean; the normal split path keeps its long-standing behaviour.
+    if fallback and max(slow) > 0 and min(fast) < max(slow) * _MIN_CLUSTER_SEPARATION:
         return None
 
     # Guard: a SINGLE standing-rest lap with a uniformly-paced fast cluster is
