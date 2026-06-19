@@ -163,6 +163,14 @@ def get_load_report(db: Session, today: Optional[date] = None) -> LoadResponse:
         .join(DerivedMetric, DerivedMetric.activity_id == Activity.id)
         .filter(Activity.is_deleted.is_(False))
         .filter(Activity.start_date >= earliest_served)
+        # Deterministic chronological order. build_load_report sorts members
+        # by date only (a LoadFact carries no time), so a stable sort preserves
+        # this query order WITHIN a day — without an explicit ORDER BY the
+        # same-day activity order is whatever physical order the scan yields
+        # (it was unordered before too; the #362 join just perturbed it). Order
+        # by start_date so same-day activities read chronologically, with id as
+        # a total-order tiebreaker.
+        .order_by(Activity.start_date.asc(), Activity.id.asc())
         .all()
     )
 
