@@ -612,3 +612,73 @@ class TestAmbiguousSplitAbstain:
         result = detect_intervals_from_laps({"laps": laps})
         assert result is not None
         assert result["summary"]["rep_count"] == 3
+
+
+# Real recorded laps from production activity strava_activity_id 18865186150
+# ("Afternoon Run", 2026-06-10; trust level 1: actual captured lap data, with
+# the rep count human-confirmed against the planned Garmin workout: warmup
+# 1.5 km easy, 6x200 m @ 4:30/km, a fast 100 m finisher, cooldown -> 7 reps).
+# The 100 m finisher was run at 6.25 m/s, far above the ~4.5 m/s 200 m reps; the
+# single-largest-gap split isolated it as the only "work" lap and abstained,
+# discarding the runner's lap marks and undercounting to 6 via the stream
+# heuristic (#389).
+def _lap_rs(idx, dist, mps, ahr, mhr, sec):
+    return {
+        "lap_index": idx, "split": idx, "name": f"Lap {idx}",
+        "distance": float(dist), "average_speed": float(mps),
+        "elapsed_time": int(sec), "moving_time": int(sec),
+        "average_heartrate": float(ahr), "max_heartrate": float(mhr),
+        "resource_state": 2,
+    }
+
+
+_REAL_FAST_FINISHER_LAPS = [
+    _lap_rs(1, 1000, 2.95, 154.8, 172.0, 539),  # warmup
+    _lap_rs(2, 500, 2.99, 168.1, 171.0, 167),   # warmup
+    _lap_rs(3, 99, 2.20, 162.5, 167.0, 44),     # short recovery/transition
+    _lap_rs(4, 200, 4.55, 169.5, 182.0, 44),    # rep 1
+    _lap_rs(5, 92, 2.05, 174.1, 184.0, 44),
+    _lap_rs(6, 200, 4.76, 168.9, 177.0, 42),    # rep 2
+    _lap_rs(7, 86, 1.90, 177.0, 184.0, 44),
+    _lap_rs(8, 200, 4.65, 177.2, 186.0, 43),    # rep 3
+    _lap_rs(9, 79, 1.76, 176.1, 185.0, 44),
+    _lap_rs(10, 200, 4.35, 168.1, 174.0, 46),   # rep 4
+    _lap_rs(11, 80, 1.78, 175.4, 181.0, 44),
+    _lap_rs(12, 200, 4.65, 165.9, 175.0, 43),   # rep 5
+    _lap_rs(13, 89, 1.98, 174.9, 179.0, 44),
+    _lap_rs(14, 200, 4.26, 174.3, 188.0, 47),   # rep 6
+    _lap_rs(15, 65, 1.44, 182.8, 191.0, 44),
+    _lap_rs(16, 100, 6.25, 182.7, 184.0, 16),   # rep 7 (fast 100 m finisher)
+    _lap_rs(17, 152, 2.53, 179.4, 189.0, 59),   # cooldown
+    _lap_rs(18, 11, 2.81, 167.3, 168.0, 4),     # cooldown fragment
+]
+
+
+class TestFastFinisherSplitRobustness:
+    """A lap-recorded interval session whose finisher is much faster than the
+    main reps must still be detected from the laps, not abstained to the stream
+    heuristic because the fast outlier isolates itself in the speed split (#389).
+    """
+
+    def test_real_session_with_fast_finisher_detected_from_laps(self):
+        result = detect_intervals_from_laps({"laps": _REAL_FAST_FINISHER_LAPS})
+
+        assert result is not None, "fast finisher must not abstain the lap path"
+        assert result["source"] == "recorded_laps"
+        # 6x200 m + the 100 m finisher = 7 reps (human-confirmed).
+        assert result["summary"]["rep_count"] == 7
+        # The easy 1.5 km warmup is correctly separated, not counted as a rep.
+        assert result["warmup_duration_s"] is not None
+
+    def test_steady_run_with_fast_finish_still_abstains(self):
+        # A continuous easy run with one fast finishing surge and NO recovery
+        # laps between fast efforts is not an interval session: the next-best
+        # split must not manufacture one (issue AC).
+        laps = [
+            _lap(1, 1000, 3.00, average_heartrate=150.0, max_heartrate=160.0),
+            _lap(2, 1000, 3.05, average_heartrate=152.0, max_heartrate=162.0),
+            _lap(3, 1000, 2.98, average_heartrate=151.0, max_heartrate=161.0),
+            _lap(4, 1000, 3.02, average_heartrate=153.0, max_heartrate=163.0),
+            _lap(5, 200, 5.50, average_heartrate=175.0, max_heartrate=185.0),  # fast finish
+        ]
+        assert detect_intervals_from_laps({"laps": laps}) is None
