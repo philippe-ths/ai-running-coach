@@ -4,7 +4,13 @@ import uuid
 from datetime import date, datetime, timezone, timedelta
 
 from app.models import Activity, DerivedMetric, User
-from app.services.training_load import MAX_WEEKS, LoadFact, build_load_report, week_start
+from app.services.training_load import (
+    MAX_WEEKS,
+    LoadFact,
+    build_load_report,
+    get_load_report,
+    week_start,
+)
 
 
 TODAY = date(2026, 6, 12)  # a Friday; week starts Mon 2026-06-08
@@ -193,3 +199,41 @@ def test_endpoint_excludes_old_activity_but_preserves_series_length(client, db):
     names = [p["name"] for w in weeks for p in w["activities"]]
     assert "Recent Run" in names
     assert "Ancient Run" not in names  # older than the window -> not served
+
+
+def test_same_day_activities_are_ordered_chronologically(db):
+    """build_load_report sorts a week's members by date only, so the query's
+    order breaks same-day ties. An explicit chronological ORDER BY makes that
+    deterministic — without it the order was whatever physical scan order the
+    DB returned (which the #362 join silently perturbed)."""
+    user_id = uuid.uuid4()
+    db.add(User(id=user_id, email=f"ord_{user_id}@example.com"))
+    db.flush()
+    day = datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc)
+
+    def _run(name, hour):
+        a = Activity(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            strava_activity_id=abs(hash(name + str(uuid.uuid4()))) % 10**9,
+            name=name,
+            type="Run",
+            start_date=day.replace(hour=hour),
+            distance_m=5000,
+            moving_time_s=1500,
+            elapsed_time_s=1600,
+            elev_gain_m=10.0,
+        )
+        db.add(a)
+        db.flush()
+        db.add(DerivedMetric(activity_id=a.id, effort_score=10.0, confidence="high"))
+
+    # Same calendar day, inserted out of chronological order.
+    _run("OrdTest-Late", 18)
+    _run("OrdTest-Early", 6)
+    _run("OrdTest-Mid", 12)
+    db.commit()
+
+    resp = get_load_report(db, today=day.date())
+    names = [a.name for w in resp.weeks for a in w.activities if a.name.startswith("OrdTest")]
+    assert names == ["OrdTest-Early", "OrdTest-Mid", "OrdTest-Late"]
