@@ -5,9 +5,10 @@ to the rest of the pack: the v9 pack minus training_volume is byte-identical to 
 v8 pack. End-to-end, a deliberate easy week reaches the section as `down` vs norm.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from uuid import uuid4
 
+from app.api.profile import get_current_user_profile
 from app.models import Activity, DerivedMetric, User, UserProfile
 from app.services.coach.context import build_context_pack
 
@@ -96,3 +97,32 @@ def test_easy_week_reaches_section_as_down(db):
     # Runs-only rides alongside the holistic total (here all current activities are runs).
     assert by_metric["sessions"].current_all == 2
     assert by_metric["sessions"].current_runs == 2
+
+
+def test_volume_endpoint_returns_signal_as_of_today(client, db):
+    """The Trends-page endpoint computes the same signal as of today (#400)."""
+    uid = get_current_user_profile(db).user_id  # the user the endpoint resolves
+    today = date.today()
+    base = datetime.combine(today, dtime(9, 0), tzinfo=timezone.utc)
+    baseline_end = base - timedelta(days=7)
+    # 12 normal prior weeks, then a single light run today.
+    for week in range(12):
+        wk = baseline_end - timedelta(days=week * 7)
+        for offset in range(4):
+            _add(db, _U(uid), wk - timedelta(days=offset))
+        _add(db, _U(uid), wk - timedelta(days=4), type="Walk")
+    _add(db, _U(uid), base)
+
+    resp = client.get("/api/trends/volume")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["has_baseline"] is True
+    rolling = {m["metric"]: m for m in body["rolling_7d"]["metrics"]}
+    assert rolling["sessions"]["direction"] == "down"  # 1 session vs the ~5/wk norm
+    assert "calendar_week" in body
+
+
+class _U:
+    """A minimal stand-in carrying just the .id _add reads, to seed under an existing user."""
+    def __init__(self, uid):
+        self.id = uid

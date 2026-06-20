@@ -772,3 +772,19 @@ def get_trends_report(
         weekly_zone_load=weekly_zone_load,
         daily_zone_load=daily_zone_load,
     )
+
+
+def get_volume_report(
+    db: Session, user_id, as_of: Optional[date] = None
+) -> "TrainingVolumeContext":
+    """The #400 frequency-/volume-vs-norm signal for the Trends page, as of `as_of`
+    (defaults to today). Reuses the same pure builder the coach pack uses, so the
+    two surfaces never drift. Fetches the trailing 91 days (current 7d + the 12-week
+    norm baseline) and partitions by local day (#399)."""
+    from app.services.coach.volume import build_training_volume
+
+    resolved = as_of or date.today()
+    facts = _query_activity_facts(
+        db, resolved - timedelta(days=91), resolved + timedelta(days=1), user_id=user_id
+    )
+    return build_training_volume(facts, resolved)
