@@ -111,6 +111,20 @@ export default function TrendsPage() {
       ? `vs last ${PERIOD_NOUN[range]}`
       : "vs prev";
 
+  // Tap-to-reveal explanations for the two comparison rows (the user-facing
+  // definition of "typical" and the period-over-period row). Built from the
+  // live range/mode so the wording stays correct across ranges rather than
+  // hardcoding "6 months"/"last month": `baseline_label` already names the
+  // norm's history span per range ("the last 6 months" for 30D).
+  const typicalHelp = volume
+    ? `Your average daily rate over ${volume.baseline_label}, projected over the days elapsed in this window.`
+    : undefined;
+  const periodNoun = PERIOD_NOUN[range];
+  const prevHelp =
+    effectiveMode === "calendar" && periodNoun
+      ? `This ${periodNoun} so far against the previous ${periodNoun}'s full total.`
+      : "This window against the equal-length window immediately before it.";
+
   // The runner's typical level per chart bucket (#413), drawn as a reference line.
   // The #400 norm is scaled to days_elapsed, so norm/days_elapsed is the true
   // per-day rate; weekly charts multiply by 7. `scale` converts norm units to the
@@ -183,6 +197,8 @@ export default function TrendsPage() {
               previous={data.previous_summary?.total_distance_m}
               format={formatDistanceKm}
               prevLabel={prevLabel}
+              typicalHelp={typicalHelp}
+              prevHelp={prevHelp}
             />
             <MetricSummaryCard
               label="Total Time"
@@ -192,6 +208,8 @@ export default function TrendsPage() {
               previous={data.previous_summary?.total_moving_time_s}
               format={formatDuration}
               prevLabel={prevLabel}
+              typicalHelp={typicalHelp}
+              prevHelp={prevHelp}
             />
             <MetricSummaryCard
               label="Activities"
@@ -201,6 +219,8 @@ export default function TrendsPage() {
               previous={data.previous_summary?.activity_count}
               format={(v) => Math.round(v).toString()}
               prevLabel={prevLabel}
+              typicalHelp={typicalHelp}
+              prevHelp={prevHelp}
             />
             <MetricSummaryCard
               label="Total Load"
@@ -210,6 +230,8 @@ export default function TrendsPage() {
               previous={data.previous_summary?.total_suffer_score}
               format={(v) => Math.round(v).toLocaleString()}
               prevLabel={prevLabel}
+              typicalHelp={typicalHelp}
+              prevHelp={prevHelp}
             />
           </div>
 
@@ -225,6 +247,8 @@ export default function TrendsPage() {
                 previous={data.previous_summary?.total_distance_m}
                 format={formatDistanceKm}
                 prevLabel={prevLabel}
+                typicalHelp={typicalHelp}
+                prevHelp={prevHelp}
               />
             }
           />
@@ -240,6 +264,8 @@ export default function TrendsPage() {
                 previous={data.previous_summary?.total_moving_time_s}
                 format={formatDuration}
                 prevLabel={prevLabel}
+                typicalHelp={typicalHelp}
+                prevHelp={prevHelp}
               />
             }
           />
@@ -255,6 +281,8 @@ export default function TrendsPage() {
                 previous={data.previous_summary?.total_suffer_score}
                 format={(v) => Math.round(v).toLocaleString()}
                 prevLabel={prevLabel}
+                typicalHelp={typicalHelp}
+                prevHelp={prevHelp}
               />
             }
           />
@@ -274,6 +302,7 @@ export default function TrendsPage() {
                     }
                     format={(v) => `${v.toFixed(2)} m/beat`}
                     prevLabel={prevLabel}
+                    prevHelp={prevHelp}
                   />
                 ) : undefined
               }
