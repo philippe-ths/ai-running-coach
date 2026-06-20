@@ -1,7 +1,10 @@
+import { DIR_FILL } from "./direction";
+import type { VolumeDirection } from "@/lib/types/volume";
+
 // The track spans ±SCALE% around "typical" (center). DEADBAND is the in-line zone
 // (matches the backend), drawn as a lighter band so "inside the band = normal"
-// reads at a glance. Monochrome: the marker's position relative to the band — not
-// colour — carries above/below, since a down window is not inherently bad.
+// reads at a glance. The marker/fill take a calm directional colour (amber up /
+// sky down / grey in-line) — never red/green, since a down window isn't "bad".
 const SCALE = 50;
 const DEADBAND = 15;
 
@@ -11,12 +14,19 @@ const DEADBAND = 15;
  * band is the in-line zone. Reads "in your usual band / above / below" instantly,
  * across any unit.
  */
-export default function NormGauge({ pct }: { pct: number }) {
+export default function NormGauge({
+  pct,
+  direction,
+}: {
+  pct: number;
+  direction: VolumeDirection;
+}) {
   const clamped = Math.max(-SCALE, Math.min(SCALE, pct));
   const pos = 50 + (clamped / SCALE) * 50; // 0..100 along the track
   const bandInset = 100 - (50 + (DEADBAND / SCALE) * 50); // inset each side
   const fillLeft = Math.min(50, pos);
   const fillWidth = Math.abs(pos - 50);
+  const fill = DIR_FILL[direction] ?? DIR_FILL.in_line;
 
   return (
     <div
@@ -31,7 +41,7 @@ export default function NormGauge({ pct }: { pct: number }) {
       />
       {/* diverging fill from the typical tick to the current marker */}
       <div
-        className="absolute inset-y-0 rounded-full bg-gray-400 dark:bg-gray-500"
+        className={`absolute inset-y-0 rounded-full ${fill}`}
         style={{ left: `${fillLeft}%`, width: `${fillWidth}%` }}
       />
       {/* "typical" tick at center */}
@@ -41,7 +51,7 @@ export default function NormGauge({ pct }: { pct: number }) {
       />
       {/* current marker */}
       <div
-        className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gray-700 dark:bg-gray-100 ring-2 ring-white dark:ring-gray-800"
+        className={`absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full ${fill} ring-2 ring-white dark:ring-gray-800`}
         style={{ left: `${pos}%` }}
       />
     </div>

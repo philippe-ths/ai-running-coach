@@ -33,7 +33,9 @@ export default function MetricSummaryCard({
       <div className="mt-1 font-mono text-2xl font-semibold tracking-tight tabular-nums text-gray-900 dark:text-gray-50">
         {value}
       </div>
-      {hasNorm && metric && <NormGauge pct={metric.pct_vs_norm ?? 0} />}
+      {hasNorm && metric && (
+        <NormGauge pct={metric.pct_vs_norm ?? 0} direction={metric.direction} />
+      )}
       <div className="mt-1.5">
         <ComparisonRows metric={metric} current={current} previous={previous} format={format} />
       </div>

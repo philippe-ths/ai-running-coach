@@ -13,6 +13,7 @@ import EfficiencyTrendChart from "@/components/trends/EfficiencyTrendChart";
 import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
 import ComparisonRows from "@/components/trends/ComparisonRows";
 import MetricSummaryCard from "@/components/trends/MetricSummaryCard";
+import { DIR_TEXT, dirFromPct } from "@/components/trends/direction";
 import type { VolumeMetricVsNorm, VolumeReport } from "@/lib/types/volume";
 
 type WindowMode = "rolling" | "calendar";
@@ -252,9 +253,16 @@ export default function TrendsPage() {
                   return (
                     <Fragment key={zone}>
                       <span className="text-gray-400 dark:text-gray-500">{zone}</span>
-                      <span className="text-gray-700 dark:text-gray-200">
-                        {pct !== null ? `${pct > 0 ? "+" : ""}${pct}%` : "—"}
-                        <span className="text-gray-400 dark:text-gray-500"> · {formatDuration(c * 60)}</span>
+                      <span className="text-gray-400 dark:text-gray-500">
+                        {pct !== null ? (
+                          <span className={`font-medium ${DIR_TEXT[dirFromPct(pct)]}`}>
+                            {pct > 0 ? "+" : ""}
+                            {pct}%
+                          </span>
+                        ) : (
+                          "—"
+                        )}{" "}
+                        · {formatDuration(c * 60)}
                       </span>
                     </Fragment>
                   );

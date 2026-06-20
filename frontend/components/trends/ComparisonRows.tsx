@@ -1,3 +1,4 @@
+import { DIR_TEXT, dirFromPct } from "./direction";
 import type { VolumeMetricVsNorm } from "@/lib/types/volume";
 
 function signed(pct: number): string {
@@ -34,24 +35,22 @@ export default function ComparisonRows({
       {hasNorm && metric && (
         <>
           <span className="text-gray-400 dark:text-gray-500">vs typical</span>
-          <span className="text-gray-700 dark:text-gray-200">
-            {signed(Math.round(metric.pct_vs_norm ?? 0))}
-            <span className="text-gray-400 dark:text-gray-500">
-              {" "}
-              · {format(metric.norm as number)}
-            </span>
+          <span className="text-gray-400 dark:text-gray-500">
+            <span className={`font-medium ${DIR_TEXT[metric.direction]}`}>
+              {signed(Math.round(metric.pct_vs_norm ?? 0))}
+            </span>{" "}
+            · {format(metric.norm as number)}
           </span>
         </>
       )}
       {prevPct !== null && (
         <>
           <span className="text-gray-400 dark:text-gray-500">vs prev</span>
-          <span className="text-gray-700 dark:text-gray-200">
-            {signed(prevPct)}
-            <span className="text-gray-400 dark:text-gray-500">
-              {" "}
-              · {format(previous as number)}
-            </span>
+          <span className="text-gray-400 dark:text-gray-500">
+            <span className={`font-medium ${DIR_TEXT[dirFromPct(prevPct)]}`}>
+              {signed(prevPct)}
+            </span>{" "}
+            · {format(previous as number)}
           </span>
         </>
       )}
