@@ -14,6 +14,7 @@ interface ActivityListItem {
   name: string;
   type: string;
   start_date: string;
+  start_date_local?: string | null;
   distance_m: number;
   moving_time_s: number;
   headline?: string | null;
