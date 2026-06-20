@@ -12,6 +12,7 @@ import SufferScoreChart from "@/components/trends/SufferScoreChart";
 import EfficiencyTrendChart from "@/components/trends/EfficiencyTrendChart";
 import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
 import MetricDelta from "@/components/trends/MetricDelta";
+import MetricSummaryCard from "@/components/trends/MetricSummaryCard";
 import StatDiff from "@/components/StatDiff";
 import type { VolumeMetricVsNorm, VolumeReport } from "@/lib/types/volume";
 
@@ -142,54 +143,38 @@ export default function TrendsPage() {
       {data && (
         <div className="space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
-              <div className="text-sm text-gray-500 dark:text-gray-400">Total Distance</div>
-              <div className="text-2xl font-bold">
-                {formatDistanceKm(data.summary.total_distance_m)}
-              </div>
-              <MetricDelta
-                metric={normByMetric["distance_m"]}
-                current={data.summary.total_distance_m}
-                previous={data.previous_summary?.total_distance_m}
-                format={formatDistanceKm}
-              />
-            </div>
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
-              <div className="text-sm text-gray-500 dark:text-gray-400">Total Time</div>
-              <div className="text-2xl font-bold">
-                {formatDuration(data.summary.total_moving_time_s)}
-              </div>
-              <MetricDelta
-                metric={normByMetric["moving_time_s"]}
-                current={data.summary.total_moving_time_s}
-                previous={data.previous_summary?.total_moving_time_s}
-                format={formatDuration}
-              />
-            </div>
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
-              <div className="text-sm text-gray-500 dark:text-gray-400">Activities</div>
-              <div className="text-2xl font-bold">
-                {data.summary.activity_count}
-              </div>
-              <MetricDelta
-                metric={normByMetric["sessions"]}
-                current={data.summary.activity_count}
-                previous={data.previous_summary?.activity_count}
-                format={(v) => Math.round(v).toString()}
-              />
-            </div>
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
-              <div className="text-sm text-gray-500 dark:text-gray-400">Total Load</div>
-              <div className="text-2xl font-bold">
-                {Math.round(data.summary.total_suffer_score).toLocaleString()}
-              </div>
-              <MetricDelta
-                metric={normByMetric["effort_score"]}
-                current={data.summary.total_suffer_score}
-                previous={data.previous_summary?.total_suffer_score}
-                format={(v) => Math.round(v).toLocaleString()}
-              />
-            </div>
+            <MetricSummaryCard
+              label="Total Distance"
+              value={formatDistanceKm(data.summary.total_distance_m)}
+              metric={normByMetric["distance_m"]}
+              current={data.summary.total_distance_m}
+              previous={data.previous_summary?.total_distance_m}
+              format={formatDistanceKm}
+            />
+            <MetricSummaryCard
+              label="Total Time"
+              value={formatDuration(data.summary.total_moving_time_s)}
+              metric={normByMetric["moving_time_s"]}
+              current={data.summary.total_moving_time_s}
+              previous={data.previous_summary?.total_moving_time_s}
+              format={formatDuration}
+            />
+            <MetricSummaryCard
+              label="Activities"
+              value={data.summary.activity_count.toString()}
+              metric={normByMetric["sessions"]}
+              current={data.summary.activity_count}
+              previous={data.previous_summary?.activity_count}
+              format={(v) => Math.round(v).toString()}
+            />
+            <MetricSummaryCard
+              label="Total Load"
+              value={Math.round(data.summary.total_suffer_score).toLocaleString()}
+              metric={normByMetric["effort_score"]}
+              current={data.summary.total_suffer_score}
+              previous={data.previous_summary?.total_suffer_score}
+              format={(v) => Math.round(v).toLocaleString()}
+            />
           </div>
 
           <TrendBarChart
