@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { Fragment, useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { TrendsData, TrendsRange } from "@/lib/types";
 import { formatDistanceKm, formatDuration } from "@/lib/format";
@@ -11,9 +11,8 @@ import TrendBarChart from "@/components/trends/TrendBarChart";
 import SufferScoreChart from "@/components/trends/SufferScoreChart";
 import EfficiencyTrendChart from "@/components/trends/EfficiencyTrendChart";
 import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
-import MetricDelta from "@/components/trends/MetricDelta";
+import ComparisonRows from "@/components/trends/ComparisonRows";
 import MetricSummaryCard from "@/components/trends/MetricSummaryCard";
-import StatDiff from "@/components/StatDiff";
 import type { VolumeMetricVsNorm, VolumeReport } from "@/lib/types/volume";
 
 type WindowMode = "rolling" | "calendar";
@@ -182,7 +181,7 @@ export default function TrendsPage() {
             data={isDaily ? data.daily_distance : data.weekly_distance}
             granularity={granularity}
             delta={
-              <MetricDelta
+              <ComparisonRows
                 metric={normByMetric["distance_m"]}
                 current={data.summary.total_distance_m}
                 previous={data.previous_summary?.total_distance_m}
@@ -195,7 +194,7 @@ export default function TrendsPage() {
             data={isDaily ? data.daily_time : data.weekly_time}
             granularity={granularity}
             delta={
-              <MetricDelta
+              <ComparisonRows
                 metric={normByMetric["moving_time_s"]}
                 current={data.summary.total_moving_time_s}
                 previous={data.previous_summary?.total_moving_time_s}
@@ -208,7 +207,7 @@ export default function TrendsPage() {
             data={isDaily ? data.daily_suffer_score : data.weekly_suffer_score}
             granularity={granularity}
             delta={
-              <MetricDelta
+              <ComparisonRows
                 metric={normByMetric["effort_score"]}
                 current={data.summary.total_suffer_score}
                 previous={data.previous_summary?.total_suffer_score}
@@ -222,9 +221,8 @@ export default function TrendsPage() {
               granularity={granularity}
               delta={
                 data.summary.avg_efficiency_mps_per_bpm != null ? (
-                  <StatDiff
-                    label="vs prev"
-                    // Display in meters-per-heartbeat (×60), matching the chart.
+                  // Display in meters-per-heartbeat (×60), matching the chart.
+                  <ComparisonRows
                     current={data.summary.avg_efficiency_mps_per_bpm * 60}
                     previous={
                       data.previous_summary?.avg_efficiency_mps_per_bpm != null
@@ -241,25 +239,26 @@ export default function TrendsPage() {
             data={isDaily ? data.daily_zone_load : data.weekly_zone_load}
             granularity={granularity}
             delta={
-              <div>
-                <StatDiff
-                  label="Easy"
-                  current={data.summary.zone_easy_minutes ?? 0}
-                  previous={data.previous_summary?.zone_easy_minutes}
-                  format={(v) => formatDuration(v * 60)}
-                />
-                <StatDiff
-                  label="Moderate"
-                  current={data.summary.zone_moderate_minutes ?? 0}
-                  previous={data.previous_summary?.zone_moderate_minutes}
-                  format={(v) => formatDuration(v * 60)}
-                />
-                <StatDiff
-                  label="Hard"
-                  current={data.summary.zone_hard_minutes ?? 0}
-                  previous={data.previous_summary?.zone_hard_minutes}
-                  format={(v) => formatDuration(v * 60)}
-                />
+              <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs tabular-nums">
+                {(
+                  [
+                    ["Easy", data.summary.zone_easy_minutes, data.previous_summary?.zone_easy_minutes],
+                    ["Moderate", data.summary.zone_moderate_minutes, data.previous_summary?.zone_moderate_minutes],
+                    ["Hard", data.summary.zone_hard_minutes, data.previous_summary?.zone_hard_minutes],
+                  ] as const
+                ).map(([zone, cur, prev]) => {
+                  const c = cur ?? 0;
+                  const pct = prev != null && prev > 0 ? Math.round(((c - prev) / prev) * 100) : null;
+                  return (
+                    <Fragment key={zone}>
+                      <span className="text-gray-400 dark:text-gray-500">{zone}</span>
+                      <span className="text-gray-700 dark:text-gray-200">
+                        {pct !== null ? `${pct > 0 ? "+" : ""}${pct}%` : "—"}
+                        <span className="text-gray-400 dark:text-gray-500"> · {formatDuration(c * 60)}</span>
+                      </span>
+                    </Fragment>
+                  );
+                })}
               </div>
             }
           />
