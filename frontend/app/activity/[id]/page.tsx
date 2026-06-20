@@ -5,6 +5,7 @@ import CheckInForm from '@/components/CheckInForm';
 import Link from 'next/link';
 import { Activity } from '@/lib/types';
 import AdvancedMetrics from '@/components/AdvancedMetrics';
+import RoutePath from '@/components/RoutePath';
 import StreamCharts from '@/components/StreamCharts';
 import { SplitsPanel } from '@/components/SplitsPanel';
 import { LapsPanel } from '@/components/LapsPanel';
@@ -57,6 +58,12 @@ export default async function ActivityDetail({ params }: { params: { id: string 
 
         {/* Main Content */}
         <div className="md:col-span-2 space-y-6 min-w-0">
+
+          {/* Route shape traced from the recorded GPS track (no basemap, #408).
+              Renders nothing for activities without a latlng stream. */}
+          {activity.streams && activity.streams.length > 0 && (
+             <RoutePath streams={activity.streams} />
+          )}
 
           {/* Activity Context Panel: Check-In & Type */}
           <CheckInForm 
