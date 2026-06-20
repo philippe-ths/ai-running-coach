@@ -174,6 +174,13 @@ class VolumeFraming(BaseModel):
     window_days: int
     days_elapsed: int
     complete: bool
+    # The actual current-window date range (inclusive), e.g. Jun 1 .. Jun 20.
+    period_start: date
+    period_end: date
+    # The actual baseline date range the norm was computed from (None when history
+    # is too thin to establish a norm). Scales with the term — see baseline_label.
+    baseline_start: Optional[date] = None
+    baseline_end: Optional[date] = None
     metrics: List[VolumeMetricVsNorm]
 
 
@@ -182,9 +189,11 @@ class VolumeReport(BaseModel):
 
     Two framings (rolling + calendar period) scaled to the range, each metric
     compared to the runner's norm for that window. `has_baseline` is False when
-    history is too thin to call a norm (every direction is then `no_norm`)."""
+    history is too thin to call a norm (every direction is then `no_norm`).
+    `baseline_label` describes the term-scaled baseline lookback (e.g. "the last 12
+    weeks" for 7D, "the last 6 months" for 30D)."""
     range: str          # 7D | 30D | 3M | 6M | 1Y
     rolling: VolumeFraming
     calendar: VolumeFraming
     has_baseline: bool
-    baseline_weeks: int
+    baseline_label: str

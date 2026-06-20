@@ -25,6 +25,10 @@ export interface VolumeFraming {
   window_days: number;
   days_elapsed: number;
   complete: boolean;
+  period_start: string; // ISO date
+  period_end: string; // ISO date
+  baseline_start: string | null; // ISO date
+  baseline_end: string | null; // ISO date
   metrics: VolumeMetricVsNorm[];
 }
 
@@ -33,5 +37,5 @@ export interface VolumeReport {
   rolling: VolumeFraming;
   calendar: VolumeFraming;
   has_baseline: boolean;
-  baseline_weeks: number;
+  baseline_label: string;
 }

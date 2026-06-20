@@ -187,3 +187,29 @@ def test_report_calendar_period_label_per_range():
     # Q2 (Apr-Jun) is 91 days; first half-year is 181; the year is 365.
     assert build_volume_report(facts, as_of, "3M").calendar.window_days == 91
     assert build_volume_report(facts, as_of, "1Y").calendar.window_days == 365
+
+
+def test_report_exposes_period_and_baseline_dates():
+    as_of = date(2026, 6, 20)
+    r = build_volume_report(_history(as_of, 400), as_of, "30D")
+    assert r.baseline_label == "the last 6 months"
+    assert r.rolling.period_start == date(2026, 5, 22)   # trailing 30 days
+    assert r.rolling.period_end == as_of
+    assert r.rolling.baseline_end == date(2026, 5, 21)   # day before the window
+    assert r.rolling.baseline_start == date(2026, 5, 21) - timedelta(days=167)  # 168d
+    assert r.calendar.period_start == date(2026, 6, 1)   # this month
+
+
+def test_report_baseline_clamped_to_history():
+    as_of = date(2026, 6, 20)
+    earliest = as_of - timedelta(days=59)
+    r = build_volume_report(_history(as_of, 60), as_of, "30D")  # only 60 days of data
+    # The 168-day nominal baseline cannot start before the runner's first activity.
+    assert r.rolling.baseline_start >= earliest
+
+
+def test_report_baseline_label_scales_with_term():
+    as_of = date(2026, 6, 20)
+    facts = _history(as_of, 400)
+    assert build_volume_report(facts, as_of, "7D").baseline_label == "the last 12 weeks"
+    assert build_volume_report(facts, as_of, "3M").baseline_label == "the last year"

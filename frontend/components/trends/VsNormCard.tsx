@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Minus } from "lucide-react";
 
 import { fetchFromAPI } from "@/lib/api";
-import { formatDistanceKm, formatDuration } from "@/lib/format";
+import { formatDateLabel, formatDistanceKm, formatDuration } from "@/lib/format";
 import type { TrendsRange } from "@/lib/types/trends";
 import type {
   VolumeDirection,
@@ -129,10 +129,15 @@ export default function VsNormCard({
 
   // The framing follows the page-level Rolling/Calendar toggle.
   const win: VolumeFraming = data[mode];
+  const dateRange = `${formatDateLabel(win.period_start)} – ${formatDateLabel(win.period_end)}`;
   const subtitle =
     win.framing === "rolling" || win.complete
-      ? `${win.label} vs your typical`
-      : `${win.label} so far (${win.days_elapsed}/${win.window_days} days) vs your typical`;
+      ? `${win.label} (${dateRange}) vs your typical`
+      : `${win.label} so far (${dateRange}, ${win.days_elapsed}/${win.window_days} days) vs your typical`;
+  const baselineRange =
+    win.baseline_start && win.baseline_end
+      ? `${formatDateLabel(win.baseline_start)} – ${formatDateLabel(win.baseline_end)}`
+      : null;
 
   return (
     <div className="bg-white dark:bg-gray-800 p-5 rounded-lg border dark:border-gray-700 shadow-sm">
@@ -149,8 +154,8 @@ export default function VsNormCard({
             <MetricRow key={m.metric} m={m} />
           ))}
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">
-            Norm is your typical output over a window this length (from the last{" "}
-            {data.baseline_weeks} weeks). A down window is often deliberate.
+            Norm is your typical output for a window this size, from {data.baseline_label}
+            {baselineRange ? ` (${baselineRange})` : ""}. A down window is often deliberate.
           </p>
         </div>
       ) : (
