@@ -32,7 +32,7 @@ export default function MetricSummaryCard({
       <div className="text-[11px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500">
         {label}
       </div>
-      <div className="mt-1 font-mono text-2xl font-semibold tracking-tight tabular-nums text-gray-900 dark:text-gray-50">
+      <div className="mt-1 whitespace-nowrap font-mono text-2xl font-semibold tracking-tight tabular-nums text-gray-900 dark:text-gray-50">
         {value}
       </div>
       {hasNorm && metric && (
