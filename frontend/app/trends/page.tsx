@@ -11,7 +11,8 @@ import TrendBarChart from "@/components/trends/TrendBarChart";
 import SufferScoreChart from "@/components/trends/SufferScoreChart";
 import EfficiencyTrendChart from "@/components/trends/EfficiencyTrendChart";
 import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
-import NormStat from "@/components/trends/NormStat";
+import MetricDelta from "@/components/trends/MetricDelta";
+import StatDiff from "@/components/StatDiff";
 import type { VolumeMetricVsNorm, VolumeReport } from "@/lib/types/volume";
 
 type WindowMode = "rolling" | "calendar";
@@ -146,28 +147,48 @@ export default function TrendsPage() {
               <div className="text-2xl font-bold">
                 {formatDistanceKm(data.summary.total_distance_m)}
               </div>
-              <NormStat metric={normByMetric["distance_m"]} format={formatDistanceKm} />
+              <MetricDelta
+                metric={normByMetric["distance_m"]}
+                current={data.summary.total_distance_m}
+                previous={data.previous_summary?.total_distance_m}
+                format={formatDistanceKm}
+              />
             </div>
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
               <div className="text-sm text-gray-500 dark:text-gray-400">Total Time</div>
               <div className="text-2xl font-bold">
                 {formatDuration(data.summary.total_moving_time_s)}
               </div>
-              <NormStat metric={normByMetric["moving_time_s"]} format={formatDuration} />
+              <MetricDelta
+                metric={normByMetric["moving_time_s"]}
+                current={data.summary.total_moving_time_s}
+                previous={data.previous_summary?.total_moving_time_s}
+                format={formatDuration}
+              />
             </div>
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
               <div className="text-sm text-gray-500 dark:text-gray-400">Activities</div>
               <div className="text-2xl font-bold">
                 {data.summary.activity_count}
               </div>
-              <NormStat metric={normByMetric["sessions"]} format={(v) => Math.round(v).toString()} />
+              <MetricDelta
+                metric={normByMetric["sessions"]}
+                current={data.summary.activity_count}
+                previous={data.previous_summary?.activity_count}
+                format={(v) => Math.round(v).toString()}
+              />
             </div>
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
               <div className="text-sm text-gray-500 dark:text-gray-400">Total Load</div>
               <div className="text-2xl font-bold">
                 {Math.round(data.summary.total_suffer_score).toLocaleString()}
               </div>
-              <NormStat metric={normByMetric["effort_score"]} format={(v) => Math.round(v).toLocaleString()} />
+              <MetricDelta
+                metric={normByMetric["effort_score"]}
+                current={data.summary.total_suffer_score}
+                previous={data.previous_summary?.total_suffer_score}
+                format={(v) => Math.round(v).toLocaleString()}
+              />
             </div>
           </div>
 
@@ -175,21 +196,37 @@ export default function TrendsPage() {
             type="distance"
             data={isDaily ? data.daily_distance : data.weekly_distance}
             granularity={granularity}
-            delta={<NormStat metric={normByMetric["distance_m"]} format={formatDistanceKm} />}
+            delta={
+              <MetricDelta
+                metric={normByMetric["distance_m"]}
+                current={data.summary.total_distance_m}
+                previous={data.previous_summary?.total_distance_m}
+                format={formatDistanceKm}
+              />
+            }
           />
           <TrendBarChart
             type="time"
             data={isDaily ? data.daily_time : data.weekly_time}
             granularity={granularity}
-            delta={<NormStat metric={normByMetric["moving_time_s"]} format={formatDuration} />}
+            delta={
+              <MetricDelta
+                metric={normByMetric["moving_time_s"]}
+                current={data.summary.total_moving_time_s}
+                previous={data.previous_summary?.total_moving_time_s}
+                format={formatDuration}
+              />
+            }
           />
 
           <SufferScoreChart
             data={isDaily ? data.daily_suffer_score : data.weekly_suffer_score}
             granularity={granularity}
             delta={
-              <NormStat
+              <MetricDelta
                 metric={normByMetric["effort_score"]}
+                current={data.summary.total_suffer_score}
+                previous={data.previous_summary?.total_suffer_score}
                 format={(v) => Math.round(v).toLocaleString()}
               />
             }
@@ -198,11 +235,48 @@ export default function TrendsPage() {
             <EfficiencyTrendChart
               data={data.efficiency_trend}
               granularity={granularity}
+              delta={
+                data.summary.avg_efficiency_mps_per_bpm != null ? (
+                  <StatDiff
+                    label="vs prev"
+                    // Display in meters-per-heartbeat (×60), matching the chart.
+                    current={data.summary.avg_efficiency_mps_per_bpm * 60}
+                    previous={
+                      data.previous_summary?.avg_efficiency_mps_per_bpm != null
+                        ? data.previous_summary.avg_efficiency_mps_per_bpm * 60
+                        : undefined
+                    }
+                    format={(v) => `${v.toFixed(2)} m/beat`}
+                  />
+                ) : undefined
+              }
             />
           )}
           <ZoneLoadChart
             data={isDaily ? data.daily_zone_load : data.weekly_zone_load}
             granularity={granularity}
+            delta={
+              <div>
+                <StatDiff
+                  label="Easy"
+                  current={data.summary.zone_easy_minutes ?? 0}
+                  previous={data.previous_summary?.zone_easy_minutes}
+                  format={(v) => formatDuration(v * 60)}
+                />
+                <StatDiff
+                  label="Moderate"
+                  current={data.summary.zone_moderate_minutes ?? 0}
+                  previous={data.previous_summary?.zone_moderate_minutes}
+                  format={(v) => formatDuration(v * 60)}
+                />
+                <StatDiff
+                  label="Hard"
+                  current={data.summary.zone_hard_minutes ?? 0}
+                  previous={data.previous_summary?.zone_hard_minutes}
+                  format={(v) => formatDuration(v * 60)}
+                />
+              </div>
+            }
           />
         </div>
       )}
