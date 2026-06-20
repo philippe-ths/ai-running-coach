@@ -53,13 +53,16 @@ def get_training_load(db: Session = Depends(get_db)):
 @router.get("/trends/volume", response_model=VolumeReport)
 def get_volume(
     range: str = Query("7D", description="7D | 30D | 3M | 6M | 1Y"),
+    types: Optional[List[str]] = Query(None, description="Activity types to include (multi-select)"),
     db: Session = Depends(get_db),
 ):
     """Frequency-/volume-vs-norm report for the selected range, as of today:
     per-metric current vs the runner's norm, in rolling and calendar-period
-    framings scaled to the range (#400)."""
+    framings scaled to the range (#400). ``types`` scopes both the window and the
+    norm baseline so the comparison stays like-for-like with the filtered Trends
+    charts (#413)."""
     user_id = get_current_user_profile(db).user_id
-    return get_volume_report(db, user_id, range)
+    return get_volume_report(db, user_id, range, types=types)
 
 
 @router.get("/stats/weekly", response_model=WeeklyStatsResponse)
