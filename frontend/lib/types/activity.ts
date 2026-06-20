@@ -43,6 +43,7 @@ export interface Activity {
   id: string;
   name: string;
   start_date: string;
+  start_date_local?: string | null;
   distance_m: number;
   moving_time_s: number;
   avg_hr?: number;

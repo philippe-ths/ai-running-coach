@@ -448,7 +448,7 @@ def build_focus_payload(
 
     return FocusPayload(
         activity=ActivityContext(
-            date=subject.start_date.isoformat(),
+            date=subject.local_start.isoformat(),  # local wall-clock (#399)
             name=subject.name,
             type=subject.user_intent or subject.type,
             distance_m=subject.distance_m,
@@ -753,7 +753,7 @@ def _adherence_candidates(
             continue  # unanalysed -> not a fair comparable
         candidates.append(
             CandidateActivity(
-                date=act.start_date.isoformat(),
+                date=act.local_start.isoformat(),  # local wall-clock (#399)
                 effort=metrics.effort,
                 duration_class=metrics.duration_class,
                 structure=metrics.structure,

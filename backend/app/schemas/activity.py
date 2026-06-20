@@ -12,6 +12,10 @@ class ActivityBase(BaseModel):
     name: str
     type: str
     start_date: datetime
+    # The runner's local wall-clock start (#399), serialised naive (no offset) so
+    # the frontend renders the activity's own local time regardless of the
+    # viewer's timezone. Null for any pre-#399 row not yet backfilled.
+    start_date_local: Optional[datetime] = None
     distance_m: int
     moving_time_s: int
     elapsed_time_s: int

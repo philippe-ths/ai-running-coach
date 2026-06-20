@@ -1,6 +1,6 @@
 import { fetchFromAPI } from '@/lib/api';
 import { format } from 'date-fns';
-import { formatPace, formatDuration, formatDistanceKm } from '@/lib/format';
+import { formatPace, formatDuration, formatDistanceKm, activityStartDate } from '@/lib/format';
 import CheckInForm from '@/components/CheckInForm';
 import Link from 'next/link';
 import { Activity } from '@/lib/types';
@@ -41,7 +41,7 @@ export default async function ActivityDetail({ params }: { params: { id: string 
             <div className="min-w-0">
                 <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 break-words">{activity.name}</h1>
                 <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 text-gray-600 dark:text-gray-400 items-center">
-                    <span>{format(new Date(activity.start_date), 'PPPP p')}</span>
+                    <span>{format(activityStartDate(activity), 'PPPP p')}</span>
                     <span>{formatDistanceKm(activity.distance_m)}</span>
                     {activity.metrics?.headline && (
                         <span className="inline-block px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-200 text-sm font-medium">
