@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Running Coach — AI Flow</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --ink: #e6e9ef;
+    --muted: #9aa3b2;
+    --line: #2c313c;
+
+    --source: #3b82f6;
+    --code: #10b981;
+    --store: #a78bfa;
+    --llm: #f59e0b;
+    --gate: #ef4444;
+    --notify: #ec4899;
+    --runner: #14b8a6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 32px 24px 80px;
+  }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -.3px; }
+  .sub { color: var(--muted); margin: 0 0 24px; max-width: 820px; }
+  .sub kbd { background:#11141a; border:1px solid var(--line); border-radius:4px; padding:0 5px; font-size:11px; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px 18px; margin-bottom: 30px;
+  }
+  .legend .item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+  .swatch { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+
+  .flow { display: flex; flex-direction: column; gap: 30px; max-width: 1180px; margin: 0 auto; }
+
+  .stage {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 18px 20px 20px;
+  }
+  .stage > h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1.4px;
+    color: var(--muted); margin: 0 0 16px; font-weight: 600;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: stretch; }
+
+  .node {
+    flex: 1 1 200px; min-width: 190px;
+    background: #1e222b;
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--code);
+    border-radius: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: transform .08s ease, border-color .08s ease, background .08s ease;
+    position: relative;
+  }
+  .node:hover { transform: translateY(-2px); background: #232834; }
+  .node:focus-visible { outline: 2px solid var(--source); outline-offset: 2px; }
+  .node::after {
+    content: "›"; position: absolute; top: 9px; right: 12px;
+    color: var(--muted); font-size: 18px; line-height: 1; opacity: .5;
+  }
+  .node h3 { margin: 0 0 4px; font-size: 13.5px; padding-right: 14px; }
+  .node p { margin: 0; font-size: 12px; color: var(--muted); }
+  code { color: #c9d2e3; background: #11141a; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+
+  .node.source { border-left-color: var(--source); }
+  .node.code   { border-left-color: var(--code); }
+  .node.store  { border-left-color: var(--store); }
+  .node.llm    { border-left-color: var(--llm); background: #241d10; }
+  .node.llm:hover { background:#2d2413; }
+  .node.gate   { border-left-color: var(--gate); }
+  .node.notify { border-left-color: var(--notify); }
+  .node.runner { border-left-color: var(--runner); }
+
+  .tag {
+    display: inline-block; font-size: 9.5px; letter-spacing: .6px; text-transform: uppercase;
+    padding: 1px 6px; border-radius: 4px; margin-bottom: 6px; font-weight: 700;
+  }
+  .tag.source { background: rgba(59,130,246,.18); color: #93c5fd; }
+  .tag.code   { background: rgba(16,185,129,.18); color: #6ee7b7; }
+  .tag.store  { background: rgba(167,139,250,.18); color: #c4b5fd; }
+  .tag.llm    { background: rgba(245,158,11,.2);  color: #fcd34d; }
+  .tag.gate   { background: rgba(239,68,68,.2);   color: #fca5a5; }
+  .tag.notify { background: rgba(236,72,153,.18); color: #f9a8d4; }
+  .tag.runner { background: rgba(20,184,166,.2);  color: #5eead4; }
+
+  .arrow {
+    text-align: center; color: var(--line); font-size: 22px; line-height: 1;
+    margin: -14px 0 -14px;
+  }
+  .arrow span { color: var(--muted); font-size: 11px; display: block; margin-top: 2px; }
+
+  .note { font-size: 11.5px; color: var(--muted); margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+  .badge { color: var(--llm); font-weight: 600; }
+  .footer { text-align: center; color: var(--muted); font-size: 11.5px; margin-top: 40px; }
+
+  /* ---- drawer ---- */
+  .scrim {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    opacity: 0; pointer-events: none; transition: opacity .18s ease; z-index: 40;
+  }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; right: 0; height: 100%; width: min(460px, 92vw);
+    background: var(--panel); border-left: 1px solid var(--line);
+    box-shadow: -20px 0 60px rgba(0,0,0,.5);
+    transform: translateX(100%); transition: transform .22s cubic-bezier(.4,0,.2,1);
+    z-index: 50; display: flex; flex-direction: column;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer header {
+    padding: 22px 24px 16px; border-bottom: 1px solid var(--line);
+  }
+  .drawer header .tag { margin-bottom: 10px; }
+  .drawer h2 { margin: 0; font-size: 19px; letter-spacing: -.2px; }
+  .drawer .accent { height: 4px; width: 44px; border-radius: 4px; margin-top: 12px; background: var(--code); }
+  .drawer .body { padding: 20px 24px 40px; overflow-y: auto; }
+  .drawer .body h4 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); margin: 22px 0 8px;
+  }
+  .drawer .body h4:first-child { margin-top: 0; }
+  .drawer .body p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink); }
+  .drawer .body ul { margin: 0; padding-left: 18px; }
+  .drawer .body li { font-size: 13px; margin-bottom: 6px; color: #d2d8e3; }
+  .drawer .files code { display: inline-block; margin: 3px 4px 0 0; }
+  .drawer .data {
+    background: #0c0f14; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 13px; margin-top: 6px; overflow-x: auto;
+  }
+  .drawer .data pre {
+    margin: 0; font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: #b8c2d4; white-space: pre-wrap; word-break: break-word;
+  }
+  .drawer .data k { color: #6ee7b7; font-style: normal; }
+  .drawer .data v { color: #fcd34d; font-style: normal; }
+  .drawer .realtag {
+    display:inline-block; font-size:9.5px; letter-spacing:.5px; text-transform:uppercase;
+    font-weight:700; color:#5eead4; background:rgba(20,184,166,.16);
+    border-radius:4px; padding:1px 6px; margin-left:8px; vertical-align:middle;
+  }
+  .close {
+    position: absolute; top: 18px; right: 18px; cursor: pointer;
+    background: #11141a; border: 1px solid var(--line); color: var(--muted);
+    width: 30px; height: 30px; border-radius: 8px; font-size: 16px; line-height: 1;
+  }
+  .close:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<h1>Running Coach — AI &amp; Data Flow</h1>
+<p class="sub">How one Strava run becomes an opinionated, voiced coach report. Blocks are coloured by what they
+<em>are</em>. <strong>Click any block</strong> for files, functions, and the details. Press <kbd>Esc</kbd> to close.</p>
+<p class="sub" style="margin-top:-14px"><span style="color:#5eead4;font-weight:600">Real data</span> in each block is traced from one actual run in the seeded local DB:
+<strong>“Afternoon Run”, 2026-06-18</strong> — a 3.39&nbsp;km run at 29&nbsp;°C whose 14.6% HR drift the pipeline correctly discounts as heat, ending in a “roast”-voiced rest-day report.</p>
+
+<div class="legend">
+  <div class="item"><span class="swatch" style="background:var(--source)"></span>External / raw data</div>
+  <div class="item"><span class="swatch" style="background:var(--code)"></span>Deterministic code</div>
+  <div class="item"><span class="swatch" style="background:var(--store)"></span>Persistence (DB)</div>
+  <div class="item"><span class="swatch" style="background:var(--llm)"></span>LLM call</div>
+  <div class="item"><span class="swatch" style="background:var(--gate)"></span>Policy / safety gate</div>
+  <div class="item"><span class="swatch" style="background:var(--runner)"></span>Runner-declared input</div>
+  <div class="item"><span class="swatch" style="background:var(--notify)"></span>Outbound notification</div>
+</div>
+
+<div class="flow" id="flow">
+
+  <!-- 1. INGEST -->
+  <div class="stage">
+    <h2>1 · Ingestion — get the activity in</h2>
+    <div class="row">
+      <div class="node source" data-key="strava"><span class="tag source">data source</span><h3>Strava API</h3><p>Activity summary, per-sample streams, recorded laps, HR zones.</p></div>
+      <div class="node code" data-key="trigger"><span class="tag code">trigger</span><h3>Webhook / Polling</h3><p>Create events, or a 120s polling fallback.</p></div>
+      <div class="node code" data-key="ingestion"><span class="tag code">function</span><h3>strava_ingestion</h3><p>Persists activity + streams; refreshes HR zones.</p></div>
+      <div class="node store" data-key="activity"><span class="tag store">tables</span><h3>Activity · ActivityStream</h3><p>Raw records keyed by <code>strava_activity_id</code>.</p></div>
+    </div>
+  </div>
+
+  <div class="arrow">↓<span>process_new_activity_job (idempotent, retried)</span></div>
+
+  <!-- 2. ANALYSIS -->
+  <div class="stage">
+    <h2>2 · Analysis pipeline — deterministic feature extraction (no LLM)</h2>
+    <div class="row">
+      <div class="node code" data-key="metrics"><span class="tag code">function</span><h3>smoothing · metrics</h3><p>Splits, pace variability, HR drift, time-in-zone, efficiency.</p></div>
+      <div class="node code" data-key="classifier"><span class="tag code">function</span><h3>classifier</h3><p>Easy / intervals / long / race.</p></div>
+      <div class="node code" data-key="intervals"><span class="tag code">function</span><h3>intervals · stops</h3><p>Recorded laps else stream heuristic; stop detection.</p></div>
+      <div class="node code" data-key="flags"><span class="tag code">function</span><h3>flags · risk · discount</h3><p>Fatigue/illness, risk, HR-drift confounders.</p></div>
+      <div class="node code" data-key="effort"><span class="tag code">function</span><h3>effort_score</h3><p>Edwards-style zone-minutes training-load primitive.</p></div>
+      <div class="node code" data-key="streamview"><span class="tag code">function</span><h3>stream_view</h3><p>Bounded aligned downsample for deep-dive.</p></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <div class="node store" data-key="derived"><span class="tag store">table</span><h3>DerivedMetric</h3><p><strong>The truth the LLM never overrides.</strong></p></div>
+      <div class="node code" data-key="blocks"><span class="tag code">function</span><h3>blocks.assign</h3><p>Group contiguous activities into a training Block.</p></div>
+      <div class="node code" data-key="baseline"><span class="tag code">function</span><h3>baseline.recompute</h3><p>Rolling per-bucket EF / HR-drift typicals.</p></div>
+    </div>
+  </div>
+
+  <div class="arrow">↓<span>block-complete debounce (~30 min quiet) → coach pipeline on the block's primary activity</span></div>
+
+  <!-- 3. CONTEXT PACK -->
+  <div class="stage">
+    <h2>3 · Context pack — assemble what the coach reasons over (deterministic)</h2>
+    <div class="row">
+      <div class="node code" data-key="focus"><span class="tag code">facts</span><h3>focus + B-baseline</h3><p>This run's metrics + lean always-present baseline.</p></div>
+      <div class="node code" data-key="load"><span class="tag code">facts</span><h3>training_load</h3><p>EWMA fitness / fatigue / form — a citable fact.</p></div>
+      <div class="node code" data-key="longitudinal"><span class="tag code">facts</span><h3>longitudinal · adherence · calibration</h3><p>Prior digest, next-step outcomes, drift + referral.</p></div>
+      <div class="node code" data-key="perceived"><span class="tag code">facts</span><h3>perceived_effort · salience</h3><p>RPE-vs-HR, pain trend; novelty + safety override.</p></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <div class="node store" data-key="beliefs"><span class="tag store">memory</span><h3>CoachingContext (beliefs)</h3><p>Deterministic, auditable learned facts.</p></div>
+      <div class="node store" data-key="narrative"><span class="tag store">memory</span><h3>CoachNarrative</h3><p><strong>Voice only, never cited as fact.</strong></p></div>
+      <div class="node runner" data-key="voice"><span class="tag runner">runner-declared</span><h3>Voice · Stance · Corpus</h3><p>Tone, emphasis + school, uploaded materials.</p></div>
+    </div>
+    <p class="note">Every section is <em>Optional-and-drop</em>: a pack stays byte-stable under prompts that don't consume it, so prompt cutover/rollback is a pure config flip.</p>
+  </div>
+
+  <div class="arrow">↓<span>build_system_prompt(prompt_id, mode, voice) + context pack</span></div>
+
+  <!-- 4. LLM -->
+  <div class="stage">
+    <h2>4 · LLM generation — the one model call that writes the report</h2>
+    <div class="row">
+      <div class="node llm" data-key="llmcall"><span class="tag llm">LLM call</span><h3>Anthropic — coach_message_v8</h3><p>Reason privately → prose <code>message</code> → one strict tool for the structured tail.</p></div>
+      <div class="node store" data-key="contract"><span class="tag store">contract</span><h3>output_contract.py</h3><p>Parse tool blocks; degrade-not-withhold merge.</p></div>
+    </div>
+    <p class="note">Two-stage <em>Exchange</em>: a light <span class="badge">opener</span> then a conditional deep <span class="badge">fuller turn</span>, gated by salience. Receipt cadence swaps the opener for a deterministic non-LLM receipt.</p>
+  </div>
+
+  <div class="arrow">↓</div>
+
+  <!-- 5. GATE -->
+  <div class="stage">
+    <h2>5 · Safety gate — deterministic, never bypassed</h2>
+    <div class="row">
+      <div class="node gate" data-key="validator"><span class="tag gate">policy gate</span><h3>validator.py (8 rules)</h3><p>Reject medical overreach, phantom flags, narrative/corpus cited as fact.</p></div>
+      <div class="node llm" data-key="retry"><span class="tag llm">retry</span><h3>policy retry</h3><p>One re-gen; surviving overreach forces fallback.</p></div>
+      <div class="node code" data-key="fallback"><span class="tag code">fallback</span><h3>safe fallback</h3><p>LLM / parse failure persists a fallback report.</p></div>
+    </div>
+  </div>
+
+  <div class="arrow">↓</div>
+
+  <!-- 6. PERSIST + LEARN -->
+  <div class="stage">
+    <h2>6 · Persist &amp; learn — write the report, update memory</h2>
+    <div class="row">
+      <div class="node store" data-key="coachreport"><span class="tag store">table</span><h3>CoachReport</h3><p>Versioned by <code>(activity_id, prompt_id, schema_version)</code>.</p></div>
+      <div class="node code" data-key="writeback"><span class="tag code">write-back</span><h3>belief_store (M8)</h3><p>Deterministic belief deltas → CoachingContext. LLM-free.</p></div>
+      <div class="node llm" data-key="consolidation"><span class="tag llm">LLM call</span><h3>Consolidation job</h3><p>Haiku re-writes the relationship narrative (voice only).</p></div>
+    </div>
+  </div>
+
+  <div class="arrow">↓</div>
+
+  <!-- 7. DELIVER -->
+  <div class="stage">
+    <h2>7 · Delivery — to the runner</h2>
+    <div class="row">
+      <div class="node notify" data-key="notify"><span class="tag notify">outbound</span><h3>Telegram / Email</h3><p>Tappable RPE / pain / done buttons.</p></div>
+      <div class="node source" data-key="frontend"><span class="tag source">read path</span><h3>Frontend activity page</h3><p>Prose report, charts, panels, training-load card.</p></div>
+      <div class="node llm" data-key="chat"><span class="tag llm">LLM call</span><h3>Coach chat</h3><p>Voice-aware streamed follow-up, same policy gate.</p></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- drawer -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dTitle">
+  <button class="close" id="closeBtn" aria-label="Close">✕</button>
+  <header>
+    <span class="tag" id="dTag">block</span>
+    <h2 id="dTitle">Title</h2>
+    <div class="accent" id="dAccent"></div>
+  </header>
+  <div class="body" id="dBody"></div>
+</aside>
+
+<p class="footer">Generated from <code>project-context.md</code>. The codebase is the truth — this diagram derives from it and may drift.</p>
+
+<script>
+const COLORS = {
+  source:'var(--source)', code:'var(--code)', store:'var(--store)',
+  llm:'var(--llm)', gate:'var(--gate)', notify:'var(--notify)', runner:'var(--runner)'
+};
+
+// kind is used for the tag + accent colour
+const DETAILS = {
+  strava: { kind:'source', tag:'data source', title:'Strava API',
+    what:'The single external source of run data. The app has no proprietary device integration — everything starts here.',
+    points:['Activity summary (distance, time, avg HR, average_temp, is_hilly).','Per-sample streams: HR, pace/velocity, cadence, power.','Recorded laps (the runner\'s own lap-button marks) — authoritative interval segmentation.','HR zone lower bounds, refreshed onto the profile each sync.'],
+    files:['services/strava_ingestion/port.py','http_adapter.py'] },
+
+  trigger: { kind:'code', tag:'trigger', title:'Webhook / Polling',
+    what:'Two convergent paths get a new activity into the pipeline; both attach a bounded retry policy.',
+    points:['Webhook create events POST to /api/webhooks/strava, authenticated by owner_id + subscription_id before any side effect.','poll_for_new_activities_job runs every POLLING_INTERVAL_SECONDS (120s) to catch anything the webhook missed.','update → re-ingest only; delete → soft-delete + detach from block.','PIPELINE_RETRY: 3 attempts at 60/300/900s.'],
+    files:['app/api/webhooks.py','app/jobs/polling.py','app/jobs/process_new_activity.py'] },
+
+  ingestion: { kind:'code', tag:'function', title:'strava_ingestion',
+    what:'Owns persistence and orchestration on top of the Strava port (ADR 0002/0003).',
+    points:['ingest_recent_activities persists the activity + streams.','sync_athlete_zones stores the runner\'s 5 HR-zone bounds on UserProfile (#297), guarded once per sync.','Windows ≤30 days fetch streams (deep processing); larger windows import summaries only (rate-limit-safe backfill).','upsert_activity preserves recorded laps when a lap-less summary re-syncs.'],
+    files:['services/strava_ingestion/ingestion.py'] },
+
+  activity: { kind:'store', tag:'tables', title:'Activity · ActivityStream',
+    what:'The raw, source-of-truth records for one run.',
+    points:['Activity: one Strava activity owned by a User, keyed by strava_activity_id, carries raw_summary + block_id FK.','ActivityStream: per-sample time-series (HR, pace, cadence, power).','These are never mutated by the coach — they are the input to deterministic analysis.'],
+    files:['app/models/activity.py','app/models/activity_stream.py'] },
+
+  metrics: { kind:'code', tag:'function', title:'smoothing · metrics',
+    what:'Pure numeric feature extraction from the streams — the bulk of "what happened on this run".',
+    points:['Smooths streams, then computes splits, pace variability, HR drift, time-in-zone, efficiency.','Time-in-zone bins against the runner\'s own Strava zone bounds, falling back to %-of-max-HR.','numpy-vectorised (perf audit #362).'],
+    files:['services/analysis/smoothing.py','metrics.py'] },
+
+  classifier: { kind:'code', tag:'function', title:'classifier',
+    what:'Assigns the activity class that frames the whole report.',
+    points:['Easy / intervals / long / race, from pace and structure.','Gates structure=="intervals" on pace_variability + a probed structure, so an auto-1km-lapped easy run is not mislabelled.'],
+    files:['services/analysis/classifier.py'] },
+
+  intervals: { kind:'code', tag:'function', title:'intervals · stops',
+    what:'Two interval sources behind one interval_structure contract, plus stop detection.',
+    points:['detect_intervals_from_laps reads recorded Strava laps — authoritative, source="recorded_laps", confidence="high".','detect_intervals (stream smoothing + bimodal heuristic) is the fallback when no usable laps.','Lap-sourced structure skips smoothing/min-duration/warmup floors; a zero-speed lap reads as rest.','Heuristic changes must be validated against real lap data, not just fixtures.'],
+    files:['services/analysis/intervals.py','stops.py'] },
+
+  flags: { kind:'code', tag:'function', title:'flags · risk · discount_signals',
+    what:'Derived judgement signals the coach leans on but can still be overridden by data.',
+    points:['flags: fatigue / illness_or_extreme_fatigue patterns.','risk: injury/overreach risk.','discount_signals: marks HR drift likely inflated by heat (average_temp), terrain (is_hilly), or opt-in stimulant_use — only when drift is actually elevated (>5%), so a confounder on a flat run yields nothing (#176).'],
+    files:['services/analysis/flags.py','risk.py','discount_signals.py'] },
+
+  effort: { kind:'code', tag:'function', title:'effort_score',
+    what:'The per-activity training-load primitive (#186) — one scale comparable and summable across runs with and without HR.',
+    points:['Edwards-style zone-minutes: Σ minutes-in-zone × zone-number.','Estimated per data tier: real HR distribution → zone of avg_hr → CheckIn.rpe → default aerobic weight.','It is cumulative load (grows with duration), NOT an intensity verdict (rule 22 / #168).','Summed by the P3 acute/chronic readiness model.'],
+    files:['services/analysis/metrics.py'] },
+
+  streamview: { kind:'code', tag:'function', title:'stream_view (A2a)',
+    what:'A small processed artifact for deep-dive, derived during analysis and pulled on demand — never a source of truth.',
+    points:['≤60-point, index-aligned, shape-preserving downsample of HR/pace/grade/cadence.','Stored on DerivedMetric.stream_view as a deferred-load JSON column, so the common metrics load stays lean.','Re-derived every analysis; degrades to null without streams.'],
+    files:['services/analysis/stream_view.py'] },
+
+  derived: { kind:'store', tag:'table', title:'DerivedMetric',
+    what:'One row of computed signals per activity. The keystone of the whole design: the LLM reasons over it but can never override it.',
+    points:['Activity class, effort score, pace variability, HR drift, time-in-zones, stops, efficiency, intervals, flags, confidence, risk, discount signals, stream_view.','Upserted by analyze (idempotent — safe to re-run).','Every prompt rule that matters ends "…never overrides this run\'s re-derived DerivedMetric".'],
+    files:['app/models/derived_metric.py'] },
+
+  blocks: { kind:'code', tag:'function', title:'blocks.assign (A1)',
+    what:'Groups temporally-contiguous activities into one training event so the coach can speak about a morning as a whole.',
+    points:['Deterministic time-gap clustering: an activity under BLOCK_GAP_SECONDS (30min) from a block joins it.','Symmetric, so out-of-order sync converges; a closed-exchange block never absorbs late arrivals.','Carries start/end, a primary_activity_id (the run, else longest), and a user_corrected audit bit.','Runs at ingestion on every path (the data model is always on).'],
+    files:['services/blocks.py','app/models/block.py'] },
+
+  baseline: { kind:'code', tag:'function', title:'baseline.recompute (M2)',
+    what:'Rolling per-runner norms used for comparison and drift detection.',
+    points:['Per-user scalar typicals + a bucketed_trends map of EF and HR-drift bucketed by effort|terrain|temp-band.','Recomputed at the end of analyze over a 182-day window anchored on the latest activity, so per-activity cost stays flat (#167).','A bucket abstains until 4 like-for-like samples.'],
+    files:['services/analysis/baseline.py','app/models/runner_baseline.py'] },
+
+  focus: { kind:'code', tag:'facts', title:'focus + B-baseline (A2b)',
+    what:'The lean core of the context pack: this run plus an always-present baseline.',
+    points:['assemble_working_context composes build_b_baseline + build_focus_payload, then flattens to the pack byte-identically to the prior one-pass builder.','focus payload = the subject activity\'s DerivedMetric facts.','Carries the block section only for a multi-member block (byte-stable otherwise).'],
+    files:['services/coach/context.py'] },
+
+  load: { kind:'code', tag:'facts', title:'training_load (P3)',
+    what:'Our own deterministic read of the runner\'s current condition — a tier-3 fact the coach may cite.',
+    points:['fitness (42-day EWMA of effort_score), fatigue (7-day EWMA), form, ramp_rate, condition/trend.','Computed read-time over a 182-day window as of the run\'s start_date.','Reads warming_up while history is shorter than the chronic window.','Emitted only under a training-load-aware prompt; never overrides DerivedMetric or the safety floor (rule 27).'],
+    files:['services/readiness.py'] },
+
+  longitudinal: { kind:'code', tag:'facts', title:'longitudinal · adherence · calibration',
+    what:'The M4–M10 learning loop that makes the coach "get better over time".',
+    points:['longitudinal (M4): digest of the last 1–2 non-fallback reports — advance the narrative, don\'t restate.','adherence (M7): labels each prior next_step acted_on / ignored / contradicted / disputed.','calibration (M9): this run\'s HR drift vs the runner\'s own typical; non-diagnostic referral nudge on red flags.'],
+    files:['services/coach/adherence.py','calibration.py','retrieval.py'] },
+
+  perceived: { kind:'code', tag:'facts', title:'perceived_effort · salience',
+    what:'Subjective-vs-objective reconciliation and the depth decision.',
+    points:['perceived_effort (M6): signed RPE-vs-HR divergence + pain_trend; favours RPE when an HR confounder fired.','salience (A4): deterministic novelty signal + a safety override that forces a deep "fuller turn" on a red-flag run.'],
+    files:['services/coach/perceived_effort.py','salience.py','services/analysis/novelty.py'] },
+
+  beliefs: { kind:'store', tag:'memory', title:'CoachingContext (beliefs, M8)',
+    what:'The deterministic, auditable half of durable memory — facts the relationship has learned.',
+    points:['One durable user-scoped belief per (user_id, kind, key): confirmed HR confound, adherence tendency.','TTL-tiered (hr_confound 120d, adherence_pattern 90d) from last reinforcement; decays.','Retrieved into later packs only when active + observation_count ≥ 2.','Never LLM-generated — pinned by test_writeback_is_llm_free.py.'],
+    files:['services/coach/belief_store.py','app/models/coaching_context.py'] },
+
+  narrative: { kind:'store', tag:'memory', title:'CoachNarrative (A2c)',
+    what:'The LLM-written, voice-only half of durable memory.',
+    points:['One bounded relationship story per user, re-written by the Consolidation job from deterministic facts + recent digests.','Authoritative for voice, never for fact: validator rule 6 rejects it as evidence; prompt rule 24 forbids deriving a number.','Never overrides the run\'s re-derived DerivedMetric.'],
+    files:['services/coach/narrative_store.py','app/models/coach_narrative.py'] },
+
+  voice: { kind:'runner', tag:'runner-declared', title:'Voice · Stance · Corpus',
+    what:'Runner-sovereign inputs that flex delivery and framing — never the facts or the safety floor. No background job ever infers them.',
+    points:['Voice (P1.1): preset + four 1–5 dials (warmth/humor/directness/energy) + free-text. Only writer: PUT /api/coach/voice.','Stance (P1.3): a coaching school + two emphasis axes (Data↔Sentiment, Process↔Outcome). Only writer: PUT /api/coach/stance.','Corpus (P1.2/P4): house schools + the runner\'s uploaded materials (distilled, untrusted, never echoed).','Enforced by cross-voice/stance invariance tests + eval preserved-safety-surface assertions.'],
+    files:['services/coach/voice.py','stance.py','corpus.py'] },
+
+  llmcall: { kind:'llm', tag:'LLM call', title:'Anthropic — coach_message_v8',
+    what:'The one model generation that writes the report. Prose-first, schema 2.0.',
+    points:['Three movements: reason privately → write the human prose message → call record_coach_tail once for the structured tail (headline, next_steps, risks, questions).','v8 retunes the base toward a warm coach with a point of view + a HOW YOU SOUND section (less "samey"); carries v7\'s six capabilities (two-stage/voice/corpus/stance/training-load/user-materials).','Model + prompt are config: COACH_MODEL_ID, COACH_PROMPT_ID. Cutover/rollback is a pure flip.','Prod runs coach_message_v8 (flipped 2026-06-18).'],
+    files:['services/coach/llm.py','prompts.py','service.py'] },
+
+  contract: { kind:'store', tag:'contract', title:'output_contract.py (A3)',
+    what:'Turns the model\'s prose + tool-call into a validated CoachMessageReport.',
+    points:['Hand-frozen record_coach_tail strict-tool JSON.','Order-agnostic block parser.','Degrade-not-withhold merge: a real message survives a missing/unusable tail as tail_degraded=True with empty next_steps.'],
+    files:['services/coach/output_contract.py','app/schemas/coach.py'] },
+
+  validator: { kind:'gate', tag:'policy gate', title:'validator.py — 8 rules',
+    what:'The deterministic policy gate. Per ai-workflow.md it must never be bypassed.',
+    points:['Rejects: missing questions for a null check-in, uncalibrated zones, phantom risk flags, ungated interval counts under low confidence.','Medical-scope (rule 5, the hard floor): no dose advice, diagnosis verbs, medication directives, or clinical assertions.','narrative.* / corpus.* / corpus.user_materials.* cited as evidence (deliberately narrow — match their own path only).','Same check_* bodies police the structured report, the prose message, AND streamed chat (#340).'],
+    files:['services/coach/validator.py'] },
+
+  retry: { kind:'llm', tag:'retry', title:'policy retry',
+    what:'One bounded re-generation when the validator rejects the output.',
+    points:['On violation, the service re-prompts once.','A medical-overreach violation that survives the retry forces is_fallback=True — prose renders verbatim, so this is the one A3 strengthening.'],
+    files:['services/coach/service.py'] },
+
+  fallback: { kind:'code', tag:'fallback', title:'safe fallback',
+    what:'Degrade gracefully rather than show nothing.',
+    points:['An LLM or parse failure persists a CoachReport with is_fallback=True.','The chat analogue is MEDICAL_REDIRECT_MESSAGE — a safe non-diagnostic redirect, itself written to pass the validator.'],
+    files:['services/coach/service.py','chat.py'] },
+
+  coachreport: { kind:'store', tag:'table', title:'CoachReport',
+    what:'The cached, versioned LLM analysis.',
+    points:['Keyed by (activity_id, prompt_id, schema_version), so a prompt/schema change retains prior-version reports.','report JSON is one of two shapes: legacy CoachReportContent (1.2) or prose CoachMessageReport (2.0).','Read path is display-safe (#261): serves the active version, else the most recent cached report of any version.','Carries the exchange digest for the longitudinal memory.'],
+    files:['app/models/coach_report.py','services/coach/digest.py'] },
+
+  writeback: { kind:'code', tag:'write-back', title:'belief_store.write_back (M8)',
+    what:'The deterministic learning write after each non-fallback report.',
+    points:['Extracts belief deltas only from structured discount_signals + M7 adherence outcomes — never from any LLM text.','Creates or reinforces CoachingContext rows; an opposing observation resolves direction in place.','Provably LLM-free (test_writeback_is_llm_free.py), so the deterministic layer stays auditable.'],
+    files:['services/coach/belief_store.py','beliefs.py'] },
+
+  consolidation: { kind:'llm', tag:'LLM call', title:'Consolidation job (A2c)',
+    what:'A background re-grounding of the voice-only relationship narrative.',
+    points:['Enqueued after each non-fallback report (idempotent single-row rewrite, no sentinel).','Hardcoded claude-haiku-4-5 — a cheap summarise-from-structured-facts task, no config knob by design.','Re-derives from deterministic facts + recent digests (never the prior narrative, so re-grounding is structural). Writes only the narrative row.'],
+    files:['app/jobs/consolidation.py','services/coach/consolidation.py'] },
+
+  notify: { kind:'notify', tag:'outbound', title:'Telegram / Email',
+    what:'The outbound channel, selected by config (Telegram preferred — Railway blocks SMTP egress).',
+    points:['Telegram when bot token + chat id set, else email when SMTP host + NOTIFY_TO set, else no-op.','The opener notification carries an inline keyboard of tappable RPE / pain / done buttons (opaque callback tokens).','A tap writes the same CheckIn as the in-app endpoint, re-analyzes, and can fire the fuller turn early; only the keyboard is edited, never the message text.'],
+    files:['services/notifications/__init__.py','telegram_adapter.py','callback_token.py'] },
+
+  frontend: { kind:'source', tag:'read path', title:'Frontend activity page',
+    what:'The Next.js read surface for a processed run.',
+    points:['Renders the prose report (react-markdown), stream charts with synced scrubbing, splits/stops/efficiency panels, a Laps panel, and a Training Load card.','Server components call BACKEND_URL directly; client /api/* calls are proxied with Basic creds injected server-side.','I3: the report\'s next_steps render as one-tap starter chips into the coach chat.'],
+    files:['frontend/app/activity/[id]/page.tsx','components/CoachReport.tsx'] },
+
+  chat: { kind:'llm', tag:'LLM call', title:'Coach chat',
+    what:'A streamed, Voice-aware follow-up conversation against the activity.',
+    points:['Speaks in the runner\'s declared Voice and carries the report\'s authority-tiering (#337).','Injects a bounded user-scoped digest of recent chat from the runner\'s OTHER activities (#339).','Buffered before sending → same shared policy check_* bodies → re-streamed in slices; medical overreach withheld + replaced with a safe redirect (#340).','Content-free heartbeats keep the proxy connection alive during buffering (#375).'],
+    files:['services/coach/chat.py','components/CoachChat.tsx'] },
+};
+
+// Real values traced from activity 256ebb60 ("Afternoon Run", 2026-06-18) in the seeded local DB.
+// <k>=key (green), <v>=value (amber).
+const REAL = {
+  strava:
+`<k>strava_activity_id</k>: <v>18971052704</v>
+<k>name</k>: <v>"Afternoon Run"</v>   <k>type</k>: <v>Run</v>
+<k>distance</k>: <v>3390 m</v>   <k>moving</k>: <v>1266 s</v>   <k>elapsed</k>: <v>1410 s</v>
+<k>avg_hr</k>: <v>161.4</v>   <k>max_hr</k>: <v>174</v>   <k>elev_gain</k>: <v>40 m</v>
+<k>raw_summary.average_temp</k>: <v>29 °C</v>   <k>laps</k>: <v>4</v>`,
+  trigger:
+`webhook <k>aspect_type</k>=<v>create</v>  →  <v>process_new_activity_job</v>
+activity <v>18971052704</v>  →  ingest → analyze → assign block
+(PIPELINE_RETRY: 3 attempts @ 60/300/900s)`,
+  ingestion:
+`<k>11 stream types</k> stored, <v>1270 samples</v> each:
+heartrate · velocity_smooth · temp · cadence · altitude ·
+grade_smooth · watts · latlng · distance · moving · time
+<k>sync_athlete_zones</k> → runner's HR zone bounds refreshed`,
+  activity:
+`Activity row + ActivityStream:
+<k>heartrate</k>:        <v>[114, 114, 112, 110, ...]</v>  (1270 pts)
+<k>velocity_smooth</k>:  <v>[0.0, 0.1, 0.6, 0.767, ...]</v>
+<k>temp</k>:            <v>[30, 30, 30, ...]</v>`,
+  metrics:
+`<k>hr_drift</k>: <v>14.6 %</v>
+<k>pace_variability</k>: <v>14.05</v>
+<k>time_in_zones</k> (sec): <v>Z1 40 · Z2 132 · Z3 863 · Z4 235 · Z5 0</v>`,
+  classifier:
+`<k>structure</k>: <v>continuous</v>
+<k>effort</k>: <v>moderate</v>
+<k>duration_class</k>: <v>standard</v>   <k>is_race</k>: <v>false</v>`,
+  intervals:
+`<k>interval_structure</k>: <v>null</v>
+4 auto-laps present, but no bimodal work/rest pattern →
+read as a continuous run, NOT an interval session.`,
+  flags:
+`<k>flags</k>: <v>["fatigue_possible"]</v>
+<k>risk_level</k>: <v>green</v>
+<k>discount_signals.likely_inflated_by</k>: <v>["heat"]</v>
+<k>.temperature_c</k>: <v>29.0</v>  <k>.confidence</k>: <v>high</v>`,
+  effort:
+`<k>effort_score</k>: <v>63.9</v>
+= Σ (minutes-in-zone × zone-number), Edwards-style.
+Cumulative training LOAD — not an intensity verdict.`,
+  streamview:
+`<k>stream_view</k>: <v>60 points</v>  (downsampled from 1270)
+<k>keys</k>: time_s · hr · pace_s_per_km · grade_pct · cadence_spm`,
+  derived:
+`<k>structure</k> <v>continuous</v> · <k>effort</k> <v>moderate</v> · <k>effort_score</k> <v>63.9</v>
+<k>hr_drift</k> <v>14.6%</v> · <k>pace_var</k> <v>14.05</v> · <k>confidence</k> <v>high</v> · <k>risk</k> <v>green</v>
+<k>flags</k> <v>[fatigue_possible]</v> · <k>discount</k> <v>[heat]</v>`,
+  blocks:
+`<k>block_id</k>: <v>8b9c33fb…</v>   <k>members</k>: <v>1</v>  (block-of-one)
+<k>primary_activity</k>: this run`,
+  baseline:
+`<k>calibration.basis</k>:
+"this runner's typical HR drift for these conditions is
+about <v>2.8%</v> across <v>8</v> comparable runs"
+(bucket = effort | terrain | temp-band)`,
+  focus:
+`pack.<k>activity</k> + pack.<k>metrics</k> =
+this run's DerivedMetric, flattened byte-stably into the pack`,
+  load:
+`<k>training_load</k>: <k>fitness</k> <v>125.2</v> · <k>fatigue</k> <v>118.6</v> · <k>form</k> <v>6.6</v>
+<k>condition</k>: <v>fresh</v> · <k>trend</k>: <v>steady</v> · <k>ramp_rate</k>: <v>0.4</v> · <k>samples</k>: <v>324</v>`,
+  longitudinal:
+`<k>recent_training_summary.last_7d</k>: <v>17 activities</v>, <v>45.7 km</v>
+<k>.last_28d</k>: <v>63 activities</v>, <v>173 km</v>
+<k>adherence.outcomes</k>: <v>[]</v>  (no prior next_steps to judge yet)`,
+  perceived:
+`<k>perceived_effort.rpe</k>: <v>3</v>   <k>effort_axis</k>: <v>moderate</v>
+<k>divergence</k>: <v>-1</v>   <k>hr_confounded</k>: <v>true</v>
+<k>recommended_weighting</k>: <v>rpe_over_hr</v>  (trust RPE over a heat-inflated HR)`,
+  beliefs:
+`<k>believed_facts.facts[0]</k>:
+"mixed response to keeping easy runs easy (acted on 5 of 8)"
+<k>confidence</k> <v>high</v> · <k>observed_count</k> <v>23</v> · <k>last_seen</k> <v>0d ago</v>`,
+  narrative:
+`"…genuine capacity for easy discipline — five of the last
+eight times the coach asked for it, the runner delivered —
+but struggles with the harder ask: doing nothing at all."`,
+  voice:
+`<k>voice_preset</k>: <v>"roast"</v>  (warmth <v>1</v> · humor <v>5</v> · directness <v>3</v> · energy <v>3</v>)
+<k>stance_school</k>: <v>aerobic-base</v>
+<k>emphasis</k>: Data↔Sentiment <v>3</v> (balanced) · Process↔Outcome <v>1</v> (strongly Process)
+<k>corpus.school.stance</k>: "Durability is built by lots of easy aerobic running…"`,
+  llmcall:
+`<k>prompt_id</k>: <v>coach_message_v7</v> · <k>schema</k>: <v>2.0</v>
+<k>message</k>: "Right, so. The rest-day advice has now been offered,
+declined, offered again, declined more creatively with a walk…
+it was 29°C at noon, and that's exactly the window where the
+stimulant you've mentioned tends to push HR up."`,
+  contract:
+`<k>tail.headline</k>: "Rest day overdue — HR confounded by heat
+and medication timing; RPE 3 = easy"
+<k>tail.next_steps[0].action</k>: "Take a genuine rest day"
+<k>.evidence</k>: recent_training_summary.last_7d.activity_count = <v>17</v>`,
+  validator:
+`<k>is_fallback</k>: <v>false</v>  →  passed all 8 rules
+medical-scope OK: "medication timing" stays a confounder note —
+no dose, no diagnosis verb.  <k>referral</k>: <v>null</v> (no red flag).`,
+  retry:
+`<v>No retry needed</v> — the output passed the validator first time.
+(A surviving medical overreach would force is_fallback=true.)`,
+  fallback:
+`<v>Not triggered</v> — generation + parse + policy all succeeded
+(is_fallback = false).`,
+  coachreport:
+`<k>key</k>: (activity_id, <v>coach_message_v7</v>, <v>2.0</v>)
+<k>report</k>: prose message + structured tail + digest stored
+(display-safe read serves this even after a prompt flip)`,
+  writeback:
+`reinforced belief <k>adherence_pattern</k> "easy runs easy":
+<k>observed_count</k> → <v>23</v>  (acted 5 of 8) · derived LLM-free
+from discount_signals + adherence outcomes`,
+  consolidation:
+`<k>CoachNarrative</k> re-written by <v>claude-haiku-4-5</v>
+from deterministic facts + recent digests (voice only);
+this run reinforced the "struggles to rest" thread.`,
+  notify:
+`<k>channel</k>: <v>Telegram</v> (Railway blocks SMTP)
+voice <v>"roast"</v> · opener keyboard: <v>RPE / pain / done</v> taps
+a tap writes a CheckIn and can fire the fuller turn early`,
+  frontend:
+`renders the prose report + stream charts +
+<k>Training Load card</k>: fitness <v>125.2</v> / fatigue <v>118.6</v> / form <v>6.6</v>
+next_steps surface as one-tap chat starter chips`,
+  chat:
+`follow-up speaks in the <v>"roast"</v> voice, carries the report's
+authority disciplines, and injects recent chat from the runner's
+OTHER activities — same policy gate, re-streamed.`,
+};
+
+const drawer = document.getElementById('drawer');
+const scrim  = document.getElementById('scrim');
+const dTag   = document.getElementById('dTag');
+const dTitle = document.getElementById('dTitle');
+const dBody  = document.getElementById('dBody');
+const dAccent= document.getElementById('dAccent');
+
+function openDrawer(key) {
+  const d = DETAILS[key];
+  if (!d) return;
+  const c = COLORS[d.kind];
+  dTag.textContent = d.tag;
+  dTag.className = 'tag ' + d.kind;
+  dTitle.textContent = d.title;
+  dAccent.style.background = c;
+  let html = '<h4>What it is</h4><p>' + d.what + '</p>';
+  if (d.points && d.points.length) {
+    html += '<h4>Details</h4><ul>' + d.points.map(p => '<li>' + p + '</li>').join('') + '</ul>';
+  }
+  if (d.files && d.files.length) {
+    html += '<h4>Where in the code</h4><div class="files">' +
+      d.files.map(f => '<code>' + f + '</code>').join('') + '</div>';
+  }
+  if (REAL[key]) {
+    html += '<h4>Real data <span class="realtag">Afternoon Run · 2026-06-18</span></h4>' +
+      '<div class="data"><pre>' + REAL[key] + '</pre></div>';
+  }
+  dBody.innerHTML = html;
+  drawer.classList.add('open');
+  scrim.classList.add('open');
+}
+function closeDrawer() {
+  drawer.classList.remove('open');
+  scrim.classList.remove('open');
+}
+
+document.querySelectorAll('.node').forEach(n => {
+  n.setAttribute('tabindex', '0');
+  n.setAttribute('role', 'button');
+  n.addEventListener('click', () => openDrawer(n.dataset.key));
+  n.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(n.dataset.key); }
+  });
+});
+document.getElementById('closeBtn').addEventListener('click', closeDrawer);
+scrim.addEventListener('click', closeDrawer);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+</script>
+
+</body>
+</html>
