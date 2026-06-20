@@ -40,6 +40,20 @@
   .legend .item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
   .swatch { width: 14px; height: 14px; border-radius: 4px; flex: none; }
 
+  .picker {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--runner);
+    border-radius: 12px; padding: 12px 16px; margin: 0 0 24px;
+  }
+  .picker label { font-size: 13px; color: var(--ink); }
+  .picker select {
+    background: #11141a; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 10px; font-size: 13px; max-width: 420px;
+    font-family: inherit; cursor: pointer;
+  }
+  .picker select:focus-visible { outline: 2px solid var(--runner); outline-offset: 2px; }
+  .picker-hint { font-size: 11.5px; color: var(--muted); }
+
   .flow { display: flex; flex-direction: column; gap: 30px; max-width: 1180px; margin: 0 auto; }
 
   .stage {
@@ -165,8 +179,11 @@
 <h1>Running Coach — AI &amp; Data Flow</h1>
 <p class="sub">How one Strava run becomes an opinionated, voiced coach report. Blocks are coloured by what they
 <em>are</em>. <strong>Click any block</strong> for files, functions, and the details. Press <kbd>Esc</kbd> to close.</p>
-<p class="sub" style="margin-top:-14px"><span style="color:#5eead4;font-weight:600">Real data</span> in each block is traced from one actual run in the seeded local DB:
-<strong>“Afternoon Run”, 2026-06-18</strong> — a 3.39&nbsp;km run at 29&nbsp;°C whose 14.6% HR drift the pipeline correctly discounts as heat, ending in a “roast”-voiced rest-day report.</p>
+<div class="picker">
+  <label for="activityPicker"><span style="color:#5eead4;font-weight:600">Real data</span> activity</label>
+  <select id="activityPicker" aria-label="Choose the activity whose real data fills the blocks"></select>
+  <span class="picker-hint" id="pickerHint"></span>
+</div>
 
 <div class="legend">
   <div class="item"><span class="swatch" style="background:var(--source)"></span>External / raw data</div>
@@ -292,8 +309,9 @@
   <div class="body" id="dBody"></div>
 </aside>
 
-<p class="footer">Generated from <code>project-context.md</code>. The codebase is the truth — this diagram derives from it and may drift.</p>
+<p class="footer">Generated from <code>project-context.md</code>; real data via <code>generate_flow_data.py</code>. The codebase is the truth — this diagram derives from it and may drift.</p>
 
+<script src="flow-data.js"></script>
 <script>
 const COLORS = {
   source:'var(--source)', code:'var(--code)', store:'var(--store)',
@@ -458,9 +476,10 @@ const DETAILS = {
     files:['services/coach/chat.py','components/CoachChat.tsx'] },
 };
 
-// Real values traced from activity 256ebb60 ("Afternoon Run", 2026-06-18) in the seeded local DB.
-// <k>=key (green), <v>=value (amber).
-const REAL = {
+// Fallback real values for one activity ("Afternoon Run", 2026-06-18), used only if
+// flow-data.js (the full 54-activity generated set) failed to load. <k>=key, <v>=value.
+const FALLBACK_ID = '256ebb60-2f04-4bf3-ac93-29080155b98e';
+const REAL_FALLBACK = {
   strava:
 `<k>strava_activity_id</k>: <v>18971052704</v>
 <k>name</k>: <v>"Afternoon Run"</v>   <k>type</k>: <v>Run</v>
@@ -591,6 +610,47 @@ authority disciplines, and injects recent chat from the runner's
 OTHER activities — same policy gate, re-streamed.`,
 };
 
+// ---- activity selection (driven by window.FLOW_DATA from flow-data.js) ----
+const FLOW = (window.FLOW_DATA || { activities: [], real: {} });
+const hasData = FLOW.activities.length > 0;
+let currentId = hasData ? FLOW.activities[0].id : FALLBACK_ID;
+
+// real-data snippet for the current activity + block key
+function realFor(key) {
+  if (hasData && FLOW.real[currentId]) return FLOW.real[currentId][key];
+  return REAL_FALLBACK[key]; // graceful fallback if flow-data.js is missing
+}
+function currentLabel() {
+  if (!hasData) return 'Afternoon Run · 2026-06-18';
+  const a = FLOW.activities.find(x => x.id === currentId);
+  return a ? a.label : currentId;
+}
+function currentChip() {
+  if (!hasData) return 'Afternoon Run · 2026-06-18';
+  const a = FLOW.activities.find(x => x.id === currentId);
+  return a ? (a.date + ' · ' + a.name) : currentId;
+}
+
+// populate the picker
+(function initPicker() {
+  const sel = document.getElementById('activityPicker');
+  const hint = document.getElementById('pickerHint');
+  if (!hasData) {
+    sel.innerHTML = '<option>Afternoon Run · 2026-06-18 (built-in)</option>';
+    sel.disabled = true;
+    hint.textContent = 'flow-data.js not loaded — showing the built-in sample. Run generate_flow_data.py.';
+    return;
+  }
+  sel.innerHTML = FLOW.activities
+    .map(a => '<option value="' + a.id + '"' + (a.id === currentId ? ' selected' : '') + '>' + a.label + '</option>')
+    .join('');
+  hint.textContent = FLOW.activities.length + ' activities with a full coach report. Pick one, then click any block.';
+  sel.addEventListener('change', e => {
+    currentId = e.target.value;
+    if (drawer.classList.contains('open') && openKey) openDrawer(openKey); // live-refresh open drawer
+  });
+})();
+
 const drawer = document.getElementById('drawer');
 const scrim  = document.getElementById('scrim');
 const dTag   = document.getElementById('dTag');
@@ -598,9 +658,11 @@ const dTitle = document.getElementById('dTitle');
 const dBody  = document.getElementById('dBody');
 const dAccent= document.getElementById('dAccent');
 
+let openKey = null;
 function openDrawer(key) {
   const d = DETAILS[key];
   if (!d) return;
+  openKey = key;
   const c = COLORS[d.kind];
   dTag.textContent = d.tag;
   dTag.className = 'tag ' + d.kind;
@@ -614,9 +676,10 @@ function openDrawer(key) {
     html += '<h4>Where in the code</h4><div class="files">' +
       d.files.map(f => '<code>' + f + '</code>').join('') + '</div>';
   }
-  if (REAL[key]) {
-    html += '<h4>Real data <span class="realtag">Afternoon Run · 2026-06-18</span></h4>' +
-      '<div class="data"><pre>' + REAL[key] + '</pre></div>';
+  const real = realFor(key);
+  if (real) {
+    html += '<h4>Real data <span class="realtag">' + currentChip() + '</span></h4>' +
+      '<div class="data"><pre>' + real + '</pre></div>';
   }
   dBody.innerHTML = html;
   drawer.classList.add('open');
