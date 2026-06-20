@@ -160,6 +160,7 @@ async def test_opener_idempotent_no_second_llm_call(db, _v2):
 # --- fuller -------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("enable_durable_memory")  # asserts the M8/A2c loop fires
 async def test_fuller_updates_opener_row_in_place_preserving_opener(db, _v2):
     activity = _seed(db)
     with patch("app.services.coach.service.AnthropicClient",

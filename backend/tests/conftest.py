@@ -79,3 +79,16 @@ def override_get_db(db):
     but normally 'client' fixture handles the override.
     """
     return db
+
+
+@pytest.fixture
+def enable_durable_memory(monkeypatch):
+    """Turn the M8 belief loop and A2c narrative back on for the tests that
+    exercise that machinery. Both default OFF in prod (the loop misclassified
+    rest-day advice and poisoned a belief; the narrative replayed it), so these
+    feature tests opt in explicitly rather than relying on the disabled default.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "COACH_BELIEFS_ENABLED", True)
+    monkeypatch.setattr(settings, "COACH_NARRATIVE_ENABLED", True)

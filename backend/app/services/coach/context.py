@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, undefer
 
+from app.core.config import settings
 from app.models import Activity, Block, DerivedMetric, RunnerBaseline, UserProfile
 from app.models.checkin import CheckIn
 from app.models.coach_chat_message import CoachChatMessage
@@ -556,10 +557,26 @@ def build_b_baseline(
             pain_scores=_recent_pain_scores(db, activity),
         ),
         adherence=_build_adherence_context(db, activity),
-        believed_facts=build_believed_facts(db, activity),
+        # M8 belief machinery (believed_facts + the M10 preference_profile that
+        # reads the same store) is gated off pending recalibration; off => the
+        # new-runner empty form, so the poisoned belief never reaches the prompt.
+        believed_facts=(
+            build_believed_facts(db, activity)
+            if settings.COACH_BELIEFS_ENABLED
+            else BelievedFactsContext(facts=[])
+        ),
         calibration=_build_calibration_context(db, activity),
-        preference_profile=_build_preference_profile(db, activity),
-        narrative=build_narrative_context(db, activity),
+        preference_profile=(
+            _build_preference_profile(db, activity)
+            if settings.COACH_BELIEFS_ENABLED
+            else build_preference_profile([])
+        ),
+        # A2c narrative is gated off pending recalibration; off => empty story.
+        narrative=(
+            build_narrative_context(db, activity)
+            if settings.COACH_NARRATIVE_ENABLED
+            else NarrativeContext()
+        ),
         salience=_build_salience_context(db, activity),
         safety_rules=SafetyRules(
             never_diagnose=True,
