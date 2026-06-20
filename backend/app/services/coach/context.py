@@ -44,8 +44,10 @@ from app.services.coach.prompts import (
     is_stance_prompt,
     is_training_load_prompt,
     is_user_materials_prompt,
+    is_volume_prompt,
 )
 from app.services.coach.stance import StanceProfile, resolve_stance
+from app.services.coach.volume import build_training_volume
 from app.services.readiness import build_readiness
 from app.services.coach.retrieval import (
     fetch_corpus,
@@ -70,6 +72,7 @@ from app.schemas.coach_context import (
     StanceContext,
     StanceEmphasisAxis,
     TrainingLoadContext,
+    TrainingVolumeContext,
     LongitudinalContext,
     MetricsContext,
     NarrativeContext,
@@ -238,6 +241,10 @@ def build_context_pack(
         # P3 readiness (ADR 0016): emitted ONLY under a training-load-aware prompt id,
         # computed read-time as of this activity (so the run is in the acute load).
         training_load=_build_training_load_context(db, activity, prompt_id),
+        # #400 volume-vs-norm: emitted ONLY under a volume-aware prompt id, computed
+        # read-time over the runner's local-day windows so a deliberate easy week reads
+        # as down-vs-norm rather than alarming.
+        training_volume=_build_training_volume_context(db, activity, prompt_id),
         safety_rules=b.safety_rules,
     )
 
@@ -360,6 +367,32 @@ def _build_training_load_context(
         warming_up=model.warming_up,
         sample_count=model.sample_count,
     )
+
+
+def _build_training_volume_context(
+    db: Session, activity: Activity, prompt_id: Optional[str]
+) -> Optional[TrainingVolumeContext]:
+    """The #400 frequency-/volume-vs-norm pack section, or None.
+
+    Emitted ONLY under a volume-aware prompt id (`is_volume_prompt`), so the pack is
+    byte-stable for every other prompt — the section is dropped from serialization
+    when None, exactly like `training_load`/`corpus`/`block`. Computed read-time as of
+    this activity's LOCAL day (so the windows match the runner's calendar, #399) over
+    a 91-day fact span (the trailing 7d plus the 12-week norm baseline before it). A
+    deterministic FACT the coach may cite, but it never overrides the run's re-derived
+    DerivedMetric or the safety floor (the volume addendum). Degrades gracefully:
+    thin history yields `has_baseline=False` and `no_norm` directions."""
+    if not is_volume_prompt(prompt_id):
+        return None
+    as_of = activity.local_start.date()
+    # _query_activity_facts filters on UTC start_date with an EXCLUSIVE end, so pass
+    # as_of+1 to keep the current local day (today's run) inside the rolling window;
+    # the builder partitions the fetched span by local_date. The start is widened to
+    # 91 days to cover the trailing 7d plus the 12-week norm baseline before it.
+    facts = _query_activity_facts(
+        db, as_of - timedelta(days=91), as_of + timedelta(days=1), user_id=activity.user_id
+    )
+    return build_training_volume(facts, as_of)
 
 
 def _build_block_context(db: Session, activity: Activity) -> Optional[BlockContext]:
