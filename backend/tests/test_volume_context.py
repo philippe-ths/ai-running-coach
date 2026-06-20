@@ -113,13 +113,23 @@ def test_volume_endpoint_returns_signal_as_of_today(client, db):
         _add(db, _U(uid), wk - timedelta(days=4), type="Walk")
     _add(db, _U(uid), base)
 
-    resp = client.get("/api/trends/volume")
+    resp = client.get("/api/trends/volume?range=7D")
     assert resp.status_code == 200, resp.text
     body = resp.json()
+    assert body["range"] == "7D"
     assert body["has_baseline"] is True
-    rolling = {m["metric"]: m for m in body["rolling_7d"]["metrics"]}
-    assert rolling["sessions"]["direction"] == "down"  # 1 session vs the ~5/wk norm
-    assert "calendar_week" in body
+    assert body["rolling"]["label"] == "7-day rolling"
+    assert body["calendar"]["label"] == "This week"
+    rolling = {m["metric"]: m for m in body["rolling"]["metrics"]}
+    assert rolling["sessions"]["direction"] == "down"  # 1 session vs the norm
+
+    # The range drives the framing: 30D switches to month labels.
+    resp30 = client.get("/api/trends/volume?range=30D")
+    assert resp30.status_code == 200, resp30.text
+    body30 = resp30.json()
+    assert body30["range"] == "30D"
+    assert body30["rolling"]["label"] == "30-day rolling"
+    assert body30["calendar"]["label"] == "This month"
 
 
 class _U:

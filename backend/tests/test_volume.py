@@ -8,7 +8,7 @@ figure rides alongside the holistic total, and thin history abstains (`no_norm`)
 from datetime import date, timedelta
 from types import SimpleNamespace
 
-from app.services.coach.volume import build_training_volume
+from app.services.coach.volume import build_training_volume, build_volume_report
 
 
 def _fact(d: date, *, type="Run", distance_m=10000, moving_time_s=3600, effort_score=50.0):
@@ -129,3 +129,61 @@ def test_calendar_week_is_partial_and_prorated():
     d = _by_metric(cw)["distance_m"]
     assert d.current_all == 30000
     assert d.direction == "up"  # 30km vs the ~21.4km pro-rated norm
+
+
+# --- range-aware report (Trends page) -----------------------------------------
+
+
+def _history(as_of: date, n_days: int, *, per_day=1, distance_m=10000):
+    """`per_day` activities per day for `n_days` days ending on as_of."""
+    facts = []
+    for i in range(n_days):
+        d = as_of - timedelta(days=i)
+        for _ in range(per_day):
+            facts.append(_fact(d, distance_m=distance_m))
+    return facts
+
+
+def _by(framing):
+    return {m.metric: m for m in framing.metrics}
+
+
+def test_report_range_drives_labels_and_windows():
+    as_of = date(2026, 6, 20)  # June, a Saturday
+    facts = _history(as_of, 200)
+    r = build_volume_report(facts, as_of, "30D")
+    assert r.range == "30D"
+    assert r.rolling.label == "30-day rolling"
+    assert r.rolling.window_days == 30
+    assert r.calendar.label == "This month"
+    assert r.calendar.window_days == 30          # June has 30 days
+    assert r.calendar.days_elapsed == 20         # 1st..20th
+    assert r.calendar.complete is False
+
+
+def test_report_consistent_history_reads_in_line():
+    as_of = date(2026, 6, 20)
+    r = build_volume_report(_history(as_of, 200), as_of, "30D")  # uniform density
+    by = _by(r.rolling)
+    assert by["sessions"].direction == "in_line"
+    assert by["distance_m"].direction == "in_line"
+
+
+def test_report_light_current_window_reads_down():
+    as_of = date(2026, 6, 20)
+    facts = _history(as_of - timedelta(days=30), 170)  # dense history ending 30d ago
+    for i in range(0, 30, 3):                            # a sparse current 30 days
+        facts.append(_fact(as_of - timedelta(days=i)))
+    by = _by(build_volume_report(facts, as_of, "30D").rolling)
+    assert by["sessions"].direction == "down"
+
+
+def test_report_calendar_period_label_per_range():
+    as_of = date(2026, 6, 20)
+    facts = _history(as_of, 400)
+    assert build_volume_report(facts, as_of, "3M").calendar.label == "This quarter"
+    assert build_volume_report(facts, as_of, "6M").calendar.label == "This half-year"
+    assert build_volume_report(facts, as_of, "1Y").calendar.label == "This year"
+    # Q2 (Apr-Jun) is 91 days; first half-year is 181; the year is 365.
+    assert build_volume_report(facts, as_of, "3M").calendar.window_days == 91
+    assert build_volume_report(facts, as_of, "1Y").calendar.window_days == 365

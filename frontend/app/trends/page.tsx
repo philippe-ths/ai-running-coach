@@ -92,7 +92,6 @@ export default function TrendsPage() {
 
       {data && (
         <div className="space-y-6">
-          <VsNormCard />
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
               <div className="text-sm text-gray-500 dark:text-gray-400">Total Distance</div>
@@ -139,6 +138,8 @@ export default function TrendsPage() {
               />
             </div>
           </div>
+
+          <VsNormCard range={range} />
 
           <TrendBarChart
             type="distance"

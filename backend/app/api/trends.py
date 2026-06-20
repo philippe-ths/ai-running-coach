@@ -9,8 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.api.profile import get_current_user_profile
 from app.db.session import get_db
-from app.schemas.coach_context import TrainingVolumeContext
-from app.schemas.trends import LoadResponse, TrendsResponse, WeeklyStatsResponse
+from app.schemas.trends import (
+    LoadResponse,
+    TrendsResponse,
+    VolumeReport,
+    WeeklyStatsResponse,
+)
 from app.services.training_load import get_load_report
 from app.services.trends import (
     get_available_types,
@@ -45,12 +49,16 @@ def get_training_load(db: Session = Depends(get_db)):
     return get_load_report(db)
 
 
-@router.get("/trends/volume", response_model=TrainingVolumeContext)
-def get_volume(db: Session = Depends(get_db)):
-    """Frequency-/volume-vs-norm signal as of today: per-metric current vs the
-    runner's per-week norm, in both rolling-7d and Mon-Sun-week framings (#400)."""
+@router.get("/trends/volume", response_model=VolumeReport)
+def get_volume(
+    range: str = Query("7D", description="7D | 30D | 3M | 6M | 1Y"),
+    db: Session = Depends(get_db),
+):
+    """Frequency-/volume-vs-norm report for the selected range, as of today:
+    per-metric current vs the runner's norm, in rolling and calendar-period
+    framings scaled to the range (#400)."""
     user_id = get_current_user_profile(db).user_id
-    return get_volume_report(db, user_id)
+    return get_volume_report(db, user_id, range)
 
 
 @router.get("/stats/weekly", response_model=WeeklyStatsResponse)

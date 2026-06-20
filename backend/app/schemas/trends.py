@@ -139,3 +139,52 @@ class LoadWeek(BaseModel):
 
 class LoadResponse(BaseModel):
     weeks: List[LoadWeek]  # chronological; last entry is the current week
+
+
+class VolumeMetricVsNorm(BaseModel):
+    """#400: one metric's current-window value vs the runner's norm for that window.
+
+    `current_all` is holistic (every logged activity); `current_runs` is the
+    runs-only figure alongside. `norm`/`norm_recent` are the runner's typical output
+    over a window of the same length (per-day rate over a 12-week / 4-week baseline
+    before the window, scaled to the window's elapsed days), so the comparison is
+    fair across ranges and partial calendar periods. `direction` carries a deadband.
+    """
+    metric: str  # sessions | distance_m | moving_time_s | effort_score
+    current_all: float
+    current_runs: float
+    norm: Optional[float] = None
+    norm_recent: Optional[float] = None
+    pct_vs_norm: Optional[float] = None
+    direction: str          # up | in_line | down | no_norm
+    direction_recent: str   # up | in_line | down | no_norm
+
+
+class VolumeFraming(BaseModel):
+    """#400: one framing of the vs-norm read for the selected range.
+
+    `framing` is "rolling" (the trailing `window_days`) or "calendar" (the current
+    calendar period — week/month/quarter/half/year — for the range). `label` is the
+    display label ("30-day rolling", "This month"). `days_elapsed` is the days
+    counted (= window_days for rolling; the elapsed days of a partial calendar
+    period). `complete` is whether the calendar period is finished.
+    """
+    framing: str        # rolling | calendar
+    label: str
+    window_days: int
+    days_elapsed: int
+    complete: bool
+    metrics: List[VolumeMetricVsNorm]
+
+
+class VolumeReport(BaseModel):
+    """#400: the Trends-page frequency-/volume-vs-norm report for a selected range.
+
+    Two framings (rolling + calendar period) scaled to the range, each metric
+    compared to the runner's norm for that window. `has_baseline` is False when
+    history is too thin to call a norm (every direction is then `no_norm`)."""
+    range: str          # 7D | 30D | 3M | 6M | 1Y
+    rolling: VolumeFraming
+    calendar: VolumeFraming
+    has_baseline: bool
+    baseline_weeks: int

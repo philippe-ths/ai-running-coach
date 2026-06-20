@@ -22,14 +22,16 @@ as a run. The norm and the direction verdict are on the holistic total.
 
 from __future__ import annotations
 
+import calendar as _cal
 from datetime import date, timedelta
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.schemas.coach_context import (
     TrainingVolumeContext,
     VolumeMetricComparison,
     VolumeWindow,
 )
+from app.schemas.trends import VolumeFraming, VolumeMetricVsNorm, VolumeReport
 
 # The metrics compared, in a fixed order (byte-stable pack).
 _METRICS = ("sessions", "distance_m", "moving_time_s", "effort_score")
@@ -165,4 +167,148 @@ def build_training_volume(facts: List[Any], as_of: date) -> TrainingVolumeContex
         baseline_weeks=_BASELINE_WEEKS,
         baseline_weeks_recent=_RECENT_WEEKS,
         has_baseline=has_baseline,
+    )
+
+
+# ---------------------------------------------------------------------------
+# #400 range-aware report for the Trends page. Reuses the core helpers above
+# (_sum, _is_run, _direction, _METRICS); the coach pack path (build_training_volume)
+# is unchanged — the coach always reasons about "this week vs norm", while the
+# Trends page generalizes to the selected range with a scaled norm.
+# ---------------------------------------------------------------------------
+
+# Range key -> the rolling window length in days.
+_RANGE_WINDOW_DAYS = {"7D": 7, "30D": 30, "3M": 90, "6M": 180, "1Y": 365}
+
+_NORM_BASELINE_DAYS = 84  # 12 weeks, the stable per-day norm
+_NORM_RECENT_DAYS = 28    # 4 weeks, recent context
+
+
+def _norm_per_day(
+    facts: List[Any], baseline_end: date, baseline_days: int
+) -> Dict[str, Optional[float]]:
+    """Per-metric average daily output over the `baseline_days` ending on
+    `baseline_end`, or None per metric when the baseline holds too few activities.
+    Calendar days (not active days) are the denominator, so rest days count as zero
+    — a true average daily rate that scales to any window length."""
+    start = baseline_end - timedelta(days=baseline_days - 1)
+    window = [f for f in facts if start <= f.local_date <= baseline_end]
+    if len(window) < _MIN_BASELINE_ACTIVITIES:
+        return {m: None for m in _METRICS}
+    return {m: _sum(window, m) / baseline_days for m in _METRICS}
+
+
+def _report_metric(
+    metric: str,
+    window_facts: List[Any],
+    days_elapsed: int,
+    norm_pd: Dict[str, Optional[float]],
+    norm_pd_recent: Dict[str, Optional[float]],
+) -> VolumeMetricVsNorm:
+    current_all = _sum(window_facts, metric)
+    current_runs = _sum(window_facts, metric, runs_only=True)
+    pd = norm_pd.get(metric)
+    pdr = norm_pd_recent.get(metric)
+    # Scale the per-day norm to the window's elapsed days, so a partial calendar
+    # period is judged against an equally-partial norm.
+    norm = pd * days_elapsed if pd is not None else None
+    norm_recent = pdr * days_elapsed if pdr is not None else None
+
+    pct: Optional[float] = None
+    if norm is not None and norm > 0:
+        pct = round((current_all - norm) / norm * 100.0, 1)
+
+    return VolumeMetricVsNorm(
+        metric=metric,
+        current_all=current_all,
+        current_runs=current_runs,
+        norm=round(norm, 1) if norm is not None else None,
+        norm_recent=round(norm_recent, 1) if norm_recent is not None else None,
+        pct_vs_norm=pct,
+        direction=_direction(current_all, norm, 1.0),  # norm already scaled
+        direction_recent=_direction(current_all, norm_recent, 1.0),
+    )
+
+
+def _report_framing(
+    facts: List[Any],
+    framing: str,
+    label: str,
+    win_start: date,
+    win_end: date,
+    window_days: int,
+    complete: bool,
+) -> VolumeFraming:
+    window_facts = [f for f in facts if win_start <= f.local_date <= win_end]
+    days_elapsed = (win_end - win_start).days + 1
+    # The norm baseline ends the day before THIS framing's window starts, so the
+    # comparison is "this window vs the runner's typical preceding history".
+    baseline_end = win_start - timedelta(days=1)
+    norm_pd = _norm_per_day(facts, baseline_end, _NORM_BASELINE_DAYS)
+    norm_pd_recent = _norm_per_day(facts, baseline_end, _NORM_RECENT_DAYS)
+    return VolumeFraming(
+        framing=framing,
+        label=label,
+        window_days=window_days,
+        days_elapsed=days_elapsed,
+        complete=complete,
+        metrics=[
+            _report_metric(m, window_facts, days_elapsed, norm_pd, norm_pd_recent)
+            for m in _METRICS
+        ],
+    )
+
+
+def _calendar_period(range_key: str, as_of: date) -> Tuple[date, date, int, str]:
+    """The current calendar period for a range: (start, last_day, length_days, label).
+    The period runs from `start` to `last_day`; the caller compares to-date (start..as_of)."""
+    if range_key == "7D":
+        start = as_of - timedelta(days=as_of.weekday())  # Monday
+        last = start + timedelta(days=6)
+        label = "This week"
+    elif range_key == "30D":
+        start = as_of.replace(day=1)
+        last = as_of.replace(day=_cal.monthrange(as_of.year, as_of.month)[1])
+        label = "This month"
+    elif range_key == "3M":
+        q_first_month = ((as_of.month - 1) // 3) * 3 + 1
+        start = date(as_of.year, q_first_month, 1)
+        end_month = q_first_month + 2
+        last = date(as_of.year, end_month, _cal.monthrange(as_of.year, end_month)[1])
+        label = "This quarter"
+    elif range_key == "6M":
+        if as_of.month <= 6:
+            start, last = date(as_of.year, 1, 1), date(as_of.year, 6, 30)
+        else:
+            start, last = date(as_of.year, 7, 1), date(as_of.year, 12, 31)
+        label = "This half-year"
+    else:  # "1Y"
+        start, last = date(as_of.year, 1, 1), date(as_of.year, 12, 31)
+        label = "This year"
+    return start, last, (last - start).days + 1, label
+
+
+def build_volume_report(facts: List[Any], as_of: date, range_key: str) -> VolumeReport:
+    """The Trends-page volume-vs-norm report for `range_key` (7D/30D/3M/6M/1Y) as of
+    `as_of`. Two framings — rolling (trailing N days) and calendar (current period to
+    date) — each metric vs the runner's norm scaled to the window. Reuses the same
+    pure core as the coach pack so the two never drift."""
+    n = _RANGE_WINDOW_DAYS[range_key]
+    roll_start = as_of - timedelta(days=n - 1)
+    rolling = _report_framing(
+        facts, "rolling", f"{n}-day rolling", roll_start, as_of, n, complete=True
+    )
+
+    p_start, p_last, p_days, p_label = _calendar_period(range_key, as_of)
+    calendar = _report_framing(
+        facts, "calendar", p_label, p_start, as_of, p_days, complete=as_of >= p_last
+    )
+
+    has_baseline = any(m.norm is not None for m in rolling.metrics)
+    return VolumeReport(
+        range=range_key,
+        rolling=rolling,
+        calendar=calendar,
+        has_baseline=has_baseline,
+        baseline_weeks=_BASELINE_WEEKS,
     )

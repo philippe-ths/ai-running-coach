@@ -5,14 +5,15 @@ import { ArrowDown, ArrowUp, Minus } from "lucide-react";
 
 import { fetchFromAPI } from "@/lib/api";
 import { formatDistanceKm, formatDuration } from "@/lib/format";
+import type { TrendsRange } from "@/lib/types/trends";
 import type {
-  TrainingVolume,
   VolumeDirection,
-  VolumeMetricComparison,
-  VolumeWindow,
+  VolumeFraming,
+  VolumeMetricVsNorm,
+  VolumeReport,
 } from "@/lib/types/volume";
 
-type Framing = "rolling_7d" | "calendar_week";
+type FramingKey = "rolling" | "calendar";
 
 const METRIC_LABELS: Record<string, string> = {
   sessions: "Sessions",
@@ -24,12 +25,11 @@ const METRIC_LABELS: Record<string, string> = {
 function formatMetric(metric: string, value: number): string {
   if (metric === "distance_m") return formatDistanceKm(value);
   if (metric === "moving_time_s") return formatDuration(value);
-  if (metric === "effort_score") return Math.round(value).toString();
-  return Math.round(value).toString(); // sessions
+  return Math.round(value).toString(); // sessions, effort_score
 }
 
-// A down week is not alarming — it is usually deliberate — so "down" reads calm
-// (sky), an up week reads as something to weigh (amber), in-line is neutral.
+// A down window is not alarming — it is usually deliberate — so "down" reads calm
+// (sky), an up window reads as something to weigh (amber), in-line is neutral.
 function directionStyle(d: VolumeDirection): { label: string; cls: string; icon: JSX.Element } {
   switch (d) {
     case "down":
@@ -59,7 +59,7 @@ function directionStyle(d: VolumeDirection): { label: string; cls: string; icon:
   }
 }
 
-function MetricRow({ m }: { m: VolumeMetricComparison }) {
+function MetricRow({ m }: { m: VolumeMetricVsNorm }) {
   const style = directionStyle(m.direction);
   const runsSuffix =
     m.metric === "sessions"
@@ -92,9 +92,9 @@ function MetricRow({ m }: { m: VolumeMetricComparison }) {
             </span>
           ) : null}
         </span>
-        {m.norm_weekly !== null && (
+        {m.norm !== null && (
           <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-            norm {formatMetric(m.metric, m.norm_weekly)}/wk
+            norm {formatMetric(m.metric, m.norm)}
           </div>
         )}
       </div>
@@ -102,37 +102,45 @@ function MetricRow({ m }: { m: VolumeMetricComparison }) {
   );
 }
 
-export default function VsNormCard() {
-  const [data, setData] = useState<TrainingVolume | null>(null);
-  const [framing, setFraming] = useState<Framing>("rolling_7d");
+export default function VsNormCard({ range }: { range: TrendsRange }) {
+  const [data, setData] = useState<VolumeReport | null>(null);
+  const [framing, setFraming] = useState<FramingKey>("rolling");
 
   useEffect(() => {
-    fetchFromAPI("/api/trends/volume")
-      .then((d: TrainingVolume) => setData(d))
-      .catch(() => setData(null));
-  }, []);
+    if (range === "ALL") return;
+    let active = true;
+    fetchFromAPI(`/api/trends/volume?range=${range}`)
+      .then((d: VolumeReport) => {
+        if (active) setData(d);
+      })
+      .catch(() => active && setData(null));
+    return () => {
+      active = false;
+    };
+  }, [range]);
 
-  if (!data) return null;
+  // "All" has no bounded current period to compare to a norm.
+  if (range === "ALL" || !data) return null;
 
-  const window: VolumeWindow = data[framing];
+  const win: VolumeFraming = data[framing];
   const subtitle =
-    framing === "rolling_7d"
-      ? "Trailing 7 days vs your typical week"
-      : window.complete
-        ? "This Mon-Sun week vs your typical week"
-        : `This week so far (${window.days_elapsed}/7 days) vs your typical week`;
+    win.framing === "rolling"
+      ? `${win.label} vs your typical`
+      : win.complete
+        ? `${win.label} vs your typical`
+        : `${win.label} so far (${win.days_elapsed}/${win.window_days} days) vs your typical`;
 
   return (
     <div className="bg-white dark:bg-gray-800 p-5 rounded-lg border dark:border-gray-700 shadow-sm">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-2">
         <div>
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-            How this week compares to your norm
+            How your training compares to your norm
           </h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
         </div>
         <div className="inline-flex rounded-md border border-gray-200 dark:border-gray-600 p-0.5 self-start">
-          {(["rolling_7d", "calendar_week"] as Framing[]).map((f) => (
+          {(["rolling", "calendar"] as FramingKey[]).map((f) => (
             <button
               key={f}
               onClick={() => setFraming(f)}
@@ -142,7 +150,7 @@ export default function VsNormCard() {
                   : "text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
               }`}
             >
-              {f === "rolling_7d" ? "7-day rolling" : "Mon-Sun week"}
+              {data[f].label}
             </button>
           ))}
         </div>
@@ -150,18 +158,18 @@ export default function VsNormCard() {
 
       {data.has_baseline ? (
         <div>
-          {window.metrics.map((m) => (
+          {win.metrics.map((m) => (
             <MetricRow key={m.metric} m={m} />
           ))}
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">
-            Norm is your average week over the last {data.baseline_weeks} weeks. A down week is
-            often deliberate.
+            Norm is your typical output over a window this length (from the last{" "}
+            {data.baseline_weeks} weeks). A down window is often deliberate.
           </p>
         </div>
       ) : (
         <p className="text-sm text-gray-500 dark:text-gray-400 py-4">
           Still learning your norm — once you have a few more weeks of history, this will show how
-          your training compares to your typical week.
+          your training compares to your typical window.
         </p>
       )}
     </div>

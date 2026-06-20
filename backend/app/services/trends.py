@@ -775,16 +775,26 @@ def get_trends_report(
 
 
 def get_volume_report(
-    db: Session, user_id, as_of: Optional[date] = None
-) -> "TrainingVolumeContext":
-    """The #400 frequency-/volume-vs-norm signal for the Trends page, as of `as_of`
-    (defaults to today). Reuses the same pure builder the coach pack uses, so the
-    two surfaces never drift. Fetches the trailing 91 days (current 7d + the 12-week
-    norm baseline) and partitions by local day (#399)."""
-    from app.services.coach.volume import build_training_volume
+    db: Session, user_id, range_key: str = "7D", as_of: Optional[date] = None
+) -> "VolumeReport":
+    """The #400 frequency-/volume-vs-norm report for the Trends page, for the selected
+    range (7D/30D/3M/6M/1Y) as of `as_of` (defaults to today). Reuses the same pure
+    core as the coach pack, so the two never drift. Fetches a span covering the larger
+    of the rolling window and the calendar period, plus the norm baseline, and
+    partitions by local day (#399)."""
+    from app.services.coach.volume import (
+        _RANGE_WINDOW_DAYS,
+        _NORM_BASELINE_DAYS,
+        _calendar_period,
+        build_volume_report,
+    )
 
     resolved = as_of or date.today()
+    n = _RANGE_WINDOW_DAYS.get(range_key, 7)
+    roll_start = resolved - timedelta(days=n - 1)
+    period_start, _, _, _ = _calendar_period(range_key if range_key in _RANGE_WINDOW_DAYS else "7D", resolved)
+    earliest = min(roll_start, period_start) - timedelta(days=_NORM_BASELINE_DAYS + 1)
     facts = _query_activity_facts(
-        db, resolved - timedelta(days=91), resolved + timedelta(days=1), user_id=user_id
+        db, earliest, resolved + timedelta(days=1), user_id=user_id
     )
-    return build_training_volume(facts, resolved)
+    return build_volume_report(facts, resolved, range_key if range_key in _RANGE_WINDOW_DAYS else "7D")

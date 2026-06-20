@@ -1,4 +1,4 @@
-// #400 frequency-/volume-vs-norm signal (mirrors backend TrainingVolumeContext).
+// #400 frequency-/volume-vs-norm report (mirrors backend VolumeReport).
 
 export type VolumeDirection = "up" | "in_line" | "down" | "no_norm";
 
@@ -8,28 +8,30 @@ export type VolumeMetricName =
   | "moving_time_s"
   | "effort_score";
 
-export interface VolumeMetricComparison {
+export interface VolumeMetricVsNorm {
   metric: VolumeMetricName;
   current_all: number;
   current_runs: number;
-  norm_weekly: number | null;
-  norm_weekly_recent: number | null;
+  norm: number | null;
+  norm_recent: number | null;
   pct_vs_norm: number | null;
   direction: VolumeDirection;
   direction_recent: VolumeDirection;
 }
 
-export interface VolumeWindow {
-  window: "rolling_7d" | "calendar_week";
+export interface VolumeFraming {
+  framing: "rolling" | "calendar";
+  label: string;
+  window_days: number;
   days_elapsed: number;
   complete: boolean;
-  metrics: VolumeMetricComparison[];
+  metrics: VolumeMetricVsNorm[];
 }
 
-export interface TrainingVolume {
-  rolling_7d: VolumeWindow;
-  calendar_week: VolumeWindow;
-  baseline_weeks: number;
-  baseline_weeks_recent: number;
+export interface VolumeReport {
+  range: string;
+  rolling: VolumeFraming;
+  calendar: VolumeFraming;
   has_baseline: boolean;
+  baseline_weeks: number;
 }
