@@ -4,6 +4,29 @@
  * Extract reusable display logic here instead of inlining it in components.
  */
 
+/**
+ * The activity's own local wall-clock start as a Date (#399).
+ *
+ * Prefers start_date_local (Strava's local time, a naive "YYYY-MM-DDTHH:MM:SS"
+ * string with no offset) and rebuilds it through the local Date constructor, so
+ * the wall-clock numbers are preserved exactly regardless of the viewer's
+ * timezone (a run logged at 09:00 always shows 09:00, even abroad). Falls back to
+ * the UTC start_date (converted to the browser's zone) when no local time exists.
+ */
+export function activityStartDate(a: {
+  start_date: string;
+  start_date_local?: string | null;
+}): Date {
+  const local = a.start_date_local;
+  if (local) {
+    const [datePart, timePart = "00:00:00"] = local.replace("Z", "").split("T");
+    const [y, m, d] = datePart.split("-").map(Number);
+    const [hh, mm, ss] = timePart.split(":").map(Number);
+    return new Date(y, (m || 1) - 1, d, hh || 0, mm || 0, ss || 0);
+  }
+  return new Date(a.start_date);
+}
+
 /** Format a pace in min:ss /km given metres and seconds. */
 export function formatPace(distanceM: number, timeS: number): string {
   const mps = distanceM / timeS;

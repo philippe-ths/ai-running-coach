@@ -2,11 +2,14 @@ import Link from 'next/link';
 import { format } from 'date-fns';
 import { ChevronRight } from 'lucide-react';
 
+import { activityStartDate } from '@/lib/format';
+
 interface Activity {
   id: string;
   name: string;
   type: string;
   start_date: string;
+  start_date_local?: string | null;
   distance_m: number;
   moving_time_s: number;
   headline?: string | null;
@@ -36,7 +39,7 @@ export default function ActivityList({ activities }: { activities: Activity[] })
                 )}
               </div>
               <div className="text-sm text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-3 gap-y-1 mt-1">
-                <span>{format(new Date(activity.start_date), 'MMM d, yyyy')}</span>
+                <span>{format(activityStartDate(activity), 'MMM d, yyyy')}</span>
                 <span aria-hidden="true">•</span>
                 <span>{(activity.distance_m / 1000).toFixed(2)} km</span>
                 <span aria-hidden="true">•</span>

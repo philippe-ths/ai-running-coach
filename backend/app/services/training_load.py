@@ -150,6 +150,7 @@ def get_load_report(db: Session, today: Optional[date] = None) -> LoadResponse:
             Activity.id,
             Activity.name,
             Activity.start_date,
+            Activity.start_date_local,
             Activity.type,
             Activity.distance_m,
             Activity.raw_summary,
@@ -192,7 +193,9 @@ def get_load_report(db: Session, today: Optional[date] = None) -> LoadResponse:
     for r in rows:
         if r.effort_score is None:
             continue
-        start = r.start_date.date() if isinstance(r.start_date, datetime) else r.start_date
+        # Bucket by the runner's local calendar day (#399), falling back to UTC.
+        local = r.start_date_local or r.start_date
+        start = local.date() if isinstance(local, datetime) else local
         metrics = SimpleNamespace(
             effort_score=r.effort_score,
             effort=r.effort,
