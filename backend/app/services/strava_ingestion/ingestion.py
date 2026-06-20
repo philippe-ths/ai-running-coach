@@ -152,6 +152,15 @@ def upsert_activity(db: Session, raw: dict, user_id) -> Activity:
         "name": raw.get("name", "Unknown Run"),
         "type": raw.get("type", "Run"),
         "start_date": datetime.strptime(raw["start_date"], "%Y-%m-%dT%H:%M:%SZ"),
+        # Strava's local wall-clock start (#399). Same string format as start_date
+        # but the trailing Z is misleading — it is already the runner's local time,
+        # so parse it naive and store it as-is. Absent on rare payloads -> None,
+        # and readers fall back to start_date via Activity.local_start.
+        "start_date_local": (
+            datetime.strptime(raw["start_date_local"], "%Y-%m-%dT%H:%M:%SZ")
+            if raw.get("start_date_local")
+            else None
+        ),
         "distance_m": int(raw.get("distance", 0)),
         "moving_time_s": raw.get("moving_time", 0),
         "elapsed_time_s": raw.get("elapsed_time", 0),

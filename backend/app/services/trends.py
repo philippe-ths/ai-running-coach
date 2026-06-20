@@ -51,8 +51,8 @@ class ActivityFact:
 
     def __init__(self, activity: Activity):
         self.activity_id = activity.id
-        # Use the timezone-aware start_date, convert to local date
-        self.local_date: date = activity.start_date.date()
+        # Bucket by the runner's local calendar day (#399), falling back to UTC.
+        self.local_date: date = activity.local_start.date()
         self.activity_type = activity.type
         self.user_intent = activity.user_intent
         self.distance_m = activity.distance_m or 0
@@ -86,7 +86,8 @@ class ActivityFact:
         """
         self = cls.__new__(cls)
         self.activity_id = row.id
-        self.local_date = row.start_date.date()
+        # Bucket by the runner's local calendar day (#399), falling back to UTC.
+        self.local_date = (row.start_date_local or row.start_date).date()
         self.activity_type = row.type
         self.user_intent = row.user_intent
         self.distance_m = row.distance_m or 0
@@ -264,6 +265,7 @@ def _query_activity_facts(
         select(
             Activity.id,
             Activity.start_date,
+            Activity.start_date_local,
             Activity.type,
             Activity.user_intent,
             Activity.distance_m,

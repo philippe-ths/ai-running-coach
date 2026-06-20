@@ -28,6 +28,14 @@ class Activity(Base):
     strava_activity_id: Mapped[int] = mapped_column(BigInteger, unique=True)
 
     start_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # The runner's local wall-clock start (Strava's start_date_local), stored
+    # timezone-naive. start_date stays UTC for ordering/windowing; this is read
+    # only where a wall-clock time or calendar day is shown to the runner/coach.
+    # Nullable for pre-#399 rows and any payload missing it; readers fall back to
+    # start_date via the local_start property.
+    start_date_local: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
     type: Mapped[str] = mapped_column(String)
     name: Mapped[str] = mapped_column(String)
 
@@ -116,3 +124,13 @@ class Activity(Base):
     )
     streams = relationship("ActivityStream", back_populates="activity", cascade="all, delete-orphan")
     block = relationship("Block", back_populates="activities", foreign_keys=[block_id])
+
+    @property
+    def local_start(self) -> datetime:
+        """The runner's local wall-clock start, for display/day-bucketing only.
+
+        Falls back to the UTC start_date for pre-#399 rows or payloads missing
+        start_date_local, so callers never have to null-check. Never use this for
+        ordering or windowing — start_date (UTC) is the correct instant there.
+        """
+        return self.start_date_local or self.start_date
