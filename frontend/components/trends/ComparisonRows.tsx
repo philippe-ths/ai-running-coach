@@ -16,11 +16,15 @@ export default function ComparisonRows({
   current,
   previous,
   format,
+  prevLabel = "vs prev",
 }: {
   metric?: VolumeMetricVsNorm;
   current: number;
   previous?: number | null;
   format: (n: number) => string;
+  /** Label for the period-over-period row. Calendar mode names the period
+   * (e.g. "vs last month"); rolling stays "vs prev" (#413). */
+  prevLabel?: string;
 }) {
   const hasNorm = !!metric && metric.direction !== "no_norm" && metric.norm !== null;
   const prevPct =
@@ -36,7 +40,9 @@ export default function ComparisonRows({
         <>
           <span className="text-gray-400 dark:text-gray-500">vs typical</span>
           <span className="text-gray-400 dark:text-gray-500">
-            <span className={`font-medium ${DIR_TEXT[metric.direction]}`}>
+            <span
+              className={`font-medium ${DIR_TEXT[dirFromPct(Math.round(metric.pct_vs_norm ?? 0))]}`}
+            >
               {signed(Math.round(metric.pct_vs_norm ?? 0))}
             </span>{" "}
             · {format(metric.norm as number)}
@@ -45,7 +51,7 @@ export default function ComparisonRows({
       )}
       {prevPct !== null && (
         <>
-          <span className="text-gray-400 dark:text-gray-500">vs prev</span>
+          <span className="text-gray-400 dark:text-gray-500">{prevLabel}</span>
           <span className="text-gray-400 dark:text-gray-500">
             <span className={`font-medium ${DIR_TEXT[dirFromPct(prevPct)]}`}>
               {signed(prevPct)}

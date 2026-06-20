@@ -1,10 +1,9 @@
-import { DIR_FILL } from "./direction";
-import type { VolumeDirection } from "@/lib/types/volume";
+import { DIR_FILL, dirFromPct } from "./direction";
 
-// The track spans ±SCALE% around "typical" (center). DEADBAND is the in-line zone
-// (matches the backend), drawn as a lighter band so "inside the band = normal"
-// reads at a glance. The marker/fill take a calm directional colour (amber up /
-// sky down / grey in-line) — never red/green, since a down window isn't "bad".
+// The track spans ±SCALE% around "typical" (center). DEADBAND is drawn as a
+// lighter band so "your typical range" reads at a glance, but the marker/fill
+// colour is purely directional by SIGN (amber up / sky down / grey only at
+// exactly typical) — never red/green, since a down window isn't "bad".
 const SCALE = 50;
 const DEADBAND = 15;
 
@@ -14,19 +13,13 @@ const DEADBAND = 15;
  * band is the in-line zone. Reads "in your usual band / above / below" instantly,
  * across any unit.
  */
-export default function NormGauge({
-  pct,
-  direction,
-}: {
-  pct: number;
-  direction: VolumeDirection;
-}) {
+export default function NormGauge({ pct }: { pct: number }) {
   const clamped = Math.max(-SCALE, Math.min(SCALE, pct));
   const pos = 50 + (clamped / SCALE) * 50; // 0..100 along the track
   const bandInset = 100 - (50 + (DEADBAND / SCALE) * 50); // inset each side
   const fillLeft = Math.min(50, pos);
   const fillWidth = Math.abs(pos - 50);
-  const fill = DIR_FILL[direction] ?? DIR_FILL.in_line;
+  const fill = DIR_FILL[dirFromPct(Math.round(pct))];
 
   return (
     <div

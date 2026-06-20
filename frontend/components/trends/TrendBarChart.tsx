@@ -8,10 +8,12 @@ import {
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
+  ReferenceLine,
 } from "recharts";
 import { ReactNode } from "react";
 import { formatDateLabel } from "@/lib/format";
 import ChartTooltip from "@/components/charts/ChartTooltip";
+import { TYPICAL_LINE_PROPS, renderTypicalLabel } from "./typicalLine";
 
 interface TrendBarChartProps {
   data: any[];
@@ -19,6 +21,9 @@ interface TrendBarChartProps {
   granularity: "daily" | "weekly";
   /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
   delta?: ReactNode;
+  /** Runner's typical level per bucket, in chart units (#413). Draws a dashed
+   * reference line. Omitted when no norm exists (thin history / ALL range). */
+  typical?: number;
 }
 
 function formatMinutes(seconds: number): string {
@@ -33,6 +38,7 @@ export default function TrendBarChart({
   type,
   granularity,
   delta,
+  typical,
 }: TrendBarChartProps) {
   // Configuration based on type
   const isDistance = type === "distance";
@@ -112,6 +118,17 @@ export default function TrendBarChart({
               radius={[4, 4, 0, 0]}
               maxBarSize={40}
             />
+            {typical != null && typical > 0 && (
+              <ReferenceLine
+                y={typical}
+                {...TYPICAL_LINE_PROPS}
+                label={renderTypicalLabel(
+                  `typical · ${
+                    isDistance ? `${typical.toFixed(1)} km` : formatMinutes(typical * 60)
+                  }`,
+                )}
+              />
+            )}
           </BarChart>
         </ResponsiveContainer>
       )}

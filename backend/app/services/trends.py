@@ -232,9 +232,10 @@ def _resolve_window(
     - ``rolling``: ``since`` is ``today - (N-1)`` and the previous window is the
       equal-length block immediately before it (unchanged behaviour).
     - ``calendar``: ``since`` is the start of the current calendar period (week/
-      month/quarter/half/year) and the previous window is the SAME span of days
-      from the prior period (e.g. Jun 1-20 vs May 1-20), so a partial period
-      compares like-for-like.
+      month/quarter/half/year) and the previous window is the ENTIRE previous
+      calendar period (e.g. Jun 1-20 to-date vs ALL of May), so "vs last month"
+      reads against last month's full total — it runs behind for most of the
+      period and catches up by period-end (#413).
     """
     today = today or date.today()
     days = _RANGE_DAYS.get(range_key.upper())
@@ -244,11 +245,11 @@ def _resolve_window(
         from app.services.coach.volume import _calendar_period
 
         p_start, _, _, _ = _calendar_period(range_key.upper(), today)
-        elapsed = (today - p_start).days + 1
         prev_p_start, _, _, _ = _calendar_period(
             range_key.upper(), p_start - timedelta(days=1)
         )
-        return p_start, prev_p_start, prev_p_start + timedelta(days=elapsed)
+        # Previous = the whole prior calendar period: [prev_p_start, p_start).
+        return p_start, prev_p_start, p_start
     since = today - timedelta(days=days - 1)
     return since, since - timedelta(days=days), since
 
@@ -368,13 +369,19 @@ def build_continuous_daily_facts(
     daily_facts: List[DailyFact],
     range_key: str = "30D",
     since: Optional[date] = None,
+    until: Optional[date] = None,
 ) -> List[DailyFact]:
     """
     Fill every day in the range so charts have continuous x-axes.
 
     Pass ``since`` to override the window start (the #400 calendar mode).
+    Pass ``until`` to override the window end (#413): calendar mode passes the
+    calendar period's last day so the chart frames the whole period (e.g. the
+    full Mon–Sun week for 7D), with days after today rendered as empty bars.
+    Defaults to today (rolling).
     """
     today = date.today()
+    end = until if until is not None else today
     if since is None:
         since = _resolve_since(range_key)
 
@@ -383,12 +390,12 @@ def build_continuous_daily_facts(
     elif daily_facts:
         start = daily_facts[0].local_date
     else:
-        start = today
+        start = end
 
     existing = {df.local_date: df for df in daily_facts}
     result: List[DailyFact] = []
     cursor = start
-    while cursor <= today:
+    while cursor <= end:
         result.append(existing.get(cursor, DailyFact(cursor)))
         cursor += timedelta(days=1)
 
@@ -399,12 +406,16 @@ def build_weekly_buckets(
     daily_facts: List[DailyFact],
     range_key: str = "30D",
     since: Optional[date] = None,
+    until: Optional[date] = None,
 ) -> List[WeekBucket]:
     """
     Roll daily facts into ISO-week buckets (Monday start).
     Fills every week in the range so charts have continuous x-axes.
 
     Pass ``since`` to override the window start (the #400 calendar mode).
+    Pass ``until`` to override the window end (#413): calendar mode passes the
+    calendar period's last day so the chart spans the whole period. Defaults to
+    today (rolling).
     """
     # Build buckets from actual data first
     buckets: dict[date, WeekBucket] = {}
@@ -415,8 +426,8 @@ def build_weekly_buckets(
         buckets[monday].add(df)
 
     # Determine the full span of weeks to show
-    today = date.today()
-    end_monday = today - timedelta(days=today.weekday())  # current week
+    end = until if until is not None else date.today()
+    end_monday = end - timedelta(days=end.weekday())  # last week to show
 
     if since is None:
         since = _resolve_since(range_key)
@@ -464,6 +475,7 @@ def build_continuous_suffer_scores(
     activity_facts: List[ActivityFact],
     range_key: str = "30D",
     since: Optional[date] = None,
+    until: Optional[date] = None,
 ) -> List[dict]:
     """
     Return one {date, effort_score} per day in the range.
@@ -471,8 +483,11 @@ def build_continuous_suffer_scores(
     Days without activities get effort_score = 0.
     Days with multiple activities sum their effort scores.
     Pass ``since`` to override the window start (the #400 calendar mode).
+    Pass ``until`` to override the window end (#413, calendar period frame).
+    Defaults to today (rolling).
     """
     today = date.today()
+    end = until if until is not None else today
     if since is None:
         since = _resolve_since(range_key)
 
@@ -481,7 +496,7 @@ def build_continuous_suffer_scores(
     elif activity_facts:
         start = activity_facts[0].local_date
     else:
-        start = today
+        start = end
 
     # Sum effort scores per day
     daily: dict[date, float] = {}
@@ -492,7 +507,7 @@ def build_continuous_suffer_scores(
 
     result: List[dict] = []
     cursor = start
-    while cursor <= today:
+    while cursor <= end:
         result.append({
             "date": cursor.isoformat(),
             "effort_score": round(daily.get(cursor, 0), 1),
@@ -700,6 +715,15 @@ def get_trends_report(
     # comparison spans [prev_start, prev_end). Calendar mode shifts both.
     since, prev_start, prev_end = _resolve_window(range_upper, mode)
 
+    # Chart x-axis frame end (#413): rolling stops at today (until=None); calendar
+    # spans the whole current period (e.g. Mon–Sun for 7D), so the period's last
+    # day frames the chart and days after today render as empty bars.
+    until: Optional[date] = None
+    if mode == "calendar" and range_upper in _RANGE_DAYS and _RANGE_DAYS[range_upper]:
+        from app.services.coach.volume import _calendar_period
+
+        _, until, _, _ = _calendar_period(range_upper, date.today())
+
     # 1. Activity-level facts (filtered by types if provided)
     activity_facts = build_activity_facts(
         db, range_upper, types=types, user_id=user_id, since=since
@@ -738,7 +762,9 @@ def get_trends_report(
         )
 
     # 3. Continuous daily facts (every day filled)
-    continuous_daily = build_continuous_daily_facts(daily_facts, range_key=range_upper, since=since)
+    continuous_daily = build_continuous_daily_facts(
+        daily_facts, range_key=range_upper, since=since, until=until
+    )
 
     daily_distance = [
         DailyDistancePoint(
@@ -759,7 +785,9 @@ def get_trends_report(
     ]
 
     # 4. Weekly buckets (continuous — includes empty weeks)
-    weekly = build_weekly_buckets(daily_facts, range_key=range_upper, since=since)
+    weekly = build_weekly_buckets(
+        daily_facts, range_key=range_upper, since=since, until=until
+    )
 
     weekly_distance = [
         WeeklyDistancePoint(
@@ -795,7 +823,9 @@ def get_trends_report(
     # 7. Daily suffer score (continuous — every day filled)
     daily_suffer_score = [
         DailySufferScorePoint(**p)
-        for p in build_continuous_suffer_scores(activity_facts, range_key=range_upper, since=since)
+        for p in build_continuous_suffer_scores(
+            activity_facts, range_key=range_upper, since=since, until=until
+        )
     ]
 
     # 8. Efficiency trend
@@ -832,13 +862,22 @@ def get_trends_report(
 
 
 def get_volume_report(
-    db: Session, user_id, range_key: str = "7D", as_of: Optional[date] = None
+    db: Session,
+    user_id,
+    range_key: str = "7D",
+    as_of: Optional[date] = None,
+    types: Optional[List[str]] = None,
 ) -> "VolumeReport":
     """The #400 frequency-/volume-vs-norm report for the Trends page, for the selected
     range (7D/30D/3M/6M/1Y) as of `as_of` (defaults to today). Reuses the same pure
     core as the coach pack, so the two never drift. Fetches a span covering the larger
     of the rolling window and the calendar period, plus the norm baseline, and
-    partitions by local day (#399)."""
+    partitions by local day (#399).
+
+    Pass ``types`` to scope BOTH the window and the norm baseline to the selected
+    activity types (#413), so the typical line / "vs typical" caption compares
+    like-for-like with the type-filtered Trends charts instead of measuring a
+    filtered window against an all-activity norm."""
     from app.services.coach.volume import (
         _RANGE_WINDOW_DAYS,
         _BASELINE_DAYS_BY_RANGE,
@@ -854,6 +893,6 @@ def get_volume_report(
     # Fetch back to the earliest window start plus the term-scaled norm baseline.
     earliest = min(roll_start, period_start) - timedelta(days=_BASELINE_DAYS_BY_RANGE[key] + 1)
     facts = _query_activity_facts(
-        db, earliest, resolved + timedelta(days=1), user_id=user_id
+        db, earliest, resolved + timedelta(days=1), types, user_id=user_id
     )
     return build_volume_report(facts, resolved, key)
