@@ -44,6 +44,16 @@ EXPECTED_CAPABILITIES = {
         F.TRAINING_LOAD,
         F.USER_MATERIALS,
     },
+    # #400 — v9 = v8 + the VOLUME capability.
+    "coach_message_v9": {
+        F.TWO_STAGE,
+        F.VOICE,
+        F.CORPUS,
+        F.STANCE,
+        F.TRAINING_LOAD,
+        F.USER_MATERIALS,
+        F.VOLUME,
+    },
 }
 
 # Ids that must carry NO capabilities (the inert-under-rollback set).
@@ -75,6 +85,7 @@ def test_derived_sets_equal_manifest_views():
     assert prompts.STANCE_PROMPT_IDS == ids_with(F.STANCE)
     assert prompts.TRAINING_LOAD_PROMPT_IDS == ids_with(F.TRAINING_LOAD)
     assert prompts.USER_MATERIALS_PROMPT_IDS == ids_with(F.USER_MATERIALS)
+    assert prompts.VOLUME_PROMPT_IDS == ids_with(F.VOLUME)
 
 
 def test_derived_sets_match_captured_membership():
@@ -82,22 +93,27 @@ def test_derived_sets_match_captured_membership():
     assert prompts.TWO_STAGE_PROMPT_IDS == {
         "coach_message_v2", "coach_message_v3", "coach_message_v4",
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
+        "coach_message_v9",
     }
     assert prompts.VOICE_PROMPT_IDS == {
         "coach_message_v3", "coach_message_v4", "coach_message_v5",
-        "coach_message_v6", "coach_message_v7", "coach_message_v8",
+        "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
     }
     assert prompts.CORPUS_PROMPT_IDS == {
         "coach_message_v4", "coach_message_v5", "coach_message_v6",
-        "coach_message_v7", "coach_message_v8",
+        "coach_message_v7", "coach_message_v8", "coach_message_v9",
     }
     assert prompts.STANCE_PROMPT_IDS == {
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
+        "coach_message_v9",
     }
     assert prompts.TRAINING_LOAD_PROMPT_IDS == {
-        "coach_message_v6", "coach_message_v7", "coach_message_v8",
+        "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
     }
-    assert prompts.USER_MATERIALS_PROMPT_IDS == {"coach_message_v7", "coach_message_v8"}
+    assert prompts.USER_MATERIALS_PROMPT_IDS == {
+        "coach_message_v7", "coach_message_v8", "coach_message_v9",
+    }
+    assert prompts.VOLUME_PROMPT_IDS == {"coach_message_v9"}
 
 
 def test_predicates_agree_with_has_feature():
@@ -108,6 +124,7 @@ def test_predicates_agree_with_has_feature():
         assert prompts.is_stance_prompt(pid) == has_feature(pid, F.STANCE)
         assert prompts.is_training_load_prompt(pid) == has_feature(pid, F.TRAINING_LOAD)
         assert prompts.is_user_materials_prompt(pid) == has_feature(pid, F.USER_MATERIALS)
+        assert prompts.is_volume_prompt(pid) == has_feature(pid, F.VOLUME)
 
 
 def test_opener_prompts_cover_exactly_two_stage_ids():
@@ -133,3 +150,5 @@ def test_message_version_capabilities_are_monotonic():
         assert PROMPT_FEATURES[earlier] < PROMPT_FEATURES[later], (earlier, later)
     # v8 adds no capability: exactly v7's feature set.
     assert PROMPT_FEATURES["coach_message_v8"] == PROMPT_FEATURES["coach_message_v7"]
+    # #400 — v9 resumes the chain: a strict superset of v8 (it adds VOLUME).
+    assert PROMPT_FEATURES["coach_message_v9"] > PROMPT_FEATURES["coach_message_v8"]

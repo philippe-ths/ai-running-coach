@@ -220,6 +220,39 @@ def _period_window(range_key: str) -> Optional[tuple[date, date]]:
     return current_start, previous_start
 
 
+def _resolve_window(
+    range_key: str, mode: str = "rolling", today: Optional[date] = None
+) -> tuple[Optional[date], Optional[date], Optional[date]]:
+    """(since, prev_start, prev_end) for the (range, mode) — the #400 global toggle.
+
+    The current window is ``[since, today]`` inclusive; the previous comparison
+    window is ``[prev_start, prev_end)``. Returns ``(None, None, None)`` for ALL
+    (whole history, no previous).
+
+    - ``rolling``: ``since`` is ``today - (N-1)`` and the previous window is the
+      equal-length block immediately before it (unchanged behaviour).
+    - ``calendar``: ``since`` is the start of the current calendar period (week/
+      month/quarter/half/year) and the previous window is the SAME span of days
+      from the prior period (e.g. Jun 1-20 vs May 1-20), so a partial period
+      compares like-for-like.
+    """
+    today = today or date.today()
+    days = _RANGE_DAYS.get(range_key.upper())
+    if days is None:
+        return None, None, None
+    if mode == "calendar":
+        from app.services.coach.volume import _calendar_period
+
+        p_start, _, _, _ = _calendar_period(range_key.upper(), today)
+        elapsed = (today - p_start).days + 1
+        prev_p_start, _, _, _ = _calendar_period(
+            range_key.upper(), p_start - timedelta(days=1)
+        )
+        return p_start, prev_p_start, prev_p_start + timedelta(days=elapsed)
+    since = today - timedelta(days=days - 1)
+    return since, since - timedelta(days=days), since
+
+
 def get_available_types(db: Session, *, user_id=None) -> List[str]:
     """
     Return the distinct activity types present in the database,
@@ -306,14 +339,16 @@ def build_activity_facts(
     types: Optional[List[str]] = None,
     *,
     user_id=None,
+    since: Optional[date] = None,
 ) -> List[ActivityFact]:
     """
     Query activities within the given range and project them into ActivityFact rows.
     Optionally filter by activity type (case-insensitive).
-    Pass ``user_id`` to restrict results to a single owner.
+    Pass ``user_id`` to restrict results to a single owner. Pass ``since`` to override
+    the window start (the #400 calendar mode); otherwise it derives from range_key.
     """
-    since = _resolve_since(range_key)
-    return _query_activity_facts(db, since, None, types, user_id=user_id)
+    resolved_since = since if since is not None else _resolve_since(range_key)
+    return _query_activity_facts(db, resolved_since, None, types, user_id=user_id)
 
 
 def build_daily_facts(activity_facts: List[ActivityFact]) -> List[DailyFact]:
@@ -332,12 +367,16 @@ def build_daily_facts(activity_facts: List[ActivityFact]) -> List[DailyFact]:
 def build_continuous_daily_facts(
     daily_facts: List[DailyFact],
     range_key: str = "30D",
+    since: Optional[date] = None,
 ) -> List[DailyFact]:
     """
     Fill every day in the range so charts have continuous x-axes.
+
+    Pass ``since`` to override the window start (the #400 calendar mode).
     """
     today = date.today()
-    since = _resolve_since(range_key)
+    if since is None:
+        since = _resolve_since(range_key)
 
     if since is not None:
         start = since
@@ -359,10 +398,13 @@ def build_continuous_daily_facts(
 def build_weekly_buckets(
     daily_facts: List[DailyFact],
     range_key: str = "30D",
+    since: Optional[date] = None,
 ) -> List[WeekBucket]:
     """
     Roll daily facts into ISO-week buckets (Monday start).
     Fills every week in the range so charts have continuous x-axes.
+
+    Pass ``since`` to override the window start (the #400 calendar mode).
     """
     # Build buckets from actual data first
     buckets: dict[date, WeekBucket] = {}
@@ -376,7 +418,8 @@ def build_weekly_buckets(
     today = date.today()
     end_monday = today - timedelta(days=today.weekday())  # current week
 
-    since = _resolve_since(range_key)
+    if since is None:
+        since = _resolve_since(range_key)
     if since is not None:
         start_monday = since - timedelta(days=since.weekday())
     elif daily_facts:
@@ -420,15 +463,18 @@ def build_suffer_score_trend(
 def build_continuous_suffer_scores(
     activity_facts: List[ActivityFact],
     range_key: str = "30D",
+    since: Optional[date] = None,
 ) -> List[dict]:
     """
     Return one {date, effort_score} per day in the range.
 
     Days without activities get effort_score = 0.
     Days with multiple activities sum their effort scores.
+    Pass ``since`` to override the window start (the #400 calendar mode).
     """
     today = date.today()
-    since = _resolve_since(range_key)
+    if since is None:
+        since = _resolve_since(range_key)
 
     if since is not None:
         start = since
@@ -633,18 +679,31 @@ def get_trends_report(
     types: Optional[List[str]] = None,
     *,
     user_id=None,
+    mode: str = "rolling",
 ) -> TrendsResponse:
     """
     Main entry point for generating the complete trends report.
     Orchestrates data fetching and aggregation.
-    Pass ``user_id`` to restrict results to a single owner.
+    Pass ``user_id`` to restrict results to a single owner. ``mode`` is the #400
+    global window framing: ``rolling`` (trailing N days, the default) or
+    ``calendar`` (the current calendar period — week/month/quarter/half/year — for
+    the range), which shifts the window start and the previous-period comparison
+    for the whole report (summary, deltas, and every chart).
     """
     range_upper = range_key.upper()
     if range_upper not in ALLOWED_RANGES:
         range_upper = "30D"
+    if mode not in ("rolling", "calendar"):
+        mode = "rolling"
+
+    # The (range, mode) window: `since` starts the current window; the previous
+    # comparison spans [prev_start, prev_end). Calendar mode shifts both.
+    since, prev_start, prev_end = _resolve_window(range_upper, mode)
 
     # 1. Activity-level facts (filtered by types if provided)
-    activity_facts = build_activity_facts(db, range_upper, types=types, user_id=user_id)
+    activity_facts = build_activity_facts(
+        db, range_upper, types=types, user_id=user_id, since=since
+    )
 
     # 2. Daily facts (sum per local date)
     daily_facts = build_daily_facts(activity_facts)
@@ -662,12 +721,10 @@ def get_trends_report(
         zone_hard_minutes=cur_hard,
     )
 
-    # Previous period summary
+    # Previous period summary (vs the equivalent prior window for this mode)
     previous_summary = None
-    window = _period_window(range_upper)
-    if window is not None:
-        current_start, prev_start = window
-        prev_facts = _query_activity_facts(db, prev_start, current_start, types=types, user_id=user_id)
+    if prev_start is not None and prev_end is not None:
+        prev_facts = _query_activity_facts(db, prev_start, prev_end, types=types, user_id=user_id)
         prev_easy, prev_mod, prev_hard = _zone_minutes(prev_facts)
         previous_summary = TrendsSummary(
             total_distance_m=sum(f.distance_m for f in prev_facts),
@@ -681,7 +738,7 @@ def get_trends_report(
         )
 
     # 3. Continuous daily facts (every day filled)
-    continuous_daily = build_continuous_daily_facts(daily_facts, range_key=range_upper)
+    continuous_daily = build_continuous_daily_facts(daily_facts, range_key=range_upper, since=since)
 
     daily_distance = [
         DailyDistancePoint(
@@ -702,7 +759,7 @@ def get_trends_report(
     ]
 
     # 4. Weekly buckets (continuous — includes empty weeks)
-    weekly = build_weekly_buckets(daily_facts, range_key=range_upper)
+    weekly = build_weekly_buckets(daily_facts, range_key=range_upper, since=since)
 
     weekly_distance = [
         WeeklyDistancePoint(
@@ -738,7 +795,7 @@ def get_trends_report(
     # 7. Daily suffer score (continuous — every day filled)
     daily_suffer_score = [
         DailySufferScorePoint(**p)
-        for p in build_continuous_suffer_scores(activity_facts, range_key=range_upper)
+        for p in build_continuous_suffer_scores(activity_facts, range_key=range_upper, since=since)
     ]
 
     # 8. Efficiency trend
@@ -772,3 +829,31 @@ def get_trends_report(
         weekly_zone_load=weekly_zone_load,
         daily_zone_load=daily_zone_load,
     )
+
+
+def get_volume_report(
+    db: Session, user_id, range_key: str = "7D", as_of: Optional[date] = None
+) -> "VolumeReport":
+    """The #400 frequency-/volume-vs-norm report for the Trends page, for the selected
+    range (7D/30D/3M/6M/1Y) as of `as_of` (defaults to today). Reuses the same pure
+    core as the coach pack, so the two never drift. Fetches a span covering the larger
+    of the rolling window and the calendar period, plus the norm baseline, and
+    partitions by local day (#399)."""
+    from app.services.coach.volume import (
+        _RANGE_WINDOW_DAYS,
+        _BASELINE_DAYS_BY_RANGE,
+        _calendar_period,
+        build_volume_report,
+    )
+
+    resolved = as_of or date.today()
+    key = range_key if range_key in _RANGE_WINDOW_DAYS else "7D"
+    n = _RANGE_WINDOW_DAYS[key]
+    roll_start = resolved - timedelta(days=n - 1)
+    period_start, _, _, _ = _calendar_period(key, resolved)
+    # Fetch back to the earliest window start plus the term-scaled norm baseline.
+    earliest = min(roll_start, period_start) - timedelta(days=_BASELINE_DAYS_BY_RANGE[key] + 1)
+    facts = _query_activity_facts(
+        db, earliest, resolved + timedelta(days=1), user_id=user_id
+    )
+    return build_volume_report(facts, resolved, key)

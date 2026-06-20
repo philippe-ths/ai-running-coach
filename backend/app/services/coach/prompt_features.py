@@ -40,6 +40,7 @@ class PromptFeature(Enum):
     STANCE = "stance"                  # P1.3 emphasis-axes section (ADR 0015)
     TRAINING_LOAD = "training_load"    # P3 readiness section (ADR 0016)
     USER_MATERIALS = "user_materials"  # P4 distilled user materials (ADR 0017)
+    VOLUME = "volume"                  # #400 frequency-/volume-vs-norm section
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -79,6 +80,19 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.STANCE,
             _F.TRAINING_LOAD,
             _F.USER_MATERIALS,
+        }
+    ),
+    # #400 — v9 = v8 + the VOLUME capability (the frequency-/volume-vs-norm section
+    # and its addendum). Same retuned base prose as v8; adds one capability.
+    "coach_message_v9": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.TRAINING_LOAD,
+            _F.USER_MATERIALS,
+            _F.VOLUME,
         }
     ),
 }

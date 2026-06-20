@@ -506,6 +506,63 @@ class TrainingLoadContext(BaseModel):
     sample_count: int
 
 
+class VolumeMetricComparison(BaseModel):
+    """#400: one training metric's current window value against the runner's norm.
+
+    `current_all` is the holistic value (every logged activity — runs, walks, rides,
+    rowing, weights), the cardio view the runner reasons in; `current_runs` is the
+    runs-only figure alongside, so the coach can speak to "12 sessions, 4 of them
+    runs" and never read a walk as a run. The norm is per-week, all-activities,
+    computed over history BEFORE the current 7 days: `norm_weekly` over ~12 weeks
+    (the stable baseline), `norm_weekly_recent` over ~4 weeks (recent context).
+    `direction`/`direction_recent` are the labelled read against each norm with a
+    deadband, so a deliberate easy week reads as `down` rather than alarming. A
+    deterministic FACT; it never overrides this run's re-derived DerivedMetric."""
+    model_config = ConfigDict(extra="forbid")
+
+    metric: str  # sessions | distance_m | moving_time_s | effort_score
+    current_all: Union[int, float]
+    current_runs: Union[int, float]
+    norm_weekly: Optional[float] = None
+    norm_weekly_recent: Optional[float] = None
+    pct_vs_norm: Optional[float] = None
+    direction: str          # up | in_line | down | no_norm
+    direction_recent: str   # up | in_line | down | no_norm
+
+
+class VolumeWindow(BaseModel):
+    """#400: one window framing of the volume-vs-norm read.
+
+    `rolling_7d` is the trailing 7 days (a full week, directly comparable to the
+    per-week norm). `calendar_week` is the current Monday-Sunday block to date — the
+    framing runners plan in — with `days_elapsed` (1-7) and `complete` (only on
+    Sunday); its direction compares the week-to-date against the norm PRO-RATED to
+    the same elapsed days, so a partial week is judged fairly."""
+    model_config = ConfigDict(extra="forbid")
+
+    window: str          # rolling_7d | calendar_week
+    days_elapsed: int
+    complete: bool
+    metrics: List[VolumeMetricComparison]
+
+
+class TrainingVolumeContext(BaseModel):
+    """#400: the frequency-/volume-vs-norm signal, both framings.
+
+    Answers "is this week up, down, or normal for me" per metric, so the coach
+    reads a deliberate down week as intentional rather than worrying. `has_baseline`
+    is False when history is too thin to establish a norm (every direction is then
+    `no_norm`). Emitted ONLY under a volume-aware prompt id, so the pack stays
+    byte-stable otherwise."""
+    model_config = ConfigDict(extra="forbid")
+
+    rolling_7d: VolumeWindow
+    calendar_week: VolumeWindow
+    baseline_weeks: int
+    baseline_weeks_recent: int
+    has_baseline: bool
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -550,6 +607,11 @@ class CoachContextPack(BaseModel):
     # `block`, so the pack stays byte-stable pre/post P3 (AC1/AC7); populated only
     # under a training-load-aware prompt id.
     training_load: Optional["TrainingLoadContext"] = None
+    # #400 frequency-/volume-vs-norm. None under every non-volume prompt and OMITTED
+    # from serialization entirely, exactly like `training_load`/`corpus`/`block`, so
+    # the pack stays byte-stable pre/post #400; populated only under a volume-aware
+    # prompt id.
+    training_volume: Optional["TrainingVolumeContext"] = None
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
@@ -575,6 +637,9 @@ class CoachContextPack(BaseModel):
         if data.get("training_load") is None:
             # AC1: a non-training-load prompt emits nothing — not even a null key.
             data.pop("training_load", None)
+        if data.get("training_volume") is None:
+            # #400: a non-volume prompt emits nothing — not even a null key.
+            data.pop("training_volume", None)
         return data
 
     def fingerprint(self) -> str:

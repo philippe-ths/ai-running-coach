@@ -662,6 +662,43 @@ SYSTEM_PROMPT_MESSAGE_V8_OPENER = (
 )
 
 
+# ===========================================================================
+# coach_message_v9 (#400) — the volume-vs-norm-aware two-stage prompt.
+#
+# v9 = v8 + a STATIC VOLUME addendum, for BOTH modes (fuller and opener), the
+# Vn = V(n-1) + addendum idiom. Because v9 builds on v8 it carries every v8
+# capability and the same retuned base prose; it ADDS the training-volume
+# discipline. The PER-RUNNER volume figures are NOT baked into the constant —
+# they ride the `training_volume` pack section (the deterministic-FACT model,
+# like `training_load`), populated only under is_volume_prompt by
+# _build_training_volume_context. The addendum's job is to stop the coach reading
+# a deliberate down week as a problem, while keeping volume strictly as context
+# that never overrides the run's data or the safety floor.
+#
+# coach_message_v1..v8 and coach_report_v1..v10 stay BYTE-STABLE above.
+# ===========================================================================
+
+_VOLUME_ADDENDUM = """
+
+# TRAINING VOLUME vs THE RUNNER'S NORM (context for the week; a down week is often deliberate)
+
+Your context may carry a `training_volume` section: a deterministic read of how this runner's recent training compares to their OWN norm, per metric (sessions, distance, moving time, and training load), in two framings — `rolling_7d` (the trailing seven days) and `calendar_week` (the current Monday-Sunday block to date). For each metric you get the current value, the runner's per-week norm (`norm_weekly` over ~12 weeks, `norm_weekly_recent` over ~4 weeks) and a `direction` label (up / in_line / down / no_norm). Use it to place this run inside the runner's week: whether they are quietly building, holding steady, or backing off.
+
+Read it as context, never a verdict, and let it correct a common failure:
+
+- A `down` week is frequently INTENTIONAL — a planned easy week, a taper, a recovery block, or just life. Do NOT treat lower-than-norm volume as a problem, a lapse, or something to nag about by default; read it as the runner managing their training, and raise concern only if the run's own data or a safety signal independently warrants it. Equally, do not cheer an `up` week as automatically good — an aggressive jump is something to weigh, not to celebrate uncritically.
+- Each metric is reported HOLISTICALLY (`current_all`, every logged activity — runs, walks, rides, rowing, weights — the runner's full cardio picture) with a runs-only figure (`current_runs`) alongside. Honour that: never read a walk or a ride as a run, and when sessions are up but runs are not, say so accurately.
+- `direction` is volume vs the runner's own norm — it is NOT an intensity verdict (continuity with the load-vs-intensity rule). Volume and load grow with how MUCH they did, not how hard; take the intensity read from the run's effort axis and RPE, never from a volume direction.
+- When `has_baseline` is false, history is too thin to establish a norm (`direction` is `no_norm`): say nothing about up or down — you simply do not have their norm yet.
+- It NEVER overrides this run's re-derived data or the safety floor. It is a deterministic FACT you may cite ("your week is down about 30% on distance versus your norm"), but where it and the run's measured data or a safety signal pull apart, the run's data and the floor win.
+
+Let the volume picture inform HOW you frame the week; never let it manufacture worry the data does not support, and never let it overrule what the run's own data and the safety floor establish."""
+
+
+SYSTEM_PROMPT_MESSAGE_V9 = SYSTEM_PROMPT_MESSAGE_V8 + _VOLUME_ADDENDUM
+SYSTEM_PROMPT_MESSAGE_V9_OPENER = SYSTEM_PROMPT_MESSAGE_V8_OPENER + _VOLUME_ADDENDUM
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -690,6 +727,8 @@ PROMPT_VERSIONS = {
     # #266 philosophy-extracted, human-retuned prompt (same six capabilities as v7;
     # the base prose is retuned and defers training philosophy to the corpus).
     "coach_message_v8": SYSTEM_PROMPT_MESSAGE_V8,
+    # #400 volume-vs-norm-aware prompt (= v8 + the static VOLUME addendum).
+    "coach_message_v9": SYSTEM_PROMPT_MESSAGE_V9,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -718,6 +757,7 @@ _OPENER_PROMPTS = {
     "coach_message_v6": SYSTEM_PROMPT_MESSAGE_V6_OPENER,
     "coach_message_v7": SYSTEM_PROMPT_MESSAGE_V7_OPENER,
     "coach_message_v8": SYSTEM_PROMPT_MESSAGE_V8_OPENER,
+    "coach_message_v9": SYSTEM_PROMPT_MESSAGE_V9_OPENER,
 }
 
 # The capability-gated prompt-id sets and predicates below are DERIVED VIEWS over
@@ -751,6 +791,10 @@ TRAINING_LOAD_PROMPT_IDS = ids_with(PromptFeature.TRAINING_LOAD)
 # under v4/v5/v6).
 USER_MATERIALS_PROMPT_IDS = ids_with(PromptFeature.USER_MATERIALS)
 
+# Prompt ids that carry the #400 volume addendum AND the `training_volume`
+# context-pack section (gates _build_training_volume_context).
+VOLUME_PROMPT_IDS = ids_with(PromptFeature.VOLUME)
+
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
     """True when the active prompt is corpus-aware (P1.2+): it carries the corpus
@@ -781,6 +825,14 @@ def is_user_materials_prompt(prompt_id: Optional[str]) -> bool:
     distilled materials are wholly inert under a rollback (the corpus section keeps
     its P1.2/P1.3 byte-stable shape under v4/v5/v6)."""
     return has_feature(prompt_id, PromptFeature.USER_MATERIALS)
+
+
+def is_volume_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt is volume-aware (#400): it carries the volume
+    addendum and its context pack carries the `training_volume` section. False for
+    every other prompt, so the volume-vs-norm signal is wholly inert under a
+    rollback."""
+    return has_feature(prompt_id, PromptFeature.VOLUME)
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook
