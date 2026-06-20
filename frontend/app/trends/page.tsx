@@ -14,8 +14,11 @@ import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
 import VsNormCard from "@/components/trends/VsNormCard";
 import StatDiff from "@/components/StatDiff";
 
+type WindowMode = "rolling" | "calendar";
+
 export default function TrendsPage() {
   const [range, setRange] = useState<TrendsRange>("30D");
+  const [mode, setMode] = useState<WindowMode>("rolling");
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [data, setData] = useState<TrendsData | null>(null);
@@ -33,27 +36,33 @@ export default function TrendsPage() {
       .catch(() => {});
   }, []);
 
-  const fetchTrends = useCallback(async (r: TrendsRange, types: string[]) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ range: r });
-      // Only send types param when the user has explicitly selected a subset
-      if (types.length > 0) {
-        types.forEach((t) => params.append("types", t));
+  // Calendar mode has no meaning for the unbounded "All" range.
+  const effectiveMode: WindowMode = range === "ALL" ? "rolling" : mode;
+
+  const fetchTrends = useCallback(
+    async (r: TrendsRange, types: string[], m: WindowMode) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const params = new URLSearchParams({ range: r, mode: m });
+        // Only send types param when the user has explicitly selected a subset
+        if (types.length > 0) {
+          types.forEach((t) => params.append("types", t));
+        }
+        const json: TrendsData = await fetchFromAPI(`/api/trends?${params}`);
+        setData(json);
+      } catch (e: any) {
+        setError(e.message || "Failed to load trends");
+      } finally {
+        setLoading(false);
       }
-      const json: TrendsData = await fetchFromAPI(`/api/trends?${params}`);
-      setData(json);
-    } catch (e: any) {
-      setError(e.message || "Failed to load trends");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
-    fetchTrends(range, selectedTypes);
-  }, [range, selectedTypes, fetchTrends]);
+    fetchTrends(range, selectedTypes, effectiveMode);
+  }, [range, selectedTypes, effectiveMode, fetchTrends]);
 
   return (
     <div className="space-y-6">
@@ -71,6 +80,23 @@ export default function TrendsPage() {
             onChange={setSelectedTypes}
           />
           <RangeSelector selected={range} onChange={setRange} />
+          {range !== "ALL" && (
+            <div className="inline-flex rounded-md border border-gray-300 dark:border-gray-600 p-0.5 bg-white dark:bg-gray-800">
+              {(["rolling", "calendar"] as WindowMode[]).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={`px-3 py-1.5 text-sm font-medium rounded ${
+                    effectiveMode === m
+                      ? "bg-blue-600 text-white"
+                      : "text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                  }`}
+                >
+                  {m === "rolling" ? "Rolling" : "Calendar"}
+                </button>
+              ))}
+            </div>
+          )}
           <Link
             href="/"
             className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700/50"
@@ -139,7 +165,7 @@ export default function TrendsPage() {
             </div>
           </div>
 
-          <VsNormCard range={range} />
+          <VsNormCard range={range} mode={effectiveMode} />
 
           <TrendBarChart
             type="distance"

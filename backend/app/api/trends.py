@@ -37,10 +37,11 @@ def list_activity_types(db: Session = Depends(get_db)):
 def get_trends(
     range: str = Query("30D", description="Time range: 7D, 30D, 3M, 6M, 1Y, ALL"),
     types: Optional[List[str]] = Query(None, description="Activity types to include (multi-select)"),
+    mode: str = Query("rolling", description="Window framing: rolling | calendar (#400)"),
     db: Session = Depends(get_db),
 ):
     user_id = get_current_user_profile(db).user_id
-    return get_trends_report(db, range, types, user_id=user_id)
+    return get_trends_report(db, range, types, user_id=user_id, mode=mode)
 
 
 @router.get("/trends/load", response_model=LoadResponse)

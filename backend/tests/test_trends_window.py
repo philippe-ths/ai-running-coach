@@ -93,3 +93,44 @@ def test_previous_window_abuts_current_with_no_gap(db):
 
     assert stats.previous_summary.activity_count == 1
     assert stats.previous_summary.total_distance_m == 3000
+
+
+# --- #400 global rolling/calendar window resolver ----------------------------
+
+from app.services.trends import _resolve_window  # noqa: E402
+
+_T = date(2026, 6, 20)  # a Saturday
+
+
+def test_resolve_window_rolling_matches_legacy():
+    # 7D rolling: 7 days ending today; previous is the abutting prior 7 days.
+    since, prev_start, prev_end = _resolve_window("7D", "rolling", _T)
+    assert since == date(2026, 6, 14)
+    assert (prev_start, prev_end) == (date(2026, 6, 7), date(2026, 6, 14))
+
+
+def test_resolve_window_calendar_week():
+    # 2026-06-20 is a Saturday -> Mon 06-15, 6 days elapsed; prior week same span.
+    since, prev_start, prev_end = _resolve_window("7D", "calendar", _T)
+    assert since == date(2026, 6, 15)
+    assert (prev_start, prev_end) == (date(2026, 6, 8), date(2026, 6, 14))  # Mon-Sat prior week
+
+
+def test_resolve_window_calendar_month():
+    # June, 20 days elapsed; previous is May 1-20 (same 20-day span).
+    since, prev_start, prev_end = _resolve_window("30D", "calendar", _T)
+    assert since == date(2026, 6, 1)
+    assert prev_start == date(2026, 5, 1)
+    assert prev_end == date(2026, 5, 21)  # exclusive -> May 1..20
+
+
+def test_resolve_window_calendar_quarter():
+    # Q2 starts Apr 1; prior quarter Q1 starts Jan 1.
+    since, prev_start, prev_end = _resolve_window("3M", "calendar", _T)
+    assert since == date(2026, 4, 1)
+    assert prev_start == date(2026, 1, 1)
+
+
+def test_resolve_window_all_has_no_bounds():
+    assert _resolve_window("ALL", "rolling", _T) == (None, None, None)
+    assert _resolve_window("ALL", "calendar", _T) == (None, None, None)

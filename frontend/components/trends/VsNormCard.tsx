@@ -102,9 +102,14 @@ function MetricRow({ m }: { m: VolumeMetricVsNorm }) {
   );
 }
 
-export default function VsNormCard({ range }: { range: TrendsRange }) {
+export default function VsNormCard({
+  range,
+  mode,
+}: {
+  range: TrendsRange;
+  mode: FramingKey;
+}) {
   const [data, setData] = useState<VolumeReport | null>(null);
-  const [framing, setFraming] = useState<FramingKey>("rolling");
 
   useEffect(() => {
     if (range === "ALL") return;
@@ -122,38 +127,20 @@ export default function VsNormCard({ range }: { range: TrendsRange }) {
   // "All" has no bounded current period to compare to a norm.
   if (range === "ALL" || !data) return null;
 
-  const win: VolumeFraming = data[framing];
+  // The framing follows the page-level Rolling/Calendar toggle.
+  const win: VolumeFraming = data[mode];
   const subtitle =
-    win.framing === "rolling"
+    win.framing === "rolling" || win.complete
       ? `${win.label} vs your typical`
-      : win.complete
-        ? `${win.label} vs your typical`
-        : `${win.label} so far (${win.days_elapsed}/${win.window_days} days) vs your typical`;
+      : `${win.label} so far (${win.days_elapsed}/${win.window_days} days) vs your typical`;
 
   return (
     <div className="bg-white dark:bg-gray-800 p-5 rounded-lg border dark:border-gray-700 shadow-sm">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-2">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-            How your training compares to your norm
-          </h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
-        </div>
-        <div className="inline-flex rounded-md border border-gray-200 dark:border-gray-600 p-0.5 self-start">
-          {(["rolling", "calendar"] as FramingKey[]).map((f) => (
-            <button
-              key={f}
-              onClick={() => setFraming(f)}
-              className={`px-3 py-1 text-xs font-medium rounded ${
-                framing === f
-                  ? "bg-blue-600 text-white"
-                  : "text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-              }`}
-            >
-              {data[f].label}
-            </button>
-          ))}
-        </div>
+      <div className="mb-2">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+          How your training compares to your norm
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
       </div>
 
       {data.has_baseline ? (
