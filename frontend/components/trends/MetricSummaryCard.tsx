@@ -15,6 +15,7 @@ export default function MetricSummaryCard({
   current,
   previous,
   format,
+  prevLabel,
 }: {
   label: string;
   value: string;
@@ -22,6 +23,7 @@ export default function MetricSummaryCard({
   current: number;
   previous?: number | null;
   format: (n: number) => string;
+  prevLabel?: string;
 }) {
   const hasNorm = !!metric && metric.direction !== "no_norm" && metric.norm !== null;
 
@@ -34,10 +36,16 @@ export default function MetricSummaryCard({
         {value}
       </div>
       {hasNorm && metric && (
-        <NormGauge pct={metric.pct_vs_norm ?? 0} direction={metric.direction} />
+        <NormGauge pct={metric.pct_vs_norm ?? 0} />
       )}
       <div className="mt-1.5">
-        <ComparisonRows metric={metric} current={current} previous={previous} format={format} />
+        <ComparisonRows
+          metric={metric}
+          current={current}
+          previous={previous}
+          format={format}
+          prevLabel={prevLabel}
+        />
       </div>
     </div>
   );

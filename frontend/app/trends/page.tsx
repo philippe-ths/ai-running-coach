@@ -13,7 +13,11 @@ import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
 import ComparisonRows from "@/components/trends/ComparisonRows";
 import MetricSummaryCard from "@/components/trends/MetricSummaryCard";
 import { DIR_TEXT, dirFromPct } from "@/components/trends/direction";
-import type { VolumeMetricVsNorm, VolumeReport } from "@/lib/types/volume";
+import type {
+  VolumeMetricName,
+  VolumeMetricVsNorm,
+  VolumeReport,
+} from "@/lib/types/volume";
 
 type WindowMode = "rolling" | "calendar";
 
@@ -67,25 +71,60 @@ export default function TrendsPage() {
   }, [range, selectedTypes, effectiveMode, fetchTrends]);
 
   // The vs-norm comparison shown on the quick-view cards (no norm for "All").
+  // Pass the same activity-type filter as the charts (#413) so "typical" is
+  // scoped to the selected types and never compares a filtered window against an
+  // all-activity norm.
   useEffect(() => {
     if (range === "ALL") {
       setVolume(null);
       return;
     }
     let active = true;
-    fetchFromAPI(`/api/trends/volume?range=${range}`)
+    const params = new URLSearchParams({ range });
+    selectedTypes.forEach((t) => params.append("types", t));
+    fetchFromAPI(`/api/trends/volume?${params}`)
       .then((v: VolumeReport) => active && setVolume(v))
       .catch(() => active && setVolume(null));
     return () => {
       active = false;
     };
-  }, [range]);
+  }, [range, selectedTypes]);
 
   // Map each metric to its vs-norm comparison for the framing in view.
   const normByMetric: Partial<Record<string, VolumeMetricVsNorm>> = {};
   if (volume && volume.has_baseline) {
     for (const m of volume[effectiveMode].metrics) normByMetric[m.metric] = m;
   }
+
+  // "vs prev" labeling (#413): calendar mode names the period it compares to
+  // (e.g. "vs last month"), so a month-to-date comparison reads clearly; rolling
+  // stays "vs prev".
+  const PERIOD_NOUN: Partial<Record<TrendsRange, string>> = {
+    "7D": "week",
+    "30D": "month",
+    "3M": "quarter",
+    "6M": "half",
+    "1Y": "year",
+  };
+  const prevLabel =
+    effectiveMode === "calendar" && PERIOD_NOUN[range]
+      ? `vs last ${PERIOD_NOUN[range]}`
+      : "vs prev";
+
+  // The runner's typical level per chart bucket (#413), drawn as a reference line.
+  // The #400 norm is scaled to days_elapsed, so norm/days_elapsed is the true
+  // per-day rate; weekly charts multiply by 7. `scale` converts norm units to the
+  // chart's units (meters→km, seconds→min, effort raw). Undefined hides the line.
+  const framing = volume && volume.has_baseline ? volume[effectiveMode] : null;
+  const typicalPerBucket = (
+    metric: VolumeMetricName,
+    scale: number,
+  ): number | undefined => {
+    const m = normByMetric[metric];
+    if (!framing || !m || m.norm == null || framing.days_elapsed <= 0) return undefined;
+    const perDay = m.norm / framing.days_elapsed;
+    return perDay * (isDaily ? 1 : 7) * scale;
+  };
 
   return (
     <div className="space-y-6">
@@ -143,6 +182,7 @@ export default function TrendsPage() {
               current={data.summary.total_distance_m}
               previous={data.previous_summary?.total_distance_m}
               format={formatDistanceKm}
+              prevLabel={prevLabel}
             />
             <MetricSummaryCard
               label="Total Time"
@@ -151,6 +191,7 @@ export default function TrendsPage() {
               current={data.summary.total_moving_time_s}
               previous={data.previous_summary?.total_moving_time_s}
               format={formatDuration}
+              prevLabel={prevLabel}
             />
             <MetricSummaryCard
               label="Activities"
@@ -159,6 +200,7 @@ export default function TrendsPage() {
               current={data.summary.activity_count}
               previous={data.previous_summary?.activity_count}
               format={(v) => Math.round(v).toString()}
+              prevLabel={prevLabel}
             />
             <MetricSummaryCard
               label="Total Load"
@@ -167,6 +209,7 @@ export default function TrendsPage() {
               current={data.summary.total_suffer_score}
               previous={data.previous_summary?.total_suffer_score}
               format={(v) => Math.round(v).toLocaleString()}
+              prevLabel={prevLabel}
             />
           </div>
 
@@ -174,12 +217,14 @@ export default function TrendsPage() {
             type="distance"
             data={isDaily ? data.daily_distance : data.weekly_distance}
             granularity={granularity}
+            typical={typicalPerBucket("distance_m", 1 / 1000)}
             delta={
               <ComparisonRows
                 metric={normByMetric["distance_m"]}
                 current={data.summary.total_distance_m}
                 previous={data.previous_summary?.total_distance_m}
                 format={formatDistanceKm}
+                prevLabel={prevLabel}
               />
             }
           />
@@ -187,12 +232,14 @@ export default function TrendsPage() {
             type="time"
             data={isDaily ? data.daily_time : data.weekly_time}
             granularity={granularity}
+            typical={typicalPerBucket("moving_time_s", 1 / 60)}
             delta={
               <ComparisonRows
                 metric={normByMetric["moving_time_s"]}
                 current={data.summary.total_moving_time_s}
                 previous={data.previous_summary?.total_moving_time_s}
                 format={formatDuration}
+                prevLabel={prevLabel}
               />
             }
           />
@@ -200,12 +247,14 @@ export default function TrendsPage() {
           <SufferScoreChart
             data={isDaily ? data.daily_suffer_score : data.weekly_suffer_score}
             granularity={granularity}
+            typical={typicalPerBucket("effort_score", 1)}
             delta={
               <ComparisonRows
                 metric={normByMetric["effort_score"]}
                 current={data.summary.total_suffer_score}
                 previous={data.previous_summary?.total_suffer_score}
                 format={(v) => Math.round(v).toLocaleString()}
+                prevLabel={prevLabel}
               />
             }
           />
@@ -224,6 +273,7 @@ export default function TrendsPage() {
                         : undefined
                     }
                     format={(v) => `${v.toFixed(2)} m/beat`}
+                    prevLabel={prevLabel}
                   />
                 ) : undefined
               }

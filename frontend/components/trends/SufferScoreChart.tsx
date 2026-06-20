@@ -8,20 +8,25 @@ import {
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
+  ReferenceLine,
 } from "recharts";
 import { ReactNode } from "react";
 import { SufferScorePoint, DailySufferScorePoint, WeeklySufferScorePoint } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
 import ChartTooltip from "@/components/charts/ChartTooltip";
+import { TYPICAL_LINE_PROPS, renderTypicalLabel } from "./typicalLine";
 
 interface Props {
   data: SufferScorePoint[] | DailySufferScorePoint[] | WeeklySufferScorePoint[];
   granularity: "daily" | "weekly";
   /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
   delta?: ReactNode;
+  /** Runner's typical load per bucket, in chart units (#413). Draws a dashed
+   * reference line; omitted when no norm exists. */
+  typical?: number;
 }
 
-export default function SufferScoreChart({ data, granularity, delta }: Props) {
+export default function SufferScoreChart({ data, granularity, delta, typical }: Props) {
   const chartData = data.map((d: any) => ({
     ...d,
     label: formatDateLabel(d.date ?? d.week_start),
@@ -72,6 +77,13 @@ export default function SufferScoreChart({ data, granularity, delta }: Props) {
               radius={[4, 4, 0, 0]}
               maxBarSize={40}
             />
+            {typical != null && typical > 0 && (
+              <ReferenceLine
+                y={typical}
+                {...TYPICAL_LINE_PROPS}
+                label={renderTypicalLabel(`typical · ${Math.round(typical).toLocaleString()}`)}
+              />
+            )}
           </BarChart>
         </ResponsiveContainer>
       )}
