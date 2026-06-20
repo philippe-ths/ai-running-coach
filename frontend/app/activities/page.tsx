@@ -1,12 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, X } from 'lucide-react';
 import { fetchFromAPI } from '@/lib/api';
 import ActivityList from '@/components/ActivityList';
+import ActivityTypeFilter from '@/components/trends/ActivityTypeFilter';
+import DateRangeFilter, { DateRange } from '@/components/activities/DateRangeFilter';
 
-// One request per "page". The backend GET /api/activities already returns
-// activities newest-first with skip/limit pagination, so this view just walks it.
+// One request per "page". The backend GET /api/activities returns activities
+// newest-first with skip/limit pagination and applies any filters server-side,
+// so this view walks the *filtered* history a page at a time.
 const PAGE_SIZE = 20;
 
 interface ActivityListItem {
@@ -20,17 +23,50 @@ interface ActivityListItem {
   headline?: string | null;
 }
 
+interface Filters {
+  types: string[];
+  startDate: string | null;
+  endDate: string | null;
+}
+
+const EMPTY_FILTERS: Filters = { types: [], startDate: null, endDate: null };
+
+function filtersActive(f: Filters): boolean {
+  return f.types.length > 0 || f.startDate !== null || f.endDate !== null;
+}
+
+function buildQuery(skip: number, f: Filters): string {
+  const params = new URLSearchParams();
+  params.set('skip', String(skip));
+  params.set('limit', String(PAGE_SIZE));
+  f.types.forEach((t) => params.append('types', t));
+  if (f.startDate) params.set('start_date', f.startDate);
+  if (f.endDate) params.set('end_date', f.endDate);
+  return params.toString();
+}
+
 export default function AllActivitiesPage() {
   const [activities, setActivities] = useState<ActivityListItem[]>([]);
   const [status, setStatus] = useState<'loading' | 'loaded' | 'loadingMore' | 'error'>('loading');
   const [hasMore, setHasMore] = useState(true);
+  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
 
-  const loadFrom = useCallback(async (skip: number) => {
+  // The distinct activity types present in the history, for the type filter.
+  // Reuses the Trends endpoint (#404), which returns non-deleted types sorted.
+  useEffect(() => {
+    fetchFromAPI('/api/trends/types')
+      .then((types: string[] | null) => setAvailableTypes(types ?? []))
+      .catch(() => {});
+  }, []);
+
+  // `activeFilters` is passed explicitly so pagination never reads a stale closure.
+  const loadFrom = useCallback(async (skip: number, activeFilters: Filters) => {
     const isFirstPage = skip === 0;
     setStatus(isFirstPage ? 'loading' : 'loadingMore');
     try {
       const batch: ActivityListItem[] | null = await fetchFromAPI(
-        `/api/activities?skip=${skip}&limit=${PAGE_SIZE}`,
+        `/api/activities?${buildQuery(skip, activeFilters)}`,
       );
       const items = batch ?? [];
       setActivities((prev) => (isFirstPage ? items : [...prev, ...items]));
@@ -42,9 +78,15 @@ export default function AllActivitiesPage() {
     }
   }, []);
 
+  // Reload from the first page whenever the filters change (and on mount). The
+  // server reapplies the filters to the whole history, so the list stays correct
+  // rather than narrowing only the rows already loaded.
   useEffect(() => {
-    loadFrom(0);
-  }, [loadFrom]);
+    loadFrom(0, filters);
+  }, [filters, loadFrom]);
+
+  const isFiltered = filtersActive(filters);
+  const clearFilters = () => setFilters(EMPTY_FILTERS);
 
   return (
     <div className="space-y-6">
@@ -52,6 +94,30 @@ export default function AllActivitiesPage() {
         <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">All Activities</h1>
         <p className="text-gray-600 dark:text-gray-400 mt-1">Your full run history, newest first.</p>
       </header>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <ActivityTypeFilter
+          available={availableTypes}
+          selected={filters.types}
+          onChange={(types) => setFilters((f) => ({ ...f, types }))}
+        />
+        <DateRangeFilter
+          startDate={filters.startDate}
+          endDate={filters.endDate}
+          onChange={(r: DateRange) =>
+            setFilters((f) => ({ ...f, startDate: r.startDate, endDate: r.endDate }))
+          }
+        />
+        {isFiltered && (
+          <button
+            onClick={clearFilters}
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+          >
+            <X className="w-3.5 h-3.5" />
+            Clear filters
+          </button>
+        )}
+      </div>
 
       {status === 'loading' && (
         <div className="flex items-center justify-center gap-2 text-gray-500 dark:text-gray-400 py-10">
@@ -64,7 +130,7 @@ export default function AllActivitiesPage() {
         <div className="bg-red-50 dark:bg-red-900/30 rounded-xl border border-red-200 dark:border-red-800 p-6">
           <p className="text-red-700 dark:text-red-300 text-sm">Could not load activities.</p>
           <button
-            onClick={() => loadFrom(0)}
+            onClick={() => loadFrom(0, filters)}
             className="mt-2 text-sm text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 underline"
           >
             Try again
@@ -77,15 +143,28 @@ export default function AllActivitiesPage() {
       )}
 
       {status === 'loaded' && activities.length === 0 && (
-        <div className="text-gray-500 dark:text-gray-400 italic">
-          No activities found yet. Try syncing from the home page.
-        </div>
+        isFiltered ? (
+          <div className="text-gray-500 dark:text-gray-400">
+            No activities match these filters.{' '}
+            <button
+              onClick={clearFilters}
+              className="text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              Clear filters
+            </button>{' '}
+            to see your full history.
+          </div>
+        ) : (
+          <div className="text-gray-500 dark:text-gray-400 italic">
+            No activities found yet. Try syncing from the home page.
+          </div>
+        )
       )}
 
       {hasMore && activities.length > 0 && (
         <div className="flex justify-center">
           <button
-            onClick={() => loadFrom(activities.length)}
+            onClick={() => loadFrom(activities.length, filters)}
             disabled={status === 'loadingMore'}
             className="inline-flex items-center gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-5 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-200 hover:border-blue-300 dark:hover:border-blue-700 hover:text-blue-600 dark:hover:text-blue-400 transition-colors disabled:opacity-60 disabled:cursor-default"
           >
