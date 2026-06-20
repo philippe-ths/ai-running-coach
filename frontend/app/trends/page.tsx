@@ -11,8 +11,9 @@ import TrendBarChart from "@/components/trends/TrendBarChart";
 import SufferScoreChart from "@/components/trends/SufferScoreChart";
 import EfficiencyTrendChart from "@/components/trends/EfficiencyTrendChart";
 import ZoneLoadChart from "@/components/trends/ZoneLoadChart";
-import VsNormCard from "@/components/trends/VsNormCard";
+import NormStat from "@/components/trends/NormStat";
 import StatDiff from "@/components/StatDiff";
+import type { VolumeMetricVsNorm, VolumeReport } from "@/lib/types/volume";
 
 type WindowMode = "rolling" | "calendar";
 
@@ -22,6 +23,7 @@ export default function TrendsPage() {
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [data, setData] = useState<TrendsData | null>(null);
+  const [volume, setVolume] = useState<VolumeReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,6 +65,27 @@ export default function TrendsPage() {
   useEffect(() => {
     fetchTrends(range, selectedTypes, effectiveMode);
   }, [range, selectedTypes, effectiveMode, fetchTrends]);
+
+  // The vs-norm comparison shown on the quick-view cards (no norm for "All").
+  useEffect(() => {
+    if (range === "ALL") {
+      setVolume(null);
+      return;
+    }
+    let active = true;
+    fetchFromAPI(`/api/trends/volume?range=${range}`)
+      .then((v: VolumeReport) => active && setVolume(v))
+      .catch(() => active && setVolume(null));
+    return () => {
+      active = false;
+    };
+  }, [range]);
+
+  // Map each metric to its vs-norm comparison for the framing in view.
+  const normByMetric: Partial<Record<string, VolumeMetricVsNorm>> = {};
+  if (volume && volume.has_baseline) {
+    for (const m of volume[effectiveMode].metrics) normByMetric[m.metric] = m;
+  }
 
   return (
     <div className="space-y-6">
@@ -124,48 +147,30 @@ export default function TrendsPage() {
               <div className="text-2xl font-bold">
                 {formatDistanceKm(data.summary.total_distance_m)}
               </div>
-              <StatDiff
-                current={data.summary.total_distance_m}
-                previous={data.previous_summary?.total_distance_m}
-                format={formatDistanceKm}
-              />
+              <NormStat metric={normByMetric["distance_m"]} format={formatDistanceKm} />
             </div>
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
               <div className="text-sm text-gray-500 dark:text-gray-400">Total Time</div>
               <div className="text-2xl font-bold">
                 {formatDuration(data.summary.total_moving_time_s)}
               </div>
-              <StatDiff
-                current={data.summary.total_moving_time_s}
-                previous={data.previous_summary?.total_moving_time_s}
-                format={formatDuration}
-              />
+              <NormStat metric={normByMetric["moving_time_s"]} format={formatDuration} />
             </div>
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
               <div className="text-sm text-gray-500 dark:text-gray-400">Activities</div>
               <div className="text-2xl font-bold">
                 {data.summary.activity_count}
               </div>
-              <StatDiff
-                current={data.summary.activity_count}
-                previous={data.previous_summary?.activity_count}
-                format={(v) => v.toString()}
-              />
+              <NormStat metric={normByMetric["sessions"]} format={(v) => Math.round(v).toString()} />
             </div>
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
               <div className="text-sm text-gray-500 dark:text-gray-400">Total Load</div>
               <div className="text-2xl font-bold">
                 {Math.round(data.summary.total_suffer_score).toLocaleString()}
               </div>
-              <StatDiff
-                current={data.summary.total_suffer_score}
-                previous={data.previous_summary?.total_suffer_score}
-                format={(v) => Math.round(v).toLocaleString()}
-              />
+              <NormStat metric={normByMetric["effort_score"]} format={(v) => Math.round(v).toLocaleString()} />
             </div>
           </div>
-
-          <VsNormCard range={range} mode={effectiveMode} />
 
           <TrendBarChart
             type="distance"
