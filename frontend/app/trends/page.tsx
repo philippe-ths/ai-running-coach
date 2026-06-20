@@ -1,7 +1,6 @@
 "use client";
 
 import { Fragment, useEffect, useState, useCallback } from "react";
-import Link from "next/link";
 import { TrendsData, TrendsRange } from "@/lib/types";
 import { formatDistanceKm, formatDuration } from "@/lib/format";
 import { fetchFromAPI } from "@/lib/api";
@@ -121,12 +120,6 @@ export default function TrendsPage() {
               ))}
             </div>
           )}
-          <Link
-            href="/"
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700/50"
-          >
-            Dashboard
-          </Link>
         </div>
       </header>
 

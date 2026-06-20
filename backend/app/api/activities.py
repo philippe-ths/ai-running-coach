@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Annotated, List, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -159,15 +159,23 @@ async def sync_activities(
 
 @router.get("/activities", response_model=List[ActivityRead])
 def read_activities(
-    skip: int = 0, 
-    limit: int = 20, 
+    skip: int = 0,
+    limit: int = 20,
+    types: Optional[List[str]] = Query(None, description="Activity types to include (multi-select)"),
+    start_date: Optional[date] = Query(None, description="Only activities on/after this date (UTC, inclusive)"),
+    end_date: Optional[date] = Query(None, description="Only activities on/before this date (UTC, inclusive)"),
     db: Session = Depends(get_db)
 ):
     """
-    Get stored activities (paginated).
+    Get stored activities (paginated), optionally filtered by type and date range (#404).
+
+    Filters apply server-side before pagination, so they narrow the whole history
+    rather than only the rows already loaded by the client.
     """
     # Note: In multi-user app, filter by current_user.id
-    activities = activity_queries.get_activities(db, skip=skip, limit=limit)
+    activities = activity_queries.get_activities(
+        db, skip=skip, limit=limit, types=types, start_date=start_date, end_date=end_date
+    )
     responses = []
     for activity in activities:
         response = ActivityRead.model_validate(activity)
