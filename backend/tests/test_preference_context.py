@@ -13,6 +13,11 @@ from app.models.user import User
 from app.services.coach.context import build_context_pack
 from app.services.coach.prompts import PROMPT_VERSIONS, SYSTEM_PROMPT_V6
 
+import pytest
+
+# M10 preference reads the M8 belief store, which defaults OFF in prod.
+pytestmark = pytest.mark.usefixtures("enable_durable_memory")
+
 
 def _user(db):
     uid = uuid.uuid4()

@@ -673,8 +673,13 @@ def _fire_learning_loop(db: Session, activity: Activity, pack: CoachContextPack)
     background — enqueued, never awaited, so the turn never blocks; idempotent, so
     no sentinel is needed.
     """
-    write_back_beliefs(db, activity, pack)
-    enqueue_consolidation(activity.user_id)
+    # Both durable-memory halves are gated off pending recalibration: no belief is
+    # written and no narrative consolidation is enqueued. The read side emits the
+    # empty form for each, so a turn carries neither.
+    if settings.COACH_BELIEFS_ENABLED:
+        write_back_beliefs(db, activity, pack)
+    if settings.COACH_NARRATIVE_ENABLED:
+        enqueue_consolidation(activity.user_id)
 
 
 @dataclass

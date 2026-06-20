@@ -22,6 +22,11 @@ from app.services.coach.belief_store import (
 from app.services.coach.context import build_context_pack
 from app.services.coach.prompts import PROMPT_VERSIONS, SYSTEM_PROMPT_V4
 
+import pytest
+
+# This module exercises the M8 belief loop, which defaults OFF in prod.
+pytestmark = pytest.mark.usefixtures("enable_durable_memory")
+
 _HEAT_DISCOUNT = {
     "hr_drift_pct": 9.0,
     "likely_inflated_by": ["heat"],

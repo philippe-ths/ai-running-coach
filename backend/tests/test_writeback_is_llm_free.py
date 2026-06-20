@@ -39,6 +39,11 @@ from app.services.coach.beliefs import extract_belief_deltas
 from app.services.coach.belief_store import write_back_beliefs
 from app.services.coach.context import build_context_pack
 
+import pytest
+
+# Pins the belief write-back boundary; needs the M8/A2c machinery (OFF by default).
+pytestmark = pytest.mark.usefixtures("enable_durable_memory")
+
 # A heat confound that an LLM "explanation" insists on, but whose STRUCTURED
 # confidence is too low to qualify — the gate is the field, not the prose.
 _LOW_CONF_HEAT = {

@@ -41,6 +41,9 @@ from app.services.coach.narrative_store import (
 from app.services.coach.service import get_or_generate_coach_report
 from app.services.coach.validator import validate_policy
 
+# This module exercises the A2c narrative + M8 belief machinery (OFF by default).
+pytestmark = pytest.mark.usefixtures("enable_durable_memory")
+
 
 # --------------------------------------------------------------------------
 # Helpers
