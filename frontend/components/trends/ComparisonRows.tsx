@@ -45,7 +45,7 @@ export default function ComparisonRows({
             >
               {signed(Math.round(metric.pct_vs_norm ?? 0))}
             </span>{" "}
-            · {format(metric.norm as number)}
+            · <span className="whitespace-nowrap">{format(metric.norm as number)}</span>
           </span>
         </>
       )}
@@ -56,7 +56,7 @@ export default function ComparisonRows({
             <span className={`font-medium ${DIR_TEXT[dirFromPct(prevPct)]}`}>
               {signed(prevPct)}
             </span>{" "}
-            · {format(previous as number)}
+            · <span className="whitespace-nowrap">{format(previous as number)}</span>
           </span>
         </>
       )}
