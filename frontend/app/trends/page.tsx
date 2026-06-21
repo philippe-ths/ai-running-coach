@@ -177,24 +177,28 @@ export default function TrendsPage() {
         </div>
       </header>
 
-      {/* Key: what the per-card "vs typical" / "vs {period}" comparisons mean. */}
+      {/* Key: what the per-card "vs typical" / "vs {period}" comparisons mean.
+          Styled as a card matching the metric summary cards below. */}
       {(typicalHelp || prevHelp) && (
-        <dl className="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
-          {typicalHelp && (
-            <div className="flex gap-1.5">
-              <dt className="font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                vs typical
-              </dt>
-              <dd>{typicalHelp}</dd>
-            </div>
-          )}
-          <div className="flex gap-1.5">
-            <dt className="font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+          <div className="text-[11px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500">
+            Key
+          </div>
+          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
+            {typicalHelp && (
+              <>
+                <dt className="font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                  vs typical
+                </dt>
+                <dd className="text-gray-500 dark:text-gray-400">{typicalHelp}</dd>
+              </>
+            )}
+            <dt className="font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">
               {prevLabel}
             </dt>
-            <dd>{prevHelp}</dd>
-          </div>
-        </dl>
+            <dd className="text-gray-500 dark:text-gray-400">{prevHelp}</dd>
+          </dl>
+        </div>
       )}
 
       {error && (
