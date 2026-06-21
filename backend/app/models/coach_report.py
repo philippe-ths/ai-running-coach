@@ -46,6 +46,16 @@ class CoachReport(Base):
         Boolean, nullable=False, server_default="false", default=False
     )
 
+    # P1.1 voice freshness (not cache IDENTITY): the fingerprint of the runner's
+    # declared voice this report was generated under, so a later voice change is
+    # detectable and the report can regenerate onto the new voice. Deliberately NOT
+    # in the unique constraint — there is still one row per (activity, prompt,
+    # schema); voice_key only records which voice that row currently speaks in.
+    # Null for a report generated under a non-voice-aware prompt (voice is inert) and
+    # for rows written before this column existed; a null on an active voice-aware
+    # row reads as stale, so it regenerates once onto the current voice.
+    voice_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

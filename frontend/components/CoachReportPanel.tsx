@@ -197,6 +197,11 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
   const regenBaseline = useRef<string | null>(null);
   const regenAttempts = useRef(0);
   const [regenTick, setRegenTick] = useState(0);
+  // P1.1: a loaded report can be voice-stale (generated under a now-changed voice).
+  // We kick the existing async regen ONCE so it is rewritten in the runner's current
+  // voice ("regenerate on next view"). The ref guards against re-firing while polling
+  // and against a loop — the regenerated report is no longer stale.
+  const voiceRegenKicked = useRef(false);
 
   const regenerate = useCallback(async () => {
     regenBaseline.current = report?.meta.generated_at ?? null;
@@ -245,6 +250,17 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
     }, REGEN_POLL_INTERVAL_MS);
     return () => clearTimeout(id);
   }, [status, regenTick, activityId]);
+
+  // P1.1: when a freshly-loaded report is voice-stale, regenerate it onto the
+  // runner's current voice. Fires once (the ref survives the regen + poll), and the
+  // rewritten report comes back not-stale, so there is no loop. A fallback regen also
+  // returns not-stale, so a persistent failure cannot hammer the worker.
+  useEffect(() => {
+    if (status !== 'loaded' || !report || !report.meta.voice_stale) return;
+    if (voiceRegenKicked.current) return;
+    voiceRegenKicked.current = true;
+    regenerate();
+  }, [status, report, regenerate]);
 
   if (!hasMetrics) return null;
 
