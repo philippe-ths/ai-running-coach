@@ -95,6 +95,13 @@ class CoachReportMeta(BaseModel):
     # missing/unusable (degrade-not-withhold). False for the legacy structured
     # family and for a clean message+tail. Defaulted so legacy stored meta validates.
     tail_degraded: bool = False
+    # P1.1 voice freshness — a READ-TIME flag, never stored. True when this report is
+    # the active-version row under a voice-aware prompt but was generated under a
+    # different voice than the runner's current one, so it should regenerate to honour
+    # the new voice (the frontend auto-triggers the async regen on a stale read). Set
+    # by the read endpoint; defaults False so stored meta (which never carries it) and
+    # every non-voice prompt validate unchanged.
+    voice_stale: bool = False
 
 
 class CoachReportContent(BaseModel):

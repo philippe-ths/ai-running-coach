@@ -51,6 +51,8 @@ from app.services.coach.prompts import (
     TWO_STAGE_PROMPT_IDS,
     build_system_prompt,
 )
+from app.services.coach.prompt_features import PromptFeature, has_feature
+from app.services.coach.receipt_voice import voice_fingerprint
 from app.services.coach.voice import resolve_voice
 from app.services.coach.stance import resolve_stance
 from app.services.coach.retrieval import fetch_latest_user_reply
@@ -167,6 +169,35 @@ def _resolve_voice_for_activity(db: Session, activity: Activity):
         .first()
     )
     return resolve_voice(relationship)
+
+
+def report_voice_stale(db: Session, row: Optional[CoachReport]) -> bool:
+    """True when `row` is the ACTIVE-version report under a voice-aware prompt but was
+    generated under a DIFFERENT voice than the runner's current one — so it should be
+    regenerated to honour the new voice (the read endpoint flags it and the frontend
+    auto-triggers the async regen on a stale view).
+
+    False for: a non-voice-aware active prompt (voice is inert), a cross-version
+    displayable fallback (#261 — left alone so a COACH_PROMPT_ID flip never storms
+    regens), or a row already on the current voice. A NULL voice_key on an active
+    voice-aware row reads as STALE: its voice is unknown (the row predates the
+    voice_key column or a non-voice prompt), so it regenerates ONCE onto the current
+    voice and is then current. This is the read-side mirror of the voice_key the
+    generate path stamps; it never itself writes or regenerates."""
+    if row is None:
+        return False
+    prompt_id = settings.COACH_PROMPT_ID
+    # Only the active-version row can be voice-stale; a stale-shape displayable
+    # fallback is intentionally served as-is (#261).
+    if row.prompt_id != prompt_id or row.schema_version != active_schema_version(prompt_id):
+        return False
+    if not has_feature(prompt_id, PromptFeature.VOICE):
+        return False
+    activity = db.query(Activity).filter(Activity.id == row.activity_id).first()
+    if activity is None:
+        return False
+    current = voice_fingerprint(_resolve_voice_for_activity(db, activity))
+    return (row.voice_key or None) != current
 
 
 def _resolve_stance_for_activity(db: Session, activity: Activity):
@@ -332,6 +363,7 @@ async def get_or_generate_coach_report(
         outcome=outcome,
         existing=existing,  # #273: in-place swap on force; None -> insert (first gen)
         fire_learning_loop=True,
+        voice=voice,
     )
     return read
 
@@ -419,6 +451,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
         outcome=outcome,
         existing=None,
         fire_learning_loop=False,  # the opener writes nothing to durable memory
+        voice=voice,
     )
     # Hybrid salience: the opener LLM's judgment OR the deterministic safety
     # override (the model can never stay quiet on a red-flag run). A fallback
@@ -533,6 +566,7 @@ async def generate_fuller(
         outcome=outcome,
         existing=existing,  # in-place update of the opener row, or None -> insert
         fire_learning_loop=True,
+        voice=voice,
     )
 
 
@@ -548,6 +582,7 @@ def _persist_report(
     outcome: "_GenOutcome",
     existing: Optional[CoachReport],
     fire_learning_loop: bool,
+    voice=None,
 ) -> Optional[CoachReportRead]:
     """Build the meta + digest, persist the report (in-place UPDATE of `existing`
     or a fresh INSERT), and optionally fire the learning loop. Shared by the
@@ -602,6 +637,17 @@ def _persist_report(
         tail_degraded=outcome.tail_degraded,
     )
 
+    # P1.1 voice freshness: stamp the voice this report speaks in, so a later voice
+    # change is detectable (report_voice_stale). Null under a non-voice-aware prompt
+    # (voice is inert there). Stamped on EVERY persist — including a fallback — so a
+    # regenerated row is always current and a persistent LLM failure can never loop
+    # the auto-regen (a fallback row reads as not-stale; the runner can still Re-run).
+    voice_key = (
+        voice_fingerprint(voice)
+        if voice is not None and has_feature(prompt_id, PromptFeature.VOICE)
+        else None
+    )
+
     # A2a digest: only for a complete non-fallback report (not an opener-only row,
     # not a fallback). Guarded so a digest hiccup never blocks storage.
     report_digest = None
@@ -625,6 +671,7 @@ def _persist_report(
         existing.raw_llm_response = outcome.raw_response
         existing.is_fallback = outcome.is_fallback
         existing.digest = report_digest
+        existing.voice_key = voice_key
         db.add(existing)
         db.commit()
         db.refresh(existing)
@@ -640,6 +687,7 @@ def _persist_report(
             raw_llm_response=outcome.raw_response,
             is_fallback=outcome.is_fallback,
             digest=report_digest,
+            voice_key=voice_key,
         )
         db.add(db_report)
         try:
