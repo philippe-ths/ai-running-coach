@@ -589,7 +589,13 @@ def build_b_baseline(
             discount_signals=metrics.discount_signals if metrics else None,
             pain_scores=_recent_pain_scores(db, activity),
         ),
-        adherence=_build_adherence_context(db, activity),
+        # M7 adherence is gated off pending recalibration (it nagged about prior
+        # next_steps the runner had already moved past); off => the empty form.
+        adherence=(
+            _build_adherence_context(db, activity)
+            if settings.COACH_ADHERENCE_ENABLED
+            else AdherenceContext(prior_report_date=None, outcomes=[])
+        ),
         # M8 belief machinery (believed_facts + the M10 preference_profile that
         # reads the same store) is gated off pending recalibration; off => the
         # new-runner empty form, so the poisoned belief never reaches the prompt.
@@ -647,8 +653,15 @@ def _build_longitudinal_context(db: Session, activity: Activity) -> Longitudinal
     for pre-A2a rows). Both halves degrade to empty/None (no prior reports, no
     comparable trend) without failing.
     """
+    # The prior-report digest is gated off pending recalibration: it replayed a
+    # stale rest-day theme forward each run. Off => empty digest, while the numeric
+    # baseline trend (no report language to echo) is retained.
     return LongitudinalContext(
-        prior_reports=fetch_prior_digests(db, activity),
+        prior_reports=(
+            fetch_prior_digests(db, activity)
+            if settings.COACH_PRIOR_REPORTS_ENABLED
+            else []
+        ),
         baseline_trend=_matching_baseline_trend(db, activity),
     )
 

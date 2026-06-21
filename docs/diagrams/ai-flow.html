@@ -99,6 +99,16 @@
   .node.notify { border-left-color: var(--notify); }
   .node.runner { border-left-color: var(--runner); }
 
+  /* a feature that ships disabled-by-default */
+  .node.off { opacity: .58; border-left-style: dashed; background: #16181d; }
+  .node.off:hover { opacity: .9; background: #1c1f26; }
+  .offpill {
+    display: inline-block; font-size: 9.5px; letter-spacing: .6px; text-transform: uppercase;
+    font-weight: 700; color: #fca5a5; background: rgba(239,68,68,.16);
+    border: 1px solid rgba(239,68,68,.4); border-radius: 4px; padding: 1px 6px; margin-left: 6px;
+    vertical-align: middle;
+  }
+
   .tag {
     display: inline-block; font-size: 9.5px; letter-spacing: .6px; text-transform: uppercase;
     padding: 1px 6px; border-radius: 4px; margin-bottom: 6px; font-weight: 700;
@@ -161,6 +171,12 @@
   }
   .drawer .data k { color: #6ee7b7; font-style: normal; }
   .drawer .data v { color: #fcd34d; font-style: normal; }
+  .offbanner {
+    background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.4);
+    color: #fca5a5; border-radius: 8px; padding: 10px 12px; margin-bottom: 16px;
+    font-size: 12.5px; line-height: 1.55;
+  }
+  .offbanner strong { color: #fecaca; }
   .drawer .realtag {
     display:inline-block; font-size:9.5px; letter-spacing:.5px; text-transform:uppercase;
     font-weight:700; color:#5eead4; background:rgba(20,184,166,.16);
@@ -236,15 +252,18 @@
     <div class="row">
       <div class="node code" data-key="focus"><span class="tag code">facts</span><h3>focus + B-baseline</h3><p>This run's metrics + lean always-present baseline.</p></div>
       <div class="node code" data-key="load"><span class="tag code">facts</span><h3>training_load</h3><p>EWMA fitness / fatigue / form — a citable fact.</p></div>
-      <div class="node code" data-key="longitudinal"><span class="tag code">facts</span><h3>longitudinal · adherence · calibration</h3><p>Prior digest, next-step outcomes, drift + referral.</p></div>
+      <div class="node code" data-key="volume"><span class="tag code">facts</span><h3>training_volume</h3><p>This week's distance / time / sessions / load vs the runner's own norm.</p></div>
+      <div class="node code" data-key="calibration"><span class="tag code">facts</span><h3>baseline trend · calibration</h3><p>Your typical drift for these conditions; non-diagnostic referral on red flags.</p></div>
+      <div class="node code off" data-key="adherence"><span class="tag code">facts</span><span class="offpill">disabled</span><h3>prior reports · adherence</h3><p>Last reports' digest + did-you-act loop — <strong>off by default</strong> (PR #418).</p></div>
       <div class="node code" data-key="perceived"><span class="tag code">facts</span><h3>perceived_effort · salience</h3><p>RPE-vs-HR, pain trend; novelty + safety override.</p></div>
     </div>
     <div class="row" style="margin-top:14px">
-      <div class="node store" data-key="beliefs"><span class="tag store">memory</span><h3>CoachingContext (beliefs)</h3><p>Deterministic, auditable learned facts.</p></div>
-      <div class="node store" data-key="narrative"><span class="tag store">memory</span><h3>CoachNarrative</h3><p><strong>Voice only, never cited as fact.</strong></p></div>
+      <div class="node store off" data-key="beliefs"><span class="tag store">memory</span><span class="offpill">disabled</span><h3>CoachingContext (beliefs)</h3><p>Deterministic learned facts — <strong>off by default</strong> (PR #403).</p></div>
+      <div class="node store off" data-key="narrative"><span class="tag store">memory</span><span class="offpill">disabled</span><h3>CoachNarrative</h3><p>Voice-only memory — <strong>off by default</strong> (PR #403).</p></div>
       <div class="node runner" data-key="voice"><span class="tag runner">runner-declared</span><h3>Voice · Stance · Corpus</h3><p>Tone, emphasis + school, uploaded materials.</p></div>
     </div>
-    <p class="note">Every section is <em>Optional-and-drop</em>: a pack stays byte-stable under prompts that don't consume it, so prompt cutover/rollback is a pure config flip.</p>
+    <p class="note">Every section is <em>Optional-and-drop</em>: a pack stays byte-stable under prompts that don't consume it, so prompt cutover/rollback is a pure config flip.<br>
+    <span style="color:#fca5a5">The prior-report-driven loops are currently OFF</span> — <code>beliefs</code> + <code>narrative</code> (PR #403) plus the M4 prior-report digest and M7 <code>adherence</code> (PR #418) — after they replayed a rest-day fixation into every report. They emit their empty form. The numeric <code>baseline trend</code> and M9 <code>calibration</code> (which carries the safety referral) stay ON. Re-enable is a config flip (#401 / #402).</p>
   </div>
 
   <div class="arrow">↓<span>build_system_prompt(prompt_id, mode, voice) + context pack</span></div>
@@ -253,7 +272,7 @@
   <div class="stage">
     <h2>4 · LLM generation — the one model call that writes the report</h2>
     <div class="row">
-      <div class="node llm" data-key="llmcall"><span class="tag llm">LLM call</span><h3>Anthropic — coach_message_v8</h3><p>Reason privately → prose <code>message</code> → one strict tool for the structured tail.</p></div>
+      <div class="node llm" data-key="llmcall"><span class="tag llm">LLM call</span><h3>Anthropic — coach_message_v9</h3><p>Reason privately → prose <code>message</code> → one strict tool for the structured tail.</p></div>
       <div class="node store" data-key="contract"><span class="tag store">contract</span><h3>output_contract.py</h3><p>Parse tool blocks; degrade-not-withhold merge.</p></div>
     </div>
     <p class="note">Two-stage <em>Exchange</em>: a light <span class="badge">opener</span> then a conditional deep <span class="badge">fuller turn</span>, gated by salience. Receipt cadence swaps the opener for a deterministic non-LLM receipt.</p>
@@ -278,8 +297,8 @@
     <h2>6 · Persist &amp; learn — write the report, update memory</h2>
     <div class="row">
       <div class="node store" data-key="coachreport"><span class="tag store">table</span><h3>CoachReport</h3><p>Versioned by <code>(activity_id, prompt_id, schema_version)</code>.</p></div>
-      <div class="node code" data-key="writeback"><span class="tag code">write-back</span><h3>belief_store (M8)</h3><p>Deterministic belief deltas → CoachingContext. LLM-free.</p></div>
-      <div class="node llm" data-key="consolidation"><span class="tag llm">LLM call</span><h3>Consolidation job</h3><p>Haiku re-writes the relationship narrative (voice only).</p></div>
+      <div class="node code off" data-key="writeback"><span class="tag code">write-back</span><span class="offpill">disabled</span><h3>belief_store (M8)</h3><p>Belief deltas → CoachingContext — <strong>off by default</strong> (PR #403).</p></div>
+      <div class="node llm off" data-key="consolidation"><span class="tag llm">LLM call</span><span class="offpill">disabled</span><h3>Consolidation job</h3><p>Haiku re-writes the narrative — <strong>off by default</strong> (PR #403).</p></div>
     </div>
   </div>
 
@@ -395,10 +414,21 @@ const DETAILS = {
     points:['fitness (42-day EWMA of effort_score), fatigue (7-day EWMA), form, ramp_rate, condition/trend.','Computed read-time over a 182-day window as of the run\'s start_date.','Reads warming_up while history is shorter than the chronic window.','Emitted only under a training-load-aware prompt; never overrides DerivedMetric or the safety floor (rule 27).'],
     files:['services/readiness.py'] },
 
-  longitudinal: { kind:'code', tag:'facts', title:'longitudinal · adherence · calibration',
-    what:'The M4–M10 learning loop that makes the coach "get better over time".',
-    points:['longitudinal (M4): digest of the last 1–2 non-fallback reports — advance the narrative, don\'t restate.','adherence (M7): labels each prior next_step acted_on / ignored / contradicted / disputed.','calibration (M9): this run\'s HR drift vs the runner\'s own typical; non-diagnostic referral nudge on red flags.'],
-    files:['services/coach/adherence.py','calibration.py','retrieval.py'] },
+  volume: { kind:'code', tag:'facts', title:'training_volume (#400)',
+    what:'The frequency-/volume-vs-norm read — "is this week up, down, or normal for me" — so the coach reads a deliberate easy week as intentional rather than alarming. This is the same data the Trends page shows.',
+    points:['For sessions, distance, moving time, and effort_score: the current window value vs the runner\'s per-week norm (a 12-week norm + a 4-week recent context), each with an up / in_line / down label (±15% deadband).','A holistic all-activities figure plus a runs-only figure, so a walk is never counted as a run.','Two framings ride the section: rolling 7 days, and the current calendar week to date (norm pro-rated to days elapsed). has_baseline is false when history is too thin.','A down week is frequently INTENTIONAL — the v9 VOLUME addendum tells the coach not to nag it by default. A citable fact, never an intensity verdict, never overrides DerivedMetric or the safety floor.','One pure core (build_volume_report) feeds BOTH this pack section and GET /api/trends/volume?range=, so the coach and the Trends UI never drift.'],
+    files:['services/coach/volume.py','app/api/trends.py'] },
+
+  calibration: { kind:'code', tag:'facts', title:'baseline trend · calibration',
+    what:'The two prior-report-INDEPENDENT halves of the longitudinal section, both still ON. They read the runner\'s own numbers, not past reports, so they carry no stale theme to replay.',
+    points:['baseline_trend (M2): the runner\'s typical EF / HR-drift for this run\'s effort|terrain|temp-band bucket (just numbers; abstains under 4 samples).','calibration (M9): this run\'s HR drift vs the runner\'s own typical for the bucket — calibrated once 4 comparable runs exist, else the ~5% population heuristic.','M9 also fires the non-diagnostic referral nudge on red-flag patterns (illness/extreme-fatigue flag, sustained pain) — the safety reason it is kept ON.','Neither overrides this run\'s re-derived DerivedMetric or the safety floor.'],
+    files:['services/coach/calibration.py','services/analysis/baseline.py'] },
+
+  adherence: { kind:'code', tag:'facts', title:'prior reports · adherence',
+    disabled:'Both gated OFF by default (PR #418), the same fix as beliefs/narrative. <code>COACH_PRIOR_REPORTS_ENABLED</code> gates the M4 prior-report digest; <code>COACH_ADHERENCE_ENABLED</code> gates the M7 adherence section. A v9 rerun on real data showed these were still replaying the "you ignored the rest-day advice" theme forward run after run even with beliefs/narrative already off (each report read the previous report\'s next_steps). Off => both emit their empty form and the coach reads each run on its own merits. The numeric baseline trend and M9 calibration are unaffected. Re-enable is a pure config flip (#401 / #402).',
+    what:'The two prior-report-DRIVEN halves of the longitudinal feedback loop.',
+    points:['longitudinal.prior_reports (M4): a digest of the last 1–2 non-fallback reports (headline + lead + next_steps) — meant to advance the narrative rather than restate it.','adherence (M7): labels each prior next_step acted_on / ignored / contradicted / disputed against the runner\'s subsequent comparable run.','Both read PRIOR REPORTS, which is exactly why they echoed a stale theme — hence the kill switches.'],
+    files:['services/coach/adherence.py','retrieval.py','services/coach/context.py'] },
 
   perceived: { kind:'code', tag:'facts', title:'perceived_effort · salience',
     what:'Subjective-vs-objective reconciliation and the depth decision.',
@@ -406,11 +436,13 @@ const DETAILS = {
     files:['services/coach/perceived_effort.py','salience.py','services/analysis/novelty.py'] },
 
   beliefs: { kind:'store', tag:'memory', title:'CoachingContext (beliefs, M8)',
+    disabled:'<code>COACH_BELIEFS_ENABLED</code> defaults off (PR #403). The whole M8 machinery is gated — the believed_facts section, the M10 preference_profile that reads it, and the post-report write-back. The section emits its empty new-runner form and no belief is read or written. A held belief had misclassified "take a rest day" advice as easy-discipline and reinforced a poisoned "ignores easy guidance" belief; #401 recalibrates before re-enabling. Stored rows are kept intact so the re-enable resumes from history.',
     what:'The deterministic, auditable half of durable memory — facts the relationship has learned.',
     points:['One durable user-scoped belief per (user_id, kind, key): confirmed HR confound, adherence tendency.','TTL-tiered (hr_confound 120d, adherence_pattern 90d) from last reinforcement; decays.','Retrieved into later packs only when active + observation_count ≥ 2.','Never LLM-generated — pinned by test_writeback_is_llm_free.py.'],
     files:['services/coach/belief_store.py','app/models/coaching_context.py'] },
 
   narrative: { kind:'store', tag:'memory', title:'CoachNarrative (A2c)',
+    disabled:'<code>COACH_NARRATIVE_ENABLED</code> defaults off (PR #403). The narrative pack section is empty and the background Consolidation job is never enqueued. It had re-grounded into an accusatory rest-day frame and replayed the coach\'s own fixation back into every report (an echo chamber); #402 recalibrates before re-enabling. The stored row is kept intact.',
     what:'The LLM-written, voice-only half of durable memory.',
     points:['One bounded relationship story per user, re-written by the Consolidation job from deterministic facts + recent digests.','Authoritative for voice, never for fact: validator rule 6 rejects it as evidence; prompt rule 24 forbids deriving a number.','Never overrides the run\'s re-derived DerivedMetric.'],
     files:['services/coach/narrative_store.py','app/models/coach_narrative.py'] },
@@ -420,9 +452,9 @@ const DETAILS = {
     points:['Voice (P1.1): preset + four 1–5 dials (warmth/humor/directness/energy) + free-text. Only writer: PUT /api/coach/voice.','Stance (P1.3): a coaching school + two emphasis axes (Data↔Sentiment, Process↔Outcome). Only writer: PUT /api/coach/stance.','Corpus (P1.2/P4): house schools + the runner\'s uploaded materials (distilled, untrusted, never echoed).','Enforced by cross-voice/stance invariance tests + eval preserved-safety-surface assertions.'],
     files:['services/coach/voice.py','stance.py','corpus.py'] },
 
-  llmcall: { kind:'llm', tag:'LLM call', title:'Anthropic — coach_message_v8',
+  llmcall: { kind:'llm', tag:'LLM call', title:'Anthropic — coach_message_v9',
     what:'The one model generation that writes the report. Prose-first, schema 2.0.',
-    points:['Three movements: reason privately → write the human prose message → call record_coach_tail once for the structured tail (headline, next_steps, risks, questions).','v8 retunes the base toward a warm coach with a point of view + a HOW YOU SOUND section (less "samey"); carries v7\'s six capabilities (two-stage/voice/corpus/stance/training-load/user-materials).','Model + prompt are config: COACH_MODEL_ID, COACH_PROMPT_ID. Cutover/rollback is a pure flip.','Prod runs coach_message_v8 (flipped 2026-06-18).'],
+    points:['Three movements: reason privately → write the human prose message → call record_coach_tail once for the structured tail (headline, next_steps, risks, questions).','v9 = v8 + a VOLUME addendum that consumes the new training_volume section (a down week is usually intentional). It carries v8\'s warm-coach base + HOW YOU SOUND retune and all of v7\'s six capabilities (two-stage/voice/corpus/stance/training-load/user-materials).','Model + prompt are config: COACH_MODEL_ID, COACH_PROMPT_ID. Cutover/rollback is a pure flip.','Prod runs coach_message_v9 (flipped 2026-06-20).'],
     files:['services/coach/llm.py','prompts.py','service.py'] },
 
   contract: { kind:'store', tag:'contract', title:'output_contract.py (A3)',
@@ -451,11 +483,13 @@ const DETAILS = {
     files:['app/models/coach_report.py','services/coach/digest.py'] },
 
   writeback: { kind:'code', tag:'write-back', title:'belief_store.write_back (M8)',
+    disabled:'Gated by <code>COACH_BELIEFS_ENABLED</code> (off by default, PR #403) — no belief deltas are written after a report. Stored rows are untouched, so a recalibrated re-enable (#401) resumes from history.',
     what:'The deterministic learning write after each non-fallback report.',
     points:['Extracts belief deltas only from structured discount_signals + M7 adherence outcomes — never from any LLM text.','Creates or reinforces CoachingContext rows; an opposing observation resolves direction in place.','Provably LLM-free (test_writeback_is_llm_free.py), so the deterministic layer stays auditable.'],
     files:['services/coach/belief_store.py','beliefs.py'] },
 
   consolidation: { kind:'llm', tag:'LLM call', title:'Consolidation job (A2c)',
+    disabled:'Gated by <code>COACH_NARRATIVE_ENABLED</code> (off by default, PR #403) — the job is never enqueued, so no narrative is re-written. #402 recalibrates before re-enabling.',
     what:'A background re-grounding of the voice-only relationship narrative.',
     points:['Enqueued after each non-fallback report (idempotent single-row rewrite, no sentinel).','Hardcoded claude-haiku-4-5 — a cheap summarise-from-structured-facts task, no config knob by design.','Re-derives from deterministic facts + recent digests (never the prior narrative, so re-grounding is structural). Writes only the narrative row.'],
     files:['app/jobs/consolidation.py','services/coach/consolidation.py'] },
@@ -542,22 +576,33 @@ this run's DerivedMetric, flattened byte-stably into the pack`,
   load:
 `<k>training_load</k>: <k>fitness</k> <v>125.2</v> · <k>fatigue</k> <v>118.6</v> · <k>form</k> <v>6.6</v>
 <k>condition</k>: <v>fresh</v> · <k>trend</k>: <v>steady</v> · <k>ramp_rate</k>: <v>0.4</v> · <k>samples</k>: <v>324</v>`,
-  longitudinal:
-`<k>recent_training_summary.last_7d</k>: <v>17 activities</v>, <v>45.7 km</v>
-<k>.last_28d</k>: <v>63 activities</v>, <v>173 km</v>
-<k>adherence.outcomes</k>: <v>[]</v>  (no prior next_steps to judge yet)`,
+  volume:
+`7-day rolling — <k>vs typical</k> = 12-wk norm · <k>vs prev</k> = prior 7 days
+  <k>Distance</k>: <v>43.83 km</v>   typ <v>+15%</v> (38.21 km)   prev <v>−18%</v> (53.65 km)
+  <k>Time</k>: <v>7h 21m</v>   typ <v>−6%</v> (7h 47m)   prev <v>−29%</v> (10h 21m)
+  <k>Activities</k>: <v>14</v> (4 runs)   typ <v>−7%</v> (15)   prev <v>−26%</v> (19)
+  <k>Load</k>: <v>706</v>   typ <v>−25%</v> (936)   prev <v>−28%</v> (977)`,
+  calibration:
+`<k>calibration.hr_drift</k>: observed <v>−9.6%</v> vs your typical <v>−3.9%</v> (8 runs) → <v>better</v>
+<k>baseline_trend</k>: <v>present</v> · <k>referral</k>: <v>null</v> (no red flag)
+(M9 stays ON — it carries the non-diagnostic safety referral)`,
+  adherence:
+`<v>DISABLED</v> — prior-report digest (M4) + adherence (M7) off by default (PR #418).
+<k>longitudinal.prior_reports</k>: <v>[]</v>   <k>adherence.outcomes</k>: <v>[]</v>
+The coach no longer replays prior reports' next_steps or nags about adherence.`,
   perceived:
 `<k>perceived_effort.rpe</k>: <v>3</v>   <k>effort_axis</k>: <v>moderate</v>
 <k>divergence</k>: <v>-1</v>   <k>hr_confounded</k>: <v>true</v>
 <k>recommended_weighting</k>: <v>rpe_over_hr</v>  (trust RPE over a heat-inflated HR)`,
   beliefs:
-`<k>believed_facts.facts[0]</k>:
-"mixed response to keeping easy runs easy (acted on 5 of 8)"
-<k>confidence</k> <v>high</v> · <k>observed_count</k> <v>23</v> · <k>last_seen</k> <v>0d ago</v>`,
+`<v>DISABLED</v> — COACH_BELIEFS_ENABLED defaults off (PR #403).
+Emits the empty new-runner form; no belief is read or written.
+(The stored, poisoned "easy_discipline" belief — observed 23, the
+cause of the rest-day fixation — is left intact for a recalibrated re-enable.)`,
   narrative:
-`"…genuine capacity for easy discipline — five of the last
-eight times the coach asked for it, the runner delivered —
-but struggles with the harder ask: doing nothing at all."`,
+`<v>DISABLED</v> — COACH_NARRATIVE_ENABLED defaults off (PR #403).
+The section is empty; the Consolidation job never enqueues.
+(It had re-grounded into an accusatory rest-day frame — #402 recalibrates.)`,
   voice:
 `<k>voice_preset</k>: <v>"roast"</v>  (warmth <v>1</v> · humor <v>5</v> · directness <v>3</v> · energy <v>3</v>)
 <k>stance_school</k>: <v>aerobic-base</v>
@@ -589,13 +634,12 @@ no dose, no diagnosis verb.  <k>referral</k>: <v>null</v> (no red flag).`,
 <k>report</k>: prose message + structured tail + digest stored
 (display-safe read serves this even after a prompt flip)`,
   writeback:
-`reinforced belief <k>adherence_pattern</k> "easy runs easy":
-<k>observed_count</k> → <v>23</v>  (acted 5 of 8) · derived LLM-free
-from discount_signals + adherence outcomes`,
+`<v>DISABLED</v> — COACH_BELIEFS_ENABLED off (PR #403).
+No belief deltas are written after a report.
+Stored rows untouched, so a recalibrated re-enable resumes from history.`,
   consolidation:
-`<k>CoachNarrative</k> re-written by <v>claude-haiku-4-5</v>
-from deterministic facts + recent digests (voice only);
-this run reinforced the "struggles to rest" thread.`,
+`<v>DISABLED</v> — COACH_NARRATIVE_ENABLED off (PR #403).
+The job is never enqueued; no narrative is re-written.`,
   notify:
 `<k>channel</k>: <v>Telegram</v> (Railway blocks SMTP)
 voice <v>"roast"</v> · opener keyboard: <v>RPE / pain / done</v> taps
@@ -668,7 +712,11 @@ function openDrawer(key) {
   dTag.className = 'tag ' + d.kind;
   dTitle.textContent = d.title;
   dAccent.style.background = c;
-  let html = '<h4>What it is</h4><p>' + d.what + '</p>';
+  let html = '';
+  if (d.disabled) {
+    html += '<div class="offbanner"><strong>Currently OFF.</strong> ' + d.disabled + '</div>';
+  }
+  html += '<h4>What it is</h4><p>' + d.what + '</p>';
   if (d.points && d.points.length) {
     html += '<h4>Details</h4><ul>' + d.points.map(p => '<li>' + p + '</li>').join('') + '</ul>';
   }

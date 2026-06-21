@@ -17,13 +17,29 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import psycopg
+
+# Compute the training_volume section live (the same pure builder the Trends page and
+# the coach use), so the diagram shows real current vs-norm data even when the newest
+# cached report predates the volume-aware prompt (coach_message_v9).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
+try:
+    from app.services.coach.volume import build_volume_report
+except Exception:  # pragma: no cover - diagram degrades to "not available" without it
+    build_volume_report = None
 
 DB_URL = os.environ.get("DB_URL", "postgresql://coach:coach@localhost:5433/coach")
 OUT = Path(__file__).parent / "flow-data.js"
 MAX_ACTIVITIES = int(os.environ.get("MAX_ACTIVITIES", "60"))
+
+# The M8 belief loop + A2c narrative ship disabled-by-default (PR #403): a poisoned
+# belief replayed a rest-day fixation into every report. Mirror that off-state in the
+# traced snippets so the diagram is honest. Flip to True when #401/#402 re-enable them.
+DURABLE_MEMORY_ENABLED = False
 
 
 def _guard_local(url: str) -> None:
@@ -64,6 +80,69 @@ def whole(x):
 def trunc(s, n):
     s = " ".join((s or "").split())
     return s if len(s) <= n else s[:n].rstrip() + "…"
+
+
+# --- training_volume snippet (mirrors the Trends-page quick-view cards) -----------
+
+def _fmt_km(m):
+    return f"{(m or 0) / 1000:.2f} km"
+
+
+def _fmt_dur(s):
+    s = int(round(s or 0))
+    h, m = s // 3600, (s % 3600) // 60
+    return f"{h}h {m:02d}m" if h else f"{m}m"
+
+
+def _fmt_int(x):
+    return str(int(round(x or 0)))
+
+
+_VOL_METRICS = [
+    ("Distance", "distance_m", _fmt_km),
+    ("Time", "moving_time_s", _fmt_dur),
+    ("Activities", "sessions", _fmt_int),
+    ("Load", "effort_score", _fmt_int),
+]
+
+
+def _metric_val(f, metric):
+    return 1.0 if metric == "sessions" else float(getattr(f, metric) or 0)
+
+
+def _win_sum(facts, lo, hi, metric):
+    return sum(_metric_val(f, metric) for f in facts if lo <= f.local_date <= hi)
+
+
+def _signed_pct(pct):
+    return f"{'+' if pct > 0 else ''}{pct}%"
+
+
+def _volume_snippet(facts, as_of):
+    """The 7-day rolling vs-norm read, in the Trends quick-view card shape: each
+    metric's current total, vs typical (the 12-week norm), and vs prev (the prior
+    7-day period). Computed live so it is real and prompt-independent."""
+    if not (build_volume_report and facts and as_of):
+        return f"{k('training_volume')}: not available (volume builder not importable)"
+    rep = build_volume_report(facts, as_of, "7D")
+    norm_by = {m.metric: m for m in rep.rolling.metrics}
+    cur_lo, cur_hi = as_of - timedelta(days=6), as_of
+    prev_lo, prev_hi = as_of - timedelta(days=13), as_of - timedelta(days=7)
+    lines = [f"7-day rolling — {k('vs typical')} = 12-wk norm · {k('vs prev')} = prior 7 days"]
+    for label, metric, fmt in _VOL_METRICS:
+        mm = norm_by.get(metric)
+        cur = mm.current_all if mm else _win_sum(facts, cur_lo, cur_hi, metric)
+        head = f"{k(label)}: {v(fmt(cur))}"
+        if metric == "sessions" and mm:
+            head += f" ({_fmt_int(mm.current_runs)} runs)"
+        parts = [head]
+        if mm and mm.direction != "no_norm" and mm.norm is not None:
+            parts.append(f"typ {v(_signed_pct(round(mm.pct_vs_norm or 0)))} ({fmt(mm.norm)})")
+        prev = _win_sum(facts, prev_lo, prev_hi, metric)
+        if prev > 0:
+            parts.append(f"prev {v(_signed_pct(round((cur - prev) / prev * 100)))} ({fmt(prev)})")
+        lines.append("  " + "   ".join(parts))
+    return "\n".join(lines)
 
 
 # --- per-block snippet builders ----------------------------------------------
@@ -213,11 +292,38 @@ def build_blocks(row: dict) -> dict:
         )
     else:
         b["load"] = f"{k('training_load')}: not emitted (prompt not training-load-aware)"
-    b["longitudinal"] = (
-        f"{k('recent_training_summary.last_7d')}: {v(str(l7.get('activity_count', '?')) + ' activities')}, {v(num(l7.get('total_distance_m', 0) / 1000) + ' km')}\n"
-        f"{k('.last_28d')}: {v(str(l28.get('activity_count', '?')) + ' activities')}, {v(num(l28.get('total_distance_m', 0) / 1000) + ' km')}\n"
-        f"{k('adherence.outcomes')}: {v(json.dumps(adh.get('outcomes', [])) if not adh.get('outcomes') else str(len(adh.get('outcomes'))) + ' judged')}"
+    # Computed live (real current data, prompt-independent), in the Trends-card shape.
+    b["volume"] = _volume_snippet(row.get("all_facts"), row.get("as_of_date"))
+    # baseline trend + M9 calibration (both prior-report-INDEPENDENT, still ON).
+    ref = (cp.get("calibration") or {}).get("referral")
+    bt = (cp.get("longitudinal") or {}).get("baseline_trend")
+    if cal.get("calibrated"):
+        cline = (
+            f"{k('calibration.hr_drift')}: observed {v(num(cal.get('observed_drift_pct')) + '%')} "
+            f"vs your typical {v(num(cal.get('expected_drift_pct')) + '%')} "
+            f"({cal.get('sample_count')} runs) → {v(cal.get('comparison'))}"
+        )
+    else:
+        cline = f"{k('calibration.hr_drift.calibrated')}: {v('false')} (<4 comparable runs → ~5% heuristic)"
+    b["calibration"] = (
+        cline + "\n"
+        + f"{k('baseline_trend')}: {v('present' if bt else 'abstaining')} · "
+        f"{k('referral')}: {v('present' if ref else 'null')}\n"
+        + "(M9 stays ON — it carries the non-diagnostic safety referral)"
     )
+    # prior-report digest (M4) + adherence (M7): off by default (PR #418).
+    if not DURABLE_MEMORY_ENABLED:
+        b["adherence"] = (
+            f"{v('DISABLED')} — prior-report digest (M4) + adherence (M7) off by default (PR #418).\n"
+            f"{k('longitudinal.prior_reports')}: {v('[]')}   {k('adherence.outcomes')}: {v('[]')}\n"
+            f"The coach no longer replays prior reports' next_steps or nags about adherence."
+        )
+    else:
+        b["adherence"] = (
+            f"{k('recent_training_summary.last_7d')}: {v(str(l7.get('activity_count', '?')) + ' activities')}, {v(num(l7.get('total_distance_m', 0) / 1000) + ' km')}\n"
+            f"{k('.last_28d')}: {v(str(l28.get('activity_count', '?')) + ' activities')}, {v(num(l28.get('total_distance_m', 0) / 1000) + ' km')}\n"
+            f"{k('adherence.outcomes')}: {v(json.dumps(adh.get('outcomes', [])) if not adh.get('outcomes') else str(len(adh.get('outcomes'))) + ' judged')}"
+        )
     if pe:
         b["perceived"] = (
             f"{k('perceived_effort.rpe')}: {v(pe.get('rpe'))}   {k('effort_axis')}: {v(pe.get('effort_axis'))}\n"
@@ -226,7 +332,13 @@ def build_blocks(row: dict) -> dict:
         )
     else:
         b["perceived"] = f"{k('perceived_effort')}: nulls (no check-in for this run)"
-    if bf:
+    if not DURABLE_MEMORY_ENABLED:
+        b["beliefs"] = (
+            f"{v('DISABLED')} — COACH_BELIEFS_ENABLED defaults off (PR #403).\n"
+            f"Emits the empty new-runner form; no belief is read or written.\n"
+            f"Stored rows kept intact for a recalibrated re-enable (#401)."
+        )
+    elif bf:
         f0 = bf[0]
         b["beliefs"] = (
             f"{k('believed_facts.facts[0]')}:\n"
@@ -235,7 +347,13 @@ def build_blocks(row: dict) -> dict:
         )
     else:
         b["beliefs"] = f"{k('believed_facts.facts')}: {v('[]')}  (no quality-cleared beliefs yet)"
-    b["narrative"] = (f"\"{trunc(narr, 220)}\"" if narr else f"{k('narrative')}: none yet (first exchanges)")
+    if not DURABLE_MEMORY_ENABLED:
+        b["narrative"] = (
+            f"{v('DISABLED')} — COACH_NARRATIVE_ENABLED defaults off (PR #403).\n"
+            f"The section is empty; the Consolidation job never enqueues. (#402 recalibrates.)"
+        )
+    else:
+        b["narrative"] = (f"\"{trunc(narr, 220)}\"" if narr else f"{k('narrative')}: none yet (first exchanges)")
     b["voice"] = (
         f"{k('voice_preset')}: {v(repr(rel.get('voice_preset')))}  (warmth {v(rel.get('voice_warmth'))} · humor {v(rel.get('voice_humor'))} · directness {v(rel.get('voice_directness'))} · energy {v(rel.get('voice_energy'))})\n"
         f"{k('stance_school')}: {v(rel.get('stance_school'))}\n"
@@ -270,7 +388,13 @@ def build_blocks(row: dict) -> dict:
         f"{k('report')}: prose message + structured tail + digest stored\n"
         f"(display-safe read serves this even after a prompt flip)"
     )
-    if bf:
+    if not DURABLE_MEMORY_ENABLED:
+        b["writeback"] = (
+            f"{v('DISABLED')} — COACH_BELIEFS_ENABLED off (PR #403).\n"
+            f"No belief deltas are written after a report.\n"
+            f"Stored rows untouched, so a recalibrated re-enable resumes from history."
+        )
+    elif bf:
         f0 = bf[0]
         b["writeback"] = (
             f"reinforced belief {k(f0.get('kind', 'adherence_pattern'))}:\n"
@@ -279,10 +403,16 @@ def build_blocks(row: dict) -> dict:
         )
     else:
         b["writeback"] = f"belief deltas derived from discount_signals + adherence outcomes (LLM-free)"
-    b["consolidation"] = (
-        f"{k('CoachNarrative')} re-written by {v('claude-haiku-4-5')}\n"
-        f"from deterministic facts + recent digests (voice only)"
-    )
+    if not DURABLE_MEMORY_ENABLED:
+        b["consolidation"] = (
+            f"{v('DISABLED')} — COACH_NARRATIVE_ENABLED off (PR #403).\n"
+            f"The job is never enqueued; no narrative is re-written."
+        )
+    else:
+        b["consolidation"] = (
+            f"{k('CoachNarrative')} re-written by {v('claude-haiku-4-5')}\n"
+            f"from deterministic facts + recent digests (voice only)"
+        )
     b["notify"] = (
         f"{k('channel')}: {v('Telegram')} (Railway blocks SMTP)\n"
         f"voice {v(repr(rel.get('voice_preset')))} · opener keyboard: {v('RPE / pain / done')} taps\n"
@@ -309,11 +439,33 @@ def load(conn) -> tuple[list, dict]:
     cur.execute("SELECT * FROM coaching_relationship LIMIT 1")
     relationship = cur.fetchone() or {}
 
+    # All activity facts (for the live training_volume computation): the norm needs
+    # the full ~91-day history, not just activities that have a coach report.
+    cur.execute(
+        """
+        SELECT a.type, a.distance_m, a.moving_time_s, a.start_date, a.start_date_local,
+               dm.effort_score
+        FROM activities a
+        LEFT JOIN derived_metrics dm ON dm.activity_id = a.id
+        WHERE a.is_deleted = false
+        """
+    )
+    all_facts = [
+        SimpleNamespace(
+            local_date=(f["start_date_local"] or f["start_date"]).date(),
+            activity_type=f["type"],
+            distance_m=f["distance_m"] or 0,
+            moving_time_s=f["moving_time_s"] or 0,
+            effort_score=f["effort_score"] or 0,
+        )
+        for f in cur.fetchall()
+    ]
+
     # latest non-fallback report w/ pack per activity
     cur.execute(
         """
         SELECT DISTINCT ON (a.id)
-          a.id, a.strava_activity_id, a.name, a.type, a.start_date,
+          a.id, a.strava_activity_id, a.name, a.type, a.start_date, a.start_date_local,
           a.distance_m, a.moving_time_s, a.elapsed_time_s, a.elev_gain_m,
           a.avg_hr, a.max_hr, a.block_id, a.raw_summary,
           cr.report, cr.context_pack, cr.prompt_id, cr.schema_version,
@@ -368,6 +520,8 @@ def load(conn) -> tuple[list, dict]:
             "prompt_id": r["prompt_id"],
             "schema_version": r["schema_version"],
             "is_fallback": r["is_fallback"],
+            "all_facts": all_facts,
+            "as_of_date": (r["start_date_local"] or r["start_date"]).date(),
         })
     return activities, real
 
