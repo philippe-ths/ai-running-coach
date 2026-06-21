@@ -253,7 +253,8 @@
       <div class="node code" data-key="focus"><span class="tag code">facts</span><h3>focus + B-baseline</h3><p>This run's metrics + lean always-present baseline.</p></div>
       <div class="node code" data-key="load"><span class="tag code">facts</span><h3>training_load</h3><p>EWMA fitness / fatigue / form — a citable fact.</p></div>
       <div class="node code" data-key="volume"><span class="tag code">facts</span><h3>training_volume</h3><p>This week's distance / time / sessions / load vs the runner's own norm.</p></div>
-      <div class="node code" data-key="longitudinal"><span class="tag code">facts</span><h3>longitudinal · adherence · calibration</h3><p>Prior digest, next-step outcomes, drift + referral.</p></div>
+      <div class="node code" data-key="calibration"><span class="tag code">facts</span><h3>baseline trend · calibration</h3><p>Your typical drift for these conditions; non-diagnostic referral on red flags.</p></div>
+      <div class="node code off" data-key="adherence"><span class="tag code">facts</span><span class="offpill">disabled</span><h3>prior reports · adherence</h3><p>Last reports' digest + did-you-act loop — <strong>off by default</strong> (PR #418).</p></div>
       <div class="node code" data-key="perceived"><span class="tag code">facts</span><h3>perceived_effort · salience</h3><p>RPE-vs-HR, pain trend; novelty + safety override.</p></div>
     </div>
     <div class="row" style="margin-top:14px">
@@ -262,7 +263,7 @@
       <div class="node runner" data-key="voice"><span class="tag runner">runner-declared</span><h3>Voice · Stance · Corpus</h3><p>Tone, emphasis + school, uploaded materials.</p></div>
     </div>
     <p class="note">Every section is <em>Optional-and-drop</em>: a pack stays byte-stable under prompts that don't consume it, so prompt cutover/rollback is a pure config flip.<br>
-    <span style="color:#fca5a5">The durable-memory loop is currently OFF</span> — the <code>beliefs</code> and <code>narrative</code> sections (and their write-back jobs) are disabled by default after a poisoned belief replayed a rest-day fixation into every report (PR #403). They emit their empty form; stored rows are kept for a recalibrated re-enable (#401 / #402).</p>
+    <span style="color:#fca5a5">The prior-report-driven loops are currently OFF</span> — <code>beliefs</code> + <code>narrative</code> (PR #403) plus the M4 prior-report digest and M7 <code>adherence</code> (PR #418) — after they replayed a rest-day fixation into every report. They emit their empty form. The numeric <code>baseline trend</code> and M9 <code>calibration</code> (which carries the safety referral) stay ON. Re-enable is a config flip (#401 / #402).</p>
   </div>
 
   <div class="arrow">↓<span>build_system_prompt(prompt_id, mode, voice) + context pack</span></div>
@@ -418,10 +419,16 @@ const DETAILS = {
     points:['For sessions, distance, moving time, and effort_score: the current window value vs the runner\'s per-week norm (a 12-week norm + a 4-week recent context), each with an up / in_line / down label (±15% deadband).','A holistic all-activities figure plus a runs-only figure, so a walk is never counted as a run.','Two framings ride the section: rolling 7 days, and the current calendar week to date (norm pro-rated to days elapsed). has_baseline is false when history is too thin.','A down week is frequently INTENTIONAL — the v9 VOLUME addendum tells the coach not to nag it by default. A citable fact, never an intensity verdict, never overrides DerivedMetric or the safety floor.','One pure core (build_volume_report) feeds BOTH this pack section and GET /api/trends/volume?range=, so the coach and the Trends UI never drift.'],
     files:['services/coach/volume.py','app/api/trends.py'] },
 
-  longitudinal: { kind:'code', tag:'facts', title:'longitudinal · adherence · calibration',
-    what:'The M4–M10 learning loop that makes the coach "get better over time".',
-    points:['longitudinal (M4): digest of the last 1–2 non-fallback reports — advance the narrative, don\'t restate.','adherence (M7): labels each prior next_step acted_on / ignored / contradicted / disputed.','calibration (M9): this run\'s HR drift vs the runner\'s own typical; non-diagnostic referral nudge on red flags.'],
-    files:['services/coach/adherence.py','calibration.py','retrieval.py'] },
+  calibration: { kind:'code', tag:'facts', title:'baseline trend · calibration',
+    what:'The two prior-report-INDEPENDENT halves of the longitudinal section, both still ON. They read the runner\'s own numbers, not past reports, so they carry no stale theme to replay.',
+    points:['baseline_trend (M2): the runner\'s typical EF / HR-drift for this run\'s effort|terrain|temp-band bucket (just numbers; abstains under 4 samples).','calibration (M9): this run\'s HR drift vs the runner\'s own typical for the bucket — calibrated once 4 comparable runs exist, else the ~5% population heuristic.','M9 also fires the non-diagnostic referral nudge on red-flag patterns (illness/extreme-fatigue flag, sustained pain) — the safety reason it is kept ON.','Neither overrides this run\'s re-derived DerivedMetric or the safety floor.'],
+    files:['services/coach/calibration.py','services/analysis/baseline.py'] },
+
+  adherence: { kind:'code', tag:'facts', title:'prior reports · adherence',
+    disabled:'Both gated OFF by default (PR #418), the same fix as beliefs/narrative. <code>COACH_PRIOR_REPORTS_ENABLED</code> gates the M4 prior-report digest; <code>COACH_ADHERENCE_ENABLED</code> gates the M7 adherence section. A v9 rerun on real data showed these were still replaying the "you ignored the rest-day advice" theme forward run after run even with beliefs/narrative already off (each report read the previous report\'s next_steps). Off => both emit their empty form and the coach reads each run on its own merits. The numeric baseline trend and M9 calibration are unaffected. Re-enable is a pure config flip (#401 / #402).',
+    what:'The two prior-report-DRIVEN halves of the longitudinal feedback loop.',
+    points:['longitudinal.prior_reports (M4): a digest of the last 1–2 non-fallback reports (headline + lead + next_steps) — meant to advance the narrative rather than restate it.','adherence (M7): labels each prior next_step acted_on / ignored / contradicted / disputed against the runner\'s subsequent comparable run.','Both read PRIOR REPORTS, which is exactly why they echoed a stale theme — hence the kill switches.'],
+    files:['services/coach/adherence.py','retrieval.py','services/coach/context.py'] },
 
   perceived: { kind:'code', tag:'facts', title:'perceived_effort · salience',
     what:'Subjective-vs-objective reconciliation and the depth decision.',
@@ -575,10 +582,14 @@ this run's DerivedMetric, flattened byte-stably into the pack`,
   <k>Time</k>: <v>7h 21m</v>   typ <v>−6%</v> (7h 47m)   prev <v>−29%</v> (10h 21m)
   <k>Activities</k>: <v>14</v> (4 runs)   typ <v>−7%</v> (15)   prev <v>−26%</v> (19)
   <k>Load</k>: <v>706</v>   typ <v>−25%</v> (936)   prev <v>−28%</v> (977)`,
-  longitudinal:
-`<k>recent_training_summary.last_7d</k>: <v>17 activities</v>, <v>45.7 km</v>
-<k>.last_28d</k>: <v>63 activities</v>, <v>173 km</v>
-<k>adherence.outcomes</k>: <v>[]</v>  (no prior next_steps to judge yet)`,
+  calibration:
+`<k>calibration.hr_drift</k>: observed <v>−9.6%</v> vs your typical <v>−3.9%</v> (8 runs) → <v>better</v>
+<k>baseline_trend</k>: <v>present</v> · <k>referral</k>: <v>null</v> (no red flag)
+(M9 stays ON — it carries the non-diagnostic safety referral)`,
+  adherence:
+`<v>DISABLED</v> — prior-report digest (M4) + adherence (M7) off by default (PR #418).
+<k>longitudinal.prior_reports</k>: <v>[]</v>   <k>adherence.outcomes</k>: <v>[]</v>
+The coach no longer replays prior reports' next_steps or nags about adherence.`,
   perceived:
 `<k>perceived_effort.rpe</k>: <v>3</v>   <k>effort_axis</k>: <v>moderate</v>
 <k>divergence</k>: <v>-1</v>   <k>hr_confounded</k>: <v>true</v>
