@@ -294,11 +294,36 @@ def build_blocks(row: dict) -> dict:
         b["load"] = f"{k('training_load')}: not emitted (prompt not training-load-aware)"
     # Computed live (real current data, prompt-independent), in the Trends-card shape.
     b["volume"] = _volume_snippet(row.get("all_facts"), row.get("as_of_date"))
-    b["longitudinal"] = (
-        f"{k('recent_training_summary.last_7d')}: {v(str(l7.get('activity_count', '?')) + ' activities')}, {v(num(l7.get('total_distance_m', 0) / 1000) + ' km')}\n"
-        f"{k('.last_28d')}: {v(str(l28.get('activity_count', '?')) + ' activities')}, {v(num(l28.get('total_distance_m', 0) / 1000) + ' km')}\n"
-        f"{k('adherence.outcomes')}: {v(json.dumps(adh.get('outcomes', [])) if not adh.get('outcomes') else str(len(adh.get('outcomes'))) + ' judged')}"
+    # baseline trend + M9 calibration (both prior-report-INDEPENDENT, still ON).
+    ref = (cp.get("calibration") or {}).get("referral")
+    bt = (cp.get("longitudinal") or {}).get("baseline_trend")
+    if cal.get("calibrated"):
+        cline = (
+            f"{k('calibration.hr_drift')}: observed {v(num(cal.get('observed_drift_pct')) + '%')} "
+            f"vs your typical {v(num(cal.get('expected_drift_pct')) + '%')} "
+            f"({cal.get('sample_count')} runs) → {v(cal.get('comparison'))}"
+        )
+    else:
+        cline = f"{k('calibration.hr_drift.calibrated')}: {v('false')} (<4 comparable runs → ~5% heuristic)"
+    b["calibration"] = (
+        cline + "\n"
+        + f"{k('baseline_trend')}: {v('present' if bt else 'abstaining')} · "
+        f"{k('referral')}: {v('present' if ref else 'null')}\n"
+        + "(M9 stays ON — it carries the non-diagnostic safety referral)"
     )
+    # prior-report digest (M4) + adherence (M7): off by default (PR #418).
+    if not DURABLE_MEMORY_ENABLED:
+        b["adherence"] = (
+            f"{v('DISABLED')} — prior-report digest (M4) + adherence (M7) off by default (PR #418).\n"
+            f"{k('longitudinal.prior_reports')}: {v('[]')}   {k('adherence.outcomes')}: {v('[]')}\n"
+            f"The coach no longer replays prior reports' next_steps or nags about adherence."
+        )
+    else:
+        b["adherence"] = (
+            f"{k('recent_training_summary.last_7d')}: {v(str(l7.get('activity_count', '?')) + ' activities')}, {v(num(l7.get('total_distance_m', 0) / 1000) + ' km')}\n"
+            f"{k('.last_28d')}: {v(str(l28.get('activity_count', '?')) + ' activities')}, {v(num(l28.get('total_distance_m', 0) / 1000) + ' km')}\n"
+            f"{k('adherence.outcomes')}: {v(json.dumps(adh.get('outcomes', [])) if not adh.get('outcomes') else str(len(adh.get('outcomes'))) + ' judged')}"
+        )
     if pe:
         b["perceived"] = (
             f"{k('perceived_effort.rpe')}: {v(pe.get('rpe'))}   {k('effort_axis')}: {v(pe.get('effort_axis'))}\n"
