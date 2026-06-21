@@ -127,6 +127,23 @@ class Settings(BaseSettings):
     COACH_BELIEFS_ENABLED: bool = False
     COACH_NARRATIVE_ENABLED: bool = False
 
+    # Prior-report feedback kill switches. Like the belief/narrative loop above,
+    # the two prior-report-driven context sections were found to replay a stale
+    # theme (the coach kept re-litigating "you ignored the rest-day advice" run
+    # after run, because each new report read the previous report's rest-day
+    # next_steps forward), so they are disabled pending the same recalibration.
+    #
+    # COACH_PRIOR_REPORTS_ENABLED gates the M4 longitudinal prior-report digest
+    # (longitudinal.prior_reports — the last 1-2 reports' headlines + next_steps).
+    # Off => prior_reports is empty; the numeric M2 baseline_trend half of the
+    # longitudinal section is unaffected (it carries no report language to echo).
+    #
+    # COACH_ADHERENCE_ENABLED gates the M7 adherence section (did the runner act on
+    # the last report's next_steps). Off => the section emits its empty form and the
+    # coach says nothing about adherence. Re-enabling either is a pure config flip.
+    COACH_PRIOR_REPORTS_ENABLED: bool = False
+    COACH_ADHERENCE_ENABLED: bool = False
+
     # Two-stage Exchange cadence (A4, ADR 0010). The opener fires immediately on a
     # finished activity; the conditional fuller turn fires on the runner's reply or
     # this timer, whichever is first. Only the two-stage prompt (coach_message_v2)

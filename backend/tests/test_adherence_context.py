@@ -10,6 +10,8 @@ pushback on the prior report flips the implicit label to "disputed".
 import uuid
 from datetime import datetime, timezone, timedelta
 
+import pytest
+
 from app.core.config import settings
 from app.models import Activity, DerivedMetric
 from app.models.checkin import CheckIn
@@ -18,6 +20,10 @@ from app.models.coach_report import CoachReport
 from app.models.user import User
 from app.services.coach.context import build_context_pack
 from app.services.coach.prompts import PROMPT_VERSIONS, SYSTEM_PROMPT_V3
+
+# The M7 adherence section defaults OFF in prod (it nagged about prior next_steps
+# the runner had moved past); these feature tests opt the loop back on.
+pytestmark = pytest.mark.usefixtures("enable_durable_memory")
 
 
 def _user(db):

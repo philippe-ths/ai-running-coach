@@ -13,11 +13,17 @@ Plus the prompt-discipline check: the active prompt carries an explicit
 import uuid
 from datetime import datetime, timezone, timedelta
 
+import pytest
+
 from app.models import Activity, DerivedMetric, RunnerBaseline
 from app.models.coach_report import CoachReport
 from app.models.user import User
 from app.services.coach.context import build_context_pack
 from app.services.coach.prompts import build_system_prompt, PROMPT_VERSIONS
+
+# The M4 prior-report digest defaults OFF in prod (it replayed a stale theme
+# forward); these feature tests opt the prior-report loops back on.
+pytestmark = pytest.mark.usefixtures("enable_durable_memory")
 
 
 def _user(db):
