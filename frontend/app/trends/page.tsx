@@ -111,12 +111,13 @@ export default function TrendsPage() {
       ? `vs last ${PERIOD_NOUN[range]}`
       : "vs prev";
 
-  // Tap-to-reveal explanations for the two comparison rows (the user-facing
-  // definition of "typical" and the period-over-period row). Built from the
-  // live range/mode so the wording stays correct across ranges rather than
-  // hardcoding "6 months"/"last month": `baseline_label` already names the
-  // norm's history span per range ("the last 6 months" for 30D).
-  const typicalHelp = volume
+  // Definitions for the key shown under the filters (what "vs typical" and the
+  // period-over-period row mean). Built from the live range/mode so the wording
+  // stays correct across ranges rather than hardcoding "6 months"/"last month":
+  // `baseline_label` already names the norm's history span per range ("the last
+  // 6 months" for 30D). "vs typical" is omitted when there's no baseline, since
+  // the cards hide that row too.
+  const typicalHelp = volume?.has_baseline
     ? `Your average daily rate over ${volume.baseline_label}, projected over the days elapsed in this window.`
     : undefined;
   const periodNoun = PERIOD_NOUN[range];
@@ -176,6 +177,26 @@ export default function TrendsPage() {
         </div>
       </header>
 
+      {/* Key: what the per-card "vs typical" / "vs {period}" comparisons mean. */}
+      {(typicalHelp || prevHelp) && (
+        <dl className="flex flex-col gap-1 text-xs text-gray-500 dark:text-gray-400">
+          {typicalHelp && (
+            <div className="flex gap-1.5">
+              <dt className="font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                vs typical
+              </dt>
+              <dd>{typicalHelp}</dd>
+            </div>
+          )}
+          <div className="flex gap-1.5">
+            <dt className="font-medium text-gray-600 dark:text-gray-300 whitespace-nowrap">
+              {prevLabel}
+            </dt>
+            <dd>{prevHelp}</dd>
+          </div>
+        </dl>
+      )}
+
       {error && (
         <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md p-4 text-red-700 dark:text-red-300 text-sm">
           {error}
@@ -197,8 +218,6 @@ export default function TrendsPage() {
               previous={data.previous_summary?.total_distance_m}
               format={formatDistanceKm}
               prevLabel={prevLabel}
-              typicalHelp={typicalHelp}
-              prevHelp={prevHelp}
             />
             <MetricSummaryCard
               label="Total Time"
@@ -208,8 +227,6 @@ export default function TrendsPage() {
               previous={data.previous_summary?.total_moving_time_s}
               format={formatDuration}
               prevLabel={prevLabel}
-              typicalHelp={typicalHelp}
-              prevHelp={prevHelp}
             />
             <MetricSummaryCard
               label="Activities"
@@ -219,8 +236,6 @@ export default function TrendsPage() {
               previous={data.previous_summary?.activity_count}
               format={(v) => Math.round(v).toString()}
               prevLabel={prevLabel}
-              typicalHelp={typicalHelp}
-              prevHelp={prevHelp}
             />
             <MetricSummaryCard
               label="Total Load"
@@ -230,8 +245,6 @@ export default function TrendsPage() {
               previous={data.previous_summary?.total_suffer_score}
               format={(v) => Math.round(v).toLocaleString()}
               prevLabel={prevLabel}
-              typicalHelp={typicalHelp}
-              prevHelp={prevHelp}
             />
           </div>
 
@@ -247,8 +260,6 @@ export default function TrendsPage() {
                 previous={data.previous_summary?.total_distance_m}
                 format={formatDistanceKm}
                 prevLabel={prevLabel}
-                typicalHelp={typicalHelp}
-                prevHelp={prevHelp}
               />
             }
           />
@@ -264,8 +275,6 @@ export default function TrendsPage() {
                 previous={data.previous_summary?.total_moving_time_s}
                 format={formatDuration}
                 prevLabel={prevLabel}
-                typicalHelp={typicalHelp}
-                prevHelp={prevHelp}
               />
             }
           />
@@ -281,8 +290,6 @@ export default function TrendsPage() {
                 previous={data.previous_summary?.total_suffer_score}
                 format={(v) => Math.round(v).toLocaleString()}
                 prevLabel={prevLabel}
-                typicalHelp={typicalHelp}
-                prevHelp={prevHelp}
               />
             }
           />
@@ -302,7 +309,6 @@ export default function TrendsPage() {
                     }
                     format={(v) => `${v.toFixed(2)} m/beat`}
                     prevLabel={prevLabel}
-                    prevHelp={prevHelp}
                   />
                 ) : undefined
               }
