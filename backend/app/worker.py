@@ -9,7 +9,7 @@ import logging
 
 from rq import Queue, Worker
 
-from app.core.observability import init_logging, init_sentry
+from app.core.observability import init_logging, init_sentry, warn_if_coach_prompt_inert
 from app.core.queue import redis_conn
 
 LISTEN = ("default",)
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     init_logging()
     init_sentry("worker")
+    warn_if_coach_prompt_inert()
     logger.info("Worker booting; listening on %s", ",".join(LISTEN))
     queues = [Queue(name, connection=redis_conn) for name in LISTEN]
     worker = Worker(queues, connection=redis_conn)

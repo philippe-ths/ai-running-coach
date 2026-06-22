@@ -30,7 +30,14 @@ class Settings(BaseSettings):
     # Coach AI
     ANTHROPIC_API_KEY: str = ""
     COACH_MODEL_ID: str = "claude-sonnet-4-6"
-    COACH_PROMPT_ID: str = "coach_report_v10"
+    # The active coach prompt. The default tracks the production prompt (see
+    # project-context.md), NOT a legacy non-feature-bearing id: a prompt that
+    # carries none of the runner-facing coaching features (voice/corpus/stance/
+    # training-load/user-materials/volume) would silently disable that whole
+    # surface, including the runner's declared voice (#424). A deploy that
+    # resolves to an inert prompt is flagged loudly at startup by
+    # warn_if_coach_prompt_inert (app/core/observability.py).
+    COACH_PROMPT_ID: str = "coach_message_v8"
 
     # Coach-report notifications. Channel selection (see
     # app/services/notifications/__init__.py): Telegram when

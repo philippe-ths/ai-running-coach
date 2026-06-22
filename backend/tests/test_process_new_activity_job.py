@@ -17,6 +17,13 @@ from app.services.strava_ingestion import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _pin_structured_prompt(monkeypatch):
+    # This suite exercises the SINGLE-SHOT structured pipeline; the active default
+    # now tracks the feature-bearing message prompt (#424), so pin the structured one.
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")
+
+
 @pytest.fixture
 def strava_adapter():
     adapter = InMemoryStravaAdapter()

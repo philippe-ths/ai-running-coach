@@ -212,6 +212,14 @@ _THEMES: Tuple[_Theme, ...] = (
             "introduce intensity", "introduce a workout", "speed work",
             "speedwork", "strides", "fartlek", "quality session",
             "tempo session", "interval workout", "do a tempo", "do intervals",
+            # Real-data additive phrasings the coach uses to ADD a quality
+            # session (verb-led "add/plan/adding/introduce a quality|tempo run").
+            # All single-intent "do a workout" requests; none are about
+            # executing/capturing a workout (lap button, pace discipline), which
+            # stay unrecognised by design.
+            "adding a quality", "add a quality run", "quality running session",
+            "add one quality", "plan your next quality", "plan next quality",
+            "plan your next tempo", "plan a quality", "plan a tempo",
         ),
         comparable=lambda c: True,  # every later run is a chance to have added quality
         verdict=_verdict_add_quality,
@@ -236,18 +244,41 @@ def _has_negation(text: str) -> bool:
     return any(phrase in text for phrase in _NEGATION_PHRASES)
 
 
+def _themes_matching(text: str) -> List[_Theme]:
+    return [t for t in _THEMES if any(kw in text for kw in t.keywords)]
+
+
 def _classify(step: dict) -> Optional[_Theme]:
     """Map a next_step to its theme, or None when unrecognised, multi-intent, or
     a negation/caution (which would otherwise invert the verdict).
 
     Classifies on `action` + `details` only — the `why` field is the rationale,
     not the action, and a rationale mentioning another theme must not re-theme
-    the step (e.g. "Focus on form, so you can add a tempo later")."""
-    text = " ".join(str(step.get(k) or "") for k in ("action", "details")).lower()
-    if _has_negation(text):
+    the step (e.g. "Focus on form, so you can add a tempo later").
+
+    The `action` is the imperative (the actual instruction); `details` is the
+    elaboration. Real coach advice routinely names a SECOND theme incidentally in
+    the details — "Plan your next quality session, focusing on easy recovery
+    rides in between" is unambiguously add_quality, but its details mention
+    "easy recovery", so scoring the combined text matched two themes and the step
+    abstained. So classify the ACTION first: when the imperative alone resolves to
+    exactly one theme, trust it. Only when the action is theme-silent do we widen
+    to action+details (so steps whose instruction lives in the details still
+    classify), keeping the multi-intent abstain there. The negation guard runs on
+    the full text either way, so a caution buried in the details still abstains."""
+    action_text = str(step.get("action") or "").lower()
+    full_text = " ".join(str(step.get(k) or "") for k in ("action", "details")).lower()
+    if _has_negation(full_text):
         return None
-    matched = [t for t in _THEMES if any(kw in text for kw in t.keywords)]
-    return matched[0] if len(matched) == 1 else None
+    action_matched = _themes_matching(action_text)
+    if len(action_matched) == 1:
+        return action_matched[0]
+    if len(action_matched) > 1:
+        return None  # the imperative itself is multi-intent -> abstain
+    # Action is theme-silent: fall back to the full text (the instruction may
+    # live in the details), keeping the multi-intent abstain.
+    full_matched = _themes_matching(full_text)
+    return full_matched[0] if len(full_matched) == 1 else None
 
 
 def build_adherence(

@@ -308,7 +308,12 @@ async def test_consolidate_degrades_on_llm_error_without_clobbering(db):
 # --------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_report_path_enqueues_consolidation_and_does_not_block(db):
+async def test_report_path_enqueues_consolidation_and_does_not_block(db, monkeypatch):
+    # The structured single-shot path is exercised here (generate_json); the active
+    # default now tracks the feature-bearing message prompt (#424), so pin it.
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")
+
     user = _seed_user(db)
     db.add(UserProfile(
         user_id=user.id, goal_type="general", experience_level="intermediate",

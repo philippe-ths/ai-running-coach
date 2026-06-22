@@ -4,10 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import health, auth, activities, blocks, webhooks, profile, trends, coach, debug, strava_import, materials
 from app.core.auth import BasicAuthMiddleware
 from app.core.config import settings
-from app.core.observability import init_logging, init_sentry
+from app.core.observability import init_logging, init_sentry, warn_if_coach_prompt_inert
 
 init_logging()
 init_sentry("web")
+warn_if_coach_prompt_inert()
 
 app = FastAPI(
     title="Running Coach",
