@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { ChatMessage, CoachReport, isMessageReport } from '@/lib/types';
 import { MessageCircle, Send, Loader2, RotateCcw, Sparkles } from 'lucide-react';
 import Markdown from 'react-markdown';
@@ -9,7 +9,15 @@ interface Props {
   activityId: string;
 }
 
-export default function CoachChat({ activityId }: Props) {
+// Imperative handle so a sibling (the report panel's question chips) can kick off
+// the chat without lifting all of the chat's state up. `ask` expands the chat,
+// brings it into view, and either sends `text` (a tapped quick-reply) or just
+// focuses the input for a free-form answer (no text).
+export interface CoachChatHandle {
+  ask: (text?: string) => void;
+}
+
+const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activityId }, ref) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -84,7 +92,7 @@ export default function CoachChat({ activityId }: Props) {
     if (expanded) scrollToBottom();
   }, [messages, streamingText, expanded, scrollToBottom]);
 
-  const sendMessage = async (textArg?: string) => {
+  const sendMessage = useCallback(async (textArg?: string) => {
     // textArg lets a tapped starter chip send without going through the input box.
     const text = (textArg ?? input).trim();
     if (!text || streaming) return;
@@ -175,7 +183,7 @@ export default function CoachChat({ activityId }: Props) {
     } finally {
       setStreaming(false);
     }
-  };
+  }, [input, streaming, activityId]);
 
   const resetChat = async () => {
     try {
@@ -200,6 +208,30 @@ export default function CoachChat({ activityId }: Props) {
     setExpanded(true);
     void sendMessage(`Tell me more about this suggestion: ${action}`);
   };
+
+  // Let the report panel's question chips start the chat. Tapping a quick-reply
+  // sends its label; a "custom" option opens the chat focused so the runner can
+  // type their own answer. The timeout lets the expanded view mount before we
+  // scroll/focus (mirrors the expand button below, #226).
+  useImperativeHandle(
+    ref,
+    () => ({
+      ask: (text?: string) => {
+        if (streaming) return;
+        setExpanded(true);
+        const trimmed = text?.trim();
+        setTimeout(() => {
+          inputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          if (trimmed) {
+            void sendMessage(trimmed);
+          } else {
+            inputRef.current?.focus({ preventScroll: true });
+          }
+        }, 100);
+      },
+    }),
+    [streaming, sendMessage],
+  );
 
   const renderStarters = () => {
     if (starters.length === 0) return null;
@@ -354,4 +386,6 @@ export default function CoachChat({ activityId }: Props) {
       </div>
     </div>
   );
-}
+});
+
+export default CoachChat;

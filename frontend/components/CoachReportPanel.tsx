@@ -85,17 +85,22 @@ function humanizeRule(rule: string): string {
 interface Props {
   activityId: string;
   hasMetrics: boolean;
+  // I2 (chat-as-continuation): tapping a conversational question option
+  // (reply/dispute/custom) starts the coach chat. Wired by the parent that also
+  // renders CoachChat; undefined when there is no chat to start (the option then
+  // falls back to a non-interactive chip).
+  onStartChat?: (text?: string) => void;
 }
 
-export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
+export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }: Props) {
   const [report, setReport] = useState<CoachReport | null>(null);
   const [status, setStatus] = useState<'checking' | 'idle' | 'loading' | 'regenerating' | 'loaded' | 'error'>('checking');
   const [errorMsg, setErrorMsg] = useState('');
 
   // I1a: tappable RPE/pain input. One answer per question; key by question index.
   // A tap writes a CheckIn (rpe → rpe, pain → pain_score) and the server fires the
-  // fuller turn when the exchange is open. Conversational reply/dispute options are
-  // out of scope here (they belong to I2 chat-as-continuation).
+  // fuller turn when the exchange is open. Conversational reply/dispute/custom
+  // options instead start the coach chat (I2 chat-as-continuation) via onStartChat.
   const [tapState, setTapState] = useState<Record<number, 'sending' | 'sent' | 'error'>>({});
   const [chosenOption, setChosenOption] = useState<Record<number, string>>({});
   const [copied, setCopied] = useState(false);
@@ -449,19 +454,38 @@ export default function CoachReportPanel({ activityId, hasMetrics }: Props) {
                         <div className="flex flex-wrap items-center gap-2 mt-2">
                           {q.options.map((opt) => {
                             // I1a delivers RPE/pain taps (the milestone's "quick
-                            // RPE/pain options"); other kinds render as before.
+                            // RPE/pain options"); the conversational kinds
+                            // (reply/dispute/custom) start the coach chat instead.
                             const interactive = opt.kind === 'rpe' || opt.kind === 'pain';
                             const answered = tapState[i] === 'sent';
                             const sending = tapState[i] === 'sending';
                             const isChosen = chosenOption[i] === opt.id;
                             if (!interactive) {
+                              // Conversational option: tapping starts the chat with
+                              // this answer (a "custom" option opens the chat for a
+                              // free-form reply, sending no canned text). With no
+                              // chat to start, fall back to a non-interactive chip.
+                              if (!onStartChat) {
+                                return (
+                                  <span
+                                    key={opt.id}
+                                    className="inline-flex items-center rounded-full border border-blue-300 dark:border-blue-700 bg-white dark:bg-gray-800 px-3 py-1 text-xs font-medium text-blue-700 dark:text-blue-300"
+                                  >
+                                    {opt.label}
+                                  </span>
+                                );
+                              }
                               return (
-                                <span
+                                <button
                                   key={opt.id}
-                                  className="inline-flex items-center rounded-full border border-blue-300 dark:border-blue-700 bg-white dark:bg-gray-800 px-3 py-1 text-xs font-medium text-blue-700 dark:text-blue-300"
+                                  type="button"
+                                  onClick={() =>
+                                    onStartChat(opt.kind === 'custom' ? undefined : opt.label)
+                                  }
+                                  className="inline-flex items-center rounded-full border border-blue-300 dark:border-blue-700 bg-white dark:bg-gray-800 px-3 py-1 text-xs font-medium text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
                                 >
                                   {opt.label}
-                                </span>
+                                </button>
                               );
                             }
                             return (
