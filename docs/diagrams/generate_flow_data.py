@@ -70,6 +70,12 @@ def first_n(arr, n=4):
     return f"[{head}{', ...' if len(arr) > n else ''}]"
 
 
+def full_arr(arr):
+    if not arr:
+        return "[]"
+    return "[" + ", ".join(str(x) for x in arr) + "]"
+
+
 def whole(x):
     if x is None:
         return "n/a"
@@ -78,8 +84,9 @@ def whole(x):
 
 
 def trunc(s, n):
-    s = " ".join((s or "").split())
-    return s if len(s) <= n else s[:n].rstrip() + "…"
+    # Abbreviation removed: show the full text (whitespace-collapsed). The `n`
+    # argument is kept for call-site compatibility but no longer truncates.
+    return " ".join((s or "").split())
 
 
 # --- training_volume snippet (mirrors the Trends-page quick-view cards) -----------
@@ -181,7 +188,7 @@ def build_blocks(row: dict) -> dict:
     step0 = steps[0] if steps else {}
     is_fallback = row["is_fallback"]
 
-    sample = lambda t: first_n((streams.get(t) or {}).get("head"))
+    sample = lambda t: full_arr((streams.get(t) or {}).get("head"))
     stream_types = ", ".join(sorted(streams.keys())) or "—"
     sn = next((s["n"] for s in streams.values()), 0)
 
@@ -204,13 +211,21 @@ def build_blocks(row: dict) -> dict:
     )
     b["trigger"] = (
         f"webhook {k('aspect_type')}={v('create')}  →  {v('process_new_activity_job')}\n"
-        f"activity {v(a['strava_activity_id'])}  →  ingest → analyze → assign block\n"
-        f"(PIPELINE_RETRY: 3 attempts @ 60/300/900s)"
+        f"activity {v(a['strava_activity_id'])}  →  ingest → analyze → assign block"
     )
+    prof = row.get("profile") or {}
+    hrz = prof.get("hr_zones")
+    if hrz:
+        zones_line = f"{k('hr_zones')} (lower bounds): {v(full_arr(hrz))}  {k('source')}: {v(prof.get('hr_zones_source'))}"
+    else:
+        zones_line = (
+            f"{k('hr_zones')}: {v('null')} (never synced from Strava) → "
+            f"binning falls back to %-of-max of {k('max_hr')} {v(whole(prof.get('max_hr')))}"
+        )
     b["ingestion"] = (
         f"{k(str(len(streams)) + ' stream types')} stored, {v(str(sn) + ' samples')} each:\n"
         f"{stream_types}\n"
-        f"{k('sync_athlete_zones')} → runner's HR zone bounds refreshed"
+        f"{zones_line}"
     )
     b["activity"] = (
         f"Activity row + ActivityStream:\n"
@@ -254,9 +269,13 @@ def build_blocks(row: dict) -> dict:
         f"= Σ (minutes-in-zone × zone-number), Edwards-style.\n"
         f"Cumulative training LOAD — not an intensity verdict."
     )
+    sv_keys = ("time_s", "hr", "pace_s_per_km", "grade_pct", "cadence_spm")
+    sv_lines = "\n".join(
+        f"{k(key)}: {v(full_arr(sv.get(key)))}" for key in sv_keys if sv.get(key) is not None
+    )
     b["streamview"] = (
         f"{k('stream_view')}: {v(str(sv.get('n_points', '?')) + ' points')}  (downsampled from {sv.get('source_n', sn)})\n"
-        f"{k('keys')}: time_s · hr · pace_s_per_km · grade_pct · cadence_spm"
+        + (sv_lines if sv_lines else f"{k('keys')}: time_s · hr · pace_s_per_km · grade_pct · cadence_spm")
     )
     b["derived"] = (
         f"{k('structure')} {v(dm.get('structure'))} · {k('effort')} {v(dm.get('effort'))} · {k('effort_score')} {v(num(dm.get('effort_score')))}\n"
@@ -264,9 +283,10 @@ def build_blocks(row: dict) -> dict:
         f"{k('flags')} {v(json.dumps(flags))} · {k('discount')} {v(json.dumps(inflated))}"
     )
     b["blocks"] = (
-        f"{k('block_id')}: {v((row['block_id'] or '—')[:8] + '…' if row['block_id'] else '—')}   {k('members')}: {v(row['block_members'])}"
+        f"{k('block_id')}: {v(row['block_id'] or '—')}   {k('members')}: {v(row['block_members'])}"
         + ("  (block-of-one)" if row["block_members"] == 1 else "  (multi-member block)") + "\n"
-        f"{k('primary_activity')}: this run"
+        f"{k('primary_activity_id')}: {v(row.get('primary_id') or '—')}"
+        + ("  (this run is primary)" if row.get("is_primary") else "  (primary is another member)")
     )
     if cal.get("calibrated"):
         b["baseline"] = (
@@ -281,9 +301,12 @@ def build_blocks(row: dict) -> dict:
             f"bucket still abstaining (< 4 comparable runs);\n"
             f"falls back to the labelled ~5% population drift heuristic."
         )
+    pack_activity = cp.get("activity")
+    pack_metrics = cp.get("metrics")
     b["focus"] = (
-        f"pack.{k('activity')} + pack.{k('metrics')} =\n"
-        f"this run's DerivedMetric, flattened byte-stably into the pack"
+        f"this run's DerivedMetric, flattened byte-stably into the pack:\n\n"
+        f"pack.{k('activity')} =\n{v(json.dumps(pack_activity, indent=2, ensure_ascii=False))}\n\n"
+        f"pack.{k('metrics')} =\n{v(json.dumps(pack_metrics, indent=2, ensure_ascii=False))}"
     )
     if tl:
         b["load"] = (
@@ -308,8 +331,7 @@ def build_blocks(row: dict) -> dict:
     b["calibration"] = (
         cline + "\n"
         + f"{k('baseline_trend')}: {v('present' if bt else 'abstaining')} · "
-        f"{k('referral')}: {v('present' if ref else 'null')}\n"
-        + "(M9 stays ON — it carries the non-diagnostic safety referral)"
+        f"{k('referral')}: {v('present' if ref else 'null')}"
     )
     # prior-report digest (M4) + adherence (M7): off by default (PR #418).
     if not DURABLE_MEMORY_ENABLED:
@@ -374,19 +396,21 @@ def build_blocks(row: dict) -> dict:
         f"{k('calibration.referral')}: {v('present' if (cp.get('calibration') or {}).get('referral') else 'null')}"
     )
     b["retry"] = (
-        f"{v('No retry needed')} — output passed the validator first time.\n"
+        f"{v('No retry needed')} — output passed the validator first time."
         if not is_fallback else
-        f"{v('Retry exhausted')} — a violation survived the re-generation.\n"
-    ) + "(A surviving medical overreach forces is_fallback=true.)"
+        f"{v('Retry exhausted')} — a violation survived the re-generation."
+    )
     b["fallback"] = (
         f"{v('Not triggered')} — generation + parse + policy all succeeded."
         if not is_fallback else
         f"{v('Triggered')} — a safe fallback report was persisted (is_fallback=true)."
     )
+    dig = row["digest"] or {}
     b["coachreport"] = (
         f"{k('key')}: (activity_id, {v(row['prompt_id'])}, {v(row['schema_version'])})\n"
-        f"{k('report')}: prose message + structured tail + digest stored\n"
-        f"(display-safe read serves this even after a prompt flip)"
+        f"{k('report')}: prose message + structured tail stored (display-safe read)\n\n"
+        f"{k('digest')} (the stored exchange digest read by later reports) =\n"
+        f"{v(json.dumps(dig, indent=2, ensure_ascii=False))}"
     )
     if not DURABLE_MEMORY_ENABLED:
         b["writeback"] = (
@@ -414,19 +438,17 @@ def build_blocks(row: dict) -> dict:
             f"from deterministic facts + recent digests (voice only)"
         )
     b["notify"] = (
-        f"{k('channel')}: {v('Telegram')} (Railway blocks SMTP)\n"
-        f"voice {v(repr(rel.get('voice_preset')))} · opener keyboard: {v('RPE / pain / done')} taps\n"
-        f"a tap writes a CheckIn and can fire the fuller turn early"
+        f"{k('channel')}: {v('Telegram')}\n"
+        f"{k('voice')}: {v(repr(rel.get('voice_preset')))} · {k('opener keyboard')}: {v('RPE / pain / done')} taps"
     )
     b["frontend"] = (
-        f"renders the prose report + stream charts +\n"
-        + (f"{k('Training Load card')}: fitness {v(num(tl.get('fitness')))} / fatigue {v(num(tl.get('fatigue')))} / form {v(num(tl.get('form')))}\n" if tl else "")
-        + f"next_steps surface as one-tap chat starter chips"
+        f"{k('Training Load card')}: fitness {v(num(tl.get('fitness')))} / fatigue {v(num(tl.get('fatigue')))} / form {v(num(tl.get('form')))}"
+        if tl else
+        f"{k('Training Load card')}: {v('not emitted')} (prompt not training-load-aware)"
     )
     b["chat"] = (
-        f"follow-up speaks in the {v(repr(rel.get('voice_preset')))} voice, carries the report's\n"
-        f"authority disciplines, and injects recent chat from the runner's\n"
-        f"OTHER activities — same policy gate, re-streamed."
+        f"{k('voice')}: {v(repr(rel.get('voice_preset')))}\n"
+        f"{k('stance_school')}: {v(rel.get('stance_school'))}"
     )
     return b
 
@@ -438,6 +460,11 @@ def load(conn) -> tuple[list, dict]:
     # one relationship (single-user)
     cur.execute("SELECT * FROM coaching_relationship LIMIT 1")
     relationship = cur.fetchone() or {}
+
+    # the runner's profile (single-user): real HR-zone bounds + source for the
+    # ingestion block, instead of a hardcoded "zones refreshed" claim.
+    cur.execute("SELECT hr_zones, hr_zones_source, max_hr FROM user_profiles LIMIT 1")
+    profile = cur.fetchone() or {}
 
     # All activity facts (for the live training_volume computation): the norm needs
     # the full ~91-day history, not just activities that have a coach report.
@@ -468,7 +495,7 @@ def load(conn) -> tuple[list, dict]:
           a.id, a.strava_activity_id, a.name, a.type, a.start_date, a.start_date_local,
           a.distance_m, a.moving_time_s, a.elapsed_time_s, a.elev_gain_m,
           a.avg_hr, a.max_hr, a.block_id, a.raw_summary,
-          cr.report, cr.context_pack, cr.prompt_id, cr.schema_version,
+          cr.report, cr.context_pack, cr.digest, cr.prompt_id, cr.schema_version,
           cr.is_fallback, cr.created_at
         FROM activities a
         JOIN coach_reports cr ON cr.activity_id = a.id
@@ -493,6 +520,11 @@ def load(conn) -> tuple[list, dict]:
             (r["block_id"],),
         )
         members = (cur.fetchone() or {}).get("n", 1)
+        # the block's real primary activity (not a hardcoded "this run")
+        primary_id = None
+        if r["block_id"]:
+            cur.execute("SELECT primary_activity_id FROM blocks WHERE id=%s", (r["block_id"],))
+            primary_id = (cur.fetchone() or {}).get("primary_activity_id")
         # streams (head sample of each type)
         cur.execute(
             "SELECT stream_type, data FROM activity_streams WHERE activity_id=%s", (r["id"],)
@@ -500,7 +532,7 @@ def load(conn) -> tuple[list, dict]:
         streams = {}
         for s in cur.fetchall():
             data = s["data"]
-            streams[s["stream_type"]] = {"n": len(data), "head": data[:4]}
+            streams[s["stream_type"]] = {"n": len(data), "head": data}
 
         date = r["start_date"].date().isoformat()
         label = f"{date} · {r['name']} ({r['prompt_id']})"
@@ -513,10 +545,14 @@ def load(conn) -> tuple[list, dict]:
             "dm": dm,
             "context_pack": r["context_pack"],
             "report": r["report"],
+            "digest": r["digest"],
             "relationship": relationship,
+            "profile": profile,
             "streams": streams,
             "block_id": str(r["block_id"]) if r["block_id"] else None,
             "block_members": members,
+            "is_primary": (primary_id == r["id"]),
+            "primary_id": str(primary_id) if primary_id else None,
             "prompt_id": r["prompt_id"],
             "schema_version": r["schema_version"],
             "is_fallback": r["is_fallback"],
