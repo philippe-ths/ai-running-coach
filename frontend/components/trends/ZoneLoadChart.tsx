@@ -11,12 +11,18 @@ import {
   CartesianGrid,
 } from "recharts";
 import { ReactNode } from "react";
-import { ZoneLoadWeekPoint, DailyZoneLoadPoint } from "@/lib/types";
+import {
+  ZoneLoadWeekPoint,
+  DailyZoneLoadPoint,
+  PeriodZoneLoadPoint,
+  TrendsGranularity,
+} from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
+import { BUCKET_NOUN, bucketKey } from "./granularity";
 
 interface ZoneLoadChartProps {
-  data: ZoneLoadWeekPoint[] | DailyZoneLoadPoint[];
-  granularity: "daily" | "weekly";
+  data: ZoneLoadWeekPoint[] | DailyZoneLoadPoint[] | PeriodZoneLoadPoint[];
+  granularity: TrendsGranularity;
   /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
   delta?: ReactNode;
 }
@@ -65,10 +71,7 @@ function CustomTooltip({
 }
 
 export default function ZoneLoadChart({ data, granularity, delta }: ZoneLoadChartProps) {
-  const title =
-    granularity === "daily"
-      ? "Training Load by Zone per Day"
-      : "Training Load by Zone per Week";
+  const title = `Training Load by Zone per ${BUCKET_NOUN[granularity]}`;
 
   // Check if all entries have zero zone data
   const hasAnyData = data.some(
@@ -88,12 +91,8 @@ export default function ZoneLoadChart({ data, granularity, delta }: ZoneLoadChar
 
   const chartData = data.map((d) => ({
     ...d,
-    label: formatDateLabel(
-      "week_start" in d ? d.week_start : d.date
-    ),
+    label: formatDateLabel(bucketKey(d)),
   }));
-
-  const tooltipPrefix = granularity === "daily" ? "" : "Week of ";
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">

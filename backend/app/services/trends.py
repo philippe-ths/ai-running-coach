@@ -25,6 +25,10 @@ from app.schemas.trends import (
     EfficiencyPoint,
     ZoneLoadWeekPoint,
     DailyZoneLoadPoint,
+    PeriodDistancePoint,
+    PeriodTimePoint,
+    PeriodSufferScorePoint,
+    PeriodZoneLoadPoint,
     WeeklyStatsSummary,
     WeeklyStatsResponse,
 )
@@ -168,6 +172,64 @@ class WeekBucket:
         self.easy_seconds = 0
         self.moderate_seconds = 0
         self.hard_seconds = 0
+
+    def add(self, daily: DailyFact):
+        self.total_distance_m += daily.total_distance_m
+        self.total_moving_time_s += daily.total_moving_time_s
+        self.total_effort_score += daily.total_effort_score
+        self.activity_count += daily.activity_count
+
+
+# ---------------------------------------------------------------------------
+# 3b. Coarse-granularity bucket (#432 — 2-week / month bars)
+# ---------------------------------------------------------------------------
+
+# A fixed Monday reference for deterministic fortnight alignment (1970-01-05 is
+# a Monday). Anchoring 2-week bins to it keeps boundaries stable regardless of
+# the window start, so the same fortnights line up across ranges and the bars
+# don't shift when the runner changes the selected range.
+_EPOCH_MONDAY = date(1970, 1, 5)
+
+
+def _period_start(d: date, period: str) -> date:
+    """First local day of the coarse bucket that ``d`` falls in.
+
+    - ``biweekly``: 14-day bins aligned to ``_EPOCH_MONDAY`` (Monday start).
+    - ``monthly``: the first of the calendar month.
+    """
+    if period == "monthly":
+        return d.replace(day=1)
+    # biweekly: snap to the bin's starting Monday by fortnight parity.
+    monday = d - timedelta(days=d.weekday())
+    weeks = (monday - _EPOCH_MONDAY).days // 7
+    if weeks % 2 == 1:
+        monday -= timedelta(days=7)
+    return monday
+
+
+def _next_period_start(start: date, period: str) -> date:
+    """The start of the bucket immediately after ``start`` (for continuous fill)."""
+    if period == "monthly":
+        if start.month == 12:
+            return date(start.year + 1, 1, 1)
+        return date(start.year, start.month + 1, 1)
+    return start + timedelta(days=14)
+
+
+class PeriodBucket:
+    """Aggregation bucket for one coarse granularity period (#432)."""
+
+    __slots__ = (
+        "period_start", "total_distance_m", "total_moving_time_s",
+        "total_effort_score", "activity_count",
+    )
+
+    def __init__(self, period_start: date):
+        self.period_start = period_start
+        self.total_distance_m = 0
+        self.total_moving_time_s = 0
+        self.total_effort_score = 0.0
+        self.activity_count = 0
 
     def add(self, daily: DailyFact):
         self.total_distance_m += daily.total_distance_m
@@ -449,6 +511,46 @@ def build_weekly_buckets(
     return sorted(buckets.values(), key=lambda w: w.week_start)
 
 
+def build_period_buckets(
+    daily_facts: List[DailyFact],
+    period: str,
+    range_key: str = "30D",
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+) -> List[PeriodBucket]:
+    """Roll daily facts into coarse buckets (#432) for ``biweekly`` or ``monthly``.
+
+    Mirrors ``build_weekly_buckets``: aggregates from real data, then fills every
+    empty bucket across the window so charts have continuous x-axes. ``since`` /
+    ``until`` override the window start/end (the #400/#413 calendar framing);
+    they default to the range start and today.
+    """
+    buckets: dict[date, PeriodBucket] = {}
+    for df in daily_facts:
+        ps = _period_start(df.local_date, period)
+        if ps not in buckets:
+            buckets[ps] = PeriodBucket(ps)
+        buckets[ps].add(df)
+
+    end = until if until is not None else date.today()
+    end_start = _period_start(end, period)
+
+    if since is None:
+        since = _resolve_since(range_key)
+    if since is not None:
+        start = _period_start(since, period)
+    elif daily_facts:
+        start = _period_start(daily_facts[0].local_date, period)
+    else:
+        start = end_start
+
+    cursor = start
+    while cursor <= end_start:
+        if cursor not in buckets:
+            buckets[cursor] = PeriodBucket(cursor)
+        cursor = _next_period_start(cursor, period)
+
+    return sorted(buckets.values(), key=lambda b: b.period_start)
 
 
 def build_suffer_score_trend(
@@ -625,6 +727,37 @@ def build_zone_load_daily(
         easy_s, mod_s, hard_s = zone_by_date.get(df.local_date, (0, 0, 0))
         result.append({
             "date": df.local_date.isoformat(),
+            "easy_min": round(easy_s / 60, 1),
+            "moderate_min": round(mod_s / 60, 1),
+            "hard_min": round(hard_s / 60, 1),
+        })
+    return result
+
+
+def build_zone_load_period(
+    activity_facts: List[ActivityFact],
+    period_buckets: List["PeriodBucket"],
+    period: str,
+) -> List[dict]:
+    """Per-coarse-bucket 3-zone minutes (#432), continuous over ``period_buckets``."""
+    zone_by_period: dict[date, tuple[int, int, int]] = {}
+    for af in activity_facts:
+        if not af.time_in_zones:
+            continue
+        ps = _period_start(af.local_date, period)
+        easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
+        prev = zone_by_period.get(ps, (0, 0, 0))
+        zone_by_period[ps] = (
+            prev[0] + easy_s,
+            prev[1] + mod_s,
+            prev[2] + hard_s,
+        )
+
+    result: List[dict] = []
+    for pb in period_buckets:
+        easy_s, mod_s, hard_s = zone_by_period.get(pb.period_start, (0, 0, 0))
+        result.append({
+            "period_start": pb.period_start.isoformat(),
             "easy_min": round(easy_s / 60, 1),
             "moderate_min": round(mod_s / 60, 1),
             "hard_min": round(hard_s / 60, 1),
@@ -815,6 +948,50 @@ def get_trends_report(
         for w in weekly
     ]
 
+    # 4b. Coarse buckets (#432): 2-week and month rollups of the same daily facts.
+    biweekly = build_period_buckets(
+        daily_facts, "biweekly", range_key=range_upper, since=since, until=until
+    )
+    monthly = build_period_buckets(
+        daily_facts, "monthly", range_key=range_upper, since=since, until=until
+    )
+
+    def _period_distance(buckets: List[PeriodBucket]) -> List[PeriodDistancePoint]:
+        return [
+            PeriodDistancePoint(
+                period_start=b.period_start,
+                total_distance_m=b.total_distance_m,
+                activity_count=b.activity_count,
+            )
+            for b in buckets
+        ]
+
+    def _period_time(buckets: List[PeriodBucket]) -> List[PeriodTimePoint]:
+        return [
+            PeriodTimePoint(
+                period_start=b.period_start,
+                total_moving_time_s=b.total_moving_time_s,
+                activity_count=b.activity_count,
+            )
+            for b in buckets
+        ]
+
+    def _period_suffer(buckets: List[PeriodBucket]) -> List[PeriodSufferScorePoint]:
+        return [
+            PeriodSufferScorePoint(
+                period_start=b.period_start,
+                effort_score=round(b.total_effort_score, 1),
+            )
+            for b in buckets
+        ]
+
+    biweekly_distance = _period_distance(biweekly)
+    monthly_distance = _period_distance(monthly)
+    biweekly_time = _period_time(biweekly)
+    monthly_time = _period_time(monthly)
+    biweekly_suffer_score = _period_suffer(biweekly)
+    monthly_suffer_score = _period_suffer(monthly)
+
     # 6. Suffer score (per-activity)
     suffer_score = [
         SufferScorePoint(**p) for p in build_suffer_score_trend(activity_facts)
@@ -843,6 +1020,14 @@ def get_trends_report(
         DailyZoneLoadPoint(**p)
         for p in build_zone_load_daily(activity_facts, continuous_daily)
     ]
+    biweekly_zone_load = [
+        PeriodZoneLoadPoint(**p)
+        for p in build_zone_load_period(activity_facts, biweekly, "biweekly")
+    ]
+    monthly_zone_load = [
+        PeriodZoneLoadPoint(**p)
+        for p in build_zone_load_period(activity_facts, monthly, "monthly")
+    ]
 
     return TrendsResponse(
         range=range_upper,
@@ -858,6 +1043,14 @@ def get_trends_report(
         efficiency_trend=efficiency_trend,
         weekly_zone_load=weekly_zone_load,
         daily_zone_load=daily_zone_load,
+        biweekly_distance=biweekly_distance,
+        monthly_distance=monthly_distance,
+        biweekly_time=biweekly_time,
+        monthly_time=monthly_time,
+        biweekly_suffer_score=biweekly_suffer_score,
+        monthly_suffer_score=monthly_suffer_score,
+        biweekly_zone_load=biweekly_zone_load,
+        monthly_zone_load=monthly_zone_load,
     )
 
 

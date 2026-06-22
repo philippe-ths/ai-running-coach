@@ -11,14 +11,16 @@ import {
   ReferenceLine,
 } from "recharts";
 import { ReactNode } from "react";
+import { TrendsGranularity } from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
 import ChartTooltip from "@/components/charts/ChartTooltip";
 import { TYPICAL_LINE_PROPS, renderTypicalLabel } from "./typicalLine";
+import { BUCKET_NOUN, TOOLTIP_PREFIX, bucketKey } from "./granularity";
 
 interface TrendBarChartProps {
   data: any[];
   type: "distance" | "time";
-  granularity: "daily" | "weekly";
+  granularity: TrendsGranularity;
   /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
   delta?: ReactNode;
   /** Runner's typical level per bucket, in chart units (#413). Draws a dashed
@@ -42,13 +44,8 @@ export default function TrendBarChart({
 }: TrendBarChartProps) {
   // Configuration based on type
   const isDistance = type === "distance";
-  const title = isDistance
-    ? granularity === "daily"
-      ? "Distance per Day"
-      : "Distance per Week"
-    : granularity === "daily"
-    ? "Time per Day"
-    : "Time per Week";
+  const noun = BUCKET_NOUN[granularity];
+  const title = isDistance ? `Distance per ${noun}` : `Time per ${noun}`;
 
   const barColor = isDistance ? "#3b82f6" : "#10b981";
   const unitLabel = isDistance ? " km" : " min";
@@ -66,11 +63,11 @@ export default function TrendBarChart({
       ...d,
       value: chartValue,
       rawValue: rawValue, // preserve for tooltip
-      label: formatDateLabel(d.week_start ?? d.date),
+      label: formatDateLabel(bucketKey(d)),
     };
   });
 
-  const tooltipPrefix = granularity === "daily" ? "" : "Week of ";
+  const tooltipPrefix = TOOLTIP_PREFIX[granularity];
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">

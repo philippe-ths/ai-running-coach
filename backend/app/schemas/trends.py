@@ -49,6 +49,30 @@ class WeeklySufferScorePoint(BaseModel):
     effort_score: float
 
 
+class PeriodDistancePoint(BaseModel):
+    """One coarse-granularity bucket of distance (#432: 2-week / month bars).
+
+    ``period_start`` is the bucket's first local day (a fortnight-aligned Monday
+    or the first of the month); the values are the sum over that bucket.
+    """
+    period_start: date
+    total_distance_m: int
+    activity_count: int
+
+
+class PeriodTimePoint(BaseModel):
+    """One coarse-granularity bucket of moving time (#432)."""
+    period_start: date
+    total_moving_time_s: int
+    activity_count: int
+
+
+class PeriodSufferScorePoint(BaseModel):
+    """One coarse-granularity bucket of accumulated load (#432)."""
+    period_start: date
+    effort_score: float
+
+
 class EfficiencyPoint(BaseModel):
     date: date
     efficiency_mps_per_bpm: float
@@ -66,6 +90,14 @@ class ZoneLoadWeekPoint(BaseModel):
 class DailyZoneLoadPoint(BaseModel):
     """One day of 3-zone load data (Easy / Moderate / Hard minutes)."""
     date: date
+    easy_min: float
+    moderate_min: float
+    hard_min: float
+
+
+class PeriodZoneLoadPoint(BaseModel):
+    """One coarse-granularity bucket of 3-zone load (#432: 2-week / month bars)."""
+    period_start: date
     easy_min: float
     moderate_min: float
     hard_min: float
@@ -100,6 +132,16 @@ class TrendsResponse(BaseModel):
     efficiency_trend: List[EfficiencyPoint]
     weekly_zone_load: List[ZoneLoadWeekPoint]
     daily_zone_load: List[DailyZoneLoadPoint]
+    # #432: coarser bar granularities (2-week / month) rolled up server-side so
+    # the frontend can offer a granularity control appropriate to the range.
+    biweekly_distance: List[PeriodDistancePoint]
+    monthly_distance: List[PeriodDistancePoint]
+    biweekly_time: List[PeriodTimePoint]
+    monthly_time: List[PeriodTimePoint]
+    biweekly_suffer_score: List[PeriodSufferScorePoint]
+    monthly_suffer_score: List[PeriodSufferScorePoint]
+    biweekly_zone_load: List[PeriodZoneLoadPoint]
+    monthly_zone_load: List[PeriodZoneLoadPoint]
 
 
 class WeeklyStatsSummary(BaseModel):

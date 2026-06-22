@@ -11,14 +11,25 @@ import {
   ReferenceLine,
 } from "recharts";
 import { ReactNode } from "react";
-import { SufferScorePoint, DailySufferScorePoint, WeeklySufferScorePoint } from "@/lib/types";
+import {
+  SufferScorePoint,
+  DailySufferScorePoint,
+  WeeklySufferScorePoint,
+  PeriodSufferScorePoint,
+  TrendsGranularity,
+} from "@/lib/types";
 import { formatDateLabel } from "@/lib/format";
 import ChartTooltip from "@/components/charts/ChartTooltip";
 import { TYPICAL_LINE_PROPS, renderTypicalLabel } from "./typicalLine";
+import { BUCKET_NOUN, bucketKey } from "./granularity";
 
 interface Props {
-  data: SufferScorePoint[] | DailySufferScorePoint[] | WeeklySufferScorePoint[];
-  granularity: "daily" | "weekly";
+  data:
+    | SufferScorePoint[]
+    | DailySufferScorePoint[]
+    | WeeklySufferScorePoint[]
+    | PeriodSufferScorePoint[];
+  granularity: TrendsGranularity;
   /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
   delta?: ReactNode;
   /** Runner's typical load per bucket, in chart units (#413). Draws a dashed
@@ -29,10 +40,10 @@ interface Props {
 export default function SufferScoreChart({ data, granularity, delta, typical }: Props) {
   const chartData = data.map((d: any) => ({
     ...d,
-    label: formatDateLabel(d.date ?? d.week_start),
+    label: formatDateLabel(bucketKey(d)),
   }));
 
-  const title = `Accumulated Load per ${granularity === "daily" ? "Day" : "Week"}`;
+  const title = `Accumulated Load per ${BUCKET_NOUN[granularity]}`;
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
