@@ -213,3 +213,53 @@ def test_report_baseline_label_scales_with_term():
     facts = _history(as_of, 400)
     assert build_volume_report(facts, as_of, "7D").baseline_label == "the last 12 weeks"
     assert build_volume_report(facts, as_of, "3M").baseline_label == "the last year"
+
+
+# --- #436: calendar "vs typical" is the FULL-period typical, not pro-rated --------
+
+
+def test_report_calendar_vs_typical_is_full_period_not_prorated():
+    """A partial calendar week is judged against the typical FULL week (#436), so a
+    week 3 days in reads `down`, not `in_line`. Contrast with the coach pack's
+    calendar_week, which stays pro-rated (test_calendar_week_is_partial_and_prorated)."""
+    as_of = date(2026, 6, 17)  # Wednesday -> Mon..Wed elapsed (3 of 7 days)
+    assert as_of.weekday() == 2
+    # Uniform history: 1 activity/day of 10km, so the per-day norm is exactly
+    # 1 session / 10000 m / 3600 s / 50 effort.
+    cal = build_volume_report(_history(as_of, 200), as_of, "7D").calendar
+    assert cal.days_elapsed == 3
+    assert cal.complete is False
+    d = _by(cal)["distance_m"]
+    assert d.current_all == 30000          # Mon+Tue+Wed at 10km
+    assert d.norm == 70000.0               # typical FULL week = 10km/day * 7, not * 3
+    assert d.pct_vs_norm == -57.1          # (30000-70000)/70000
+    assert d.direction == "down"
+    s = _by(cal)["sessions"]
+    assert s.current_all == 3
+    assert s.norm == 7.0                   # 1/day * 7 days
+
+
+def test_report_rolling_unchanged_by_full_period_norm():
+    """Rolling is a complete window (days_elapsed == window_days), so the #436 change
+    is a no-op there: a uniform trailing week still reads in_line against its norm."""
+    as_of = date(2026, 6, 17)
+    roll = build_volume_report(_history(as_of, 200), as_of, "7D").rolling
+    assert roll.days_elapsed == roll.window_days == 7
+    d = _by(roll)["distance_m"]
+    assert d.current_all == 70000          # full trailing 7 days at 10km
+    assert d.norm == 70000.0
+    assert d.pct_vs_norm == 0.0
+    assert d.direction == "in_line"
+
+
+def test_report_calendar_full_period_applies_to_longer_terms():
+    """The full-period typical applies to every range, not just 7D (#436): a month
+    20 days in is judged against the typical full month."""
+    as_of = date(2026, 6, 20)  # June (30 days), 20 elapsed
+    cal = build_volume_report(_history(as_of, 400), as_of, "30D").calendar
+    assert cal.days_elapsed == 20
+    d = _by(cal)["distance_m"]
+    assert d.current_all == 200000         # 20 days at 10km
+    assert d.norm == 300000.0              # typical FULL month = 10km/day * 30
+    assert d.pct_vs_norm == -33.3
+    assert d.direction == "down"
