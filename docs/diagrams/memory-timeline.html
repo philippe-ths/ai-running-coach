@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Running Coach — Memory Timeline</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --ink: #e6e9ef;
+    --muted: #9aa3b2;
+    --line: #2c313c;
+
+    --raw: #3b82f6;     /* raw external / stream data */
+    --derived: #10b981; /* deterministic derived */
+    --store: #a78bfa;   /* persistence */
+    --llm: #f59e0b;     /* llm-written memory */
+    --runner: #14b8a6;  /* runner-declared */
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 32px 24px 80px;
+  }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -.3px; }
+  .sub { color: var(--muted); margin: 0 0 24px; max-width: 880px; }
+  .sub kbd { background:#11141a; border:1px solid var(--line); border-radius:4px; padding:0 5px; font-size:11px; }
+  .sub strong { color: var(--ink); }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px 18px; margin-bottom: 22px;
+  }
+  .legend .item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+  .swatch { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+  .swatch.planned { background: #16181d; border: 1px dashed #fca5a5; }
+
+  /* ---- the grid: columns = lanes, rows = time bands (oldest top → now bottom) ---- */
+  .board { max-width: 1100px; margin: 0 auto; }
+
+  /* column header row (lane names), aligned to the grid below */
+  .grid-cols {
+    display: grid; grid-template-columns: var(--cols); gap: 12px; margin-bottom: 10px;
+  }
+  .lane-head {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); font-weight: 600;
+    padding: 0 4px;
+  }
+  .lane-head.spacer { /* over the time rail */ }
+
+  /* one time band = one row */
+  .band-row {
+    display: grid; grid-template-columns: var(--cols); gap: 12px;
+    align-items: stretch; margin-bottom: 12px; position: relative;
+  }
+  /* left rail: the time axis label for the band */
+  .band-meta {
+    border-right: 2px solid var(--line); padding: 12px 14px 12px 18px; position: relative;
+  }
+  .band-meta::before { /* the node on the time spine */
+    content: ""; position: absolute; right: -6px; top: 18px;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--bg); border: 2px solid var(--muted);
+  }
+  .band-row:last-child .band-meta::before { border-color: #5eead4; background: #14b8a6; }
+  .band-meta h2 { margin: 0; font-size: 13px; letter-spacing: .2px; }
+  .band-meta .when { margin: 3px 0 0; font-size: 11px; color: var(--muted); }
+  .band-meta .density { margin-top: 8px; }
+
+  /* each lane cell holds the artifacts retained in that band */
+  .cell {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px; display: flex; flex-direction: column; gap: 8px;
+  }
+  /* detail gradient: older (top) bands sit fainter than recent ones */
+  .band-row.b-lifetime .cell { opacity: .82; }
+  .band-row.b-older    .cell { opacity: .88; }
+
+  .chip {
+    background: #1e222b; border: 1px solid var(--line); border-left: 4px solid var(--derived);
+    border-radius: 9px; padding: 9px 11px; cursor: pointer;
+    transition: transform .08s ease, background .08s ease;
+    position: relative;
+  }
+  .chip:hover { transform: translateY(-2px); background: #232834; }
+  .chip:focus-visible { outline: 2px solid var(--raw); outline-offset: 2px; }
+  .chip h3 { margin: 0 0 2px; font-size: 12.5px; padding-right: 12px; }
+  .chip p { margin: 0; font-size: 11px; color: var(--muted); }
+  .chip::after { content: "›"; position: absolute; top: 7px; right: 10px; color: var(--muted); font-size: 16px; opacity: .5; }
+
+  .chip.raw     { border-left-color: var(--raw); }
+  .chip.derived { border-left-color: var(--derived); }
+  .chip.store   { border-left-color: var(--store); }
+  .chip.llm     { border-left-color: var(--llm); background: #241d10; }
+
+  /* "planned, not built yet" */
+  .chip.planned { opacity: .6; border-left-style: dashed; background: #16181d; }
+  .chip.planned:hover { opacity: .95; background: #1c1f26; }
+  .pill {
+    display: inline-block; font-size: 9px; letter-spacing: .5px; text-transform: uppercase; font-weight: 700;
+    color: #fca5a5; background: rgba(239,68,68,.16); border: 1px solid rgba(239,68,68,.4);
+    border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: middle;
+  }
+  .pill.keep { color:#5eead4; background:rgba(20,184,166,.16); border-color:rgba(20,184,166,.4); }
+
+  .density { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+
+  /* training-shape sparkline on the lifetime chip + drawer figure */
+  .spark { margin-top: 8px; }
+  .spark .cap { font-size: 9.5px; color: var(--muted); margin-top: 3px; letter-spacing: .2px; }
+  .drawer .figure { margin: 6px 0 4px; background: #0c0f14; border: 1px solid var(--line); border-radius: 8px; padding: 12px 12px 8px; }
+  .drawer .figure .cap { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+  .drawer .figure .cap b { color: #5eead4; font-weight: 600; }
+
+  /* quarter-view chart */
+  .qv { background:#0c0f14; border:1px solid var(--line); border-radius:8px; padding:12px 12px 9px; margin:6px 0 4px; }
+  .qv-row { display:flex; align-items:flex-end; gap:10px; margin-bottom:10px; }
+  .qv-label { width:46px; flex:none; font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); padding-bottom:18px; }
+  .qv-bars { display:flex; gap:8px; flex:1; align-items:flex-end; height:62px; }
+  .qv-bar { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; }
+  .qv-fill { width:100%; border-radius:3px 3px 0 0; min-height:3px; }
+  .qv-fill.pace { background:#3b82f6; } .qv-fill.hr { background:#ec4899; } .qv-fill.watts { background:#f59e0b; }
+  .qv-val { font-size:10px; color:#c9d2e3; margin-top:4px; font-family:ui-monospace,Menlo,monospace; }
+  .qv-x { display:flex; gap:8px; padding-left:56px; }
+  .qv-x span { flex:1; text-align:center; font-size:9.5px; color:var(--muted); }
+  .qv-meta { font-size:10.5px; color:var(--muted); margin-top:7px; }
+  /* type→metric mapping table */
+  .maptbl { width:100%; border-collapse:collapse; margin:4px 0 2px; font-size:12px; }
+  .maptbl td { padding:5px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .maptbl td:first-child { color:#c9d2e3; font-weight:600; white-space:nowrap; width:1%; }
+  .maptbl td:last-child { color:var(--muted); }
+  .maptbl .mm { color:#6ee7b7; }
+
+  /* faint placeholder for lanes still to be designed */
+  .todo {
+    border: 1px dashed var(--line); border-radius: 12px; padding: 18px;
+    color: var(--muted); font-size: 12.5px; text-align: center; margin-top: 10px;
+  }
+
+  /* ---- drawer (reused from ai-flow) ---- */
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.55); opacity: 0; pointer-events: none; transition: opacity .18s ease; z-index: 40; }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; right: 0; height: 100%; width: min(460px, 92vw);
+    background: var(--panel); border-left: 1px solid var(--line); box-shadow: -20px 0 60px rgba(0,0,0,.5);
+    transform: translateX(100%); transition: transform .22s cubic-bezier(.4,0,.2,1); z-index: 50; display: flex; flex-direction: column;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer header { padding: 22px 24px 16px; border-bottom: 1px solid var(--line); }
+  .drawer header .tag { margin-bottom: 10px; }
+  .tag { display:inline-block; font-size: 9.5px; letter-spacing:.6px; text-transform:uppercase; padding:1px 6px; border-radius:4px; font-weight:700; }
+  .tag.raw { background: rgba(59,130,246,.18); color:#93c5fd; }
+  .tag.derived { background: rgba(16,185,129,.18); color:#6ee7b7; }
+  .tag.store { background: rgba(167,139,250,.18); color:#c4b5fd; }
+  .tag.llm { background: rgba(245,158,11,.2); color:#fcd34d; }
+  .drawer h2 { margin: 0; font-size: 19px; letter-spacing: -.2px; }
+  .drawer .accent { height: 4px; width: 44px; border-radius: 4px; margin-top: 12px; background: var(--derived); }
+  .drawer .body { padding: 20px 24px 40px; overflow-y: auto; }
+  .drawer .body h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 22px 0 8px; }
+  .drawer .body h4:first-child { margin-top: 0; }
+  .drawer .body p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink); }
+  .drawer .body ul { margin: 0; padding-left: 18px; }
+  .drawer .body li { font-size: 13px; margin-bottom: 6px; color: #d2d8e3; }
+  .drawer .files code { display: inline-block; margin: 3px 4px 0 0; }
+  code { color: #c9d2e3; background: #11141a; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+  .planbanner {
+    background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.4); color: #fcd34d;
+    border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; font-size: 12.5px; line-height: 1.55;
+  }
+  .drawer .data {
+    background: #0c0f14; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 13px; margin-top: 6px; overflow-x: auto;
+  }
+  .drawer .data pre {
+    margin: 0; font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: #b8c2d4; white-space: pre-wrap; word-break: break-word;
+  }
+  .data k { color: #6ee7b7; font-style: normal; }
+  .data v { color: #fcd34d; font-style: normal; }
+  .realtag {
+    display:inline-block; font-size:9.5px; letter-spacing:.5px; text-transform:uppercase;
+    font-weight:700; color:#5eead4; background:rgba(20,184,166,.16);
+    border-radius:4px; padding:1px 6px; margin-left:8px; vertical-align:middle;
+  }
+  /* real coverage callout under the legend */
+  .coverage {
+    max-width: 1100px; margin: 0 auto 22px; background: #0c0f14;
+    border: 1px solid var(--line); border-left: 4px solid var(--derived); border-radius: 10px;
+    padding: 12px 14px; overflow-x: auto;
+  }
+  .coverage pre { margin: 0; font: 11.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #b8c2d4; white-space: pre-wrap; }
+  .coverage k { color:#6ee7b7; font-style:normal; } .coverage v { color:#fcd34d; font-style:normal; }
+  .coverage .cap { font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 8px; }
+  .close { position: absolute; top: 18px; right: 18px; cursor: pointer; background: #11141a; border: 1px solid var(--line); color: var(--muted); width: 30px; height: 30px; border-radius: 8px; font-size: 16px; }
+  .close:hover { color: var(--ink); }
+  .footer { text-align: center; color: var(--muted); font-size: 11.5px; margin-top: 40px; }
+</style>
+</head>
+<body>
+
+<h1>Running Coach — Memory Timeline</h1>
+<p class="sub">How the coach <em>remembers</em> a run as it ages. The timeline runs top&nbsp;→&nbsp;bottom, oldest down to now:
+the <strong>oldest</strong> band (top) is the most condensed (a single aggregate), <strong>now</strong> (bottom) is the most detailed (raw streams + full report).
+Dashed blocks marked <span class="pill" style="margin:0">planned</span> do not exist yet — this diagram is the plan for them. <strong>Click any block</strong> for detail. <kbd>Esc</kbd> closes.</p>
+
+<div class="legend">
+  <div class="item"><span class="swatch" style="background:var(--raw)"></span>Raw / stream data</div>
+  <div class="item"><span class="swatch" style="background:var(--derived)"></span>Deterministic derived</div>
+  <div class="item"><span class="swatch" style="background:var(--store)"></span>Persisted record</div>
+  <div class="item"><span class="swatch" style="background:var(--llm)"></span>LLM-written memory</div>
+  <div class="item"><span class="swatch planned"></span>Planned (not built)</div>
+</div>
+
+<div class="coverage" id="coverage" hidden>
+  <div class="cap">Real retention coverage <span class="realtag" id="covTag"></span></div>
+  <pre id="covPre"></pre>
+</div>
+
+<div class="board" id="board" style="--cols: 190px 1fr;">
+
+  <!-- column headers (lanes) -->
+  <div class="grid-cols">
+    <div class="lane-head spacer">Time</div>
+    <div class="lane-head">Activities — the run itself</div>
+  </div>
+
+  <!-- LIFETIME (oldest, top) -->
+  <div class="band-row b-lifetime">
+    <div class="band-meta">
+      <h2>Lifetime</h2>
+      <p class="when">&gt; 1 year ago</p>
+      <div class="density">1 aggregate · streams &amp; report no longer read</div>
+    </div>
+    <div class="cell">
+      <div class="chip derived planned" data-key="lifetime-agg">
+        <h3>Lifetime totals<span class="pill">planned</span></h3><p>Counts &amp; sums only — the run is now a number in a lifetime accumulator.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- OLDER -->
+  <div class="band-row b-older">
+    <div class="band-meta">
+      <h2>Older</h2>
+      <p class="when">beyond the 182-day baseline window</p>
+      <div class="density">no longer in context packs</div>
+    </div>
+    <div class="cell">
+      <div class="chip store" data-key="old-activity"><h3>Activity</h3><p>Summary row, kept.</p></div>
+      <div class="chip store" data-key="old-derived"><h3>DerivedMetric</h3><p>Kept, but outside every rolling window.</p></div>
+      <div class="chip raw planned" data-key="old-streams"><h3>ActivityStream<span class="pill">prune?</span></h3><p>0% here — summary-only. Prune plan targets recent runs aging in.</p></div>
+    </div>
+  </div>
+
+  <!-- THIS SEASON -->
+  <div class="band-row b-season">
+    <div class="band-meta">
+      <h2>This season</h2>
+      <p class="when">within 182d · feeds baselines &amp; load</p>
+      <div class="density">contributes to rolling aggregates</div>
+    </div>
+    <div class="cell">
+      <div class="chip store" data-key="season-activity"><h3>Activity</h3><p>Full row.</p></div>
+      <div class="chip store" data-key="season-derived"><h3>DerivedMetric</h3><p>Feeds baselines, load EWMA, volume norms.</p></div>
+      <div class="chip raw" data-key="season-streams"><h3>ActivityStream</h3><p>Mixed: ~27% have streams, the rest summary-only.</p></div>
+      <div class="chip derived planned" data-key="qview-season"><h3>Quarter view<span class="pill">planned</span></h3><p>4-segment shape: pace · HR per quarter.</p></div>
+      <div class="chip store" data-key="season-report"><h3>CoachReport</h3><p>On disk, not in context.</p></div>
+    </div>
+  </div>
+
+  <!-- RECENT -->
+  <div class="band-row b-recent">
+    <div class="band-meta">
+      <h2>Recent</h2>
+      <p class="when">last ~2 weeks · last 1–2 exchanges</p>
+      <div class="density">read into the longitudinal section</div>
+    </div>
+    <div class="cell">
+      <div class="chip store" data-key="recent-activity"><h3>Activity</h3><p>Full row.</p></div>
+      <div class="chip raw" data-key="recent-streams"><h3>ActivityStream</h3><p>Full per-sample HR / pace / cadence.</p></div>
+      <div class="chip store" data-key="recent-derived"><h3>DerivedMetric + stream_view</h3><p>Full signals; view pulled on demand.</p></div>
+      <div class="chip derived planned" data-key="qview-recent"><h3>Quarter view<span class="pill">planned</span></h3><p>4-segment shape: pace · HR per quarter.</p></div>
+      <div class="chip llm planned" data-key="recent-digest"><h3>CoachReport.digest<span class="pill">off</span></h3><p>Headline + lead + next_steps into context (M4, disabled).</p></div>
+    </div>
+  </div>
+
+  <!-- NOW (newest, bottom) -->
+  <div class="band-row b-now">
+    <div class="band-meta">
+      <h2>Now</h2>
+      <p class="when">today · the live exchange</p>
+      <div class="density">everything retained, nothing condensed yet</div>
+    </div>
+    <div class="cell">
+      <div class="chip raw" data-key="now-activity"><h3>Activity (raw_summary)</h3><p>Just-ingested Strava record.</p></div>
+      <div class="chip raw" data-key="now-streams"><h3>ActivityStream</h3><p>Every per-sample point, full resolution.</p></div>
+      <div class="chip store" data-key="now-derived"><h3>DerivedMetric + stream_view</h3><p>The full re-derived truth the LLM never overrides.</p></div>
+      <div class="chip derived planned" data-key="qview-now"><h3>Quarter view<span class="pill">planned</span></h3><p>4-segment shape the full streams condense into.</p></div>
+      <div class="chip llm" data-key="now-report"><h3>CoachReport (full prose)</h3><p>The complete message + structured tail.</p></div>
+      <div class="chip store" data-key="now-exchange"><h3>Exchange (open)</h3><p>Repliable window; RPE / pain / done taps.</p></div>
+    </div>
+  </div>
+
+  <!-- placeholder for the lanes we'll add next as columns -->
+  <div class="todo">Next: add more lanes as <strong>columns</strong> to the right of Activities — <strong>Baselines &amp; load</strong> · <strong>Beliefs (M8)</strong> · <strong>Narrative (A2c)</strong> · <strong>Exchanges / digests</strong>. Tell me which to add.</div>
+
+</div>
+
+<!-- drawer -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dTitle">
+  <button class="close" id="closeBtn" aria-label="Close">✕</button>
+  <header>
+    <span class="tag" id="dTag">block</span>
+    <h2 id="dTitle">Title</h2>
+    <div class="accent" id="dAccent"></div>
+  </header>
+  <div class="body" id="dBody"></div>
+</aside>
+
+<p class="footer">A planning artifact — the target memory model, not all of it built. The codebase is the truth; this derives from it and the design intent.</p>
+
+<script src="memory-data.js"></script>
+<script>
+const COLORS = { raw:'var(--raw)', derived:'var(--derived)', store:'var(--store)', llm:'var(--llm)' };
+const REAL = (window.MEMORY_DATA || {});
+
+// ---- imagined 10-year training "shape" (illustrative; we only hold ~1yr of real data) ----
+const SHAPE = {
+  years: [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025],
+  km:    [ 380, 1150, 1980, 2600, 3120, 2840,  980, 2200, 3050, 3380, 2910],
+  injuryIdx: 6,   // the visible layoff
+  realIdx: 10,    // where the real data would live
+};
+function buildShape(width, height, labels) {
+  const n = SHAPE.km.length, max = Math.max(...SHAPE.km);
+  const padL = 6, padR = 6, padT = labels ? 16 : 4, padB = labels ? 26 : 4;
+  const innerW = width - padL - padR, innerH = height - padT - padB;
+  const gap = labels ? 6 : 3, bw = (innerW - gap * (n - 1)) / n;
+  let s = '';
+  for (let i = 0; i < n; i++) {
+    const h = Math.max(2, innerH * SHAPE.km[i] / max);
+    const x = padL + i * (bw + gap), y = padT + innerH - h;
+    let fill = '#3b82f6', op = labels ? 0.85 : 0.7;
+    if (i === SHAPE.injuryIdx) { fill = '#ef4444'; op = 1; }
+    else if (i === SHAPE.realIdx) { fill = '#5eead4'; op = 1; }
+    s += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="${fill}" opacity="${op}"/>`;
+    if (labels) s += `<text x="${(x + bw / 2).toFixed(1)}" y="${height - 14}" font-size="8" fill="#9aa3b2" text-anchor="middle">'${String(SHAPE.years[i]).slice(2)}</text>`;
+  }
+  if (labels) {
+    const ix = padL + SHAPE.injuryIdx * (bw + gap) + bw / 2;
+    s += `<text x="${ix.toFixed(1)}" y="${padT - 4}" font-size="8" fill="#fca5a5" text-anchor="middle">injury</text>`;
+    const rx = padL + SHAPE.realIdx * (bw + gap) + bw / 2;
+    s += `<text x="${rx.toFixed(1)}" y="${height - 2}" font-size="7.5" fill="#5eead4" text-anchor="middle">real</text>`;
+  }
+  return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">${s}</svg>`;
+}
+
+// ---- quarter view: a per-activity 4-segment chart, type-aware ----
+function fmtMetric(m, val) {
+  if (val == null) return '—';
+  if (m === 'pace') { const s = Math.round(val); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+  return String(val);
+}
+function buildQuarterChart(qv) {
+  if (!qv) return '<p style="color:#9aa3b2;font-size:12.5px">No quarter view — this run is summary-only (no streams to segment).</p>';
+  const unit = { pace: 'min/km', hr: 'bpm', watts: 'W' };
+  let rows = '';
+  qv.metrics.forEach(m => {
+    const vals = qv.quarters.map(q => q[m]);
+    const nums = vals.filter(x => x != null);
+    const min = Math.min(...nums), max = Math.max(...nums), rng = (max - min) || 1;
+    let bars = '';
+    vals.forEach(val => {
+      let pct = 20;
+      if (val != null) { let t = (val - min) / rng; if (m === 'pace') t = 1 - t; pct = Math.round(20 + 72 * t); }
+      bars += `<div class="qv-bar"><span class="qv-fill ${m}" style="height:${pct}%"></span><span class="qv-val">${fmtMetric(m, val)}</span></div>`;
+    });
+    rows += `<div class="qv-row"><span class="qv-label">${m}</span><div class="qv-bars">${bars}</div></div>`;
+  });
+  const each = qv.quarter_s ? ' (~' + Math.round(qv.quarter_s / 60) + ' min each)' : '';
+  return `<div class="qv">${rows}<div class="qv-x"><span>Q1</span><span>Q2</span><span>Q3</span><span>Q4</span></div>` +
+    `<div class="qv-meta">${qv.type} · ${qv.name} — 4 equal-time quarters${each}. Pace bars: taller = faster.</div></div>`;
+}
+const QV_MAP =
+  '<h4>What each type charts (the "decide what data" call)</h4>' +
+  '<table class="maptbl">' +
+  '<tr><td>Run / Walk / Hike</td><td><span class="mm">pace</span> · <span class="mm">HR</span> · time · effort</td></tr>' +
+  '<tr><td>Ride / VirtualRide<br>(indoor bike)</td><td><span class="mm">watts</span> · <span class="mm">HR</span> · time · cadence</td></tr>' +
+  '<tr><td>Rowing</td><td><span class="mm">pace</span> · <span class="mm">watts</span> · <span class="mm">HR</span> · time</td></tr>' +
+  '<tr><td>WeightTraining / Yoga</td><td>HR · time (low-signal)</td></tr>' +
+  '<tr><td>AlpineSki</td><td>speed · descent · HR · time</td></tr>' +
+  '</table>' +
+  '<p style="font-size:11.5px;color:#9aa3b2;margin-top:6px">Green = the continuous series the mini-chart draws; the rest are per-quarter scalars the view also stores. This dataset only carries run streams, so only pace/HR render below.</p>';
+
+// small sparkline on the lifetime chip so the "shape" is visible in the timeline itself
+(function initSpark() {
+  const chip = document.querySelector('[data-key="lifetime-agg"]');
+  if (chip) chip.insertAdjacentHTML('beforeend',
+    `<div class="spark">${buildShape(240, 38, false)}<div class="cap">imagined 10-yr volume shape — illustrative</div></div>`);
+})();
+
+// surface the real retention-coverage callout if the generated data is present
+(function initCoverage() {
+  const cov = REAL._coverage;
+  if (!cov) return;
+  document.getElementById('covPre').innerHTML = cov;
+  document.getElementById('covTag').textContent = 'seeded local DB · 466 activities';
+  document.getElementById('coverage').hidden = false;
+})();
+
+const DETAILS = {
+  // NOW
+  'now-activity': { kind:'raw', tag:'raw', title:'Activity — raw_summary',
+    what:'The just-ingested Strava record for this run, the rawest memory of it.',
+    points:['Keyed by strava_activity_id, owned by the User, carries raw_summary + block_id.','Source of truth for the run; never mutated by the coach.'],
+    files:['app/models/activity.py'] },
+  'now-streams': { kind:'raw', tag:'raw', title:'ActivityStream — full resolution',
+    what:'Every per-sample point of the run: HR, pace/velocity, cadence, power, temp, grade.',
+    points:['~1000–1500 samples per run.','This is the densest the memory of a run ever gets.','Today these rows live forever — see the "prune?" markers further left.'],
+    files:['app/models/activity_stream.py'] },
+  'now-derived': { kind:'store', tag:'store', title:'DerivedMetric + stream_view',
+    what:'The full re-derived signal set the LLM reasons over but can never override.',
+    points:['Class, effort_score, pace variability, HR drift, time-in-zones, stops, efficiency, intervals, flags, risk, discount signals.','stream_view: a ≤60-point aligned downsample for deep-dive, deferred-load.','Re-derived idempotently on every analyze.'],
+    files:['app/models/derived_metric.py','services/analysis/stream_view.py'] },
+  'now-report': { kind:'llm', tag:'llm', title:'CoachReport — full prose',
+    what:'The complete generated report: the human prose message plus the structured tail.',
+    points:['Versioned by (activity_id, prompt_id, schema_version).','This is the full text; older bands keep only its digest, then drop it from context entirely.'],
+    files:['app/models/coach_report.py'] },
+  'now-exchange': { kind:'store', tag:'store', title:'Exchange — open',
+    what:'The live two-stage lifecycle row for this run\'s block.',
+    points:['opened_at anchors the reply window; a tap can fire the fuller turn early.','Closes once fuller_sent_at is set — after which late activities start a new block.'],
+    files:['app/models/exchange.py'] },
+
+  // RECENT
+  'recent-activity': { kind:'store', tag:'store', title:'Activity — recent',
+    what:'Still the full row; nothing about the record itself has condensed yet.',
+    points:['Within the last ~2 weeks / last 1–2 exchanges.'],
+    files:['app/models/activity.py'] },
+  'recent-streams': { kind:'raw', tag:'raw', title:'ActivityStream — recent',
+    what:'Full per-sample streams, unchanged from ingestion.',
+    points:['Still pulled for charts and deep-dive.'],
+    files:['app/models/activity_stream.py'] },
+  'recent-derived': { kind:'store', tag:'store', title:'DerivedMetric — recent',
+    what:'Full derived signals; the stream_view is pulled on demand for a deep-dive.',
+    points:['Read through the A2b retrieval seam, not eagerly loaded.'],
+    files:['services/coach/retrieval.py'] },
+  'recent-digest': { kind:'llm', tag:'llm', title:'CoachReport.digest (M4 — currently off)',
+    plan:'The M4 prior-report digest is gated OFF by default (PR #418) after it replayed a stale theme forward. The data still exists on the row; it is just not read into context. Re-enable is a config flip (#401/#402).',
+    what:'The first real condensing step: the full report shrinks to a digest for the longitudinal memory.',
+    points:['Digest = activity_date, headline, lead_argument, next_steps only — never the full body.','Read into the longitudinal section so a new report advances the prior narrative.','This is the seam where "detailed → condensed" actually happens in code today.'],
+    files:['services/coach/digest.py','retrieval.py'] },
+
+  // SEASON
+  'season-activity': { kind:'store', tag:'store', title:'Activity — this season',
+    what:'Full row, within the 182-day baseline window.',
+    points:['No longer surfaced in context packs, but fully queryable.'],
+    files:['app/models/activity.py'] },
+  'season-derived': { kind:'store', tag:'store', title:'DerivedMetric — this season',
+    what:'The workhorse: this is what the rolling aggregates are built from.',
+    points:['Feeds RunnerBaseline buckets, the training-load EWMA, and volume norms.','effort_score is the summed primitive behind fitness/fatigue/form.'],
+    files:['services/analysis/baseline.py','services/readiness.py','services/coach/volume.py'] },
+  'season-streams': { kind:'raw', tag:'raw', title:'ActivityStream — this season',
+    what:'Mixed across this band: in the real seeded data only ~27% of season activities carry per-sample streams; the rest were summary-only imports that never had them. Where streams exist, this is the biggest storage cost and the prime pruning candidate.',
+    points:['Nothing in the rolling-aggregate path needs raw streams once DerivedMetric exists.','The runs that still hold streams here are exactly what the planned prune (Older band) would condense to a stream_view.'],
+    files:['app/models/activity_stream.py'] },
+  'season-report': { kind:'store', tag:'store', title:'CoachReport — this season',
+    what:'The full report is still on disk but no longer read into any context.',
+    points:['Kept for the activity page; not part of the coach\'s working memory.'],
+    files:['app/models/coach_report.py'] },
+
+  // OLDER
+  'old-activity': { kind:'store', tag:'store', title:'Activity — older',
+    what:'Summary row, kept indefinitely, but now outside every rolling window.',
+    points:['Beyond the 182-day baseline window — contributes to nothing rolling.'],
+    files:['app/models/activity.py'] },
+  'old-derived': { kind:'store', tag:'store', title:'DerivedMetric — older',
+    what:'Still stored, but no aggregate reads it any more.',
+    points:['Only lifetime totals and (planned) condensed history would touch it.'],
+    files:['app/models/derived_metric.py'] },
+  'old-streams': { kind:'raw', tag:'raw', title:'ActivityStream — older (PLANNED prune)',
+    plan:'NOT BUILT. The real data shows 0% of activities older than 182 days carry streams — historically they were summary-only imports that never fetched per-sample data, so there is nothing to prune for THESE runs. The plan bites the recent runs that DO carry streams (100% at ≤14d) once they age out of the baseline window: drop the raw per-sample rows and keep only the ≤60-point stream_view already on DerivedMetric. The diagram keeps this marker in the Older band because that is where the drop should happen.',
+    what:'Raw streams that should condense once a run is old enough that nothing reads them at full resolution.',
+    points:['stream_view already preserves the shape at ≤60 points — enough for any retro chart.','For runs that never had streams there is no work to do; the prune is about recent stream-carrying runs as they age.','Pruning is the main storage win as per-user history and (soon) user count grow.','Open questions: hard-delete vs cold archive? re-fetchable from Strava on demand?'],
+    files:['app/models/activity_stream.py','services/analysis/stream_view.py'] },
+
+  // LIFETIME
+  'lifetime-agg': { kind:'derived', tag:'derived', title:'Lifetime totals (PLANNED)',
+    plan:'NOT BUILT as a durable record. The numbers below are computed live for this diagram, but nothing in the app keeps a per-user lifetime memory yet. This is the floor of the condensing gradient: a run stops being a run and becomes its contribution to a handful of sums.',
+    what:'The fully-condensed end state, and the accumulator that makes pruning everything else safe. Once raw streams (and one day whole old activities) can be dropped, their contribution must already be banked here first — so lifetime totals is the memory that must never be lost.',
+    points:['Proposed scalar fields on a per-user LifetimeMemory: since / through, activity_count + a per-type breakdown (every type, not an "other" bucket), total_distance_m, total_moving_time_s, total_elevation_m, total_load (Σ effort_score), report_count.','Beyond scalars, it keeps a SHAPE — a coarse, shape-preserving contour of the whole career (per-year volume, eras, the longest layoff, lifetime PBs by distance). Same idea as stream_view downsampling one run, applied to a decade: condensed but still recognisable.','The shape is what lets the coach say "your highest-volume year since the 2021 injury" or "first time back over 3,000 km" after the individual runs are long gone.','Open design question: a durable incrementally-updated row, vs a computed-on-demand view. A view is cheapest while the source rows survive; a durable row becomes mandatory the moment we prune those rows, because then the sum (and the shape) is the only surviving trace.','This is why it sits at the top of the timeline: it is the one tier that GAINS authority as everything below it is allowed to fade.'],
+    files:['(planned — no model yet)'] },
+};
+
+// the larger labelled training-shape figure for the lifetime drawer (DETAILS now exists)
+DETAILS['lifetime-agg'].extra =
+  '<h4>Training shape — imagined 10-year career</h4>' +
+  '<div class="figure">' + buildShape(420, 150, true) +
+  '<div class="cap">A made-up decade (we only hold ~1&nbsp;yr of real data): per-year running volume, a visible <b style="color:#fca5a5">2021 layoff</b>, and where the <b>real data</b> sits. The point: lifetime memory keeps this contour, not just the totals, so the career stays legible after the runs are pruned.</div></div>';
+
+// quarter-view planned artifact, one per band — shares content, real chart from q-* data
+['qview-now', 'qview-recent', 'qview-season'].forEach((key, i) => {
+  const dataKey = ['q-now', 'q-recent', 'q-season'][i];
+  DETAILS[key] = {
+    kind: 'derived', tag: 'planned', title: 'Quarter view (PLANNED)',
+    plan: 'NOT BUILT. A proposed condensed per-activity artifact: each run reduced to 4 equal-time quarters of its type\'s key metrics. It is the per-activity parallel of the lifetime career-shape, and the mid-tier between full streams and a scalar — what a run keeps once its raw streams are pruned.',
+    what: 'A 4-segment, type-aware, shape-preserving summary of one activity. The chart below is computed from this run\'s REAL streams.',
+    points: ['Equal-time quarters Q1–Q4; each carries the type\'s metrics averaged over the segment.','Type-aware: a run keeps pace/HR/effort, an indoor bike keeps watts/HR — see the mapping.','Tiny enough to keep forever (~12 numbers) vs the ~1–2k-sample raw streams it replaces.','Preserves the within-run shape — warmup, HR drift, a fast finish — that a single average erases.'],
+    files: ['(planned — would derive from stream_view / streams at prune time)'],
+    extra: QV_MAP + '<h4>Real quarter shape</h4>' + buildQuarterChart(REAL[dataKey]),
+  };
+});
+
+const drawer = document.getElementById('drawer');
+const scrim  = document.getElementById('scrim');
+const dTag   = document.getElementById('dTag');
+const dTitle = document.getElementById('dTitle');
+const dBody  = document.getElementById('dBody');
+const dAccent= document.getElementById('dAccent');
+
+function openDrawer(key) {
+  const d = DETAILS[key];
+  if (!d) return;
+  dTag.textContent = d.tag;
+  dTag.className = 'tag ' + d.kind;
+  dTitle.textContent = d.title;
+  dAccent.style.background = COLORS[d.kind];
+  let html = '';
+  if (d.plan) html += '<div class="planbanner">' + d.plan + '</div>';
+  html += '<h4>What it is</h4><p>' + d.what + '</p>';
+  if (d.extra) html += d.extra;
+  if (d.points && d.points.length) html += '<h4>Details</h4><ul>' + d.points.map(p => '<li>' + p + '</li>').join('') + '</ul>';
+  if (d.files && d.files.length) html += '<h4>Where in the code</h4><div class="files">' + d.files.map(f => '<code>' + f + '</code>').join('') + '</div>';
+  const real = REAL[key];
+  if (real) html += '<h4>Real data <span class="realtag">seeded local DB</span></h4><div class="data"><pre>' + real + '</pre></div>';
+  dBody.innerHTML = html;
+  drawer.classList.add('open');
+  scrim.classList.add('open');
+}
+function closeDrawer() { drawer.classList.remove('open'); scrim.classList.remove('open'); }
+
+document.querySelectorAll('.chip').forEach(n => {
+  n.setAttribute('tabindex', '0');
+  n.setAttribute('role', 'button');
+  n.addEventListener('click', () => openDrawer(n.dataset.key));
+  n.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(n.dataset.key); } });
+});
+document.getElementById('closeBtn').addEventListener('click', closeDrawer);
+scrim.addEventListener('click', closeDrawer);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+</script>
+
+</body>
+</html>
