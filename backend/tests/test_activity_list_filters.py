@@ -12,7 +12,9 @@ import pytest
 from app.models import Activity, User
 
 
-def _make_activity(db, *, name: str, type_: str, start: datetime) -> Activity:
+def _make_activity(
+    db, *, name: str, type_: str, start: datetime, is_deleted: bool = False
+) -> Activity:
     user_id = uuid.uuid4()
     db.add(User(id=user_id, email=f"filt_{user_id}@example.com"))
     db.flush()
@@ -27,6 +29,7 @@ def _make_activity(db, *, name: str, type_: str, start: datetime) -> Activity:
         moving_time_s=3600,
         elapsed_time_s=3700,
         elev_gain_m=10.0,
+        is_deleted=is_deleted,
     )
     db.add(a)
     db.commit()
@@ -95,3 +98,44 @@ def test_empty_result_when_nothing_matches(client, seeded):
     resp = client.get("/api/activities?types=Swim")
     assert resp.status_code == 200, resp.text
     assert resp.json() == []
+
+
+def test_soft_deleted_excluded_from_list(client, db):
+    """A soft-deleted activity must not appear in the All Activities list (#410),
+    consistent with every other read path that filters is_deleted."""
+    _make_activity(
+        db, name="Live Run", type_="Run",
+        start=datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc),
+    )
+    _make_activity(
+        db, name="Deleted Run", type_="Run",
+        start=datetime(2026, 5, 2, 9, 0, tzinfo=timezone.utc),
+        is_deleted=True,
+    )
+    resp = client.get("/api/activities")
+    assert resp.status_code == 200, resp.text
+    assert _names(resp) == {"Live Run"}
+
+
+def test_soft_deleted_excluded_with_type_filter(client, db):
+    """The type filter must not re-admit a soft-deleted activity (#410)."""
+    _make_activity(
+        db, name="Deleted Run", type_="Run",
+        start=datetime(2026, 5, 2, 9, 0, tzinfo=timezone.utc),
+        is_deleted=True,
+    )
+    resp = client.get("/api/activities?types=Run")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+def test_detail_view_404s_for_soft_deleted(client, db):
+    """The single-activity detail view reads a soft-deleted activity as
+    not-present and 404s, consistent with the list (#410)."""
+    a = _make_activity(
+        db, name="Deleted Run", type_="Run",
+        start=datetime(2026, 5, 2, 9, 0, tzinfo=timezone.utc),
+        is_deleted=True,
+    )
+    resp = client.get(f"/api/activities/{a.id}")
+    assert resp.status_code == 404, resp.text

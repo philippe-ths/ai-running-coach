@@ -28,6 +28,9 @@ def get_activities(
         # per item (compose_headline -> sport_type/trainer reads raw_summary), so
         # without this the deferred column would lazy-load once per row -> N+1.
         .options(joinedload(Activity.metrics), undefer(Activity.raw_summary))
+        # Exclude soft-deleted activities (#410), consistent with every other
+        # read path (trends, readiness, training load, coach context/retrieval).
+        .filter(Activity.is_deleted == False)  # noqa: E712
     )
     if types:
         query = query.filter(Activity.type.in_(types))
@@ -64,5 +67,8 @@ def get_activity(db: Session, activity_id: str | uuid.UUID) -> Activity | None:
             undefer(Activity.raw_summary),
         )
         .filter(Activity.id == activity_id)
+        # A soft-deleted activity reads as not-present (#410): the detail view
+        # 404s on it, consistent with the list and every other read path.
+        .filter(Activity.is_deleted == False)  # noqa: E712
         .first()
     )
