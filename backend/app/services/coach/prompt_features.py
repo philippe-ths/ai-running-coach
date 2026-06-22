@@ -98,9 +98,41 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
 }
 
 
+# The runner-facing capabilities. TWO_STAGE is the cadence shape (an operational
+# choice, inert under the receipt cadence and rolled back deliberately), so a prompt
+# that carries ONLY two-stage is not what we mean by "feature-bearing": this set is
+# the runner-visible coaching surface (voice/corpus/stance/training-load/
+# user-materials/volume) whose silent loss #424 guards against.
+RUNNER_FACING_FEATURES: frozenset[PromptFeature] = frozenset(
+    {
+        PromptFeature.VOICE,
+        PromptFeature.CORPUS,
+        PromptFeature.STANCE,
+        PromptFeature.TRAINING_LOAD,
+        PromptFeature.USER_MATERIALS,
+        PromptFeature.VOLUME,
+    }
+)
+
+
 def has_feature(prompt_id: Optional[str], feature: PromptFeature) -> bool:
     """True when ``prompt_id`` carries ``feature``. False for any unknown id or None."""
     return feature in PROMPT_FEATURES.get(prompt_id, frozenset())
+
+
+def features_for(prompt_id: Optional[str]) -> frozenset[PromptFeature]:
+    """The full capability set ``prompt_id`` carries (empty for any unknown id/None)."""
+    return PROMPT_FEATURES.get(prompt_id, frozenset())
+
+
+def carries_runner_facing_features(prompt_id: Optional[str]) -> bool:
+    """True when ``prompt_id`` activates at least one runner-visible coaching feature.
+
+    False for a legacy ``coach_report_*`` id, ``coach_message_v1``, a TWO_STAGE-only
+    id, ``None``, or any unknown id. This is the predicate #424 uses to detect a
+    silently degraded active prompt at startup.
+    """
+    return bool(features_for(prompt_id) & RUNNER_FACING_FEATURES)
 
 
 def ids_with(feature: PromptFeature) -> frozenset[str]:

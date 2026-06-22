@@ -21,7 +21,15 @@ from app.services.coach.service import (
     get_or_generate_coach_report,
 )
 
-ACTIVE_PROMPT_ID = settings.COACH_PROMPT_ID
+# This suite exercises the STRUCTURED single-shot cache path (schema 1.2), so it
+# pins the structured prompt rather than following the active default, which now
+# tracks the feature-bearing message prompt (#424).
+ACTIVE_PROMPT_ID = "coach_report_v10"
+
+
+@pytest.fixture(autouse=True)
+def _pin_structured_prompt(monkeypatch):
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", ACTIVE_PROMPT_ID)
 
 _VALID_REPORT = {
     "key_takeaways": [{"text": "Cached takeaway one."}, {"text": "Cached takeaway two."}],

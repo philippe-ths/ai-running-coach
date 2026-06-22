@@ -20,6 +20,15 @@ from app.models.coach_report import CoachReport
 from app.services.coach.service import _strip_code_fences, get_or_generate_coach_report
 
 
+@pytest.fixture(autouse=True)
+def _pin_structured_prompt(monkeypatch):
+    # This regression is about the STRUCTURED single-shot path; the active default
+    # now tracks the feature-bearing message prompt (#424), so pin the structured one.
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")
+
+
 class TestStripCodeFences:
     def test_fully_fenced(self):
         assert _strip_code_fences('```json\n{"a": 1}\n```') == '{"a": 1}'
