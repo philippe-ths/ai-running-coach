@@ -188,9 +188,10 @@ class VolumeMetricVsNorm(BaseModel):
 
     `current_all` is holistic (every logged activity); `current_runs` is the
     runs-only figure alongside. `norm`/`norm_recent` are the runner's typical output
-    over a window of the same length (per-day rate over a 12-week / 4-week baseline
-    before the window, scaled to the window's elapsed days), so the comparison is
-    fair across ranges and partial calendar periods. `direction` carries a deadband.
+    over a FULL period of the framing's length (per-day rate over a 12-week / 4-week
+    baseline before the window, scaled to the full period — #436), so a calendar
+    period-to-date total is compared against a typical full period rather than a
+    pro-rated slice. `direction` carries a deadband.
     """
     metric: str  # sessions | distance_m | moving_time_s | effort_score
     current_all: float

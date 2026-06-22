@@ -223,15 +223,18 @@ def _norm_per_day(
 def _report_metric(
     metric: str,
     window_facts: List[Any],
-    days_elapsed: int,
+    norm_days: int,
     norm_pd: Dict[str, Optional[float]],
 ) -> VolumeMetricVsNorm:
     current_all = _sum(window_facts, metric)
     current_runs = _sum(window_facts, metric, runs_only=True)
     pd = norm_pd.get(metric)
-    # Scale the per-day norm to the window's elapsed days, so a partial calendar
-    # period is judged against an equally-partial norm.
-    norm = pd * days_elapsed if pd is not None else None
+    # Scale the per-day norm to the framing's FULL period length (#436), so the
+    # period-to-date total is judged against the runner's typical full-period total
+    # — e.g. a Monday's run vs a typical full week, not vs a single typical day.
+    # For rolling, norm_days == the window length, so this is unchanged there; only
+    # a partial calendar period changes (it no longer reads "in line" mid-period).
+    norm = pd * norm_days if pd is not None else None
 
     pct: Optional[float] = None
     if norm is not None and norm > 0:
@@ -284,7 +287,9 @@ def _report_framing(
         baseline_start=b_start,
         baseline_end=b_end,
         metrics=[
-            _report_metric(m, window_facts, days_elapsed, norm_pd) for m in _METRICS
+            # Scale the norm by the FULL period length (#436), not days_elapsed, so
+            # the "vs typical" read is full-period (consistent with "vs last period").
+            _report_metric(m, window_facts, window_days, norm_pd) for m in _METRICS
         ],
     )
 
@@ -321,8 +326,11 @@ def _calendar_period(range_key: str, as_of: date) -> Tuple[date, date, int, str]
 def build_volume_report(facts: List[Any], as_of: date, range_key: str) -> VolumeReport:
     """The Trends-page volume-vs-norm report for `range_key` (7D/30D/3M/6M/1Y) as of
     `as_of`. Two framings — rolling (trailing N days) and calendar (current period to
-    date) — each metric vs the runner's norm scaled to the window. Reuses the same
-    pure core as the coach pack so the two never drift."""
+    date) — each metric vs the runner's norm for a FULL period of that length (#436):
+    rolling compares a complete window, and calendar compares the period-to-date total
+    against the typical full-period total (so it reads as progress through the period,
+    consistent with "vs last period", rather than pro-rating to days elapsed). Reuses
+    the same pure core as the coach pack so the two never drift."""
     n = _RANGE_WINDOW_DAYS[range_key]
     baseline_days = _BASELINE_DAYS_BY_RANGE[range_key]
     roll_start = as_of - timedelta(days=n - 1)
