@@ -149,6 +149,34 @@ def test_measurement_advice_does_not_classify_as_add_quality():
         assert ctx.outcomes == [], f"{action!r} should not classify"
 
 
+def test_more_measurement_advice_does_not_classify():
+    """#165: extra real-data capture/testing phrasings must still abstain — the
+    recall improvement must not start reading data-capture advice as add_quality."""
+    for action, details in (
+        ("Consider using structured intervals for future indoor rides",
+         "use your bike computer's lap button or interval timer to track work and rest periods"),
+        ("Consider using interval timing for structured rowing sessions",
+         "use the rowing machine's interval function or manual lap button"),
+        ("Consider heart rate zone calibration",
+         "schedule a lactate threshold or ramp test to establish personalized training zones"),
+        ("Consider using manual lap markers for structured indoor sessions",
+         "press lap button between intervals or efforts to improve workout detection"),
+    ):
+        ctx = build_adherence(
+            prior_report_date="2026-02-01T10:00:00+00:00",
+            prior_next_steps=[{"action": action, "details": details, "why": ""}],
+            candidates=[
+                CandidateActivity(
+                    date="2026-02-03T10:00:00+00:00", effort="tempo",
+                    duration_class="standard", structure="continuous", is_race=False,
+                    confidence="high", user_intent=None,
+                ),
+            ],
+            pushback=False,
+        )
+        assert ctx.outcomes == [], f"{action!r} should not classify as a theme"
+
+
 def test_easy_discipline_judges_first_comparable_run():
     """The verdict is the NEXT comparable run after the advice, not a later one."""
     ctx = build_adherence(
@@ -277,6 +305,76 @@ def test_add_quality_acted_on_fires_immediately():
         pushback=False,
     )
     assert ctx.outcomes[0].label == "acted_on"
+
+
+# --------------------------------------------------------------------------- #
+# #165 recall: real-data additive-quality phrasings now classify, and the
+# action-first rule rescues a quality instruction whose DETAILS incidentally
+# mention easy/recovery (the second-theme-in-the-rationale false abstain).
+# --------------------------------------------------------------------------- #
+
+def test_add_quality_real_phrasings_classify():
+    """Real production next_step actions the coach uses to ADD a quality session
+    that the v1 keyword set missed."""
+    for action in (
+        "Consider adding a quality running session",
+        "Add one quality session this week",
+        "Plan a tempo run",
+    ):
+        ctx = build_adherence(
+            prior_report_date="2026-02-01T10:00:00+00:00",
+            prior_next_steps=[_step(action)],
+            candidates=[_run("2026-02-02T10:00:00+00:00", effort="tempo")],
+            pushback=False,
+        )
+        assert len(ctx.outcomes) == 1, f"{action!r} should classify"
+        assert ctx.outcomes[0].theme == "add_quality", action
+
+
+def test_add_quality_action_survives_easy_mention_in_details():
+    """#165: the imperative is add_quality; the details name "easy recovery rides"
+    only as the rest BETWEEN quality work. Action-first classification trusts the
+    instruction instead of abstaining as multi-intent on the incidental mention."""
+    ctx = build_adherence(
+        prior_report_date="2026-02-01T10:00:00+00:00",
+        prior_next_steps=[_step(
+            "Plan your next quality session",
+            details="wait 2-3 days before another moderate or hard effort, "
+                    "focusing on easy recovery rides in between",
+        )],
+        candidates=[_run("2026-02-03T10:00:00+00:00", effort="tempo")],
+        pushback=False,
+    )
+    assert len(ctx.outcomes) == 1
+    assert ctx.outcomes[0].theme == "add_quality"
+    assert ctx.outcomes[0].label == "acted_on"
+
+
+def test_multi_intent_in_the_action_itself_still_abstains():
+    """Action-first must NOT defeat the multi-intent guard: when the imperative
+    ITSELF names two themes, the step is genuinely ambiguous -> abstain."""
+    ctx = build_adherence(
+        prior_report_date="2026-02-01T10:00:00+00:00",
+        prior_next_steps=[_step("Add a tempo run but keep your easy runs easy")],
+        candidates=[_run("2026-02-03T10:00:00+00:00", effort="tempo")],
+        pushback=False,
+    )
+    assert ctx.outcomes == []
+
+
+def test_caution_in_details_still_abstains_under_action_first():
+    """The negation guard runs on the full text, so a caution buried in the
+    details abstains even when the action keyword looks positive."""
+    ctx = build_adherence(
+        prior_report_date="2026-02-01T10:00:00+00:00",
+        prior_next_steps=[_step(
+            "Plan your next quality session",
+            details="but hold off until the knee settles",
+        )],
+        candidates=[_run("2026-02-03T10:00:00+00:00", effort="tempo")],
+        pushback=False,
+    )
+    assert ctx.outcomes == []
 
 
 # --------------------------------------------------------------------------- #
