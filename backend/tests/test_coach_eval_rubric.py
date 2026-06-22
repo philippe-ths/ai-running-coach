@@ -649,7 +649,8 @@ class TestPromptVersioningV9:
 
     def test_v9_is_active_default(self):
         from app.core.config import settings
-        assert settings.COACH_PROMPT_ID == "coach_report_v10"
+        # The in-code default tracks the production feature-bearing prompt (#424).
+        assert settings.COACH_PROMPT_ID == "coach_message_v8"
 
     def test_v9_adds_coach_the_data_rule(self):
         from app.services.coach.prompts import PROMPT_VERSIONS
