@@ -126,8 +126,9 @@ def test_no_referral_when_clean(db):
 
 class TestPromptVersioning:
     def test_v6_is_active_default(self):
-        # Active default has since advanced (#168 -> v8); v7 stays byte-stable.
-        assert settings.COACH_PROMPT_ID == "coach_report_v10"
+        # The in-code default tracks the production feature-bearing prompt (#424);
+        # v7 stays registered and byte-stable for its cached reports.
+        assert settings.COACH_PROMPT_ID == "coach_message_v8"
 
     def test_v6_adds_calibration_rule(self):
         v6 = PROMPT_VERSIONS["coach_report_v7"]

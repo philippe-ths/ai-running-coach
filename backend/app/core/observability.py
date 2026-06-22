@@ -118,6 +118,34 @@ def init_logging() -> None:
     root.setLevel(logging.INFO)
 
 
+def warn_if_coach_prompt_inert() -> None:
+    """Log a loud WARNING when the active coach prompt carries no runner-facing features.
+
+    The voice block, corpus, stance, training-load, user-materials, and volume
+    sections are all gated on COACH_PROMPT_ID. If a deploy resolves to a prompt
+    that carries none of them (a legacy ``coach_report_*`` id, ``coach_message_v1``,
+    a two-stage-only id, or an unknown id), that whole coaching surface goes inert
+    with no error. Rather than degrade silently (#424), surface it at startup so a
+    misconfigured deploy is visible in the logs instead of producing flat reports.
+    Called once per process group right after ``init_logging``.
+    """
+    # Imported lazily so this pure-logging module stays free of a coach-layer
+    # import at module load.
+    from app.services.coach.prompt_features import carries_runner_facing_features
+
+    prompt_id = settings.COACH_PROMPT_ID
+    if carries_runner_facing_features(prompt_id):
+        return
+    logging.getLogger(__name__).warning(
+        "coach_prompt_inert: active COACH_PROMPT_ID=%r carries no runner-facing "
+        "coaching features (voice/corpus/stance/training-load/user-materials/volume); "
+        "the entire prompt-gated coaching surface is disabled. Set COACH_PROMPT_ID to a "
+        "feature-bearing prompt (e.g. coach_message_v8).",
+        prompt_id,
+        extra={"coach_prompt_id": prompt_id},
+    )
+
+
 def sentry_capture_active() -> bool:
     """True only when Sentry error capture is actually live.
 

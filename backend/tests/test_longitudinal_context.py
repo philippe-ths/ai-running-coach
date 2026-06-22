@@ -312,8 +312,10 @@ def test_pack_omits_baseline_trend_when_no_matching_bucket(db):
 # --- prompt discipline ------------------------------------------------------
 
 def test_active_prompt_has_anti_restate_instruction():
-    from app.core.config import settings
-    prompt = build_system_prompt(settings.COACH_PROMPT_ID)
+    # Pins the M4 anti-restate wording in the structured coach_report chain. The
+    # active default now tracks the feature-bearing message prompt (#424), which
+    # carries the same discipline phrased differently; this asserts the v10 text.
+    prompt = build_system_prompt("coach_report_v10")
     lowered = prompt.lower()
     assert "advance the narrative" in lowered
     assert "longitudinal" in lowered
