@@ -58,6 +58,32 @@ export interface DailyZoneLoadPoint {
   hard_min: number;
 }
 
+// #432: coarse-granularity (2-week / month) bucket points, keyed by the bucket's
+// first local day. One shape per metric, shared by the biweekly and monthly series.
+export interface PeriodDistancePoint {
+  period_start: string;
+  total_distance_m: number;
+  activity_count: number;
+}
+
+export interface PeriodTimePoint {
+  period_start: string;
+  total_moving_time_s: number;
+  activity_count: number;
+}
+
+export interface PeriodSufferScorePoint {
+  period_start: string;
+  effort_score: number;
+}
+
+export interface PeriodZoneLoadPoint {
+  period_start: string;
+  easy_min: number;
+  moderate_min: number;
+  hard_min: number;
+}
+
 export interface TrendsSummary {
   total_distance_m: number;
   total_moving_time_s: number;
@@ -86,9 +112,21 @@ export interface TrendsData {
   efficiency_trend: EfficiencyPoint[];
   weekly_zone_load: ZoneLoadWeekPoint[];
   daily_zone_load: DailyZoneLoadPoint[];
+  // #432: coarser bar granularities rolled up server-side.
+  biweekly_distance: PeriodDistancePoint[];
+  monthly_distance: PeriodDistancePoint[];
+  biweekly_time: PeriodTimePoint[];
+  monthly_time: PeriodTimePoint[];
+  biweekly_suffer_score: PeriodSufferScorePoint[];
+  monthly_suffer_score: PeriodSufferScorePoint[];
+  biweekly_zone_load: PeriodZoneLoadPoint[];
+  monthly_zone_load: PeriodZoneLoadPoint[];
 }
 
 export type TrendsRange = "7D" | "30D" | "3M" | "6M" | "1Y" | "ALL";
+
+// #432: bar granularity (bucket size) the runner can choose per range.
+export type TrendsGranularity = "day" | "week" | "2week" | "month";
 
 export interface WeeklyStatsSummary {
   total_distance_m: number;
