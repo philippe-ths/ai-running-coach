@@ -1,6 +1,7 @@
 import uuid
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, undefer
 
 from app.models import Activity
@@ -18,10 +19,22 @@ def get_activities(
     """List activities newest-first, paginated, with optional filters (#404).
 
     ``types`` narrows to the given activity types (OR within the list). ``start_date``
-    and ``end_date`` bound the range on ``start_date`` (UTC) and are both inclusive of
-    the whole day. Filters compose; pagination is applied after filtering so it walks
-    the filtered history rather than the full one.
+    and ``end_date`` bound the range on the activity's LOCAL calendar day and are both
+    inclusive of the whole day. Filters compose; pagination is applied after filtering so
+    it walks the filtered history rather than the full one.
+
+    The bound is taken against ``coalesce(start_date_local, start_date)`` (#411): the
+    list renders each row by its own local wall-clock date (``start_date_local``, falling
+    back to UTC ``start_date`` for pre-#399 rows, mirroring ``Activity.local_start`` and
+    the frontend's ``activityStartDate``), so filtering on the UTC instant could
+    include/exclude a near-midnight row in disagreement with the date the runner sees.
+    Bounds are naive datetimes so they compare against the naive local wall-clock column.
+    ``start_date_local`` is not indexed (single-user, single-timezone today); the cost is
+    a sequential scan over the runner's history, acceptable at this scale.
     """
+    # The displayed/filtered day: the local wall-clock start, falling back to the UTC
+    # instant when no local time was stored (the same precedence local_start uses).
+    local_start = func.coalesce(Activity.start_date_local, Activity.start_date)
     query = (
         db.query(Activity)
         # undefer raw_summary (#359): the list composes a classification headline
@@ -35,14 +48,14 @@ def get_activities(
     if types:
         query = query.filter(Activity.type.in_(types))
     if start_date is not None:
-        # Bound on start_date (UTC, the indexed ordering column). The chosen date is
-        # treated as a UTC day, consistent with how the list orders/windows.
-        lower = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
-        query = query.filter(Activity.start_date >= lower)
+        # Bound on the local wall-clock day. Naive lower bound: midnight of the chosen
+        # local day, compared against the naive local-start column.
+        lower = datetime.combine(start_date, time.min)
+        query = query.filter(local_start >= lower)
     if end_date is not None:
-        # End inclusive: everything strictly before the start of the following day.
-        upper = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone.utc)
-        query = query.filter(Activity.start_date < upper)
+        # End inclusive: everything strictly before the start of the following local day.
+        upper = datetime.combine(end_date + timedelta(days=1), time.min)
+        query = query.filter(local_start < upper)
     return (
         query
         .order_by(Activity.start_date.desc())
