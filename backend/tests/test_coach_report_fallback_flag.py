@@ -19,6 +19,15 @@ from app.models.coach_report import CoachReport
 from app.services.coach.service import get_or_generate_coach_report
 
 
+@pytest.fixture(autouse=True)
+def _pin_structured_prompt(monkeypatch):
+    # This suite exercises the STRUCTURED single-shot path; the active default now
+    # tracks the feature-bearing message prompt (#424), so pin the structured one.
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")
+
+
 def _seed_activity_with_metrics(db) -> Activity:
     user = User(email=f"u-{uuid4()}@example.com")
     db.add(user)

@@ -44,6 +44,9 @@ def configured(monkeypatch):
     monkeypatch.setattr(settings, "APP_BASE_URL", "http://localhost:3000")
     monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
     monkeypatch.setattr(settings, "STRAVA_WEBHOOK_VERIFY_TOKEN", "x")
+    # Exercises the SINGLE-SHOT structured email pipeline; the active default now
+    # tracks the feature-bearing message prompt (#424), so pin the structured one.
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")
 
 
 def _seed(db, athlete_id: int = 70707):
