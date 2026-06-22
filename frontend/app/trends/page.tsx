@@ -43,19 +43,28 @@ export default function TrendsPage() {
   // Pick the series matching the effective granularity (#432). Typed as any[]
   // because the four series carry granularity-specific point shapes; the charts
   // narrow them via their own props.
+  //
+  // A series can be undefined when the backend is older than this frontend: the
+  // frontend (Vercel) and backend (Railway) deploy independently, so during a
+  // rollout the frontend can be live before the backend returns the new
+  // `biweekly_*` / `monthly_*` fields. Coalesce to [] so a missing series shows
+  // "no data" rather than crashing on `.map` of undefined (#432 follow-up).
   const bySeries = (
-    daily: any[],
-    weekly: any[],
-    biweekly: any[],
-    monthly: any[],
-  ): any[] =>
-    effectiveGranularity === "day"
-      ? daily
-      : effectiveGranularity === "week"
-      ? weekly
-      : effectiveGranularity === "2week"
-      ? biweekly
-      : monthly;
+    daily?: any[],
+    weekly?: any[],
+    biweekly?: any[],
+    monthly?: any[],
+  ): any[] => {
+    const series =
+      effectiveGranularity === "day"
+        ? daily
+        : effectiveGranularity === "week"
+        ? weekly
+        : effectiveGranularity === "2week"
+        ? biweekly
+        : monthly;
+    return series ?? [];
+  };
 
   // Fetch available activity types once on mount
   useEffect(() => {
