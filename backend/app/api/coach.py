@@ -22,6 +22,7 @@ from app.services.coach.chat import get_chat_history, stream_chat_response
 from app.services.coach.service import (
     get_displayable_report_row,
     get_or_generate_coach_report,
+    report_voice_stale,
     _to_read,
 )
 
@@ -162,7 +163,12 @@ async def get_coach_report(
     if not force:
         existing = get_displayable_report_row(db, str(activity_id))
         if existing:
-            return _to_read(existing)
+            read = _to_read(existing)
+            # P1.1: flag a report still speaking in a now-changed voice so the
+            # frontend regenerates it onto the runner's current voice (async, on
+            # next view). A read-time flag only — the stored report is untouched.
+            read.meta.voice_stale = report_voice_stale(db, existing)
+            return read
         if not generate:
             raise HTTPException(status_code=404, detail="No cached report.")
 

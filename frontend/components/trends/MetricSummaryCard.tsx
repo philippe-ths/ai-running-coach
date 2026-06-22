@@ -16,8 +16,6 @@ export default function MetricSummaryCard({
   previous,
   format,
   prevLabel,
-  typicalHelp,
-  prevHelp,
 }: {
   label: string;
   value: string;
@@ -26,8 +24,6 @@ export default function MetricSummaryCard({
   previous?: number | null;
   format: (n: number) => string;
   prevLabel?: string;
-  typicalHelp?: string;
-  prevHelp?: string;
 }) {
   const hasNorm = !!metric && metric.direction !== "no_norm" && metric.norm !== null;
 
@@ -49,8 +45,6 @@ export default function MetricSummaryCard({
           previous={previous}
           format={format}
           prevLabel={prevLabel}
-          typicalHelp={typicalHelp}
-          prevHelp={prevHelp}
         />
       </div>
     </div>

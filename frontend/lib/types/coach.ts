@@ -36,6 +36,10 @@ export interface CoachReportMeta {
   policy_violations?: string[];
   // A3: a prose message was produced but its structured tail was missing/unusable.
   tail_degraded?: boolean;
+  // P1.1: this report was generated under a different voice than the runner's
+  // current one, so it should regenerate to honour the new voice. A read-time flag
+  // set by the backend; the panel auto-triggers the async regen once when it is true.
+  voice_stale?: boolean;
 }
 
 export interface CoachReportContent {
