@@ -11,8 +11,7 @@ import { SplitsPanel } from '@/components/SplitsPanel';
 import { LapsPanel } from '@/components/LapsPanel';
 import StopsPanel from '@/components/StopsPanel';
 import EfficiencyPanel from '@/components/EfficiencyPanel';
-import CoachReportPanel from '@/components/CoachReportPanel';
-import CoachChat from '@/components/CoachChat';
+import CoachSection from '@/components/CoachSection';
 import TrainingLoadCard from '@/components/TrainingLoadCard';
 
 export const dynamic = 'force-dynamic';
@@ -79,11 +78,10 @@ export default async function ActivityDetail({ params }: { params: { id: string 
               <TrainingLoadCard data={activity.training_load} />
           )}
 
-          {/* Coach Analysis */}
-          <CoachReportPanel activityId={activity.id} hasMetrics={!!activity.metrics} />
+          {/* Coach Analysis + follow-up chat. The report's conversational
+              question options start the chat below (chat-as-continuation). */}
+          <CoachSection activityId={activity.id} hasMetrics={!!activity.metrics} />
 
-          {/* Coach Chat — follow-up conversation */}
-          {activity.metrics && <CoachChat activityId={activity.id} />}
 
           {/* Detailed Stream Charts */}
           {activity.streams && activity.streams.length > 0 && (
