@@ -19,7 +19,6 @@ import ChartTooltip from "@/components/charts/ChartTooltip";
 
 interface Props {
   data: EfficiencyPoint[];
-  granularity: "daily" | "weekly";
   /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
   delta?: ReactNode;
 }
@@ -35,7 +34,7 @@ function calculateSMA(data: EfficiencyPoint[], window: number = 5): (number | nu
   return result;
 }
 
-export default function EfficiencyTrendChart({ data, granularity, delta }: Props) {
+export default function EfficiencyTrendChart({ data, delta }: Props) {
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
 
   // Derive available types from the dataset
@@ -74,7 +73,9 @@ export default function EfficiencyTrendChart({ data, granularity, delta }: Props
     return Array.from(types);
   }, [chartData]);
   
-  const title = `Heart Rate Efficiency per ${granularity === "daily" ? "Day" : "Week"}`;
+  // Efficiency is inherently per-activity (a scatter of individual runs with a
+  // rolling-activity trend), so the bar-granularity control does not bucket it.
+  const title = "Heart Rate Efficiency per Activity";
 
   // Color map for known types
   const getColor = (type: string) => {
