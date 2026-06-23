@@ -1,4 +1,25 @@
-from app.services.units.cadence import normalize_cadence_spm
+from app.services.units.cadence import (
+    CADENCE_SINGLE_LEG_THRESHOLD_SPM,
+    cadence_doubling_factor,
+    normalize_cadence_spm,
+)
+
+
+def test_cadence_doubling_factor_threshold():
+    """#442: the single source of the per-leg rule. Below the threshold -> 2
+    (single leg), at or above -> 1, and a missing value -> 1."""
+    assert cadence_doubling_factor(CADENCE_SINGLE_LEG_THRESHOLD_SPM - 0.1) == 2
+    assert cadence_doubling_factor(CADENCE_SINGLE_LEG_THRESHOLD_SPM) == 1
+    assert cadence_doubling_factor(CADENCE_SINGLE_LEG_THRESHOLD_SPM + 0.1) == 1
+    assert cadence_doubling_factor(None) == 1
+
+
+def test_normalize_cadence_spm_is_the_shared_factor_applied():
+    """#442: normalize_cadence_spm is exactly the scalar application of the shared
+    per-leg factor, so the read path and the stream-view builder cannot drift."""
+    for v in (60.0, 79.1, 85.0, 129.9, 130.0, 168.0, 190.0):
+        assert normalize_cadence_spm("Run", v) == v * cadence_doubling_factor(v)
+
 
 def test_normalize_cadence_spm_run_doubling():
     """Test that runs with low cadence (strides/min) are doubled to steps/min."""
