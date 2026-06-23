@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Running Coach — Context-Pack Provenance</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#181b22; --ink:#e6e9ef; --muted:#9aa3b2; --line:#2c313c;
+    --source:#3b82f6; --code:#10b981; --store:#a78bfa; --llm:#f59e0b;
+    --gate:#ef4444; --runner:#14b8a6; --memory:#a78bfa; --fact:#10b981;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:30px 22px 90px; }
+  h1 { font-size:25px; margin:0 0 4px; letter-spacing:-.3px; }
+  .sub { color:var(--muted); margin:0 0 18px; max-width:980px; }
+  .sub b { color:var(--ink); }
+  .sub kbd { background:#11141a; border:1px solid var(--line); border-radius:4px; padding:0 5px; font-size:11px; }
+  code { color:#c9d2e3; background:#11141a; padding:1px 5px; border-radius:4px; font-size:11.5px; }
+
+  .bar { display:flex; flex-wrap:wrap; gap:12px; align-items:center;
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:11px 16px; margin-bottom:14px; }
+  .bar .who { font-size:12.5px; color:var(--muted); }
+  .bar .who b { color:#5eead4; }
+  .legend { display:flex; flex-wrap:wrap; gap:13px; margin-left:auto; }
+  .legend .item { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+  .sw { width:13px; height:13px; border-radius:4px; flex:none; }
+  .reset { margin-left:8px; background:#11141a; color:var(--muted); border:1px solid var(--line);
+    border-radius:8px; padding:6px 12px; font-size:12px; cursor:pointer; font-family:inherit; }
+  .reset:hover { color:var(--ink); }
+
+  .flow { max-width:1320px; margin:0 auto; }
+  .layer { margin:0 0 8px; }
+  .layer > h2 { font-size:11.5px; text-transform:uppercase; letter-spacing:1.3px;
+    color:var(--muted); margin:24px 0 10px; font-weight:700; display:flex; gap:10px; align-items:baseline; }
+  .layer > h2 .hint { font-weight:500; letter-spacing:.2px; text-transform:none; font-size:11.5px; color:#6b7280; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:13px; align-items:start; }
+  .grid.wide { grid-template-columns:repeat(auto-fill,minmax(420px,1fr)); }
+
+  .between { text-align:center; color:var(--line); font-size:20px; margin:6px 0 -2px; }
+  .between span { color:var(--muted); font-size:11px; display:block; margin-top:1px; }
+
+  .card { background:#1e222b; border:1px solid var(--line); border-left:4px solid var(--code);
+    border-radius:10px; padding:11px 13px 12px; cursor:pointer; position:relative;
+    transition:opacity .14s ease, box-shadow .14s ease, border-color .14s, transform .08s; }
+  .card:hover { transform:translateY(-2px); }
+  .card.span2 { grid-column:1 / -1; }
+  .card.source { border-left-color:var(--source); }
+  .card.code   { border-left-color:var(--code); }
+  .card.store  { border-left-color:var(--store); }
+  .card.llm    { border-left-color:var(--llm); background:#241d10; }
+  .card.gate   { border-left-color:var(--gate); }
+  .card.runner { border-left-color:var(--runner); }
+  .card.memory { border-left-color:var(--memory); }
+
+  .card .top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:3px; }
+  .tag { font-size:9px; letter-spacing:.5px; text-transform:uppercase; font-weight:700;
+    padding:1px 6px; border-radius:4px; }
+  .tag.source{background:rgba(59,130,246,.18);color:#93c5fd;}
+  .tag.code  {background:rgba(16,185,129,.18);color:#6ee7b7;}
+  .tag.store {background:rgba(167,139,250,.18);color:#c4b5fd;}
+  .tag.llm   {background:rgba(245,158,11,.2); color:#fcd34d;}
+  .tag.gate  {background:rgba(239,68,68,.2);  color:#fca5a5;}
+  .tag.runner{background:rgba(20,184,166,.2); color:#5eead4;}
+  .tag.memory{background:rgba(167,139,250,.18);color:#c4b5fd;}
+  .card h3 { margin:0; font-size:13px; }
+  .card .path { font-size:10.5px; color:#6b7280; font-family:ui-monospace,Menlo,monospace; }
+  .card .desc { margin:4px 0 0; font-size:11.5px; color:var(--muted); }
+  .offpill { font-size:8.5px; letter-spacing:.5px; text-transform:uppercase; font-weight:700;
+    color:#fca5a5; background:rgba(239,68,68,.16); border:1px solid rgba(239,68,68,.4);
+    border-radius:4px; padding:1px 5px; }
+
+  .data { background:#0c0f14; border:1px solid var(--line); border-radius:8px;
+    padding:9px 10px; margin-top:8px; overflow:auto; max-height:300px; }
+  .data.tall { max-height:460px; }
+  .data pre { margin:0; font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color:#aeb8c9; white-space:pre; }
+  .jk { color:#7dd3fc; } .js { color:#fcd34d; } .jn { color:#f0abfc; } .jb { color:#86efac; }
+
+  .writes { margin-top:8px; font-size:11px; }
+  .writes .wl { display:flex; gap:6px; padding:2px 0; align-items:baseline; }
+  .writes .arrow { color:var(--code); font-weight:700; flex:none; }
+  .writes .f { font-family:ui-monospace,Menlo,monospace; color:#7dd3fc; }
+  .writes .val { color:var(--ink); font-family:ui-monospace,Menlo,monospace; }
+
+  .lineage { margin-top:9px; padding-top:8px; border-top:1px dashed var(--line);
+    font-size:10.5px; color:var(--muted); line-height:1.7; }
+  .lineage b { color:#9aa3b2; font-weight:600; text-transform:uppercase; letter-spacing:.4px; font-size:9px; }
+  .chip { display:inline-block; background:#11141a; border:1px solid var(--line); border-radius:5px;
+    padding:0 6px; margin:1px 3px 1px 0; font-size:10px; color:#c9d2e3; }
+  .chip.feeds { border-color:rgba(245,158,11,.4); color:#fcd34d; }
+
+  .offbanner { background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.35);
+    color:#fca5a5; border-radius:7px; padding:7px 9px; margin-top:8px; font-size:11px; line-height:1.5; }
+  .note { font-size:11px; color:var(--muted); margin:6px 2px 0; }
+
+  /* highlight states */
+  body.tracing .card { opacity:.16; }
+  body.tracing .card.hot { opacity:1; box-shadow:0 0 0 1px rgba(245,158,11,.35), 0 0 22px -8px rgba(245,158,11,.6); }
+  body.tracing .card.focus { opacity:1; box-shadow:0 0 0 2px var(--llm), 0 0 26px -6px rgba(245,158,11,.8); }
+  .footer { text-align:center; color:var(--muted); font-size:11px; margin-top:42px; }
+
+  .prose { background:#0c0f14; border:1px solid var(--line); border-radius:8px; padding:11px 13px;
+    margin-top:8px; font-size:12.5px; line-height:1.6; color:#d2d8e3; max-height:none; }
+  .prose .hl { color:#fcd34d; }
+  .ns { margin-top:8px; }
+  .ns .step { background:#11141a; border:1px solid var(--line); border-left:3px solid var(--code);
+    border-radius:7px; padding:7px 9px; margin-bottom:6px; }
+  .ns .step b { color:var(--ink); } .ns .step .why { color:var(--muted); font-size:11.5px; }
+  .ns .step .ev { font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:#7dd3fc; margin-top:3px; }
+
+  /* ---- structured data view (labelled key→value rows + inline sparklines) ---- */
+  .kv { font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .kv .rw { display:flex; gap:7px; padding:2px 0; align-items:baseline; flex-wrap:wrap; border-bottom:1px solid rgba(44,49,60,.45); }
+  .kv .rw:last-child { border-bottom:0; }
+  .kv .rw.col { flex-direction:column; gap:4px; flex-wrap:nowrap; align-items:stretch; }
+  .kv .rw > .kline { flex:0 0 auto; min-width:130px; color:#7dd3fc; word-break:break-word; }
+  .kv .rw.col > .kline { flex:1 1 auto; min-width:0; }
+  .kv .eq { flex:0 0 auto; color:#525a68; }
+  .kv .rw.col > .eq { display:none; }
+  .kv .k { color:#7dd3fc; }
+  .kv .meta { color:#5b6472; font-size:10px; }
+  .kv .vline { flex:1 1 auto; min-width:0; color:#e6e9ef; word-break:break-word; }
+  .kv .sep { color:#525a68; }
+  .kv .v.vnum{ color:#f0abfc; } .kv .v.vstr{ color:#fcd34d; } .kv .v.vbool{ color:#86efac; } .kv .v.vnull{ color:#6ee7b7; }
+  .kv .nest { border-left:1px solid var(--line); margin:3px 0 4px 4px; padding-left:12px; }
+  .kv .strlist .si { display:block; color:#cdd5e1; font-family:-apple-system,system-ui; font-size:11.5px;
+    line-height:1.45; padding:3px 0 3px 12px; border-left:2px solid var(--line); margin-bottom:4px; }
+  .kv .spark { margin-top:3px; }
+  .kv .spark svg { width:100%; height:46px; background:#0c0f14; border:1px solid var(--line); border-radius:6px; display:block; }
+  .kv .sparkline { fill:none; stroke:#7dd3fc; stroke-width:1.4; vector-effect:non-scaling-stroke; }
+  .kv .sparkarea { fill:rgba(125,211,252,.12); stroke:none; }
+  .kv .sparkmeta { display:flex; flex-wrap:wrap; gap:12px; font-size:10px; color:#6b7280; margin-top:4px; }
+
+  .kv .srctag { display:inline-block; font-size:9px; font-weight:700; letter-spacing:.3px; color:#6ee7b7;
+    background:rgba(16,185,129,.13); border:1px solid rgba(16,185,129,.34); border-radius:4px;
+    padding:0 5px; margin-left:7px; cursor:pointer; vertical-align:middle; white-space:nowrap; }
+  .kv .srctag:hover { background:rgba(16,185,129,.26); color:#a7f3d0; }
+  /* the second chip: a field's FATE on the hop to its next node */
+  .fate-forwarded,.fate-transformed,.fate-reduced,.fate-gated,.fate-dropped {
+    display:inline-block; font-weight:700; font-size:11px; border-radius:4px; padding:0 4px;
+    vertical-align:middle; white-space:nowrap; }
+  .kv .fatetag { font-size:9px; letter-spacing:.3px; margin-left:5px; padding:0 5px; cursor:default; }
+  .legend .fchip { font-size:11px; padding:0 5px; }
+  .fate-forwarded   { color:#fcd34d; background:rgba(252,211,77,.12); border:1px solid rgba(252,211,77,.34); }
+  .fate-transformed { color:#c4b5fd; background:rgba(167,139,250,.15); border:1px solid rgba(167,139,250,.38); }
+  .fate-reduced     { color:#fdba74; background:rgba(251,146,60,.14); border:1px solid rgba(251,146,60,.36); }
+  .fate-gated       { color:#9ca3af; background:rgba(156,163,175,.10); border:1px dashed rgba(156,163,175,.52); }
+  .fate-dropped     { color:#fca5a5; background:rgba(248,81,73,.14); border:1px solid rgba(248,81,73,.42); }
+  .fatebanner { font-size:11.5px; color:var(--muted); line-height:1.5; background:rgba(252,211,77,.06);
+    border:1px solid rgba(252,211,77,.18); border-left:3px solid #fcd34d; border-radius:5px; padding:7px 10px; margin:9px 0; }
+  /* the system prompt, rendered as labelled layers (each tagged with the version that added it) */
+  .prompt { display:flex; flex-direction:column; gap:7px; margin-top:8px; }
+  .pseg { border:1px solid #23262d; border-left:3px solid #3a3f47; border-radius:6px; background:#0e1014; overflow:hidden; }
+  .pseghdr { font-size:9.5px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; color:#8b93a1;
+    padding:5px 9px; background:rgba(255,255,255,.025); border-bottom:1px solid #1c1f25; }
+  .ptext { margin:0; padding:9px 11px; font-size:11px; line-height:1.5; color:#c5ccd6; white-space:pre-wrap;
+    word-break:break-word; font-family:'SF Mono',ui-monospace,Menlo,monospace; }
+  .pseg-base   { border-left-color:#6b7280; }
+  .pseg-safety { border-left-color:#ef4444; } .pseg-safety .pseghdr { color:#fca5a5; }
+  .pseg-add    { border-left-color:#14b8a6; } .pseg-add .pseghdr { color:#5eead4; }
+  .pseg-play   { border-left-color:#f59e0b; } .pseg-play .pseghdr { color:#fcd34d; }
+  .pseg-voice  { border-left-color:#a78bfa; } .pseg-voice .pseghdr { color:#c4b5fd; }
+</style>
+</head>
+<body>
+
+<h1>Running Coach — Context-Pack Provenance</h1>
+<p class="sub">Reads <b>top → bottom</b>: the report the model wrote, the <b>full context pack it received</b>, then every section traced back through derivation and the analysis pipeline to the raw Strava ingest. Real, unabbreviated data from one activity. <b>Click any block</b> to light up its entire lineage chain — what fed it and where its output goes. <kbd>Esc</kbd> or <b>Reset</b> clears.</p>
+
+<div class="bar">
+  <span class="who" id="who"></span>
+  <button class="reset" id="resetBtn">Reset trace</button>
+  <div class="legend">
+    <div class="item"><span class="sw" style="background:var(--source)"></span>Raw / external</div>
+    <div class="item"><span class="sw" style="background:var(--code)"></span>Deterministic code / fact</div>
+    <div class="item"><span class="sw" style="background:var(--store)"></span>Persistence (DB)</div>
+    <div class="item"><span class="sw" style="background:var(--runner)"></span>Runner-declared</div>
+    <div class="item"><span class="sw" style="background:var(--memory)"></span>Durable memory</div>
+    <div class="item"><span class="sw" style="background:var(--llm)"></span>LLM</div>
+    <div class="item"><span class="sw" style="background:var(--gate)"></span>Safety</div>
+    <div class="item" style="color:#3a3f47">|</div>
+    <div class="item"><span class="fchip fate-forwarded">→</span>forwarded</div>
+    <div class="item"><span class="fchip fate-transformed">↝</span>transformed</div>
+    <div class="item"><span class="fchip fate-reduced">▽</span>reduced</div>
+    <div class="item"><span class="fchip fate-gated">◇</span>gated</div>
+    <div class="item"><span class="fchip fate-dropped">✕</span>dropped</div>
+  </div>
+</div>
+
+<div class="flow" id="flow"></div>
+
+<p class="footer">Real data traced from the seeded local DB (activity <code id="aidf"></code>, prompt <code id="pidf"></code>). The codebase is the truth — this diagram derives from it and may drift.</p>
+
+<script src="flow-nodes.js"></script>
+<script>
+
+/* ---------- render ---------- */
+const LAYERS = [
+  ['model','① The model & its output', 'what the pack is for'],
+  ['pack','② The context pack — exactly what the LLM receives', '18 sections · Optional-and-drop'],
+  ['deriv','③ Derivation — how each pack section is computed', 'read-time builders + the keystone table'],
+  ['analysis','④ Analysis pipeline — fills the DerivedMetric row', 'deterministic, no LLM · each card shows the fields it writes'],
+  ['ingest','⑤ Ingestion — the raw source', 'Strava → Activity / streams / profile / check-in'],
+];
+const BETWEEN = {
+  pack:['↑ assembled into the prompt', ''],
+  deriv:['↑ flattened / gathered into pack sections',''],
+  analysis:['↑ upserted into the DerivedMetric row',''],
+  ingest:['↑ consumed by the analysis pipeline',''],
+};
+
+const flow = document.getElementById('flow');
+LAYERS.forEach(([key,label,hint])=>{
+  if(BETWEEN[key]) {
+    const b=document.createElement('div'); b.className='between';
+    b.innerHTML='↑<span>'+BETWEEN[key][0]+'</span>'; flow.appendChild(b);
+  }
+  const sec=document.createElement('div'); sec.className='layer';
+  sec.innerHTML='<h2>'+label+' <span class="hint">'+hint+'</span></h2>';
+  const grid=document.createElement('div');
+  grid.className='grid'+(key==='pack'||key==='deriv'?'':'');
+  NODES.filter(n=>n.layer===key).forEach(n=>{
+    const card=document.createElement('div');
+    card.className='card '+n.kind+(n.span?' span2':'');
+    card.dataset.id=n.id;
+    const fromChips=(n.from||[]).map(f=>'<span class="chip">'+esc(byId[f]?byId[f].title.split('—')[0].split('(')[0].trim():f)+'</span>').join('');
+    const feedChips=(consumers[n.id]||[]).map(c=>'<span class="chip feeds">'+esc(byId[c].title.split('—')[0].split('(')[0].trim())+'</span>').join('');
+    card.innerHTML =
+      '<div class="top"><span class="tag '+n.kind+'">'+n.tag+'</span><h3>'+esc(n.title)+'</h3>'
+        + (n.badge?'<span class="offpill">'+n.badge+'</span>':'') +'</div>'
+      + (n.path?'<div class="path">'+esc(n.path)+'</div>':'')
+      + n.body()
+      + '<div class="lineage">'
+        + (fromChips?'<b>from</b> '+fromChips+'<br>':'')
+        + (feedChips?'<b>feeds</b> '+feedChips:'')
+        + (!fromChips&&!feedChips?'':'')
+      + '</div>';
+    grid.appendChild(card);
+  });
+  sec.appendChild(grid);
+  flow.appendChild(sec);
+});
+
+/* ---------- interaction ---------- */
+const cards=[...document.querySelectorAll('.card')];
+const who=document.getElementById('who');
+function trace(id){
+  const chain=chainOf(id);
+  document.body.classList.add('tracing');
+  cards.forEach(c=>{
+    c.classList.toggle('hot', chain.has(c.dataset.id));
+    c.classList.toggle('focus', c.dataset.id===id);
+  });
+  who.innerHTML='Tracing <b>'+esc(byId[id].title.split('—')[0].split('(')[0].trim())+'</b> — '+chain.size+' blocks in its lineage';
+}
+function reset(){ document.body.classList.remove('tracing'); cards.forEach(c=>c.classList.remove('hot','focus')); who.innerHTML='Click any block to trace its lineage.'; }
+cards.forEach(c=> c.addEventListener('click', e=>{ e.stopPropagation(); trace(c.dataset.id); }));
+document.getElementById('resetBtn').addEventListener('click', reset);
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') reset(); });
+document.body.addEventListener('click', reset);
+document.getElementById('aidf').textContent=D.meta.activity_id;
+document.getElementById('pidf').textContent=D.meta.prompt_id;
+reset();
+</script>
+</body>
+</html>
