@@ -33,7 +33,8 @@ def test_v10_registered_carries_every_v9_capability_plus_stream_view():
     assert V10.startswith(MESSAGE_PROMPT_PREFIX)  # -> schema 2.0 by prefix
     assert V10 in VOLUME_PROMPT_IDS  # inherits v9's capabilities
     assert V10 in STREAM_VIEW_PROMPT_IDS  # ...plus the new STREAM_VIEW capability
-    assert STREAM_VIEW_PROMPT_IDS == {V10}
+    # v11 (#444) inherits STREAM_VIEW too.
+    assert STREAM_VIEW_PROMPT_IDS == {V10, "coach_message_v11"}
     assert V10 in _OPENER_PROMPTS  # has a distinct opener form (two-stage)
     # same schema family as v9 (so v10 reports regenerate, prior history retained).
     assert active_schema_version(V10) == active_schema_version(V9)

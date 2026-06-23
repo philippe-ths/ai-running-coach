@@ -563,6 +563,86 @@ class TrainingVolumeContext(BaseModel):
     has_baseline: bool
 
 
+class RecentTypeBreakdown(BaseModel):
+    """#444: one activity type's contribution to a recent-training window — counts,
+    per-type distance/time/load totals, and the type's SHARE of the window's sessions
+    (the modality mix as a precomputed number, so a walk is never read as a run)."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    count: int
+    distance_m: int
+    moving_time_s: int
+    effort_score: float
+    share_pct: float  # this type's share of the window's session COUNT (0-100)
+
+
+class RecentActivityItem(BaseModel):
+    """#444: one session in the recent (7d) window — its type and intensity/load
+    read, so the coach can speak to specific sessions, not only aggregates."""
+    model_config = ConfigDict(extra="forbid")
+
+    date: str
+    type: str
+    effort: Optional[str]  # HR-derived intensity axis (recovery|easy|moderate|tempo|hard)
+    effort_score: Optional[float]  # the TRIMP-like LOAD number (grows with duration)
+
+
+class RecentComparison(BaseModel):
+    """#444: one metric's current window value with its vs-TYPICAL and vs-PREV
+    comparison, ALL percentages precomputed and each carrying a self-describing
+    BASIS so the coach never cites a comparison whose reference it does not know.
+
+    `current_all` is holistic (every logged activity); `current_runs` is runs-only.
+    "typical" is the runner's own per-day rate over a trailing baseline (the Trends
+    definition, #444 decision 1); "prev" is the equal-length window immediately
+    before this one. A deterministic FACT the coach may cite; never an intensity
+    verdict (continuity with the load-vs-intensity rule) and never overrides the
+    run's re-derived DerivedMetric or the safety floor."""
+    model_config = ConfigDict(extra="forbid")
+
+    metric: str  # sessions | distance_m | moving_time_s | effort_score
+    current_all: Union[int, float]
+    current_runs: Union[int, float]
+    vs_typical_pct: Optional[float] = None
+    vs_typical_direction: str  # up | in_line | down | no_norm
+    vs_prev_pct: Optional[float] = None
+    vs_prev_direction: str     # up | in_line | down | no_norm
+    typical_basis: str
+    prev_basis: str
+
+
+class RecentTrainingWindow(BaseModel):
+    """#444: one window's modality-aware roll-up — the per-type breakdown + share and
+    overall totals, plus (7d/30d only) the vs-typical/vs-prev comparisons; the 7d
+    window also carries the bounded per-activity list (the longer windows do not)."""
+    model_config = ConfigDict(extra="forbid")
+
+    window: str  # last_7d | last_30d | previous_30d
+    days: int
+    activity_count: int
+    by_type: List[RecentTypeBreakdown]
+    total_distance_m: int
+    total_moving_time_s: int
+    total_effort: float
+    comparisons: List[RecentComparison]   # 7d/30d only; empty for previous_30d
+    activities: List[RecentActivityItem]  # 7d only; empty for the longer windows
+
+
+class RecentTrainingContext(BaseModel):
+    """#444: the modality-aware recent-training picture — the rich successor to
+    `recent_training_summary` (per-type breakdown + per-activity detail + vs-typical/
+    vs-prev with self-describing basis). Emitted ONLY under a recent-training-aware
+    prompt id, so the pack stays byte-stable otherwise. `has_baseline` is False when
+    history is too thin for any vs-typical norm (every direction then `no_norm`)."""
+    model_config = ConfigDict(extra="forbid")
+
+    last_7d: RecentTrainingWindow
+    last_30d: RecentTrainingWindow
+    previous_30d: RecentTrainingWindow
+    has_baseline: bool
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -620,6 +700,12 @@ class CoachContextPack(BaseModel):
     # stream-view-aware prompt id. It is a downsampled VIEW, never a measurement, and
     # never overrides the re-derived metrics (prompt addendum).
     stream_view: Optional[Dict[str, Any]] = None
+    # #444 modality-aware recent-training picture (per-type breakdown + per-activity
+    # detail + vs-typical/vs-prev with basis). None under every non-recent-training
+    # prompt and OMITTED from serialization entirely, exactly like the other gated
+    # sections, so the pack stays byte-stable pre/post #444; populated only under a
+    # recent-training-aware prompt id.
+    recent_training: Optional["RecentTrainingContext"] = None
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
@@ -652,6 +738,9 @@ class CoachContextPack(BaseModel):
             # #443: a non-stream-view prompt emits nothing — not even a null key, so
             # the pack stays byte-stable under v9 and below.
             data.pop("stream_view", None)
+        if data.get("recent_training") is None:
+            # #444: a non-recent-training prompt emits nothing — not even a null key.
+            data.pop("recent_training", None)
         return data
 
     def fingerprint(self) -> str:
