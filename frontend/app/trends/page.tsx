@@ -43,19 +43,28 @@ export default function TrendsPage() {
   // Pick the series matching the effective granularity (#432). Typed as any[]
   // because the four series carry granularity-specific point shapes; the charts
   // narrow them via their own props.
+  //
+  // A series can be undefined when the backend is older than this frontend: the
+  // frontend (Vercel) and backend (Railway) deploy independently, so during a
+  // rollout the frontend can be live before the backend returns the new
+  // `biweekly_*` / `monthly_*` fields. Coalesce to [] so a missing series shows
+  // "no data" rather than crashing on `.map` of undefined (#432 follow-up).
   const bySeries = (
-    daily: any[],
-    weekly: any[],
-    biweekly: any[],
-    monthly: any[],
-  ): any[] =>
-    effectiveGranularity === "day"
-      ? daily
-      : effectiveGranularity === "week"
-      ? weekly
-      : effectiveGranularity === "2week"
-      ? biweekly
-      : monthly;
+    daily?: any[],
+    weekly?: any[],
+    biweekly?: any[],
+    monthly?: any[],
+  ): any[] => {
+    const series =
+      effectiveGranularity === "day"
+        ? daily
+        : effectiveGranularity === "week"
+        ? weekly
+        : effectiveGranularity === "2week"
+        ? biweekly
+        : monthly;
+    return series ?? [];
+  };
 
   // Fetch available activity types once on mount
   useEffect(() => {
@@ -139,8 +148,11 @@ export default function TrendsPage() {
   // `baseline_label` already names the norm's history span per range ("the last
   // 6 months" for 30D). "vs typical" is omitted when there's no baseline, since
   // the cards hide that row too.
+  const typicalNoun = PERIOD_NOUN[range] ?? "period";
   const typicalHelp = volume?.has_baseline
-    ? `Your average daily rate over ${volume.baseline_label}, projected over the days elapsed in this window.`
+    ? effectiveMode === "calendar"
+      ? `Your typical total for a full ${typicalNoun}, averaged over ${volume.baseline_label}. This ${typicalNoun}'s running total is compared against it, so it climbs toward typical as the ${typicalNoun} progresses.`
+      : `Your typical total for a ${typicalNoun}-length window, averaged over ${volume.baseline_label}.`
     : undefined;
   const periodNoun = PERIOD_NOUN[range];
   const prevHelp =
@@ -149,19 +161,19 @@ export default function TrendsPage() {
       : "This window against the equal-length window immediately before it.";
 
   // The runner's typical level per chart bucket (#413), drawn as a reference line.
-  // The #400 norm is scaled to days_elapsed, so norm/days_elapsed is the true
-  // per-day rate; each bucket multiplies by its day span (#432: 1/7/14/~30.44),
-  // so the line stays coherent with the chosen granularity. `scale` converts norm
-  // units to the chart's units (meters→km, seconds→min, effort raw). Undefined
-  // hides the line.
+  // The norm is scaled to the framing's full period length (#436), so
+  // norm/window_days is the true per-day rate; each bucket multiplies by its day
+  // span (#432: 1/7/14/~30.44), so the line stays coherent with the chosen
+  // granularity. `scale` converts norm units to the chart's units (meters→km,
+  // seconds→min, effort raw). Undefined hides the line.
   const framing = volume && volume.has_baseline ? volume[effectiveMode] : null;
   const typicalPerBucket = (
     metric: VolumeMetricName,
     scale: number,
   ): number | undefined => {
     const m = normByMetric[metric];
-    if (!framing || !m || m.norm == null || framing.days_elapsed <= 0) return undefined;
-    const perDay = m.norm / framing.days_elapsed;
+    if (!framing || !m || m.norm == null || framing.window_days <= 0) return undefined;
+    const perDay = m.norm / framing.window_days;
     return perDay * DAYS_PER_BUCKET[effectiveGranularity] * scale;
   };
 
