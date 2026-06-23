@@ -41,6 +41,7 @@ from app.services.coach.corpus import DEFAULT_SCHOOL_ID
 from app.services.coach.prompts import (
     _describe_dial,
     is_corpus_prompt,
+    is_recent_training_prompt,
     is_stance_prompt,
     is_stream_view_prompt,
     is_training_load_prompt,
@@ -49,6 +50,7 @@ from app.services.coach.prompts import (
 )
 from app.services.coach.stance import StanceProfile, resolve_stance
 from app.services.coach.volume import build_training_volume
+from app.services.coach.recent_training import build_recent_training
 from app.services.readiness import build_readiness
 from app.services.coach.retrieval import (
     fetch_corpus,
@@ -74,6 +76,7 @@ from app.schemas.coach_context import (
     StanceEmphasisAxis,
     TrainingLoadContext,
     TrainingVolumeContext,
+    RecentTrainingContext,
     LongitudinalContext,
     MetricsContext,
     NarrativeContext,
@@ -254,6 +257,10 @@ def build_context_pack(
         # stream-view-aware prompt (focus.stream_view is None otherwise, dropped from
         # serialization), so the pack stays byte-stable under v9 and below.
         stream_view=f.stream_view,
+        # #444 modality-aware recent-training picture: emitted ONLY under a
+        # recent-training-aware prompt (the rich successor to recent_training_summary),
+        # computed read-time over the runner's local-day windows.
+        recent_training=_build_recent_training_context(db, activity, prompt_id),
         safety_rules=b.safety_rules,
     )
 
@@ -402,6 +409,28 @@ def _build_training_volume_context(
         db, as_of - timedelta(days=91), as_of + timedelta(days=1), user_id=activity.user_id
     )
     return build_training_volume(facts, as_of)
+
+
+def _build_recent_training_context(
+    db: Session, activity: Activity, prompt_id: Optional[str]
+) -> Optional[RecentTrainingContext]:
+    """The #444 modality-aware recent-training section, or None.
+
+    Emitted ONLY under a recent-training-aware prompt id, so the pack stays byte-stable
+    otherwise (the Optional-and-drop idiom). Computed read-time as of this activity's
+    LOCAL day over a ~210-day fact span (the 30d window plus its ~6-month vs-typical
+    baseline), reusing the Trends per-day-rate core so "typical" has one meaning across
+    the product. A deterministic FACT the coach may cite, but it never overrides the
+    run's re-derived DerivedMetric or the safety floor (the recent-training addendum).
+    Degrades gracefully: thin history yields `has_baseline=False` and `no_norm`
+    directions."""
+    if not is_recent_training_prompt(prompt_id):
+        return None
+    as_of = activity.local_start.date()
+    facts = _query_activity_facts(
+        db, as_of - timedelta(days=210), as_of + timedelta(days=1), user_id=activity.user_id
+    )
+    return build_recent_training(facts, as_of)
 
 
 def _build_block_context(db: Session, activity: Activity) -> Optional[BlockContext]:

@@ -42,6 +42,7 @@ class PromptFeature(Enum):
     USER_MATERIALS = "user_materials"  # P4 distilled user materials (ADR 0017)
     VOLUME = "volume"                  # #400 frequency-/volume-vs-norm section
     STREAM_VIEW = "stream_view"        # #443 consolidated stream-view timeline in the default pack
+    RECENT_TRAINING = "recent_training"  # #444 modality-aware recent-training picture
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -110,6 +111,23 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.USER_MATERIALS,
             _F.VOLUME,
             _F.STREAM_VIEW,
+        }
+    ),
+    # #444 — v11 = v10 + the RECENT_TRAINING capability (the modality-aware
+    # recent-training picture in the pack, plus its reading addendum). Same retuned
+    # base prose; adds one capability (an additive superset of v10). Ships INERT
+    # (the config default stays v8); the owner flips COACH_PROMPT_ID to activate.
+    "coach_message_v11": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.TRAINING_LOAD,
+            _F.USER_MATERIALS,
+            _F.VOLUME,
+            _F.STREAM_VIEW,
+            _F.RECENT_TRAINING,
         }
     ),
 }

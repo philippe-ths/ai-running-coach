@@ -734,6 +734,52 @@ SYSTEM_PROMPT_MESSAGE_V10 = SYSTEM_PROMPT_MESSAGE_V9 + _STREAM_VIEW_ADDENDUM
 SYSTEM_PROMPT_MESSAGE_V10_OPENER = SYSTEM_PROMPT_MESSAGE_V9_OPENER + _STREAM_VIEW_ADDENDUM
 
 
+# ===========================================================================
+# coach_message_v11 (#444) — the recent-training-aware two-stage prompt.
+#
+# v11 = v10 + a STATIC RECENT-TRAINING addendum, for BOTH modes (fuller and opener),
+# the Vn = V(n-1) + addendum idiom. Because v11 builds on v10 it carries every v10
+# capability and the same retuned base prose; it ADDS the recent-training-reading
+# discipline. The PER-RUNNER figures are NOT baked into the constant — they ride the
+# `recent_training` pack section (per-type breakdown + per-activity detail + vs-typical
+# /vs-prev with self-describing basis), populated only under is_recent_training_prompt
+# by build_context_pack. The addendum's job: make the coach read the modality MIX
+# (not all runs), read each comparison WITH its basis, and treat a deliberate down
+# week as intentional — while keeping it a deterministic FACT that never overrides the
+# run's data or the floor.
+#
+# Consolidation note (#444 decisions 1 & 2): the rich `recent_training` section
+# supersedes the coarse `recent_training_summary` and reuses the Trends per-day-rate
+# "typical" so there is one definition of typical. Fully RETIRING the legacy
+# `recent_training_summary` and the overlapping `training_volume` section (still live
+# under v9) is a deliberate, live-behaviour reconciliation left to the owner: it
+# touches the shared base prose (rule 22 cites recent_training_summary) and removes a
+# live section, so v11 ships the rich section additively and the owner prunes the
+# overlap when adopting v11.
+#
+# coach_message_v1..v10 and coach_report_v1..v10 stay BYTE-STABLE above.
+# ===========================================================================
+
+_RECENT_TRAINING_ADDENDUM = """
+
+# RECENT TRAINING (the modality-aware picture; read each comparison with its basis)
+
+Your context may carry a `recent_training` section: a modality-aware read of the runner's recent training across three windows — `last_7d`, `last_30d`, and `previous_30d` (the 30 days before last_30d). For each window you get a per-activity-TYPE breakdown (`by_type`: counts and per-type distance/time/load, with each type's `share_pct` of the window's sessions) and the overall roll-up totals; `last_7d` also carries a bounded per-session list (`activities`, each with its type and intensity/load). The `last_7d` and `last_30d` windows carry `comparisons`: per metric, the current value (`current_all` holistic, `current_runs` runs-only) with a vs-typical and a vs-prev read.
+
+Read it as the runner's recent context, honouring two things:
+
+- READ THE MODALITY MIX, never assume all runs. The breakdown is by activity type for a reason: a week of 6 sessions might be 3 runs and 3 walks. Honour `by_type` and the runs-only figures — never read a walk, ride, or row as a run, and when sessions are up but runs are not, say so accurately.
+- CITE A COMPARISON ONLY WITH ITS BASIS. Every comparison carries a `typical_basis` and a `prev_basis` saying exactly what "typical" and "prev" mean (typical = the runner's own average daily rate over a trailing baseline, projected onto the window; prev = the equal-length window just before). When you cite a percentage, cite what it is measured against — never a bare "down 30%" whose reference the runner cannot tell. When a direction is `no_norm`, the baseline is too thin: say nothing about up or down for that metric.
+- A `down` window is frequently INTENTIONAL — a planned easy week, a taper, a recovery block, or just life. Do not treat lower-than-typical volume as a problem or nag about it by default; raise concern only if the run's own data or a safety signal independently warrants it. Equally, do not cheer an `up` window uncritically.
+- It is a deterministic FACT you may cite, but it is NOT an intensity verdict (volume and load grow with how MUCH was done, not how hard — take intensity from the effort axis and RPE), and it NEVER overrides this run's re-derived DerivedMetric or the safety floor.
+
+Let the recent-training picture inform HOW you frame the runner's week; never let it manufacture worry the data does not support, and never let it overrule the run's own data or the floor."""
+
+
+SYSTEM_PROMPT_MESSAGE_V11 = SYSTEM_PROMPT_MESSAGE_V10 + _RECENT_TRAINING_ADDENDUM
+SYSTEM_PROMPT_MESSAGE_V11_OPENER = SYSTEM_PROMPT_MESSAGE_V10_OPENER + _RECENT_TRAINING_ADDENDUM
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -767,6 +813,9 @@ PROMPT_VERSIONS = {
     # #443 stream-view-aware prompt (= v9 + the static STREAM-VIEW addendum). Ships
     # INERT (config default stays v8); owner flips COACH_PROMPT_ID to activate.
     "coach_message_v10": SYSTEM_PROMPT_MESSAGE_V10,
+    # #444 recent-training-aware prompt (= v10 + the static RECENT-TRAINING addendum).
+    # Ships INERT (config default stays v8); owner flips COACH_PROMPT_ID to activate.
+    "coach_message_v11": SYSTEM_PROMPT_MESSAGE_V11,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -797,6 +846,7 @@ _OPENER_PROMPTS = {
     "coach_message_v8": SYSTEM_PROMPT_MESSAGE_V8_OPENER,
     "coach_message_v9": SYSTEM_PROMPT_MESSAGE_V9_OPENER,
     "coach_message_v10": SYSTEM_PROMPT_MESSAGE_V10_OPENER,
+    "coach_message_v11": SYSTEM_PROMPT_MESSAGE_V11_OPENER,
 }
 
 # The capability-gated prompt-id sets and predicates below are DERIVED VIEWS over
@@ -838,6 +888,10 @@ VOLUME_PROMPT_IDS = ids_with(PromptFeature.VOLUME)
 # context-pack section in the DEFAULT pack (gates the stream_view threading in
 # build_context_pack).
 STREAM_VIEW_PROMPT_IDS = ids_with(PromptFeature.STREAM_VIEW)
+
+# Prompt ids that carry the #444 recent-training addendum AND the `recent_training`
+# context-pack section (gates _build_recent_training_context).
+RECENT_TRAINING_PROMPT_IDS = ids_with(PromptFeature.RECENT_TRAINING)
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
@@ -886,6 +940,15 @@ def is_stream_view_prompt(prompt_id: Optional[str]) -> bool:
     pack (byte-stable under v9 and below) and the signal is wholly inert under a
     rollback."""
     return has_feature(prompt_id, PromptFeature.STREAM_VIEW)
+
+
+def is_recent_training_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt is recent-training-aware (#444): it carries the
+    recent-training addendum and its context pack carries the `recent_training`
+    section. False for every other prompt, so the modality-aware recent-training
+    picture stays out of the pack (byte-stable under v10 and below) and the signal
+    is wholly inert under a rollback."""
+    return has_feature(prompt_id, PromptFeature.RECENT_TRAINING)
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook
