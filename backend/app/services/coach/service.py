@@ -336,7 +336,7 @@ async def get_or_generate_coach_report(
     classification = Classification.from_metrics(activity.metrics)
     voice = _resolve_voice_for_activity(db, activity)
     system_prompt = build_system_prompt(
-        prompt_id, playbook_key(activity, classification), voice=voice
+        prompt_id, playbook_key(activity, classification), voice=voice, pack=pack
     )
     user_message = json.dumps(pack_dict, default=str)
 
@@ -431,7 +431,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     # block (P1.1) rides both stages, so the opener already speaks in the declared
     # voice.
     voice = _resolve_voice_for_activity(db, activity)
-    system_prompt = build_system_prompt(prompt_id, mode="opener", voice=voice)
+    system_prompt = build_system_prompt(prompt_id, mode="opener", voice=voice, pack=pack)
     user_message = json.dumps(pack_dict, default=str)
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
@@ -529,7 +529,7 @@ async def generate_fuller(
     classification = Classification.from_metrics(activity.metrics)
     voice = _resolve_voice_for_activity(db, activity)
     system_prompt = build_system_prompt(
-        prompt_id, playbook_key(activity, classification), mode="fuller", voice=voice
+        prompt_id, playbook_key(activity, classification), mode="fuller", voice=voice, pack=pack
     )
     user_message = json.dumps(pack_dict, default=str)
     client = AnthropicClient(
