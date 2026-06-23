@@ -19,18 +19,25 @@ Captured reference: activity `256ebb60` ("Afternoon Run", 2026-06-18), prompt
 
 ## A. DerivedMetric row → pack.metrics
 
-The whole row is flattened into `MetricsContext` (`context.py:496-525`), so every
-column is **forwarded** EXCEPT one:
+The whole row is flattened into `MetricsContext` (`build_focus_payload`,
+`context.py:593-627`). MOST columns are **forwarded**, but the hop is NOT uniformly
+verbatim — three exceptions:
 
-- forwarded: effort, duration_class, structure, is_hilly, is_race, effort_score,
-  hr_drift, pace_variability, time_in_zones, efficiency_analysis, stops_analysis,
-  flags, confidence, confidence_reasons, interval_structure, workout_match,
-  interval_kpis, risk_level, risk_score, risk_reasons, training_context
-  (`context.py:480,524`), discount_signals.
-- **stream_view (sv_points) → reduced + deferred.** A ≤60-pt aligned downsample
+- forwarded (verbatim): effort, duration_class, structure, is_hilly, is_race,
+  time_in_zones, stops_analysis, flags, confidence, confidence_reasons,
+  interval_structure, workout_match, interval_kpis, risk_level, risk_score,
+  risk_reasons, training_context, discount_signals.
+- **effort_score / hr_drift / pace_variability → reduced (rounded).** Rounded to 1 dp
+  into the pack; hr_drift / pace_variability are nulled when 0 (`context.py:600-606`).
+- **efficiency_analysis → reduced (reshaped).** The stored column carries a 128-pt
+  curve; `_summarize_efficiency_for_coach` (`context.py`, #441) drops the curve and adds
+  a coarse `trend` descriptor before it enters the pack — not a verbatim copy.
+- **stream_view (sv_points) → reduced + deferred + gated.** A ≤60-pt aligned downsample
   (`stream_view.py`), stored on a `deferred=True` column (`derived_metric.py:51`),
-  loaded ONLY when `deep=True` (`context.py:534`). Absent from the default coach
-  report; pulled only on an explicit deep-dive.
+  pulled into `pack.stream_view` by `retrieval.fetch_stream_view` only when `deep=True`.
+  Since #443, `deep = is_stream_view_prompt(prompt_id)` (`context.py:217`), so it rides
+  EVERY report under a stream-view-aware prompt — v10/v11, including the live prod prompt
+  v11. Absent only under v9 and below.
 
 pack.metrics also adds three fields composed at read time (not DM columns), all
 **forwarded**: headline (`context.py:497`), zones_calibrated / zones_basis
