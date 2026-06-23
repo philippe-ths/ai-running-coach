@@ -180,6 +180,11 @@ function _promptHTML(text){
     +'<pre class="ptext">'+esc(lines.slice(sg.a,sg.b).join('\n').trim())+'</pre></div>').join('')+'</div>';
 }
 const D = DATA, P = D.pack, DM = D.derived;
+// stream_view (A2a): read directly from the deferred DerivedMetric.stream_view column for
+// the captured activity. The default-path DATA snapshot omits it (the column is loaded only
+// on a deep-dive, never on the default report path), so the real downsample is carried here
+// so the stream_view node can render the four aligned channels instead of just a point count.
+const STREAM_VIEW = {"n_points":60,"source_n":1270,"time_s":[10,31,52,73,94,116,137,158,179,200,221,242,270,403,424,445,466,488,509,530,551,572,593,614,636,657,678,699,720,742,763,784,805,826,847,868,890,911,932,953,974,996,1017,1045,1083,1104,1125,1146,1168,1189,1210,1231,1252,1274,1295,1316,1337,1358,1379,1400],"hr":[116,131,143,152,162,167,169,166,166,168,163,162,157,121,137,149,156,160,160,158,153,155,162,159,160,158,156,159,164,164,163,167,170,171,173,172,171,171,168,164,166,167,169,164,155,164,167,169,171,170,168,167,165,165,166,166,166,167,168,170],"pace_s_per_km":[604,438,411,348,334,371,349,347,319,338,382,371,347,447,346,311,334,363,456,388,326,331,361,339,347,358,367,350,329,379,416,356,429,435,407,366,416,386,378,387,385,349,374,501,445,462,434,432,427,421,425,407,353,362,383,359,354,360,320,343],"grade_pct":[3.0,0.4,0.5,0.9,0.0,1.9,0.1,-0.6,-1.8,-1.4,-1.9,-2.2,-4.1,-3.1,-2.1,-1.8,-2.9,-1.5,1.0,-2.0,-1.3,-3.0,-0.6,-2.7,-8.6,-12.7,0.9,-1.7,-8.5,-1.4,2.9,2.6,7.1,8.3,2.4,2.1,4.9,0.1,-2.5,2.6,0.7,-3.2,1.6,-1.0,11.9,8.3,5.6,5.2,3.4,2.1,1.4,1.1,-0.7,-0.3,-0.8,-0.6,-1.7,-2.4,-2.2,-2.1],"cadence_spm":[103,161,156,156,163,165,166,162,164,161,164,160,153,123,140,158,159,161,137,144,159,161,160,159,159,166,165,162,164,167,169,166,165,166,165,166,167,163,163,163,164,164,166,147,166,164,166,165,163,166,162,164,159,162,164,162,159,160,162,161]};
 const fmt = (x)=> (x===null||x===undefined)?'null':(typeof x==='object'?JSON.stringify(x):String(x));
 
 /* ---------- the graph ---------- */
@@ -356,8 +361,15 @@ const NODES = [
               ['DerivedMetric.discount_signals.confidence', DM.discount_signals.confidence]]) },
 { id:'a_streamview', layer:'analysis', kind:'code', tag:'function', title:'stream_view (A2a)', path:'services/analysis/stream_view.py',
   from:['act_streams'],
-  body:()=> '<p class="desc">A ≤60-pt aligned downsample, stored deferred-load. <b>Pulled only on a deep-dive</b>, not on the default report path.</p>'
-    + writes([['DerivedMetric.stream_view', DM.sv_points+' points (deferred JSON)']]) },
+  body:()=> {
+    const sv=STREAM_VIEW;
+    const channels=[['hr','heart rate (bpm)'],['pace_s_per_km','pace (s/km)'],['grade_pct','grade (%)'],['cadence_spm','cadence (spm)']];
+    const rows=channels.filter(([k])=>Array.isArray(sv[k])).map(([k,label])=>
+      '<div class="rw col"><div class="kline"><span class="k">'+label+'</span> <span class="meta">'+sv[k].length+' pts</span></div>'+_sparkline(sv[k], sv.n_points+' pts')+'</div>').join('');
+    return '<p class="desc">A ≤60-pt aligned, shape-preserving downsample of four channels — HR, pace, grade, cadence — built from the same streams. <b>Stored deferred-load and pulled only on a deep-dive</b>, not on the default report path, so it is absent from the default coach pack.</p>'
+      + '<div class="fatebanner">These series were read directly from the deferred <code>DerivedMetric.stream_view</code> column — the default-path snapshot does not carry them. Downsampled from <b>'+sv.source_n+'</b> raw samples to <b>'+sv.n_points+'</b> aligned points.</div>'
+      + writes([['DerivedMetric.stream_view', sv.n_points+' points × 4 channels (deferred JSON)']])
+      + '<div class="data tall kv">'+rows+'</div>'; } },
 
 /* ===== LAYER: INGEST ===== */
 { id:'act_row', layer:'ingest', kind:'store', tag:'table', title:'Activity (summary row)', path:'app/models/activity.py',
