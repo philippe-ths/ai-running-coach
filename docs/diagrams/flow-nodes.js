@@ -367,13 +367,10 @@ const NODES = [
   from:['act_streams'],
   body:()=> {
     const sv=STREAM_VIEW;
-    const channels=[['hr','heart rate (bpm)'],['pace_s_per_km','pace (s/km)'],['grade_pct','grade (%)'],['cadence_spm','cadence (spm)']];
-    const rows=channels.filter(([k])=>Array.isArray(sv[k])).map(([k,label])=>
-      '<div class="rw col"><div class="kline"><span class="k">'+label+'</span> <span class="meta">'+sv[k].length+' pts</span></div>'+_sparkline(sv[k], sv.n_points+' pts')+'</div>').join('');
-    return '<p class="desc">A ≤60-pt aligned, shape-preserving downsample of four channels — HR, pace, grade, cadence — built from the same streams. <b>Stored deferred-load and pulled only on a deep-dive</b>, not on the default report path, so it is absent from the default coach pack.</p>'
-      + '<div class="fatebanner">These series were read directly from the deferred <code>DerivedMetric.stream_view</code> column — the default-path snapshot does not carry them. Downsampled from <b>'+sv.source_n+'</b> raw samples to <b>'+sv.n_points+'</b> aligned points.</div>'
-      + writes([['DerivedMetric.stream_view', sv.n_points+' points × 4 channels (deferred JSON)']])
-      + '<div class="data tall kv">'+rows+'</div>'; } },
+    return '<p class="desc">The complete <code>stream_view</code> dict — every field of the real stored column shown below: <code>n_points</code>/<code>source_n</code>, the <code>time_s</code> axis, and the four channels (HR, pace, grade, cadence), all ≤60-pt aligned and shape-preserving. <b>Stored deferred-load and pulled only on a deep-dive</b>, not on the default report path, so it is absent from the default coach pack.</p>'
+      + '<div class="fatebanner">Read directly from the deferred <code>DerivedMetric.stream_view</code> column — the default-path snapshot does not carry it. Downsampled from <b>'+sv.source_n+'</b> raw samples to <b>'+sv.n_points+'</b> aligned points.</div>'
+      + writes([['DerivedMetric.stream_view', sv.n_points+' points × (time_s + 4 channels), deferred JSON']])
+      + jTall(sv); } },
 
 /* ===== LAYER: INGEST ===== */
 { id:'act_row', layer:'ingest', kind:'store', tag:'table', title:'Activity (summary row)', path:'app/models/activity.py',
