@@ -612,6 +612,14 @@ class CoachContextPack(BaseModel):
     # the pack stays byte-stable pre/post #400; populated only under a volume-aware
     # prompt id.
     training_volume: Optional["TrainingVolumeContext"] = None
+    # #443 consolidated stream view (A2a): the <=60-pt aligned HR/pace/grade/cadence
+    # downsample, carried in the DEFAULT pack so the coach reads the run's shape on
+    # every report. None under every non-stream-view prompt and OMITTED from
+    # serialization entirely, exactly like `training_volume`/`training_load`/`corpus`/
+    # `block`, so the pack stays byte-stable pre/post #443; populated only under a
+    # stream-view-aware prompt id. It is a downsampled VIEW, never a measurement, and
+    # never overrides the re-derived metrics (prompt addendum).
+    stream_view: Optional[Dict[str, Any]] = None
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
@@ -640,6 +648,10 @@ class CoachContextPack(BaseModel):
         if data.get("training_volume") is None:
             # #400: a non-volume prompt emits nothing — not even a null key.
             data.pop("training_volume", None)
+        if data.get("stream_view") is None:
+            # #443: a non-stream-view prompt emits nothing — not even a null key, so
+            # the pack stays byte-stable under v9 and below.
+            data.pop("stream_view", None)
         return data
 
     def fingerprint(self) -> str:

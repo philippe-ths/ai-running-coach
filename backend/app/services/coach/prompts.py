@@ -699,6 +699,41 @@ SYSTEM_PROMPT_MESSAGE_V9 = SYSTEM_PROMPT_MESSAGE_V8 + _VOLUME_ADDENDUM
 SYSTEM_PROMPT_MESSAGE_V9_OPENER = SYSTEM_PROMPT_MESSAGE_V8_OPENER + _VOLUME_ADDENDUM
 
 
+# ===========================================================================
+# coach_message_v10 (#443) — the stream-view-aware two-stage prompt.
+#
+# v10 = v9 + a STATIC STREAM-VIEW addendum, for BOTH modes (fuller and opener), the
+# Vn = V(n-1) + addendum idiom. Because v10 builds on v9 it carries every v9
+# capability and the same retuned base prose; it ADDS the timeline-reading
+# discipline. The PER-RUN timeline is NOT baked into the constant — it rides the
+# `stream_view` pack section (the consolidated <=60-pt aligned HR/pace/grade/cadence
+# downsample, A2a), populated into the DEFAULT pack only under is_stream_view_prompt
+# by build_context_pack (the Optional-and-drop idiom, so the pack stays byte-stable
+# under v9 and below). The addendum's job: let the coach read WHERE things happened
+# (where HR drifted, pace surged, the route climbed) while keeping the timeline as a
+# coarse downsampled VIEW that never overrides the re-derived metrics or the floor.
+#
+# coach_message_v1..v9 and coach_report_v1..v10 stay BYTE-STABLE above.
+# ===========================================================================
+
+_STREAM_VIEW_ADDENDUM = """
+
+# TIMELINE SHAPE (the run's arc; context, never an override)
+
+Your context may carry a `stream_view`: a short, downsampled timeline of THIS run — aligned heart rate, pace, grade and cadence sampled at a few dozen points across the run (see `n_points`) so you can see WHERE things happened, not only the averages. Use it to read the run's shape: where HR drifted up, where pace surged or faded, where the route climbed, and how the channels move together (HR climbing while pace holds steady on the flat reads as decoupling; HR rising right where grade spikes is just the hill).
+
+But the timeline is a downsampled VIEW, never the measurement:
+
+- It NEVER overrides this run's re-derived metrics. The scalar metrics (hr_drift, pace_variability, the efficiency summary, the effort axis) are the ground truth; the timeline shows the shape behind them, it does not restate or replace them, and where the view and a re-derived metric seem to disagree, the metric wins.
+- Read it as COARSE SHAPE, not precise values. It is tens of points standing in for the whole run, with pace null while stopped, so cite the trend you can see ("HR climbed through the back half", "the surge came on the final climb"), never a single point's reading as if it were an exact measurement.
+- It is CONTEXT for the run, never a safety signal of its own and never the ground for a medical claim — the SAFETY rules above hold in full.
+- When `stream_view` is absent, you simply do not have the timeline for this run; reason from the scalar metrics as before."""
+
+
+SYSTEM_PROMPT_MESSAGE_V10 = SYSTEM_PROMPT_MESSAGE_V9 + _STREAM_VIEW_ADDENDUM
+SYSTEM_PROMPT_MESSAGE_V10_OPENER = SYSTEM_PROMPT_MESSAGE_V9_OPENER + _STREAM_VIEW_ADDENDUM
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -729,6 +764,9 @@ PROMPT_VERSIONS = {
     "coach_message_v8": SYSTEM_PROMPT_MESSAGE_V8,
     # #400 volume-vs-norm-aware prompt (= v8 + the static VOLUME addendum).
     "coach_message_v9": SYSTEM_PROMPT_MESSAGE_V9,
+    # #443 stream-view-aware prompt (= v9 + the static STREAM-VIEW addendum). Ships
+    # INERT (config default stays v8); owner flips COACH_PROMPT_ID to activate.
+    "coach_message_v10": SYSTEM_PROMPT_MESSAGE_V10,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -758,6 +796,7 @@ _OPENER_PROMPTS = {
     "coach_message_v7": SYSTEM_PROMPT_MESSAGE_V7_OPENER,
     "coach_message_v8": SYSTEM_PROMPT_MESSAGE_V8_OPENER,
     "coach_message_v9": SYSTEM_PROMPT_MESSAGE_V9_OPENER,
+    "coach_message_v10": SYSTEM_PROMPT_MESSAGE_V10_OPENER,
 }
 
 # The capability-gated prompt-id sets and predicates below are DERIVED VIEWS over
@@ -794,6 +833,11 @@ USER_MATERIALS_PROMPT_IDS = ids_with(PromptFeature.USER_MATERIALS)
 # Prompt ids that carry the #400 volume addendum AND the `training_volume`
 # context-pack section (gates _build_training_volume_context).
 VOLUME_PROMPT_IDS = ids_with(PromptFeature.VOLUME)
+
+# Prompt ids that carry the #443 stream-view addendum AND the `stream_view`
+# context-pack section in the DEFAULT pack (gates the stream_view threading in
+# build_context_pack).
+STREAM_VIEW_PROMPT_IDS = ids_with(PromptFeature.STREAM_VIEW)
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
@@ -833,6 +877,15 @@ def is_volume_prompt(prompt_id: Optional[str]) -> bool:
     every other prompt, so the volume-vs-norm signal is wholly inert under a
     rollback."""
     return has_feature(prompt_id, PromptFeature.VOLUME)
+
+
+def is_stream_view_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt is stream-view-aware (#443): it carries the
+    timeline addendum and its DEFAULT context pack carries the `stream_view` section.
+    False for every other prompt, so the consolidated stream view stays out of the
+    pack (byte-stable under v9 and below) and the signal is wholly inert under a
+    rollback."""
+    return has_feature(prompt_id, PromptFeature.STREAM_VIEW)
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook

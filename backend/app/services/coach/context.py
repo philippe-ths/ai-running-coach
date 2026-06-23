@@ -42,6 +42,7 @@ from app.services.coach.prompts import (
     _describe_dial,
     is_corpus_prompt,
     is_stance_prompt,
+    is_stream_view_prompt,
     is_training_load_prompt,
     is_user_materials_prompt,
     is_volume_prompt,
@@ -209,7 +210,11 @@ def build_context_pack(
     and the stance section uses the balanced default — keeping callers that pass no
     stance byte-stable against the P1.2-wired behaviour.
     """
-    wc = assemble_working_context(db, activity)
+    # #443: under a stream-view-aware prompt the DEFAULT pack carries the consolidated
+    # stream view (deep=True pulls it through the retrieval seam). Under any other
+    # prompt deep=False, so the deferred column is never loaded and the pack stays
+    # byte-stable (stream_view stays None and is dropped from serialization).
+    wc = assemble_working_context(db, activity, deep=is_stream_view_prompt(prompt_id))
     b, f = wc.b_baseline, wc.focus
     return CoachContextPack(
         activity=f.activity,
@@ -245,6 +250,10 @@ def build_context_pack(
         # read-time over the runner's local-day windows so a deliberate easy week reads
         # as down-vs-norm rather than alarming.
         training_volume=_build_training_volume_context(db, activity, prompt_id),
+        # #443 consolidated stream view: present in the DEFAULT pack only under a
+        # stream-view-aware prompt (focus.stream_view is None otherwise, dropped from
+        # serialization), so the pack stays byte-stable under v9 and below.
+        stream_view=f.stream_view,
         safety_rules=b.safety_rules,
     )
 

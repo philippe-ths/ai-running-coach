@@ -40,9 +40,9 @@ def test_v9_registered_in_message_family_and_gate_sets():
     assert V9 in STANCE_PROMPT_IDS
     assert V9 in TRAINING_LOAD_PROMPT_IDS
     assert V9 in USER_MATERIALS_PROMPT_IDS
-    # ...plus the new VOLUME capability (v9 only).
+    # ...plus the new VOLUME capability (v9 onward; v10 carries it too, #443).
     assert V9 in VOLUME_PROMPT_IDS
-    assert VOLUME_PROMPT_IDS == {V9}
+    assert VOLUME_PROMPT_IDS == {V9, "coach_message_v10"}
     # same schema family as v8 (so v9 reports regenerate, prior history retained).
     assert active_schema_version(V9) == active_schema_version(V8)
 
