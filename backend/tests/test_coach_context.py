@@ -237,3 +237,73 @@ def test_context_pack_profile_includes_new_fields(db):
     assert pack.profile.max_hr == 190
     assert pack.profile.max_hr_source == "user_entered"
     assert pack.profile.current_weekly_km == 35
+
+
+# --- #441: efficiency curve is coarsened in the coach pack -------------------
+
+def test_efficiency_trend_reads_first_third_vs_last_third():
+    from app.services.coach.context import _efficiency_trend
+
+    # Steady curve -> stable.
+    assert _efficiency_trend([1.0] * 30) == "stable"
+    # Clear fade across the run -> declining.
+    assert _efficiency_trend([2.0] * 10 + [1.9] * 10 + [1.5] * 10) == "declining"
+    # Clear improvement -> improving.
+    assert _efficiency_trend([1.5] * 10 + [1.7] * 10 + [2.0] * 10) == "improving"
+    # Stops (0.0) inside a third are ignored, not read as a fade.
+    assert _efficiency_trend([2.0, 0.0, 2.0] * 10) == "stable"
+    # Degrades to None when there is no usable shape.
+    assert _efficiency_trend(None) is None
+    assert _efficiency_trend([]) is None
+    assert _efficiency_trend([1.0, 2.0]) is None  # fewer than 3 points
+
+
+def test_summarize_efficiency_drops_curve_keeps_summary():
+    from app.services.coach.context import _summarize_efficiency_for_coach
+
+    stored = {
+        "average": 2.1,
+        "best_sustained": 2.4,
+        "unit": "m/min/bpm",
+        "curve": [2.0] * 10 + [1.6] * 10,  # full chart-resolution series
+    }
+    out = _summarize_efficiency_for_coach(stored)
+    assert "curve" not in out  # the long series is dropped
+    assert out["average"] == 2.1 and out["best_sustained"] == 2.4
+    assert out["unit"] == "m/min/bpm"
+    assert out["trend"] == "declining"  # coarse shape descriptor survives
+    # The stored dict is not mutated.
+    assert "curve" in stored
+
+    # Pass-through for empty / None.
+    assert _summarize_efficiency_for_coach(None) is None
+    assert _summarize_efficiency_for_coach({}) == {}
+
+
+def test_coach_pack_efficiency_carries_summary_not_full_curve(db):
+    """#441: the coach pack carries the efficiency summary + a coarse trend, never
+    the full chart-resolution curve."""
+    user_id = uuid.uuid4()
+    from app.models.user import User
+    db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
+    db.flush()
+
+    activity = _create_activity(db, user_id)
+    _add_metrics(
+        db,
+        activity,
+        efficiency_analysis={
+            "average": 2.0,
+            "best_sustained": 2.3,
+            "unit": "m/min/bpm",
+            "curve": [2.1] * 15 + [1.5] * 15,
+        },
+    )
+
+    pack = build_context_pack(db, activity)
+
+    eff = pack.metrics.efficiency_analysis
+    assert eff is not None
+    assert "curve" not in eff  # the chart series never reaches the coach
+    assert eff["average"] == 2.0 and eff["best_sustained"] == 2.3
+    assert eff["trend"] == "declining"
