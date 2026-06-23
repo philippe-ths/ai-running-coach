@@ -182,8 +182,8 @@ export default function UserMaterialsPanel() {
         <p className="mt-2 flex items-start gap-1.5 text-xs text-gray-500 dark:text-gray-400">
           <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
           <span>
-            Rolling out soon — uploads are saved and processed now so they&apos;re ready
-            when your coach starts using them.
+            Each upload is distilled into a short profile your coach reasons from. New
+            materials are picked up automatically and shape your reports from then on.
           </span>
         </p>
       </div>
