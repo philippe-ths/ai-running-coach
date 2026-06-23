@@ -19,11 +19,15 @@ def _fact(d: date, *, type="Run", distance_m=10000, moving_time_s=3600, effort_s
 
 
 def _baseline(as_of: date):
-    """12 identical prior weeks, each 5 sessions (4 runs + 1 walk), 50km, 18000s,
-    250 effort. So the per-week norm is exactly that, by construction."""
+    """13 identical prior weeks, each 5 sessions (4 runs + 1 walk), 50km, 18000s,
+    250 effort. The runner thus has continuous history extending BEYOND the 12-week
+    (84-day) norm window, so the clamped per-day-rate norm (#451) is computed over the
+    full window and equals the clean per-week figure by construction: 5 sessions /
+    50km / 250 effort per week. (A runner with LESS history is the divergence case —
+    see test_short_history_uses_honest_per_day_rate.)"""
     baseline_end = as_of - timedelta(days=7)
     facts = []
-    for week in range(12):
+    for week in range(13):
         wk_anchor = baseline_end - timedelta(days=week * 7)
         for offset in range(4):  # 4 runs
             facts.append(_fact(wk_anchor - timedelta(days=offset)))
@@ -52,6 +56,30 @@ def test_deliberate_easy_week_reads_down():
     assert r["moving_time_s"].direction == "down"
     assert r["effort_score"].direction == "down"
     assert r["distance_m"].pct_vs_norm == -60.0  # 20km vs 50km
+
+
+def test_short_history_uses_honest_per_day_rate_not_deflated_per_week():
+    """#451: 'typical' is the clamped per-day rate, not total / a fixed 12 weeks. A
+    runner with only ~4 weeks of history (28 consecutive daily runs) has a true rate of
+    7 sessions / 70km a week; the per-day rate reports that honestly, where the old
+    divide-by-12 would deflate it to ~2.3/week and mislabel a normal week as a spike."""
+    as_of = date(2026, 6, 20)
+    baseline_end = as_of - timedelta(days=7)
+    # 28 consecutive days of one 10km run/day, all BEFORE the current 7-day window.
+    facts = [_fact(baseline_end - timedelta(days=d)) for d in range(28)]
+    # A normal current week for this runner: 7 daily runs.
+    facts += [_fact(as_of - timedelta(days=d)) for d in range(7)]
+
+    vol = build_training_volume(facts, as_of)
+    assert vol.has_baseline is True
+    r = _by_metric(vol.rolling_7d)
+    # Clamped window = the 28 actual days; per-day = 28/28 = 1 -> weekly norm = 7.0,
+    # NOT 28/12 ~= 2.3 (the deflated per-week figure the old definition produced).
+    assert r["sessions"].norm_weekly == 7.0
+    assert r["distance_m"].norm_weekly == 70000.0  # 280km / 28d * 7
+    # The current week matches that rate, so it reads in_line, not a false 'up' spike.
+    assert r["sessions"].current_all == 7
+    assert r["sessions"].direction == "in_line"
 
 
 def test_normal_week_reads_in_line():

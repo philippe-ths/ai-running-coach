@@ -608,7 +608,10 @@ class RecentComparison(BaseModel):
     vs_typical_direction: str  # up | in_line | down | no_norm
     vs_prev_pct: Optional[float] = None
     vs_prev_direction: str     # up | in_line | down | no_norm
-    typical_basis: str
+    # #451: None on a window that carries no vs-typical read (the 7d window — its
+    # weekly vs-norm verdict lives in `training_volume`, so recent_training does not
+    # duplicate it). Present (a self-describing string) wherever vs_typical is computed.
+    typical_basis: Optional[str] = None
     prev_basis: str
 
 
@@ -650,7 +653,13 @@ class CoachContextPack(BaseModel):
     metrics: MetricsContext
     check_in: CheckInContext
     profile: ProfileContext
-    recent_training_summary: RecentTrainingSummary
+    # #451: the legacy coarse recent-volume summary, RETIRED. No longer populated —
+    # the rich `recent_training` section plus the `training_volume` vs-norm verdict
+    # supersede it (the three-way overlap is gone). Kept as an Optional field so
+    # STORED pre-#451 packs (which carry it) still validate under extra="forbid" — the
+    # chat read path and eval harness both strict-parse historical packs — and dropped
+    # from serialization when None so new packs never carry it.
+    recent_training_summary: Optional[RecentTrainingSummary] = None
     longitudinal: LongitudinalContext
     perceived_effort: PerceivedEffortContext
     adherence: AdherenceContext
@@ -741,6 +750,11 @@ class CoachContextPack(BaseModel):
         if data.get("recent_training") is None:
             # #444: a non-recent-training prompt emits nothing — not even a null key.
             data.pop("recent_training", None)
+        if data.get("recent_training_summary") is None:
+            # #451: the legacy summary is retired and no longer populated; drop the
+            # null key so new packs omit it. A pre-#451 stored pack still carries the
+            # real object (non-None), so it round-trips unchanged.
+            data.pop("recent_training_summary", None)
         return data
 
     def fingerprint(self) -> str:

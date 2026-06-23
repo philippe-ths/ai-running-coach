@@ -1,9 +1,9 @@
 """#444: the modality-aware recent-training picture for the coach pack.
 
-A richer recent-training read than the four windowed all-activity sums of
-`recent_training_summary`. For each of three windows — recent (last 7 days), recent
-long (last 30 days) and the prior comparison window (the 30 days before that) — it
-reports:
+The coach pack's single recent-training picture (#451: it replaced the coarse
+`recent_training_summary`, now retired, so there is one recent-volume home). For
+each of three windows — recent (last 7 days), recent long (last 30 days) and the
+prior comparison window (the 30 days before that) — it reports:
 
   - a per-activity-TYPE breakdown (counts + per-type distance/time/load totals), so
     a walk is never read as a run and the coach sees the full cardio picture;
@@ -14,15 +14,17 @@ reports:
 The recent (7d) window also carries a bounded, capped per-activity list (each
 session's type and intensity/load), so the coach can speak to specific sessions.
 
-For the 7d and 30d windows it carries a vs-TYPICAL and a vs-PREV comparison per
-metric, with ALL percentages precomputed and a deadband direction (up/in_line/down/
-no_norm), each tagged with a self-describing BASIS so the coach never cites a
-comparison whose reference it does not know:
+Both the 7d and 30d windows carry a vs-PREV comparison per metric; only the 30d
+window carries a vs-TYPICAL one (#451: the 7d weekly vs-norm verdict lives in the
+`training_volume` section, so recent_training does not duplicate it). All
+percentages are precomputed with a deadband direction (up/in_line/down/no_norm),
+each tagged with a self-describing BASIS so the coach never cites a comparison whose
+reference it does not know:
 
-  - "typical" is the runner's own average daily rate over a trailing baseline
-    (7d vs ~12 weeks, 30d vs ~6 months), projected onto the window — the SAME
-    per-day-rate definition the Trends page uses, reused via `build_volume_report`,
-    so "typical" has one meaning across the product (#444 decision 1).
+  - "typical" (30d only) is the runner's own average daily rate over a trailing
+    ~6-month baseline, projected onto the window — the SAME clamped per-day-rate
+    definition the Trends page and `training_volume` use, reused via
+    `build_volume_report`, so "typical" has one meaning across the product (#451).
   - "prev" is the same metric over the equal-length window immediately before this
     one.
 
@@ -48,14 +50,11 @@ from app.services.coach.volume import _METRICS, _direction, _sum, build_volume_r
 # windows carry only the per-type roll-up, never a per-session list).
 _MAX_RECENT_ACTIVITIES = 12
 
-# Self-describing basis for the vs-typical comparison, by window length. Mirrors the
-# per-day-rate definition build_volume_report computes (12 weeks for 7d, 6 months for
-# 30d), so the label and the number always agree.
+# Self-describing basis for the vs-typical comparison. Only the 30d window carries a
+# vs-typical read now (#451): the 7d weekly vs-norm verdict lives in `training_volume`,
+# so recent_training does not duplicate it. Mirrors the per-day-rate definition
+# build_volume_report computes (~6 months for 30d), so the label and the number agree.
 _TYPICAL_BASIS = {
-    7: (
-        "your own average daily training over the last ~12 weeks, projected onto "
-        "7 days (rest days counted as zero)"
-    ),
     30: (
         "your own average daily training over the last ~6 months, projected onto "
         "30 days (rest days counted as zero)"
@@ -128,13 +127,18 @@ def _vs_prev_pct(window_facts: List[Any], prev_facts: List[Any], metric: str):
 
 
 def _comparisons(
-    facts: List[Any], as_of: date, n: int
+    facts: List[Any], as_of: date, n: int, *, with_typical: bool
 ) -> List[RecentComparison]:
-    """The vs-typical (per-day-rate, reused from build_volume_report) + vs-prev
-    comparison per metric for a window of `n` days ending `as_of`."""
-    range_key = "7D" if n == 7 else "30D"
-    report = build_volume_report(facts, as_of, range_key)
-    typical_by_metric = {m.metric: m for m in report.rolling.metrics}
+    """The vs-prev comparison per metric for a window of `n` days ending `as_of`, plus
+    the vs-typical (per-day-rate, reused from build_volume_report) ONLY when
+    `with_typical` (the 30d window). The 7d window omits vs-typical (#451): its weekly
+    vs-norm verdict lives in `training_volume`, so recent_training does not duplicate
+    it — those metrics carry vs-prev and a `no_norm` vs-typical with no basis."""
+    typical_by_metric: dict = {}
+    if with_typical:
+        range_key = "7D" if n == 7 else "30D"
+        report = build_volume_report(facts, as_of, range_key)
+        typical_by_metric = {m.metric: m for m in report.rolling.metrics}
 
     cur_start = as_of - timedelta(days=n - 1)
     prev_end = cur_start - timedelta(days=1)
@@ -155,7 +159,7 @@ def _comparisons(
                 vs_typical_direction=t.direction if t else "no_norm",
                 vs_prev_pct=prev_pct,
                 vs_prev_direction=prev_dir,
-                typical_basis=_TYPICAL_BASIS[n],
+                typical_basis=_TYPICAL_BASIS[n] if with_typical else None,
                 prev_basis=f"the {n} days immediately before this window",
             )
         )
@@ -172,6 +176,7 @@ def _window(
     as_of: date,
     with_comparisons: bool,
     with_activities: bool,
+    with_typical: bool = False,
 ) -> RecentTrainingWindow:
     window_facts = [f for f in facts if win_start <= f.local_date <= win_end]
     return RecentTrainingWindow(
@@ -182,7 +187,11 @@ def _window(
         total_distance_m=int(_sum(window_facts, "distance_m")),
         total_moving_time_s=int(_sum(window_facts, "moving_time_s")),
         total_effort=round(_sum(window_facts, "effort_score"), 1),
-        comparisons=_comparisons(facts, as_of, n) if with_comparisons else [],
+        comparisons=(
+            _comparisons(facts, as_of, n, with_typical=with_typical)
+            if with_comparisons
+            else []
+        ),
         activities=_recent_activities(window_facts) if with_activities else [],
     )
 
@@ -193,21 +202,25 @@ def build_recent_training(facts: List[Any], as_of: date) -> RecentTrainingContex
     vs-typical baseline). Facts are duck-typed `ActivityFact`s: each needs
     `local_date`, `activity_type`, `distance_m`, `moving_time_s`, `effort_score`,
     and (for the per-activity list) `effort`."""
+    # 7d: vs-prev only (no vs-typical — training_volume owns the weekly vs-norm, #451).
     last_7d = _window(
         "last_7d", 7, as_of - timedelta(days=6), as_of, facts,
-        as_of=as_of, with_comparisons=True, with_activities=True,
+        as_of=as_of, with_comparisons=True, with_activities=True, with_typical=False,
     )
+    # 30d: both vs-typical (the ~6-month per-day rate) and vs-prev.
     last_30d = _window(
         "last_30d", 30, as_of - timedelta(days=29), as_of, facts,
-        as_of=as_of, with_comparisons=True, with_activities=False,
+        as_of=as_of, with_comparisons=True, with_activities=False, with_typical=True,
     )
     previous_30d = _window(
         "previous_30d", 30, as_of - timedelta(days=59), as_of - timedelta(days=30), facts,
         as_of=as_of, with_comparisons=False, with_activities=False,
     )
 
-    # has_baseline mirrors the vs-typical abstention: true when any 7d/30d metric
-    # resolved a norm (build_volume_report sets direction 'no_norm' when too thin).
+    # has_baseline mirrors the vs-typical abstention: true when a 30d metric resolved a
+    # norm (build_volume_report sets direction 'no_norm' when too thin). Only the 30d
+    # window carries vs-typical now (#451), so the 7d comparisons are all 'no_norm' and
+    # do not contribute — checking both is harmless and keeps the intent explicit.
     has_baseline = any(
         c.vs_typical_direction != "no_norm"
         for c in (last_7d.comparisons + last_30d.comparisons)

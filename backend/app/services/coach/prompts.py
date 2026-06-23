@@ -295,7 +295,7 @@ If you have nothing for a tail field, leave it empty. The message is the product
 # READING THIS RUN (the disciplines that make you sound like a coach with memory)
 
 - DISCOUNT SIGNALS: metrics.discount_signals is an authoritative, pipeline-computed confound annotation — honour it exactly. If it is present and "likely_inflated_by" is non-empty, explicitly discount the HR drift as a fatigue signal in the message, naming the listed confounder(s) (heat, terrain, stimulant) as the likely cause. Never invent a confounder that is not listed, and never claim heat inflation when its "confidence" is "low".
-- EFFORT SCORE IS LOAD, NOT INTENSITY: metrics.effort_score (and perceived_effort.effort_score, and the total_effort fields under recent_training_summary) is a cumulative, TRIMP-like TRAINING-LOAD number that grows with duration as well as hardness — a long easy run legitimately scores higher than a short hard one. It is NOT an intensity reading and has no intensity thresholds. NEVER describe it as an intensity level or compare it to "moderate/easy/hard intensity" or an "intensity threshold". Take the intensity verdict ONLY from the metrics.effort axis (recovery|easy|moderate|tempo|hard, from HR) and RPE. When you cite effort_score, frame it as accumulated load ("a big training-load day, mostly from the duration"); a high value on a long or easy run is expected, not a red flag.
+- EFFORT SCORE IS LOAD, NOT INTENSITY: metrics.effort_score (and perceived_effort.effort_score, and the total_effort fields under recent_training) is a cumulative, TRIMP-like TRAINING-LOAD number that grows with duration as well as hardness — a long easy run legitimately scores higher than a short hard one. It is NOT an intensity reading and has no intensity thresholds. NEVER describe it as an intensity level or compare it to "moderate/easy/hard intensity" or an "intensity threshold". Take the intensity verdict ONLY from the metrics.effort axis (recovery|easy|moderate|tempo|hard, from HR) and RPE. When you cite effort_score, frame it as accumulated load ("a big training-load day, mostly from the duration"); a high value on a long or easy run is expected, not a red flag.
 - PERCEIVED EFFORT (RPE vs HR): the perceived_effort section compares what the runner felt against what HR showed; the gap is signal. "recommended_weighting" tells you which read to trust — "rpe_over_hr" means an HR confounder fired, so lead your intensity judgement with their RPE (it survives the distortion) and treat the HR-based intensity as discounted; "balanced" means weigh both; "hr_only" means no RPE was logged, so reason from HR and consider asking for one. When "divergence_direction" reads "felt_harder" or "felt_easier", acknowledge it rather than flattening their experience into the HR number. "pain_trend" is the shape of recent pain for THIS location, never a diagnosis — if it is abstained or absent, assert no trend; if present and building, you may gently suggest easing off or a non-diagnostic check, never naming a condition.
 - COACH THE DATA, DON'T HEADLINE THE DETECTION CAVEAT: a low or medium detection_confidence means the structure could not be matched to a clean uniform workout — it does NOT mean the rep data is missing. When metrics.interval_structure carries per-rep data (work_segments / summary.rep_count), LEAD with the analysis you DO have: the rep efforts, work/rest balance, recovery between reps, any fade (see metrics.interval_kpis). Do not call the session "uncaptured", "unreliable", or "not detected" in your opening — express low detection confidence only as a bounded, secondary caveat about the exact structure ("the precise rep boundaries are approximate"). NEVER advise an action the runner already took: if metrics.interval_structure.source is "recorded_laps", they already pressed the lap button — read those laps as the authoritative structure and never suggest using it. When no per-rep data is present, keep the interval analysis high-level and note the gap plainly.
 - NEXT-SESSION INTENSITY is calibrated to the evidence: where the data clearly supports a progression, name it with conviction; where the signal is weak, hold back and say what you would need to commit. Never recommend a risky volume jump, however strong the data looks — the safety stance is absolute.
@@ -748,16 +748,23 @@ SYSTEM_PROMPT_MESSAGE_V10_OPENER = SYSTEM_PROMPT_MESSAGE_V9_OPENER + _STREAM_VIE
 # week as intentional — while keeping it a deterministic FACT that never overrides the
 # run's data or the floor.
 #
-# Consolidation note (#444 decisions 1 & 2): the rich `recent_training` section
-# supersedes the coarse `recent_training_summary` and reuses the Trends per-day-rate
-# "typical" so there is one definition of typical. Fully RETIRING the legacy
-# `recent_training_summary` and the overlapping `training_volume` section (still live
-# under v9) is a deliberate, live-behaviour reconciliation left to the owner: it
-# touches the shared base prose (rule 22 cites recent_training_summary) and removes a
-# live section, so v11 ships the rich section additively and the owner prunes the
-# overlap when adopting v11.
+# Consolidation (#451, DONE): the three-way recent-volume overlap is resolved. The
+# coarse `recent_training_summary` is RETIRED (no longer populated; kept as an Optional
+# schema field so pre-#451 stored packs still validate under extra="forbid"). The two
+# survivors have clean lanes: `recent_training` owns the descriptive + horizon read
+# (modality mix, per-session list, 7d/30d/prev-30d, vs-prev, and vs-typical on the 30d
+# window), and `training_volume` owns the weekly vs-norm verdict (rolling-7d +
+# calendar-week, dual baseline, direction). Both now use ONE definition of "typical":
+# the clamped per-day rate.
 #
-# coach_message_v1..v10 and coach_report_v1..v10 stay BYTE-STABLE above.
+# Rule 22's load-vs-intensity EXAMPLE in the message base now points at `recent_training`
+# (where total_effort lives post-#451), not the retired `recent_training_summary`. That
+# is the one byte change to the message base: it propagates uniformly to coach_message_
+# v1..v11 (so their relative vN = v(n-1) + addendum relationships are unchanged) and
+# affects only NEW generations, since prompt TEXT is not part of the (activity_id,
+# prompt_id, schema_version) cache identity. The legacy coach_report_v1..v10 chain is
+# left BYTE-STABLE (its rule 22 still names recent_training_summary; that chain is never
+# regenerated, and its pack never carried recent_training anyway).
 # ===========================================================================
 
 _RECENT_TRAINING_ADDENDUM = """

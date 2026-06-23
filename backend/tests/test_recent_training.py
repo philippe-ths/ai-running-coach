@@ -99,17 +99,27 @@ def test_vs_prev_abstains_when_prior_window_empty():
 
 # --- vs-typical (per-day-rate baseline, reused from the Trends core) --------
 
-def test_vs_typical_resolves_with_enough_baseline_and_carries_basis():
-    # A baseline of weekly runs across the ~12 weeks before the current week, plus a
-    # heavier current week -> sessions read as up vs typical.
-    facts = [_fact(7 * w + 8) for w in range(10)]  # ~10 runs in the baseline window
+def test_vs_typical_resolves_on_30d_window_and_carries_basis():
+    # #451: only the 30d window carries vs-typical (the ~6-month per-day rate); the 7d
+    # weekly vs-norm verdict lives in training_volume, so 7d omits vs-typical entirely.
+    # Runs spread across the ~6 months before now -> the 30d vs-typical resolves.
+    facts = [_fact(7 * w + 8) for w in range(20)]  # ~20 runs over ~20 weeks
     facts += [_fact(1), _fact(2), _fact(3)]  # a busy current week
     ctx = build_recent_training(facts, _AS_OF)
     assert ctx.has_baseline is True
-    sessions = next(c for c in ctx.last_7d.comparisons if c.metric == "sessions")
-    assert sessions.vs_typical_direction in {"up", "in_line", "down"}
-    assert sessions.vs_typical_pct is not None
-    assert "average daily" in sessions.typical_basis and "12 weeks" in sessions.typical_basis
+
+    s30 = next(c for c in ctx.last_30d.comparisons if c.metric == "sessions")
+    assert s30.vs_typical_direction in {"up", "in_line", "down"}
+    assert s30.vs_typical_pct is not None
+    assert s30.typical_basis is not None
+    assert "average daily" in s30.typical_basis and "6 months" in s30.typical_basis
+
+    # 7d keeps vs-prev but carries NO vs-typical read (basis None, direction no_norm).
+    s7 = next(c for c in ctx.last_7d.comparisons if c.metric == "sessions")
+    assert s7.vs_typical_pct is None
+    assert s7.vs_typical_direction == "no_norm"
+    assert s7.typical_basis is None
+    assert s7.vs_prev_pct is not None  # the vs-prev comparison is still present
 
 
 def test_vs_typical_abstains_on_thin_history():
@@ -188,3 +198,9 @@ def test_recent_training_in_default_pack_only_under_v11(db):
     pack_default = build_context_pack(db, activity)
     assert pack_default.recent_training is None
     assert "recent_training" not in pack_default.to_serializable_dict()
+
+    # #451: the coarse recent_training_summary is RETIRED — no freshly built pack
+    # emits it, under any prompt (the rich recent_training supersedes it under v11).
+    for pack in (pack_v11, pack_v10, pack_default):
+        assert pack.recent_training_summary is None
+        assert "recent_training_summary" not in pack.to_serializable_dict()
