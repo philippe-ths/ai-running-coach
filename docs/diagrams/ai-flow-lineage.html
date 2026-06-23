@@ -152,6 +152,18 @@
   .fate-dropped     { color:#fca5a5; background:rgba(248,81,73,.14); border:1px solid rgba(248,81,73,.42); }
   .fatebanner { font-size:11.5px; color:var(--muted); line-height:1.5; background:rgba(252,211,77,.06);
     border:1px solid rgba(252,211,77,.18); border-left:3px solid #fcd34d; border-radius:5px; padding:7px 10px; margin:9px 0; }
+  /* the system prompt, rendered as labelled layers (each tagged with the version that added it) */
+  .prompt { display:flex; flex-direction:column; gap:7px; margin-top:8px; }
+  .pseg { border:1px solid #23262d; border-left:3px solid #3a3f47; border-radius:6px; background:#0e1014; overflow:hidden; }
+  .pseghdr { font-size:9.5px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; color:#8b93a1;
+    padding:5px 9px; background:rgba(255,255,255,.025); border-bottom:1px solid #1c1f25; }
+  .ptext { margin:0; padding:9px 11px; font-size:11px; line-height:1.5; color:#c5ccd6; white-space:pre-wrap;
+    word-break:break-word; font-family:'SF Mono',ui-monospace,Menlo,monospace; }
+  .pseg-base   { border-left-color:#6b7280; }
+  .pseg-safety { border-left-color:#ef4444; } .pseg-safety .pseghdr { color:#fca5a5; }
+  .pseg-add    { border-left-color:#14b8a6; } .pseg-add .pseghdr { color:#5eead4; }
+  .pseg-play   { border-left-color:#f59e0b; } .pseg-play .pseghdr { color:#fcd34d; }
+  .pseg-voice  { border-left-color:#a78bfa; } .pseg-voice .pseghdr { color:#c4b5fd; }
 </style>
 </head>
 <body>
