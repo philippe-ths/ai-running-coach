@@ -1,0 +1,378 @@
+// AUTO-EXTRACTED shared model for the flow diagrams (ai-flow-lineage.html + ai-flow-graph.html).
+// Real per-activity data + the node graph (NODES, from-edges) + adjacency helpers.
+// Regenerate the DATA blob via generate_flow_data.py-style queries; edit NODES here.
+
+const DATA = {"meta": {"activity_id": "256ebb60-2f04-4bf3-ac93-29080155b98e", "prompt_id": "coach_message_v7", "schema_version": "2.0", "captured": "2026-06-18"}, "pack": {"activity": {"date": "2026-06-18T12:13:44+00:00", "name": "Afternoon Run", "type": "Run", "distance_m": 3390, "moving_time_s": 1266, "avg_hr": 161.4, "max_hr": 174.0, "avg_cadence": 162.0, "elev_gain_m": 40.0}, "metrics": {"headline": "Moderate run", "effort": "moderate", "duration_class": "standard", "structure": "continuous", "is_hilly": false, "is_race": false, "effort_score": 63.9, "hr_drift": 14.6, "pace_variability": 14.1, "flags": ["fatigue_possible"], "confidence": "high", "confidence_reasons": [], "time_in_zones": {"Z1": 40, "Z2": 132, "Z3": 863, "Z4": 235, "Z5": 0}, "zones_calibrated": false, "zones_basis": "uncalibrated", "efficiency_analysis": {"average": 1.0, "best_sustained": 1.14, "curve": [0.46, 0.622, 0.774, 0.953, 1.033, 1.061, 1.066, 1.08, 1.098, 1.066, 1.071, 1.037, 1.017, 1.008, 1.015, 1.044, 1.066, 1.09, 1.081, 1.062, 1.055, 1.044, 1.002, 0.994, 1.02, 0.963, 1.036, 1.076, 1.127, 1.167, 1.191, 1.307, 1.27, 1.238, 1.199, 1.152, 1.097, 1.021, 0.882, 0.922, 0.954, 0.981, 1.022, 1.083, 1.192, 1.151, 1.116, 1.108, 1.087, 1.07, 1.076, 1.076, 1.088, 1.074, 1.063, 1.053, 1.063, 1.073, 1.079, 1.07, 1.054, 1.042, 1.003, 0.972, 0.951, 0.946, 0.916, 0.906, 0.887, 0.874, 0.85, 0.824, 0.855, 0.871, 0.883, 0.881, 0.881, 0.896, 0.896, 0.893, 0.91, 0.934, 0.942, 0.947, 0.947, 0.967, 0.979, 0.979, 0.98, 0.975, 0.901, 0.873, 0.838, 0.813, 0.79, 0.771, 0.826, 0.82, 0.821, 0.818, 0.824, 0.827, 0.82, 0.826, 0.832, 0.835, 0.85, 0.857, 0.893, 0.918, 0.944, 0.975, 0.971, 0.995, 0.993, 0.981, 0.986, 0.991, 1.005, 0.988, 1.008, 1.04, 1.041, 1.048, 1.052, 0.901, 0.718], "unit": "m/min/bpm"}, "stops_analysis": {"total_stopped_time_s": 6, "stopped_count": 4, "longest_stop_s": 3, "stops": [{"start_time": 0, "duration_s": 1, "location": [51.11543, 0.24839], "distance_m": 0.0}, {"start_time": 392, "duration_s": 1, "location": [51.110468, 0.253627], "distance_m": 744.6}, {"start_time": 516, "duration_s": 1, "location": [51.107796, 0.254047], "distance_m": 1090.7}, {"start_time": 519, "duration_s": 3, "location": [51.107798, 0.253983], "distance_m": 1091.7}]}, "interval_structure": null, "workout_match": {"match_score": null, "detection_confidence": "low", "confidence_reasons": ["no_intervals_detected"], "detected_workout": null}, "interval_kpis": null, "risk_level": "green", "risk_score": 1, "risk_reasons": ["fatigue_possible (+1)"], "training_context": {"intensity_distribution_7d": {"easy": 15, "moderate": 3, "hard": 0}, "days_since_last_hard": null, "hard_sessions_this_week": 0}, "discount_signals": {"hr_drift_pct": 14.6, "likely_inflated_by": ["heat"], "temperature_c": 29.0, "confidence": "high", "interpretation": "This HR drift is likely inflated by heat; discount it as a fatigue signal."}}, "check_in": {"rpe": 3, "pain_score": null, "pain_location": null, "sleep_quality": null, "notes": null}, "profile": {"goal_type": "general", "experience_level": "intermediate", "weekly_days_available": 6, "injury_notes": "Past injury: right foot pain, right knee pain, shin splints.\n\nMedical: I'm taking Lisdexamfetamine for ADHD, it is known to raise heart rate, particularly during peak times, 12 - 3 p.m.", "max_hr": 191, "max_hr_source": null, "current_weekly_km": 18}, "recent_training_summary": {"last_7d": {"activity_count": 17, "total_distance_m": 45716, "total_moving_time_s": 35176, "total_effort": 851.1}, "last_28d": {"activity_count": 63, "total_distance_m": 173089, "total_moving_time_s": 123598, "total_effort": 3218.2}, "previous_28d": {"activity_count": 65, "total_distance_m": 147498, "total_moving_time_s": 110466, "total_effort": 3730.9}}, "longitudinal": {"prior_reports": [{"activity_date": "2026-06-18T11:38:57+00:00", "headline": "Rest day advice not taken — walk was fine, rest still owed", "lead_argument": "Right, so \"take a genuine rest day\" was yesterday's advice, and what you've presented me with is a lunchtime walk.", "next_steps": ["Take a genuine rest day (No activity at all — not a walk, not a gentle ride. Leave the log empty for at least one full day.)"]}, {"activity_date": "2026-06-17T17:23:58+00:00", "headline": "Third easy session today — discipline held, but volume and efficiency trend call for rest", "lead_argument": "*Dear Reader,*\n\nYour correspondent must confess she arrived at this column expecting to write about nothing at all — and the evening ride has, blessedly, obliged.", "next_steps": ["Take a genuine rest day (Let the activity log stay empty for at least one day this week — ideally the next available day. No 'easy' session as a substitute.)"]}], "baseline_trend": {"bucket": "moderate|flat|hot", "sample_count": 13, "efficiency_factor": {"direction": "improving", "magnitude_pct": 27.0, "slope": 0.0195, "n": 13}, "hr_drift": {"direction": "declining", "magnitude_pct": 56.5, "slope": 0.2282, "n": 9}}}, "perceived_effort": {"rpe": 3, "effort_axis": "moderate", "effort_score": 63.9, "divergence": -1, "divergence_direction": "aligned", "hr_confounded": true, "recommended_weighting": "rpe_over_hr", "pain_trend": null}, "adherence": {"prior_report_date": null, "outcomes": []}, "believed_facts": {"facts": [{"kind": "adherence_pattern", "statement": "This runner has a mixed response to guidance about keeping easy runs easy (acted on 5 of 8).", "confidence": "high", "observed_count": 23, "last_seen_days_ago": 0}]}, "calibration": {"hr_drift": {"calibrated": true, "expected_drift_pct": 2.8, "observed_drift_pct": 14.6, "delta_pct": 11.8, "comparison": "above", "sample_count": 8, "personal_norm_elevated": false, "basis": "this runner's typical HR drift for these conditions is about 2.8% across 8 comparable runs"}, "referral": null}, "preference_profile": {"themes": [{"theme": "easy_discipline", "tendency": "mixed", "acted": 5, "total": 8}]}, "narrative": {"narrative": "This runner has shown genuine capacity for easy discipline—five of the last eight times the coach has asked for it, the runner has delivered—but struggles with the harder ask: doing nothing at all. The coach has watched this runner complete three sessions in a single day and then, when asked to take a genuine rest day, substitute a walk instead, which suggests the runner understands *easy* but not yet *rest*. The tone that lands is wry and slightly literary, which the runner seems to respond to without defensiveness. The open thread is whether this runner can learn that a truly empty day is not a failure but a necessity, and the coach is holding that line with patient firmness.", "source_report_count": 5, "last_updated_days_ago": 0}, "salience": {"novelty": {"first_of_kind": [], "has_history": true}, "safety_override": {"force_fuller": false, "reasons": []}}, "continuity": {"opener_message": null, "reply": null}, "corpus": {"house_principles": ["Consistency compounds: the best session is one the runner can repeat next week, so favour sustainable progress over any single heroic effort.", "Most running should be genuinely easy; that easy aerobic volume is where durability is built, and protecting it is usually the highest-leverage habit.", "Progress is gradual: load rises in small steps, never in leaps, and a big jump in volume or intensity is a risk however good the runner feels.", "Adaptation happens during recovery, not during the hard session, so easy days, sleep, and rest are part of the training, not time off from it.", "The runner's goal, experience, and life context lead; training serves the runner, and advice is always tethered to what they are actually training for.", "Felt experience is data too: reconcile how a run felt with what the numbers show rather than overriding either, and treat a mismatch as signal.", "Never trade long-term health or durability for a single session's number; the long game wins, and the safety floor is never negotiable."], "school": {"id": "aerobic-base", "name": "Aerobic Base", "stance": "Durability is built by lots of easy aerobic running; the long game beats any single sharp session.", "principles": ["The aerobic engine is the foundation — build it patiently with easy volume before reaching for sharpness.", "More easy kilometres, run truly easy, beat fewer hard ones for long-term gains; mileage is the headline, not the intervals.", "Steady mileage and the long run are the main work; quality is a small, late seasoning on top of a deep base.", "Guard easy days fiercely — letting easy runs drift to moderate is the most common way base-building quietly stalls."], "method_framing": "Frame training around weekly easy volume and the long run; treat intensity as a small, well-earned supplement, and read easy-day discipline and aerobic durability as the signals that matter most.", "emphasis_hints": ["easy-day discipline", "weekly volume and the long run", "aerobic durability (HR drift, efficiency) over peak pace", "patience with progression"]}, "user_materials": []}, "stance": {"emphasis": [{"key": "data_sentiment", "low_pole": "Data", "high_pole": "Sentiment", "value": 3, "descriptor": "balanced"}, {"key": "process_outcome", "low_pole": "Process", "high_pole": "Outcome", "value": 1, "descriptor": "strongly Process"}]}, "training_load": {"fitness": 125.2, "fatigue": 118.6, "form": 6.6, "ramp_rate": 0.4, "condition": "fresh", "trend": "steady", "ramp_aggressive": false, "warming_up": false, "sample_count": 324}, "safety_rules": {"never_diagnose": true, "pain_severe_threshold": 7, "no_invented_facts": true}}, "derived": {"effort_score": 63.9, "pace_variability": 14.05, "hr_drift": 14.57, "time_in_zones": {"Z1": 40, "Z2": 132, "Z3": 863, "Z4": 235, "Z5": 0}, "flags": ["fatigue_possible"], "confidence": "high", "confidence_reasons": [], "structure": "continuous", "effort": "moderate", "duration_class": "standard", "is_hilly": false, "is_race": false, "risk_level": "green", "risk_score": 1, "risk_reasons": ["fatigue_possible (+1)"], "interval_structure": null, "workout_match": {"match_score": null, "detection_confidence": "low", "confidence_reasons": ["no_intervals_detected"], "detected_workout": null}, "interval_kpis": null, "discount_signals": {"hr_drift_pct": 14.6, "likely_inflated_by": ["heat"], "temperature_c": 29.0, "confidence": "high", "interpretation": "This HR drift is likely inflated by heat; discount it as a fatigue signal."}, "training_context": {"intensity_distribution_7d": {"easy": 15, "moderate": 3, "hard": 0}, "days_since_last_hard": null, "hard_sessions_this_week": 0}, "sv_points": "60", "stops_analysis": {"total_stopped_time_s": 6, "stopped_count": 4, "longest_stop_s": 3, "stops": [{"start_time": 0, "duration_s": 1, "location": [51.11543, 0.24839], "distance_m": 0.0}, {"start_time": 392, "duration_s": 1, "location": [51.110468, 0.253627], "distance_m": 744.6}, {"start_time": 516, "duration_s": 1, "location": [51.107796, 0.254047], "distance_m": 1090.7}, {"start_time": 519, "duration_s": 3, "location": [51.107798, 0.253983], "distance_m": 1091.7}]}}, "report": {"message": "Right, so. The rest-day advice has now been offered, declined, offered again, declined more creatively with a walk, and today we appear to be in round three. I'm choosing to read this as dedication rather than selective hearing, but I am watching you.\n\nThe run itself: you said RPE 3 — easy — and I believe you. The HR read moderate, which sounds concerning until you account for two things: it was 29°C at noon, and that's exactly the window where the stimulant you've mentioned tends to push HR up. Between the heat (confirmed as a high-confidence confounder by the data) and the medication timing, the HR here is not a useful fatigue signal. Your felt effort is the honest read, and it says easy. HR drift came in at 14.6%, well above your personal norm of around 2.8% for these conditions — but that gap is explained entirely by those two confounds. Discount it.\n\nThe numbers that actually matter: your efficiency on comparable moderate runs in the heat has improved 27% over recent months, and HR drift in those same conditions has been trending down 56.5%. Both of those you've earned by consistently running, which is evidently not something you're capable of stopping.\n\nWhat the data hasn't absorbed yet is the recovery those runs require. Seventeen activities in the last seven days. That is not a training week; it is a controlled collapse in slow motion. No pain reported today, which is genuinely good, and the overall risk score is low — but the fatigue flag is up and the volume warrants it. The one thing that would move the needle here is a day with nothing in the log. Not a walk. Not an \"easy\" 3k. Nothing. That's the next step, it's the same next step it's been for three days, and I will continue saying it until one of us gets bored.\n\nThe data says you can run. It also says you really should stop, just for today.", "headline": "Rest day overdue — HR confounded by heat and medication timing; RPE 3 = easy", "next_steps": [{"action": "Take a genuine rest day", "details": "Leave the activity log completely empty for at least one full day — no walk, no easy run, nothing.", "why": "17 activities in 7 days with a fatigue_possible flag; adaptation happens during recovery, not during the run.", "evidence": [{"field": "recent_training_summary.last_7d.activity_count", "value": 17}, {"field": "metrics.flags", "value": "fatigue_possible"}]}], "risks": [{"flag": "fatigue_possible", "explanation": "17 activities in the last 7 days with accumulated training load; the fatigue flag is up despite a low risk score.", "mitigation": "A full rest day with no substitution — not a walk, not an easy session."}], "questions": [{"question": "Is something making it hard to take a full day off — or is the rest day on the cards for tomorrow?", "reason": "Rest day advice has been given three consecutive sessions without being acted on; understanding the barrier would help.", "options": [{"id": "rest_tomorrow", "label": "Planning to rest tomorrow", "kind": "reply", "payload": "rest_tomorrow"}, {"id": "hard_to_stop", "label": "Hard to stop moving", "kind": "reply", "payload": "hard_to_stop"}, {"id": "felt_fine", "label": "I felt fine so kept going", "kind": "reply", "payload": "felt_fine"}]}], "tail_degraded": false, "opener_message": null, "schedule_fuller_turn": false}, "streams": {"heartrate": {"n": 1270, "series": [114, 118, 129, 140, 142, 147, 154, 161, 165, 168, 168, 169, 167, 166, 166, 168, 168, 164, 163, 162, 157, 159, 119, 127, 140, 147, 150, 155, 158, 160, 160, 160, 157, 153, 153, 152, 159, 165, 159, 158, 161, 159, 159, 156, 156, 158, 161, 165, 165, 162, 163, 166, 167, 170, 169, 170, 172, 174, 173, 171, 171, 172, 170, 169, 165, 164, 162, 167, 166, 167, 170, 167, 166, 155, 156, 164, 166, 168, 168, 171, 170, 170, 171, 167, 167, 166, 165, 166, 166, 165, 166, 165, 166, 166, 168, 167, 168, 169, 170, 171]}, "velocity_smooth": {"n": 1270, "series": [0, 1.98, 2.54, 2.16, 2.56, 2.38, 2.9, 2.76, 3.1, 2.28, 3.02, 3.34, 2.38, 2.62, 3.4, 3.2, 2.74, 2.42, 2.74, 2.7, 2.66, 3.14, 3.38, 2.56, 2.86, 3.46, 3.2, 3.32, 2.5, 2.96, 2.62, 1.98, 3.86, 3.2, 3.16, 3.1, 2.8, 2.72, 2.88, 3.06, 2.6, 2.8, 2.76, 3.06, 2.98, 2.52, 2.98, 3.12, 2.92, 2.72, 2.4, 2.58, 2.94, 2.48, 2.36, 2.16, 2.38, 2.46, 2.8, 2.74, 2.32, 2.72, 2.64, 2.5, 2.72, 2.7, 2.3, 2.68, 2.78, 2.86, 2.82, 2.48, 2.7, 2.36, 2.28, 2.24, 2.12, 2.2, 2.56, 2.2, 2.28, 2.34, 2.62, 2.68, 2.26, 2.38, 2.86, 2.98, 2.8, 2.7, 2.96, 2.78, 3.04, 2.92, 2.66, 2.48, 2.66, 3.18, 2.92, 2.88]}, "temp": {"n": 1270, "series": [30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 29, 29, 29, 29, 29, 29, 29, 29, 28, 29, 29, 28, 30, 30, 30, 30, 30, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 28, 29, 28, 28, 28, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29, 29]}, "cadence": {"n": 1270, "series": [0, 77, 83, 79, 77, 79, 78, 80, 87, 83, 82, 82, 80, 81, 83, 80, 82, 81, 82, 80, 82, 81, 88, 79, 78, 81, 78, 79, 81, 80, 80, 0, 81, 82, 78, 79, 82, 80, 81, 79, 80, 79, 84, 82, 83, 81, 81, 82, 82, 83, 84, 83, 83, 83, 81, 84, 82, 82, 82, 84, 84, 82, 83, 82, 83, 80, 85, 82, 82, 83, 83, 83, 82, 84, 81, 82, 84, 83, 81, 82, 80, 82, 83, 81, 80, 83, 79, 79, 83, 80, 81, 80, 81, 79, 79, 81, 81, 81, 79, 81]}, "altitude": {"n": 1270, "series": [136, 136.6, 137.8, 137.6, 137.6, 137.8, 138.2, 138.6, 138.4, 138.6, 139.8, 139.8, 139.6, 139.4, 139.2, 138, 137.6, 137, 136.4, 135.4, 135, 133.4, 131.8, 131, 130, 129.2, 128.6, 127.8, 126.8, 125.8, 126, 126.2, 125.6, 125, 124.4, 123.6, 122.6, 122.4, 122, 121.2, 119.4, 116, 112, 107, 107.4, 108.2, 107.2, 104.8, 101.2, 100, 101.6, 102.2, 102.6, 104, 106.2, 108.2, 111, 112.2, 112.4, 112.8, 115, 116.2, 116.4, 116, 115.4, 114.8, 116.2, 117.2, 116, 115, 114.8, 115.4, 115.4, 116.4, 119.8, 122.4, 124.4, 126, 128, 129.2, 130.4, 131.4, 132, 132.6, 133, 133.4, 133.4, 133.4, 133.2, 133, 133, 132.6, 132.4, 132, 131.4, 130.6, 129.4, 128.8, 128.2, 127.2]}, "grade_smooth": {"n": 1270, "series": [-3.8, 7.8, 1.9, 0, -1.8, 0, 3.6, -1.8, 0, 5, 5.1, 0, -1.8, -1.8, -2.8, 0, -2, 1.9, -1.9, 0, -1.6, -1.6, -3.2, -1.7, -1.6, -4.6, -1.6, -4.8, -1.9, -3.6, 1.8, 2.1, -1.4, 0, -1.5, -8.3, -1.8, 0, 0, -1.7, -5.4, -11.8, -12.2, -12.1, 6.4, -3.4, -5, -5.7, -5.9, 1.8, 7.5, 0, 3.1, 7.1, 5.3, 9.9, 7.4, 1.7, -1.8, 5.3, 5.5, 1.7, 0, 0, -3.5, 1.6, 4.8, 0, -4.7, -1.8, 0, 1.6, -3.8, 13.2, 10.6, 9.6, 5, 5.1, 5, 5.3, 3.6, 3.6, 1.6, 2, 1.7, 1.7, -1.6, 0, -1.9, 0, 0, 0, 0, -1.9, -1.9, 0, 0, -1.7, -3.3, -3.5]}, "distance": {"n": 1270, "series": [0, 23.4, 53.1, 79.8, 109.1, 142.7, 181.1, 220.2, 259, 288.2, 327.2, 364.9, 400.4, 438.7, 474.8, 517.8, 556.2, 588.4, 624.5, 658.5, 692.2, 732.3, 763.8, 798.1, 835.5, 874.4, 915.2, 956.5, 991.8, 1029.1, 1062.9, 1089.9, 1113.6, 1154.5, 1194.9, 1235.2, 1270.2, 1307, 1342.9, 1381.9, 1418.4, 1456.4, 1489.3, 1527.5, 1562.5, 1595.9, 1635.7, 1672.4, 1711.1, 1743.8, 1776.2, 1807.8, 1844.1, 1876.2, 1905, 1935, 1966.2, 1998.8, 2029.5, 2064.7, 2097, 2128.6, 2161.1, 2195.5, 2227.6, 2262.3, 2294.4, 2328.5, 2362.9, 2399.6, 2435.3, 2468.6, 2502.8, 2531.6, 2558.9, 2585.3, 2613, 2643.1, 2675.3, 2704, 2732.4, 2762.5, 2792.3, 2825.6, 2855.1, 2887.2, 2918.4, 2954.4, 2991.6, 3027.1, 3060.9, 3093.2, 3129, 3166.8, 3202.5, 3235.7, 3274.2, 3315.8, 3354.2, 3390.8]}, "watts": {"n": 1270, "series": [0, 241, 303, 281, 248, 266, 307, 321, 340, 308, 316, 380, 310, 310, 319, 345, 308, 290, 284, 276, 291, 297, 310, 248, 263, 336, 335, 353, 311, 309, 317, 58, 371, 316, 323, 310, 291, 297, 299, 301, 275, 242, 217, 217, 255, 307, 304, 264, 224, 243, 310, 344, 297, 330, 354, 341, 371, 338, 287, 276, 335, 333, 288, 261, 254, 249, 275, 334, 264, 257, 255, 272, 281, 261, 400, 398, 369, 330, 325, 311, 305, 294, 279, 268, 259, 262, 271, 265, 277, 276, 275, 279, 278, 286, 278, 270, 267, 296, 288, 289]}, "time": {"n": 1270, "series": [0, 13, 26, 38, 51, 64, 77, 90, 103, 115, 128, 141, 154, 167, 179, 192, 205, 218, 231, 244, 256, 269, 400, 413, 426, 438, 451, 464, 477, 490, 503, 515, 528, 541, 554, 567, 579, 592, 605, 618, 631, 644, 656, 669, 682, 695, 708, 720, 733, 746, 759, 772, 785, 797, 810, 823, 836, 849, 861, 874, 887, 900, 913, 926, 938, 951, 964, 977, 990, 1002, 1015, 1028, 1041, 1078, 1091, 1103, 1116, 1129, 1142, 1155, 1167, 1180, 1193, 1206, 1219, 1232, 1244, 1257, 1270, 1283, 1296, 1308, 1321, 1334, 1347, 1360, 1373, 1385, 1398, 1411]}, "moving": {"n": 1270, "head": [false, false, true, true, true, true, true, true, true, true, true, true]}, "latlng": {"n": 1270, "head": [[51.11543, 0.24839], [51.115423, 0.248402], [51.115413, 0.248417], [51.115398, 0.248437], [51.115384, 0.248455], [51.11537, 0.24847], [51.115352, 0.248485], [51.115338, 0.248502], [51.115324, 0.24852], [51.115306, 0.248537], [51.115287, 0.248556], [51.115268, 0.248574]]}}, "raw_summary": {"average_temp": 29, "average_speed": 2.678, "total_elevation_gain": 40.0, "nlaps": 4, "sport_type": "Run", "average_heartrate": 161.4}, "activity": {"strava_activity_id": 18971052704, "name": "Afternoon Run", "type": "Run", "distance_m": 3390, "moving_time_s": 1266, "elapsed_time_s": 1410, "avg_hr": 161.4, "max_hr": 174, "avg_cadence": 81, "elev_gain_m": 40, "start_date": "2026-06-18T12:13:44+00:00", "start_date_local": "2026-06-18T13:13:44"}, "profile": {"hr_zones": null, "hr_zones_source": null, "max_hr": 190, "goal_type": "general", "experience_level": "intermediate", "injury_notes": "Past injury: right foot pain, right knee pain, shin splints.\n\nMedical: I'm taking Lisdexamfetamine for ADHD, it is known to raise heart rate, particularly during peak times, 12 - 3 p.m.", "current_weekly_km": 18}, "relationship": {"voice_preset": "cornerman", "voice_warmth": 5, "voice_humor": 3, "voice_directness": 3, "voice_energy": 4, "stance_school": "polarized", "stance_data_sentiment": 3, "stance_process_outcome": 3, "note": "current row — runner edited since; the pack below was resolved at generation time (aerobic-base, emphasis 3/1)"}, "block": {"id": "8b9c33fb", "members": 1, "primary_is_this": true, "start": "2026-06-18T12:13:44+00:00", "end": "2026-06-18T12:37:14+00:00"}, "smoothing": {"n": 1270, "cadence_raw": [0, 77, 83, 79, 77, 79, 78, 80, 87, 83, 82, 82, 80, 81, 83, 80, 82, 81, 82, 80, 82, 81, 88, 79, 78, 81, 78, 79, 81, 80, 80, 0, 81, 82, 78, 79, 82, 80, 81, 79, 80, 79, 84, 82, 83, 81, 81, 82, 82, 83, 84, 83, 83, 83, 81, 84, 82, 82, 82, 84, 84, 82, 83, 82, 83, 80, 85, 82, 82, 83, 83, 83, 82, 84, 81, 82, 84, 83, 81, 82, 80, 82, 83, 81, 80, 83, 79, 79, 83, 80, 81, 80, 81, 79, 79, 81, 81, 81, 79, 81], "cadence_smoothed": [null, 77, 83, 79, 78, 78, 78, 80, 86, 83, 82, 82, 80, 82, 83, 80, 81, 81, 82, 80, 81, 80, 83.5, 79, 78, 80, 78, 79, 81, 80, 80, 81, 81, 81, 78, 79, 82, 80, 80, 79, 80, 80, 84, 82, 83, 81, 81, 82, 82, 83, 84, 82, 83, 83, 82, 84, 83, 82, 82, 84, 84, 82, 83, 82, 82, 81, 85, 82, 82, 82, 83, 83, 81, 84, 81, 82, 84, 83, 81, 82, 81, 82, 84, 81, 80, 82, 79, 79, 82, 80, 82, 81, 81, 79, 79, 81, 81, 81, 80, 80.5]}};
+
+/* ---------- helpers ---------- */
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// ---- structured data renderer: every leaf is a labelled key→value row, and any
+// numeric array longer than 10 points is drawn as an inline sparkline instead of a number dump.
+const _isNum  = x => typeof x === 'number';
+const _allNum = a => Array.isArray(a) && a.length>0 && a.every(_isNum);
+const _allPrim= a => Array.isArray(a) && a.length>0 && a.every(x => x===null || ['number','boolean','string'].includes(typeof x));
+const _fmtN   = x => (typeof x==='number' ? (Math.round(x*1000)/1000) : x);
+function _valHTML(v){
+  if(v===null||v===undefined) return '<span class="v vnull">null</span>';
+  if(typeof v==='boolean')    return '<span class="v vbool">'+v+'</span>';
+  if(typeof v==='number')     return '<span class="v vnum">'+v+'</span>';
+  return '<span class="v vstr">'+esc(v)+'</span>';
+}
+function _sparkline(arr, countLabel){
+  const W=260,H=46,pad=4, mn=Math.min(...arr), mx=Math.max(...arr), rng=(mx-mn)||1, n=arr.length;
+  const pt=(v,i)=>[ pad+(W-2*pad)*(n===1?0:i/(n-1)), H-pad-(H-2*pad)*((v-mn)/rng) ];
+  const pts=arr.map(pt);
+  const line='M'+pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L');
+  const area=line+` L${pts[n-1][0].toFixed(1)},${H-pad} L${pad},${H-pad} Z`;
+  const avg=arr.reduce((s,v)=>s+v,0)/n;
+  return '<div class="spark"><svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none">'
+    +'<path class="sparkarea" d="'+area+'"/><path class="sparkline" d="'+line+'"/></svg>'
+    +'<div class="sparkmeta"><span>'+(countLabel||(n+' points'))+'</span><span>min '+_fmtN(mn)+'</span><span>max '+_fmtN(mx)
+    +'</span><span>avg '+_fmtN(avg)+'</span><span>first '+_fmtN(arr[0])+' · last '+_fmtN(arr[n-1])+'</span></div></div>';
+}
+// which analysis stage WROTE each DerivedMetric / pack.metrics field (field-level provenance)
+const FIELD_SOURCE = {
+  headline:{id:'a_classifier',label:'classifier'}, effort:{id:'a_classifier',label:'classifier'},
+  duration_class:{id:'a_classifier',label:'classifier'}, structure:{id:'a_classifier',label:'classifier'},
+  is_race:{id:'a_classifier',label:'classifier'},
+  is_hilly:{id:'a_classifier',label:'classifier'}, hr_drift:{id:'a_metrics',label:'metrics'},
+  pace_variability:{id:'a_metrics',label:'metrics'}, time_in_zones:{id:'a_metrics',label:'metrics'},
+  zones_calibrated:{id:'profile',label:'UserProfile'}, zones_basis:{id:'profile',label:'UserProfile'},
+  efficiency_analysis:{id:'a_metrics',label:'metrics'},
+  effort_score:{id:'a_effort',label:'effort_score'},
+  flags:{id:'a_flags',label:'flags · risk'}, risk_level:{id:'a_flags',label:'flags · risk'},
+  risk_score:{id:'a_flags',label:'flags · risk'}, risk_reasons:{id:'a_flags',label:'flags · risk'},
+  interval_structure:{id:'a_intervals',label:'intervals · stops'}, workout_match:{id:'a_intervals',label:'intervals · stops'},
+  interval_kpis:{id:'a_intervals',label:'intervals · stops'}, stops_analysis:{id:'a_intervals',label:'intervals · stops'},
+  discount_signals:{id:'a_discount',label:'discount_signals'},
+  stream_view:{id:'a_streamview',label:'stream_view'}, sv_points:{id:'a_streamview',label:'stream_view'},
+};
+// the SECOND chip: each field's FATE on the hop to its next node (per-node, since the same
+// value can change fate as it moves). Five local labels \u2014 verified in field-fate-inventory.md.
+//   forwarded   = appears unchanged on the next node
+//   transformed = consumed by the next node, re-emerges under a different name (its derivative continues)
+//   reduced     = appears on the next node, lossily shrunk
+//   gated       = reaches the next node only under a prompt/config condition
+//   dropped     = reaches no next node \u2014 terminal
+const _FATE_GLYPH = { forwarded:'\u2192', transformed:'\u219d', reduced:'\u25bd', gated:'\u25c7', dropped:'\u2715' };
+function _fateChip(f){
+  return ' <span class="fatetag fate-'+f.f+'" title="'+esc(f.note||f.f)+'">'+_FATE_GLYPH[f.f]+' '+esc(f.f)+'</span>';
+}
+// DerivedMetric row \u2192 build_focus_payload/pack.metrics: every column copied verbatim except stream_view.
+const FATE_DERIVED = (()=>{ const fwd={f:'forwarded',note:'copied verbatim into pack.metrics (context.build_focus_payload, context.py:496-525)'};
+  const m={}; ['effort_score','pace_variability','hr_drift','time_in_zones','flags','confidence','confidence_reasons',
+    'structure','effort','duration_class','is_hilly','is_race','risk_level','risk_score','risk_reasons',
+    'interval_structure','workout_match','interval_kpis','discount_signals','training_context','stops_analysis']
+    .forEach(k=>m[k]=fwd);
+  m.sv_points={f:'gated',note:'stream_view: a \u226460-pt downsample on a deferred column \u2014 loaded into the pack ONLY on a deep-dive (deep=True, context.py:534), absent from the default report'};
+  return m; })();
+// ActivityStream raw series \u2192 analysis / read-time detail. The raw per-sample series never reaches the model.
+const FATE_STREAMS = {
+  heartrate:{f:'transformed',note:'\u2192 metrics (time_in_zones, hr_drift, efficiency) + intervals. The raw series is never sent to the model.'},
+  velocity_smooth:{f:'transformed',note:'\u2192 metrics (pace_variability, efficiency) + intervals.'},
+  grade_smooth:{f:'transformed',note:'\u2192 stream_view + read-time detail splits. Not read by the analyze\u2192coach pipeline.'},
+  altitude:{f:'transformed',note:'\u2192 read-time detail view (splits) ONLY. Its chain dead-ends at the detail page \u2014 never reaches the coach.'},
+  cadence:{f:'transformed',note:'\u2192 stream_view + detail charts (smoothing) + splits. Not in the coach DerivedMetric.'},
+  watts:{f:'transformed',note:'\u2192 read-time detail view (splits) ONLY. Never reaches the coach pipeline.'},
+  temp:{f:'dropped',note:'No analysis stage reads the temp STREAM. The coach\u2019s temperature comes from the scalar raw_summary.average_temp instead.'},
+  distance:{f:'transformed',note:'\u2192 stops, intervals, workout matching, detail splits.'},
+  time:{f:'transformed',note:'\u2192 zone binning, stops, intervals, stream_view.'},
+  moving:{f:'transformed',note:'\u2192 stops_analysis (moving/stopped segmentation).'},
+  latlng:{f:'transformed',note:'\u2192 stop locations inside stops_analysis.'},
+};
+// Activity.raw_summary \u2192 analysis stages.
+const FATE_RAW_SUMMARY = {
+  average_temp:{f:'transformed',note:'\u2192 discount_signals.temperature_c + the baseline/calibration temp-band bucket.'},
+  average_speed:{f:'dropped',note:'Top-level value unused; intervals reads a per-LAP average_speed (intervals.py:294), not this.'},
+  total_elevation_gain:{f:'dropped',note:'Redundant \u2014 the consumed copy is Activity.elev_gain_m \u2192 pack.activity.'},
+  nlaps:{f:'dropped',note:'Intervals reads the laps list, never the count.'},
+  sport_type:{f:'transformed',note:'\u2192 classifier (_is_run, classifier.py:76) \u2192 activity classification.'},
+  average_heartrate:{f:'dropped',note:'Redundant \u2014 the consumed copy is Activity.avg_hr \u2192 pack.activity.'},
+};
+// Activity summary row \u2192 pack.activity (build_focus_payload, context.py:483-495).
+const FATE_ACT_ROW = {
+  strava_activity_id:{f:'dropped',note:'Identifier; storage/dedup only, not placed in any pack.'},
+  name:{f:'forwarded',note:'\u2192 pack.activity.name'},
+  type:{f:'transformed',note:'\u2192 pack.activity.type (user_intent or type).'},
+  distance_m:{f:'forwarded',note:'\u2192 pack.activity.distance_m'},
+  moving_time_s:{f:'forwarded',note:'\u2192 pack.activity.moving_time_s'},
+  elapsed_time_s:{f:'dropped',note:'Not in pack.activity \u2014 the coach sees moving_time_s only.'},
+  avg_hr:{f:'forwarded',note:'\u2192 pack.activity.avg_hr'},
+  max_hr:{f:'forwarded',note:'\u2192 pack.activity.max_hr'},
+  avg_cadence:{f:'transformed',note:'\u2192 pack.activity.avg_cadence via normalize_cadence_spm.'},
+  elev_gain_m:{f:'forwarded',note:'\u2192 pack.activity.elev_gain_m'},
+  start_date:{f:'transformed',note:'pack.activity.date is built from local_start (start_date_local), not this UTC value; start_date still drives readiness/baseline as-of windows.'},
+  start_date_local:{f:'forwarded',note:'\u2192 pack.activity.date (local wall-clock, context.py:484).'},
+};
+function _rows(obj, depth, sources, fates){
+  depth=depth||0;
+  const entries = Array.isArray(obj) ? obj.map((v,i)=>[i,v]) : Object.entries(obj);
+  let h='';
+  for(const [k,v] of entries){
+    const _src=(depth===0 && sources && sources[k]) ? sources[k] : null;
+    const _tag=_src ? ' <span class="srctag" data-go="'+_src.id+'" title="written by the '+esc(_src.label)+' stage">\u21a4 '+esc(_src.label)+'</span>' : '';
+    const _fate=(depth===0 && fates && fates[k]) ? fates[k] : null;
+    const _ftag=_fate ? _fateChip(_fate) : '';
+    const key='<span class="k">'+esc(k)+'</span>'+_tag+_ftag;
+    if(Array.isArray(v)){
+      if(_allNum(v) && v.length>10){
+        h+='<div class="rw col"><div class="kline">'+key+' <span class="meta">'+v.length+' points</span></div>'+_sparkline(v)+'</div>';
+      } else if(v.length===0){
+        h+='<div class="rw"><div class="kline">'+key+'</div><span class="eq">=</span><div class="vline"><span class="v vnull">[ ]</span></div></div>';
+      } else if(_allNum(v) || (_allPrim(v) && v.every(x=>typeof x!=='string'))){
+        h+='<div class="rw"><div class="kline">'+key+' <span class="meta">'+v.length+'</span></div><span class="eq">=</span><div class="vline">'
+          +v.map(x=>_valHTML(x)).join('<span class="sep">, </span>')+'</div></div>';
+      } else if(v.every(x=>typeof x==='string')){
+        h+='<div class="rw col"><div class="kline">'+key+' <span class="meta">'+v.length+' items</span></div>'
+          +'<div class="strlist">'+v.map(x=>'<span class="si">'+esc(x)+'</span>').join('')+'</div></div>';
+      } else {
+        const show=v.slice(0,10), more=v.length>10?' (first 10 of '+v.length+')':'';
+        h+='<div class="rw col"><div class="kline">'+key+' <span class="meta">'+v.length+' items'+more+'</span></div>'
+          +'<div class="nest">'+_rows(show, depth+1, sources, fates)+'</div></div>';
+      }
+    } else if(v && typeof v==='object'){
+      h+='<div class="rw col"><div class="kline">'+key+'</div><div class="nest">'+_rows(v)+'</div></div>';
+    } else {
+      h+='<div class="rw"><div class="kline">'+key+'</div><span class="eq">=</span><div class="vline">'+_valHTML(v)+'</div></div>';
+    }
+  }
+  return h;
+}
+function renderTree(obj, tall, sources, fates){
+  const cls='data kv'+(tall?' tall':'');
+  if(obj===null || typeof obj!=='object') return '<div class="'+cls+'">'+_valHTML(obj)+'</div>';
+  return '<div class="'+cls+'">'+_rows(obj, 0, sources, fates)+'</div>';
+}
+const j   = (o)=> renderTree(o, false);
+const jTall=(o)=> renderTree(o, true);
+function writes(rows){ // [[field, value], ...]
+  return '<div class="writes">'+rows.map(r=>
+    '<div class="wl"><span class="arrow">writes →</span><span class="f">'+esc(r[0])+'</span><span class="val">= '+esc(r[1])+'</span></div>'
+  ).join('')+'</div>';
+}
+const D = DATA, P = D.pack, DM = D.derived;
+const fmt = (x)=> (x===null||x===undefined)?'null':(typeof x==='object'?JSON.stringify(x):String(x));
+
+/* ---------- the graph ---------- */
+// from = upstream sources (where this node's data came from). consumers are derived by inversion.
+const NODES = [
+
+/* ===== LAYER: MODEL ===== */
+{ id:'detail_charts', layer:'output', kind:'source', tag:'read path', title:'Activity detail page (read-time)', path:'api/activities.py \u2192 analysis/splits.py + StreamCharts',
+  from:['smoothing','act_streams'],
+  body:()=> '<p class="desc">The activity-detail page: per-km/per-time <b>splits</b> and scrubbable stream <b>charts</b>, computed per request \u2014 NOT part of <code>analyze</code> \u2192 coach. <code>splits.py</code> is imported by the detail endpoint and chat, never by <code>_orchestrator.py</code>.</p>'
+    + '<p class="desc">This is the real next node for the streams that never reach the coach: <code>altitude</code> and <code>watts</code> (splits only), plus the detail-view reads of <code>cadence</code>/<code>grade_smooth</code>, and where the detail-only <code>smooth_cadence</code> lands. Their chains dead-end here \u2014 follow the lineage and you will see no edge onward to the model.</p>' },
+{ id:'output', layer:'model', kind:'llm', span:true, tag:'LLM output',
+  title:'CoachReport — the message the model wrote', path:'coach_reports.report (schema 2.0)',
+  from:['llm'],
+  body:()=> '<p class="desc">Prose-first. This is the artifact the runner reads; everything below exists to ground it.</p>'
+    + '<div class="prose"><b>Headline:</b> '+esc(D.report.headline)+'<br><br>'
+    + esc(D.report.message).replace(/\n\n/g,'<br><br>')
+      .replace(/29°C/g,'<span class="hl">29°C</span>')
+      .replace(/14\.6%/g,'<span class="hl">14.6%</span>')
+      .replace(/2\.8%/g,'<span class="hl">2.8%</span>')
+      .replace(/Seventeen activities/g,'<span class="hl">Seventeen activities</span>')
+    + '</div>'
+    + '<div class="ns">'+ D.report.next_steps.map(s=>
+        '<div class="step"><b>'+esc(s.action)+'</b><div class="why">'+esc(s.details||'')+'</div>'
+        +'<div class="why">why: '+esc(s.why||'')+'</div>'
+        +'<div class="ev">evidence: '+ (s.evidence||[]).map(e=>esc(e.field)+'='+esc(fmt(e.value))).join('  ·  ') +'</div></div>'
+      ).join('') +'</div>'
+},
+{ id:'llm', layer:'model', kind:'llm', span:true, tag:'LLM call',
+  title:'Anthropic — '+D.meta.prompt_id, path:'services/coach/llm.generate_coach_message',
+  from:['sysprompt','p_activity','p_metrics','p_check_in','p_profile','p_recent','p_longitudinal',
+        'p_perceived','p_adherence','p_believed','p_calibration','p_preference','p_narrative',
+        'p_salience','p_continuity','p_corpus','p_stance','p_training_load','p_safety'],
+  body:()=> '<p class="desc">One model call. Input = the system prompt + <b>all 18 pack sections below</b>. '
+    +'Reason privately → write the prose <code>message</code> → call <code>record_coach_tail</code> once for the structured tail. '
+    +'Click this to light up <b>every</b> block that feeds the model.</p>'
+},
+{ id:'sysprompt', layer:'model', kind:'code', tag:'prompt',
+  title:'build_system_prompt(v7, mode, voice)', path:'services/coach/prompts.py',
+  from:['d_relationship'],
+  body:()=> '<p class="desc">The static prompt for '+D.meta.prompt_id+' (grounding + safety + the six v1→v7 addenda). '
+    +'The runner\'s <b>Voice dials</b> are rendered into the system prompt <b>here</b>, not into the context pack.</p>'
+    + j({ voice_preset:D.relationship.voice_preset, warmth:D.relationship.voice_warmth,
+          humor:D.relationship.voice_humor, directness:D.relationship.voice_directness,
+          energy:D.relationship.voice_energy })
+},
+
+/* ===== LAYER: PACK ===== */
+{ id:'p_activity', layer:'pack', kind:'code', tag:'fact', title:'pack.activity', path:'context.build_focus_payload',
+  from:['act_row'], body:()=> j(P.activity) },
+{ id:'p_metrics', layer:'pack', kind:'code', tag:'fact', span:true, title:'pack.metrics', path:'context.build_focus_payload ← DerivedMetric',
+  from:['derivedmetric'],
+  body:()=> '<p class="desc">The whole DerivedMetric row, flattened byte-stably into the pack. <b>This is where every analysis-pipeline output lands.</b> Includes the embedded <code>discount_signals</code> (heat) and <code>workout_match</code>.</p>'
+    + '<div class="fatebanner">Fate of every field here: <span class="fate-forwarded">forwarded</span> into the single model call — this pack <em>is</em> the model’s input, so nothing is dropped on this last hop. The per-field chips below trace where each value was <em>written</em> one stage earlier.</div>'
+    + renderTree(P.metrics, true, FIELD_SOURCE) },
+{ id:'p_check_in', layer:'pack', kind:'code', tag:'fact', title:'pack.check_in', path:'context.py',
+  from:['checkin'], body:()=> j(P.check_in) },
+{ id:'p_profile', layer:'pack', kind:'code', tag:'fact', title:'pack.profile', path:'context.py',
+  from:['profile'], body:()=> j(P.profile) },
+{ id:'p_recent', layer:'pack', kind:'code', tag:'fact', title:'pack.recent_training_summary', path:'context.py',
+  from:['d_recent'], body:()=> j(P.recent_training_summary) },
+{ id:'p_longitudinal', layer:'pack', kind:'memory', tag:'memory + fact', span:true, title:'pack.longitudinal', path:'retrieval.fetch_prior_digests + baseline',
+  from:['d_baseline','d_memory'],
+  body:()=> '<p class="desc"><code>baseline_trend</code> is a prior-report-<b>independent</b> numeric fact (still ON). <code>prior_reports</code> is the M4 last-reports digest — <b>now OFF by default</b> (PR #418); this pack predates that flip, so it is shown populated.</p>'
+    + '<div class="offbanner">The <code>prior_reports</code> half ships disabled now (PR #418) — it emits <code>[]</code>. <code>baseline_trend</code> stays ON.</div>'
+    + jTall(P.longitudinal) },
+{ id:'p_perceived', layer:'pack', kind:'code', tag:'fact', title:'pack.perceived_effort', path:'perceived_effort.py',
+  from:['d_perceived'], body:()=> j(P.perceived_effort) },
+{ id:'p_adherence', off:true, layer:'pack', kind:'memory', tag:'memory', title:'pack.adherence', path:'adherence.py',
+  from:['d_memory'], body:()=> '<div class="offbanner">M7 adherence — OFF by default (PR #418). Empty even here.</div>'+ j(P.adherence) },
+{ id:'p_believed', off:true, layer:'pack', kind:'memory', tag:'memory', title:'pack.believed_facts', path:'belief_store.build_believed_facts',
+  from:['d_memory'], badge:'disabled',
+  body:()=> '<div class="offbanner">M8 beliefs — OFF by default (PR #403). A poisoned "easy_discipline" belief drove a rest-day fixation; shown populated because this pack predates the flip.</div>'+ j(P.believed_facts) },
+{ id:'p_calibration', layer:'pack', kind:'code', tag:'fact', title:'pack.calibration', path:'calibration.py',
+  from:['d_calibration'],
+  body:()=> '<p class="desc">Carries the safety <code>referral</code> nudge (null here) — the reason M9 stays ON.</p>'+ j(P.calibration) },
+{ id:'p_preference', off:true, layer:'pack', kind:'memory', tag:'memory', title:'pack.preference_profile', path:'preference.py',
+  from:['d_memory'], badge:'disabled',
+  body:()=> '<div class="offbanner">M10 — reads M8 beliefs, so OFF with them (PR #403).</div>'+ j(P.preference_profile) },
+{ id:'p_narrative', off:true, layer:'pack', kind:'memory', tag:'memory', title:'pack.narrative', path:'narrative_store.py',
+  from:['d_memory'], badge:'disabled',
+  body:()=> '<div class="offbanner">A2c voice-only memory — OFF by default (PR #403). Validator rule 6 forbids citing it as fact.</div>'+ j(P.narrative) },
+{ id:'p_salience', layer:'pack', kind:'code', tag:'fact', title:'pack.salience', path:'salience.py + novelty.py',
+  from:['d_salience'], body:()=> '<p class="desc">Novelty + the deterministic safety override that can force a deep "fuller turn".</p>'+ j(P.salience) },
+{ id:'p_continuity', layer:'pack', kind:'code', tag:'two-stage', title:'pack.continuity', path:'context.py',
+  from:[], body:()=> '<p class="desc">Opener prose + any reply, for the fuller turn. Null on a first/single turn.</p>'+ j(P.continuity) },
+{ id:'p_corpus', layer:'pack', kind:'runner', tag:'runner', span:true, title:'pack.corpus', path:'retrieval.fetch_corpus + corpus.py',
+  from:['d_corpus','d_relationship'],
+  body:()=> '<p class="desc">House principles (always present) + the runner\'s <b>selected school</b> (resolved at generation time: <code>aerobic-base</code>) + uploaded materials (none). Judgment the coach reasons from — never cited as fact (validator rule 7).</p>'+ jTall(P.corpus) },
+{ id:'p_stance', layer:'pack', kind:'runner', tag:'runner', title:'pack.stance', path:'stance.py',
+  from:['d_relationship'], body:()=> '<p class="desc">The two emphasis axes (resolved at gen time). Reweights what the coach foregrounds, never the facts.</p>'+ j(P.stance) },
+{ id:'p_training_load', layer:'pack', kind:'code', tag:'fact', title:'pack.training_load', path:'readiness.build_readiness',
+  from:['d_readiness'], body:()=> '<p class="desc">A tier-3 citable fact. EWMA fitness/fatigue/form as of this run\'s start.</p>'+ j(P.training_load) },
+{ id:'p_safety', layer:'pack', kind:'gate', tag:'safety', title:'pack.safety_rules', path:'context.py (constant)',
+  from:[], body:()=> '<p class="desc">The non-negotiable floor, restated into every pack.</p>'+ j(P.safety_rules) },
+
+/* ===== LAYER: DERIVATION ===== */
+{ id:'derivedmetric', layer:'deriv', kind:'store', span:true, tag:'table — keystone', title:'DerivedMetric (one row per activity)', path:'app/models/derived_metric.py',
+  from:['a_metrics','a_effort','a_classifier','a_intervals','a_flags','a_discount','a_streamview'],
+  body:()=> '<p class="desc"><b>The truth the LLM never overrides.</b> Every analysis stage below writes into this one row; <code>analyze</code> upserts it. It is then flattened wholesale into <code>pack.metrics</code> above. The second chip on each field is its <b>fate</b> on that hop: every column is <span class="fate-forwarded">forwarded</span> verbatim except <code>stream_view</code>.</p>'+ renderTree(DM, true, FIELD_SOURCE, FATE_DERIVED) },
+{ id:'d_recent', layer:'deriv', kind:'code', tag:'aggregate', title:'recent_training_summary', path:'context.py',
+  from:['act_row'], body:()=> '<p class="desc">Rolling 7d / 28d / prev-28d totals over the activity history (count, distance, time, effort).</p>'+ j(P.recent_training_summary) },
+{ id:'d_readiness', layer:'deriv', kind:'code', tag:'read-time', title:'readiness.build_readiness (P3)', path:'services/readiness.py',
+  from:['a_effort'],
+  body:()=> '<p class="desc">EWMA over a 182-day daily load series built from <code>effort_score</code> history (<b>'+P.training_load.sample_count+' samples</b>). Fitness = 42d EWMA, fatigue = 7d EWMA, form = the balance.</p>'+ j(P.training_load) },
+{ id:'d_baseline', layer:'deriv', kind:'code', tag:'rolling norm', title:'baseline (RunnerBaseline, M2)', path:'services/analysis/baseline.py',
+  from:['derivedmetric'],
+  body:()=> '<p class="desc">Per-bucket (<code>effort|terrain|temp-band</code>) typicals over a 182d window. This run\'s bucket: <code>'+P.longitudinal.baseline_trend.bucket+'</code> (n='+P.longitudinal.baseline_trend.sample_count+').</p>'+ j(P.longitudinal.baseline_trend) },
+{ id:'d_calibration', layer:'deriv', kind:'code', tag:'read-time', title:'calibration.py (M9)', path:'services/coach/calibration.py',
+  from:['d_baseline','a_metrics'],
+  body:()=> '<p class="desc">This run\'s HR drift vs the runner\'s own typical for the bucket. Also fires the non-diagnostic referral on red-flag patterns.</p>'+ j(P.calibration) },
+{ id:'d_perceived', layer:'deriv', kind:'code', tag:'read-time', title:'perceived_effort.py (M6)', path:'services/coach/perceived_effort.py',
+  from:['checkin','a_metrics','a_discount'],
+  body:()=> '<p class="desc">Reconciles subjective <code>RPE '+P.check_in.rpe+'</code> with the HR-derived <code>effort</code> axis. Because an HR confounder fired, it recommends <b>rpe_over_hr</b>.</p>'+ j(P.perceived_effort) },
+{ id:'d_salience', layer:'deriv', kind:'code', tag:'read-time', title:'salience · novelty', path:'salience.py + analysis/novelty.py',
+  from:['derivedmetric'], body:()=> j(P.salience) },
+{ id:'d_memory', off:true, layer:'deriv', kind:'memory', tag:'durable memory', span:true, title:'durable memory (beliefs · narrative · adherence · preference)', path:'belief_store / narrative_store / adherence / preference',
+  from:['act_row'], badge:'mostly disabled',
+  body:()=> '<div class="offbanner"><b>Mostly OFF now.</b> M8 beliefs + A2c narrative (PR #403) and the M4 prior-report digest + M7 adherence (PR #418) replayed a rest-day fixation into every report. They now emit empty. Shown populated because this real pack was captured 2026-06-18, before the flips. Re-enable is a config flip (#401/#402).</div>'
+    + '<p class="desc">Feeds four pack sections: <code>believed_facts</code>, <code>narrative</code>, <code>preference_profile</code>, and <code>longitudinal.prior_reports</code> / <code>adherence</code>.</p>'
+    + j({ believed_facts:P.believed_facts, narrative:P.narrative, preference_profile:P.preference_profile }) },
+{ id:'d_relationship', layer:'deriv', kind:'runner', tag:'runner-declared', title:'coaching_relationship', path:'app/models/coaching_relationship.py',
+  from:[],
+  body:()=> '<p class="desc">One durable row the runner controls. Resolves Voice (→ system prompt), Stance (→ <code>pack.stance</code>), and the school key (→ <code>pack.corpus</code>). No background job ever infers it.</p>'
+    + '<div class="note">Resolved at generation time for this report: school <code>aerobic-base</code>, emphasis 3/1. The current row differs (runner edited since): '+esc(D.relationship.note)+'</div>'
+    + j({ voice_preset:D.relationship.voice_preset, stance_school_now:D.relationship.stance_school,
+          stance_at_gen_time:'aerobic-base', emphasis_at_gen_time:P.stance.emphasis }) },
+{ id:'d_corpus', layer:'deriv', kind:'runner', tag:'code-resident', title:'corpus.py (house schools)', path:'services/coach/corpus.py',
+  from:[], body:()=> '<p class="desc">Frozen, code-resident coaching knowledge: an always-present house core + five schools. The relationship\'s key selects one.</p>'+ j({ school_id:P.corpus.school.id, name:P.corpus.school.name, house_principle_count:P.corpus.house_principles.length }) },
+
+/* ===== LAYER: ANALYSIS PIPELINE ===== */
+{ id:'smoothing', layer:'analysis', kind:'code', tag:'function · detail-view', title:'cadence smoothing', path:'services/analysis/smoothing.py \u2192 schemas/detail.py',
+  from:['act_streams'],
+  body:()=> '<p class="desc">Cleans the <b>cadence</b> stream: zero-dropouts and &gt;220 spm spikes \u2192 NaN, a 7-wide rolling median, then linear interpolation across gaps \u226410s. <b>Side branch, not part of the analyze \u2192 coach pipeline</b>: <code>smooth_cadence</code> is imported only by <code>schemas/detail.py</code> for the activity-detail chart. The metrics stages read the raw streams (and Strava\'s own <code>velocity_smooth</code>/<code>grade_smooth</code>) directly \u2014 there is no smoothing step before metrics.</p>'
+    + '<div class="data tall kv">'
+    + '<div class="rw col"><div class="kline"><span class="k">cadence \u2014 raw input</span> <span class="meta">'+D.smoothing.n+' samples \u00b7 16 zero-dropouts at the start</span></div>'+_sparkline(D.smoothing.cadence_raw, D.smoothing.n+' samples')+'</div>'
+    + '<div class="rw col"><div class="kline"><span class="k">cadence \u2014 smoothed output</span> <span class="meta">dropouts removed \u00b7 median + gap-interpolated</span></div>'+_sparkline(D.smoothing.cadence_smoothed.filter(x=>x!=null), D.smoothing.n+' samples')+'</div>'
+    + '</div>' },
+{ id:'a_metrics', layer:'analysis', kind:'code', tag:'function', span:true, title:'metrics', path:'services/analysis/metrics.py',
+  from:['act_streams','profile'],
+  body:()=> '<p class="desc">The bulk of "what happened". Bins time-in-zone against the runner\'s Strava zones — but <code>profile.hr_zones</code> is <b>null</b> here, so it falls back to %-of-max-HR and the pack is tagged <code>zones_calibrated:false</code>.</p>'
+    + writes([['DerivedMetric.hr_drift', DM.hr_drift+' %'],
+              ['DerivedMetric.pace_variability', DM.pace_variability],
+              ['DerivedMetric.time_in_zones', JSON.stringify(DM.time_in_zones)],
+              ['DerivedMetric.efficiency_analysis', 'avg '+P.metrics.efficiency_analysis.average+', best '+P.metrics.efficiency_analysis.best_sustained+' (128-pt curve)'],
+              ['DerivedMetric.stops_analysis', DM.stops_analysis.stopped_count+' stops (analyze_stops)']]) },
+{ id:'a_effort', layer:'analysis', kind:'code', tag:'function', title:'effort_score', path:'services/analysis/metrics.py',
+  from:['a_metrics','checkin'],
+  body:()=> '<p class="desc">Edwards-style zone-minutes (Σ min-in-zone × zone-number). Cumulative <b>load</b>, not intensity. Summed by the readiness model.</p>'
+    + writes([['DerivedMetric.effort_score', DM.effort_score]]) },
+{ id:'a_classifier', layer:'analysis', kind:'code', tag:'function', title:'classifier', path:'services/analysis/classifier.py',
+  from:['a_metrics','a_intervals'],
+  body:()=> '<p class="desc">Frames the whole report. Gated so an auto-lapped easy run is not called intervals.</p>'
+    + writes([['DerivedMetric.structure', DM.structure],
+              ['DerivedMetric.effort', DM.effort],
+              ['DerivedMetric.duration_class', DM.duration_class],
+              ['DerivedMetric.is_hilly', String(DM.is_hilly)],
+              ['DerivedMetric.is_race', String(DM.is_race)]]) },
+{ id:'a_intervals', layer:'analysis', kind:'code', tag:'function', title:'intervals · stops', path:'services/analysis/intervals.py + stops.py + workout_matching.py',
+  from:['act_streams','raw_summary'],
+  body:()=> '<p class="desc">4 recorded laps present but <b>no bimodal work/rest pattern</b> → read as a continuous run, not intervals.</p>'
+    + writes([['DerivedMetric.interval_structure', String(DM.interval_structure)],
+              ['DerivedMetric.workout_match.detection_confidence', DM.workout_match.detection_confidence],
+              ['DerivedMetric.stops_analysis', DM.stops_analysis.stopped_count+' stops, '+DM.stops_analysis.total_stopped_time_s+'s']]) },
+{ id:'a_flags', layer:'analysis', kind:'code', tag:'function', title:'flags · risk', path:'services/analysis/flags.py + risk.py',
+  from:['a_metrics'],
+  body:()=> '<p class="desc">Fatigue/illness patterns + injury/overreach risk.</p>'
+    + writes([['DerivedMetric.flags', JSON.stringify(DM.flags)],
+              ['DerivedMetric.risk_level', DM.risk_level],
+              ['DerivedMetric.risk_score', DM.risk_score],
+              ['DerivedMetric.risk_reasons', JSON.stringify(DM.risk_reasons)]]) },
+{ id:'a_discount', layer:'analysis', kind:'code', tag:'function', title:'discount_signals', path:'services/analysis/discount_signals.py',
+  from:['a_metrics','raw_summary'],
+  body:()=> '<p class="desc">HR drift (14.6%) is elevated AND it was <b>29°C</b> → marks the drift as heat-inflated so the coach discounts it as fatigue. Fires only when drift is actually elevated (#176).</p>'
+    + writes([['DerivedMetric.discount_signals.likely_inflated_by', JSON.stringify(DM.discount_signals.likely_inflated_by)],
+              ['DerivedMetric.discount_signals.temperature_c', DM.discount_signals.temperature_c],
+              ['DerivedMetric.discount_signals.confidence', DM.discount_signals.confidence]]) },
+{ id:'a_streamview', layer:'analysis', kind:'code', tag:'function', title:'stream_view (A2a)', path:'services/analysis/stream_view.py',
+  from:['act_streams'],
+  body:()=> '<p class="desc">A ≤60-pt aligned downsample, stored deferred-load. <b>Pulled only on a deep-dive</b>, not on the default report path.</p>'
+    + writes([['DerivedMetric.stream_view', DM.sv_points+' points (deferred JSON)']]) },
+
+/* ===== LAYER: INGEST ===== */
+{ id:'act_row', layer:'ingest', kind:'store', tag:'table', title:'Activity (summary row)', path:'app/models/activity.py',
+  from:['strava'],
+  body:()=> '<p class="desc">The summary columns. Most flow into <code>pack.activity</code>; <code>strava_activity_id</code> and <code>elapsed_time_s</code> are kept for storage but never shown to the coach.</p>'+ renderTree(D.activity, false, null, FATE_ACT_ROW) },
+{ id:'raw_summary', layer:'ingest', kind:'store', tag:'json column', title:'Activity.raw_summary', path:'app/models/activity.py',
+  from:['strava'], body:()=> '<p class="desc">The verbatim Strava summary. <code>average_temp: 29</code> is what makes the discount fire — but four of these keys are <span class="fate-dropped">dropped</span> (unused or redundant copies of an Activity column).</p>'+ renderTree(D.raw_summary, false, null, FATE_RAW_SUMMARY) },
+{ id:'act_streams', layer:'ingest', kind:'store', tag:'table', span:true, title:'ActivityStream — 11 types × 1270 samples', path:'app/models/activity_stream.py',
+  from:['strava'],
+  body:()=> {
+    const order=['heartrate','velocity_smooth','grade_smooth','altitude','cadence','watts','temp','distance','time','moving','latlng'];
+    const keys=order.filter(k=>D.streams[k]).concat(Object.keys(D.streams).filter(k=>order.indexOf(k)<0));
+    let rows='';
+    for(const k of keys){
+      const v=D.streams[k];
+      const ft=FATE_STREAMS[k]?_fateChip(FATE_STREAMS[k]):'';
+      if(v.series){
+        rows+='<div class="rw col"><div class="kline"><span class="k">'+k+'</span>'+ft+' <span class="meta">'+v.n+' raw samples · '+v.series.length+'-pt downsample, pre-smoothing</span></div>'+_sparkline(v.series, v.n+' samples')+'</div>';
+      } else {
+        rows+='<div class="rw col"><div class="kline"><span class="k">'+k+'</span>'+ft+' <span class="meta">'+v.n+' samples · first '+v.head.length+' shown</span></div><div class="vline">'+v.head.map(x=>_valHTML(x)).join('<span class="sep">, </span>')+'</div></div>';
+      }
+    }
+    return '<p class="desc">Per-sample time series — the raw input to the whole pipeline, <b>before</b> our smoothing stage. The raw series is never sent to the model: each stream is <span class="fate-transformed">transformed</span> into derived metrics (its fate chip names where). Two exceptions worth seeing: <code>temp</code> is <span class="fate-dropped">dropped</span> (the coach reads <code>raw_summary.average_temp</code> instead), and <code>altitude</code>/<code>watts</code> only feed the read-time detail view. Each numeric stream is the full series, downsampled to a sparkline (latlng/moving shown as a head sample):</p><div class="data tall kv">'+rows+'</div>';
+  } },
+{ id:'profile', layer:'ingest', kind:'store', tag:'table', title:'UserProfile', path:'app/models/user_profile.py',
+  from:['strava'],
+  body:()=> '<p class="desc">Goal, max HR, injuries/meds, and <code>hr_zones</code> (synced from Strava). Null here → time-in-zone uses %-of-max fallback. The Lisdexamfetamine note is what lets the coach name the medication-timing confound.</p>'+ j(D.profile) },
+{ id:'checkin', layer:'ingest', kind:'runner', tag:'runner input', title:'CheckIn', path:'app/models/checkin.py',
+  from:[], body:()=> '<p class="desc">Subjective post-run input. <code>RPE 3</code> here is what perceived_effort weighs against the (heat-inflated) HR.</p>'+ j(P.check_in) },
+{ id:'strava', layer:'ingest', kind:'source', tag:'data source', title:'Strava API', path:'services/strava_ingestion',
+  from:[], body:()=> '<p class="desc">The single external source. Activity summary, per-sample streams, recorded laps, HR zones — webhook create → <code>process_new_activity_job</code> → ingest → analyze.</p>' },
+];
+
+/* ---------- build adjacency ---------- */
+const byId = Object.fromEntries(NODES.map(n=>[n.id,n]));
+const consumers = {}; NODES.forEach(n=>consumers[n.id]=[]);
+NODES.forEach(n=> (n.from||[]).forEach(s=> { if(consumers[s]) consumers[s].push(n.id); }));
+
+function chainOf(id){ // upstream (from) + downstream (consumers), transitively
+  const up=new Set(), down=new Set();
+  (function climb(x){ if(!byId[x]) return; (byId[x].from||[]).forEach(s=>{ if(!up.has(s)){up.add(s); climb(s);} }); })(id);
+  (function fall(x){ (consumers[x]||[]).forEach(c=>{ if(!down.has(c)){down.add(c); fall(c);} }); })(id);
+  return new Set([id, ...up, ...down]);
+}

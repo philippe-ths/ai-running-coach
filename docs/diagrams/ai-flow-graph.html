@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Running Coach — Data-Flow Graph</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#181b22; --ink:#e6e9ef; --muted:#9aa3b2; --line:#2c313c;
+    --source:#3b82f6; --code:#10b981; --store:#a78bfa; --llm:#f59e0b;
+    --gate:#ef4444; --runner:#14b8a6; --memory:#a78bfa;
+    --up:#22d3ee; --down:#f59e0b;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    overflow:hidden; }
+  code { color:#c9d2e3; background:#11141a; padding:1px 5px; border-radius:4px; font-size:11.5px; }
+
+  header.top { position:fixed; top:0; left:0; right:0; z-index:20; padding:12px 18px 11px;
+    background:linear-gradient(#0f1115ee,#0f1115cc); border-bottom:1px solid var(--line);
+    display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header.top h1 { font-size:17px; margin:0; letter-spacing:-.3px; white-space:nowrap; }
+  header.top .tip { font-size:12px; color:var(--muted); max-width:560px; }
+  header.top .tip b { color:var(--ink); }
+  .legend { display:flex; flex-wrap:wrap; gap:12px; margin-left:auto; align-items:center; }
+  .legend .item { display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--muted); white-space:nowrap; }
+  .sw { width:12px; height:12px; border-radius:4px; flex:none; }
+  .dash { width:18px; height:0; border-top:3px solid; flex:none; border-radius:2px; }
+  .ctrl { background:#11141a; color:var(--muted); border:1px solid var(--line);
+    border-radius:8px; padding:5px 11px; font-size:12px; cursor:pointer; font-family:inherit; }
+  .ctrl:hover { color:var(--ink); }
+
+  #stage { position:fixed; inset:0; top:0; cursor:grab; }
+  #stage.grabbing { cursor:grabbing; }
+  #cam.glide { transition:transform .3s cubic-bezier(.4,0,.2,1); }
+  svg { width:100%; height:100%; display:block; }
+
+  .colhdr { font:700 11px/1 ui-sans-serif,system-ui; letter-spacing:1px; text-transform:uppercase; fill:#6b7280; }
+  .colhdr.sub { font-weight:500; letter-spacing:.2px; text-transform:none; fill:#525a68; }
+
+  .edge { fill:none; stroke:#8aa; stroke-opacity:.13; stroke-width:1.3; transition:stroke-opacity .15s, stroke .15s; }
+  .edge.eup   { stroke:var(--up);   stroke-opacity:.85; stroke-width:1.8; }
+  .edge.edown { stroke:var(--down); stroke-opacity:.8;  stroke-width:1.8; }
+  body.sel .edge:not(.eup):not(.edown) { stroke-opacity:.025; }
+
+  .node { cursor:pointer; }
+  .node rect { fill:#1e222b; stroke:var(--line); stroke-width:1.3; rx:8;
+    transition:opacity .15s, stroke .15s, stroke-width .15s; }
+  .node .kdot { }
+  .node text { fill:#dfe4ee; font:600 11.5px/1 -apple-system,system-ui; pointer-events:none; }
+  .node .accent { stroke-width:4; }
+  body.sel .node { opacity:.16; }
+  body.sel .node.up, body.sel .node.down, body.sel .node.focus { opacity:1; }
+  .node.up rect    { stroke:var(--up);   stroke-width:2; }
+  .node.down rect  { stroke:var(--down); stroke-width:2; }
+  .node.focus rect { stroke:#fff; stroke-width:2.5; }
+  /* off-by-default blocks: dashed + muted so they read as inactive at a glance */
+  .node.off rect { fill:#15171c; stroke-dasharray:4 3; }
+  .node.off text { fill:#6b7280; }
+  .node.off .accent { opacity:.45; }
+  body:not(.sel) .node.off { opacity:.6; }
+  /* start-of-chain cap: a node nothing precedes (a raw input / origin) */
+  .startcap { fill:#5eead4; }
+
+  /* drawer (non-modal: the graph behind it stays pannable) */
+  .drawer { position:fixed; top:0; right:0; height:100%; width:min(480px,94vw); z-index:50;
+    background:var(--panel); border-left:1px solid var(--line); box-shadow:-20px 0 60px rgba(0,0,0,.5);
+    transform:translateX(100%); transition:transform .2s cubic-bezier(.4,0,.2,1); display:flex; flex-direction:column; }
+  .drawer.open { transform:translateX(0); }
+  .drawer header { padding:20px 22px 14px; border-bottom:1px solid var(--line); position:relative; }
+  .drawer h2 { margin:0; font-size:18px; }
+  .drawer .path { font-size:10.5px; color:#6b7280; font-family:ui-monospace,Menlo,monospace; margin-top:4px; }
+  .tag { display:inline-block; font-size:9px; letter-spacing:.5px; text-transform:uppercase; font-weight:700;
+    padding:1px 6px; border-radius:4px; }
+  .tag.source{background:rgba(59,130,246,.18);color:#93c5fd;} .tag.code{background:rgba(16,185,129,.18);color:#6ee7b7;}
+  .tag.store{background:rgba(167,139,250,.18);color:#c4b5fd;} .tag.llm{background:rgba(245,158,11,.2);color:#fcd34d;}
+  .tag.gate{background:rgba(239,68,68,.2);color:#fca5a5;} .tag.runner{background:rgba(20,184,166,.2);color:#5eead4;}
+  .tag.memory{background:rgba(167,139,250,.18);color:#c4b5fd;}
+  .drawer .body { padding:16px 22px 50px; overflow-y:auto; }
+  .drawer .desc { margin:0 0 8px; font-size:12.5px; color:var(--muted); }
+  .close { position:absolute; top:16px; right:16px; width:30px; height:30px; border-radius:8px; cursor:pointer;
+    background:#11141a; border:1px solid var(--line); color:var(--muted); font-size:15px; }
+  .close:hover { color:var(--ink); }
+
+  .relchips { padding:12px 22px 0; }
+  .relchips .grp { margin-bottom:8px; font-size:11px; color:var(--muted); }
+  .relchips .lbl { font-size:9px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; margin-right:6px; }
+  .relchips .lbl.up { color:var(--up); } .relchips .lbl.down { color:var(--down); }
+  .chip { display:inline-block; background:#11141a; border:1px solid var(--line); border-radius:5px;
+    padding:1px 7px; margin:2px 4px 2px 0; font-size:10.5px; color:#c9d2e3; cursor:pointer; }
+  .chip.up { border-color:rgba(34,211,238,.45); } .chip.down { border-color:rgba(245,158,11,.45); }
+  .chip:hover { background:#1c2029; }
+  .chip.off { color:#6b7280; border-style:dashed; }
+  .offsub { margin-top:4px; padding-top:4px; border-top:1px dashed var(--line); }
+  .offlbl { font-size:8.5px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:#fca5a5; margin-right:6px; }
+  .grp.start, .grp.end { font-size:11px; color:var(--muted); }
+  .lbl.start { color:#5eead4; } .lbl.end { color:#fcd34d; }
+
+  /* data render (shared classes from flow-nodes.js body()) */
+  .data { background:#0c0f14; border:1px solid var(--line); border-radius:8px; padding:9px 10px; margin-top:8px; overflow:auto; max-height:340px; }
+  .data.tall { max-height:520px; }
+  .data pre { margin:0; font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#aeb8c9; white-space:pre; }
+  .jk{color:#7dd3fc;} .js{color:#fcd34d;} .jn{color:#f0abfc;} .jb{color:#86efac;}
+  .writes { margin-top:8px; font-size:11px; }
+  .writes .wl { display:flex; gap:6px; padding:2px 0; align-items:baseline; }
+  .writes .arrow { color:var(--code); font-weight:700; flex:none; }
+  .writes .f { font-family:ui-monospace,Menlo,monospace; color:#7dd3fc; }
+  .writes .val { color:var(--ink); font-family:ui-monospace,Menlo,monospace; }
+  .lineage { display:none; }
+  .offbanner { background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.35); color:#fca5a5;
+    border-radius:7px; padding:7px 9px; margin-top:8px; font-size:11px; line-height:1.5; }
+  .note { font-size:11px; color:var(--muted); margin:6px 2px 0; }
+  .prose { background:#0c0f14; border:1px solid var(--line); border-radius:8px; padding:11px 13px; margin-top:8px;
+    font-size:12.5px; line-height:1.6; color:#d2d8e3; }
+  .prose .hl { color:#fcd34d; }
+  .ns { margin-top:8px; } .ns .step { background:#11141a; border:1px solid var(--line); border-left:3px solid var(--code);
+    border-radius:7px; padding:7px 9px; margin-bottom:6px; }
+  .ns .step b { color:var(--ink); } .ns .step .why { color:var(--muted); font-size:11.5px; } .ns .step .ev{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:#7dd3fc;margin-top:3px;}
+  .offpill { font-size:8.5px; letter-spacing:.5px; text-transform:uppercase; font-weight:700; color:#fca5a5;
+    background:rgba(239,68,68,.16); border:1px solid rgba(239,68,68,.4); border-radius:4px; padding:1px 5px; margin-left:6px; }
+
+  .hintbar { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); z-index:15;
+    background:#11141aee; border:1px solid var(--line); border-radius:10px; padding:7px 14px; font-size:12px; color:var(--muted); }
+  .hintbar b { color:#5eead4; }
+
+  /* ---- structured data view (labelled key→value rows + inline sparklines) ---- */
+  .kv { font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .kv .rw { display:flex; gap:7px; padding:2px 0; align-items:baseline; flex-wrap:wrap; border-bottom:1px solid rgba(44,49,60,.45); }
+  .kv .rw:last-child { border-bottom:0; }
+  .kv .rw.col { flex-direction:column; gap:4px; flex-wrap:nowrap; align-items:stretch; }
+  .kv .rw > .kline { flex:0 0 auto; min-width:130px; color:#7dd3fc; word-break:break-word; }
+  .kv .rw.col > .kline { flex:1 1 auto; min-width:0; }
+  .kv .eq { flex:0 0 auto; color:#525a68; }
+  .kv .rw.col > .eq { display:none; }
+  .kv .k { color:#7dd3fc; }
+  .kv .meta { color:#5b6472; font-size:10px; }
+  .kv .vline { flex:1 1 auto; min-width:0; color:#e6e9ef; word-break:break-word; }
+  .kv .sep { color:#525a68; }
+  .kv .v.vnum{ color:#f0abfc; } .kv .v.vstr{ color:#fcd34d; } .kv .v.vbool{ color:#86efac; } .kv .v.vnull{ color:#6ee7b7; }
+  .kv .nest { border-left:1px solid var(--line); margin:3px 0 4px 4px; padding-left:12px; }
+  .kv .strlist .si { display:block; color:#cdd5e1; font-family:-apple-system,system-ui; font-size:11.5px;
+    line-height:1.45; padding:3px 0 3px 12px; border-left:2px solid var(--line); margin-bottom:4px; }
+  .kv .spark { margin-top:3px; }
+  .kv .spark svg { width:100%; height:46px; background:#0c0f14; border:1px solid var(--line); border-radius:6px; display:block; }
+  .kv .sparkline { fill:none; stroke:#7dd3fc; stroke-width:1.4; vector-effect:non-scaling-stroke; }
+  .kv .sparkarea { fill:rgba(125,211,252,.12); stroke:none; }
+  .kv .sparkmeta { display:flex; flex-wrap:wrap; gap:12px; font-size:10px; color:#6b7280; margin-top:4px; }
+
+  .kv .srctag { display:inline-block; font-size:9px; font-weight:700; letter-spacing:.3px; color:#6ee7b7;
+    background:rgba(16,185,129,.13); border:1px solid rgba(16,185,129,.34); border-radius:4px;
+    padding:0 5px; margin-left:7px; cursor:pointer; vertical-align:middle; white-space:nowrap; }
+  .kv .srctag:hover { background:rgba(16,185,129,.26); color:#a7f3d0; }
+  /* the second chip: a field's FATE on the hop to its next node */
+  .fate-forwarded,.fate-transformed,.fate-reduced,.fate-gated,.fate-dropped {
+    display:inline-block; font-weight:700; font-size:11px; border-radius:4px; padding:0 4px;
+    vertical-align:middle; white-space:nowrap; }
+  .kv .fatetag { font-size:9px; letter-spacing:.3px; margin-left:5px; padding:0 5px; cursor:default; }
+  .legend .fchip { font-size:11px; padding:0 5px; }
+  .fate-forwarded   { color:#fcd34d; background:rgba(252,211,77,.12); border:1px solid rgba(252,211,77,.34); }
+  .fate-transformed { color:#c4b5fd; background:rgba(167,139,250,.15); border:1px solid rgba(167,139,250,.38); }
+  .fate-reduced     { color:#fdba74; background:rgba(251,146,60,.14); border:1px solid rgba(251,146,60,.36); }
+  .fate-gated       { color:#9ca3af; background:rgba(156,163,175,.10); border:1px dashed rgba(156,163,175,.52); }
+  .fate-dropped     { color:#fca5a5; background:rgba(248,81,73,.14); border:1px solid rgba(248,81,73,.42); }
+  .fatebanner { font-size:11.5px; color:var(--muted); line-height:1.5; background:rgba(252,211,77,.06);
+    border:1px solid rgba(252,211,77,.18); border-left:3px solid #fcd34d; border-radius:5px; padding:7px 10px; margin:9px 0; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>Data-Flow Graph</h1>
+  <div class="tip">One run's <b>context pack</b>, every block traced to its source. <b>Click a node</b>: <span style="color:var(--up)">cyan = where it came from</span>, <span style="color:var(--down)">amber = where it goes</span>, and its real data opens on the right. Each field carries two chips: <span style="color:#6ee7b7">↤ which stage wrote it</span> and its <b>fate</b> — where it goes on the next hop. Drag to pan, scroll to zoom.</div>
+  <div class="legend">
+    <div class="item"><span class="sw" style="background:var(--source)"></span>Raw</div>
+    <div class="item"><span class="sw" style="background:var(--code)"></span>Code/fact</div>
+    <div class="item"><span class="sw" style="background:var(--store)"></span>DB</div>
+    <div class="item"><span class="sw" style="background:var(--runner)"></span>Runner</div>
+    <div class="item"><span class="sw" style="background:var(--memory)"></span>Memory</div>
+    <div class="item"><span class="sw" style="background:#15171c;border:1px dashed #6b7280"></span>off by default</div>
+    <div class="item"><span style="color:#5eead4;font-size:14px;line-height:1">▶</span>start of chain</div>
+    <div class="item"><span class="sw" style="background:var(--llm)"></span>LLM</div>
+    <div class="item"><span class="dash" style="border-color:var(--up)"></span>came from</div>
+    <div class="item"><span class="dash" style="border-color:var(--down)"></span>feeds</div>
+    <div class="item" style="color:#3a3f47">|</div>
+    <div class="item">fate:</div>
+    <div class="item"><span class="fchip fate-forwarded">→</span>forwarded</div>
+    <div class="item"><span class="fchip fate-transformed">↝</span>transformed</div>
+    <div class="item"><span class="fchip fate-reduced">▽</span>reduced</div>
+    <div class="item"><span class="fchip fate-gated">◇</span>gated</div>
+    <div class="item"><span class="fchip fate-dropped">✕</span>dropped</div>
+    <button class="ctrl" id="fit">Fit</button>
+    <button class="ctrl" id="reset">Reset</button>
+  </div>
+</header>
+
+<div id="stage"><svg id="svg"><g id="cam"></g></svg></div>
+
+<div class="hintbar" id="hint">Click any node to trace its lineage.</div>
+
+<aside class="drawer" id="drawer" role="dialog">
+  <button class="close" id="closeBtn">✕</button>
+  <header><span class="tag" id="dTag"></span><h2 id="dTitle"></h2><div class="path" id="dPath"></div></header>
+  <div class="relchips" id="dRel"></div>
+  <div class="body" id="dBody"></div>
+</aside>
+
+<script src="flow-nodes.js"></script>
+<script>
+const SVGNS='http://www.w3.org/2000/svg';
+const cam=document.getElementById('cam'), svg=document.getElementById('svg'), stage=document.getElementById('stage');
+
+/* ----- layout -----
+   Categories run left→right. Within each category, a node is placed in a SUB-column equal
+   to its longest dependency depth among *intra-category* edges, so an edge never stays inside
+   one column (no from-and-to within the same category). Extra gap separates the categories. */
+const CATS = ['ingest','analysis','deriv','pack','model','output'];
+const CATHDR = { ingest:['1  Ingestion','Strava → rows'], analysis:['2  Analysis pipeline','fills DerivedMetric'],
+  deriv:['3  Derivation','read-time builders'], pack:['4  Context pack','what the LLM sees'],
+  model:['5  Model','the call'], output:['6  Output','the report'] };
+const catOf = n => n.id==='output' ? 'output' : n.layer;
+const NW=152, NH=36, VGAP=11, COLPITCH=170, CATGAP=44, LEFT=60, PADTOP=104;
+
+// sub-rank = longest path using only edges whose source is in the same category
+const subRank = {};
+CATS.forEach(cat=>{
+  const ms = new Set(NODES.filter(n=>catOf(n)===cat).map(n=>n.id));
+  const preds = id => (byId[id].from||[]).filter(s=>ms.has(s));
+  const memo = {};
+  const rank = id => id in memo ? memo[id] : (memo[id] = preds(id).reduce((r,p)=>Math.max(r, rank(p)+1), 0));
+  ms.forEach(id=>subRank[id]=rank(id));
+});
+const catWidth = {}; CATS.forEach(c=> catWidth[c]=1+Math.max(0,...NODES.filter(n=>catOf(n)===c).map(n=>subRank[n.id])));
+const catStart = {}, catIndex = {}; let acc=0;
+CATS.forEach((c,i)=>{ catStart[c]=acc; catIndex[c]=i; acc+=catWidth[c]; });
+const totalCols = acc;
+const gcol = n => catStart[catOf(n)] + subRank[n.id];               // global column index
+const xOfCol = (gc,cat) => LEFT + gc*COLPITCH + catIndex[cat]*CATGAP;
+
+// group nodes by global column for vertical stacking (each column belongs to one category)
+const groups = {};
+NODES.forEach(n=>{ const gc=gcol(n); (groups[gc]=groups[gc]||[]).push(n); });
+const stackH = arr => arr.length*NH + (arr.length-1)*VGAP;
+const maxStack = Math.max(...Object.values(groups).map(stackH));
+const pos = {};
+Object.entries(groups).forEach(([gc,arr])=>{
+  const cat = catOf(arr[0]);
+  const x = xOfCol(+gc, cat);
+  const y0 = PADTOP + (maxStack - stackH(arr))/2;
+  arr.forEach((n,i)=>{ const y=y0+i*(NH+VGAP); pos[n.id]={ x, y, cx:x+NW/2, cy:y+NH/2, leftX:x, rightX:x+NW }; });
+});
+const worldW = LEFT + (totalCols-1)*COLPITCH + (CATS.length-1)*CATGAP + NW + 60;
+const worldH = PADTOP + maxStack + 60;
+
+const shortLabel = n => n.title.split('—')[0].split('(')[0].trim();
+const KCOL = { source:'#3b82f6', code:'#10b981', store:'#a78bfa', llm:'#f59e0b', gate:'#ef4444', runner:'#14b8a6', memory:'#a78bfa' };
+
+/* ----- category headers (one per category, at its leftmost sub-column) ----- */
+CATS.forEach(cat=>{
+  const x = xOfCol(catStart[cat], cat);
+  const t1=document.createElementNS(SVGNS,'text'); t1.setAttribute('x',x); t1.setAttribute('y',54);
+  t1.setAttribute('class','colhdr'); t1.textContent=CATHDR[cat][0]; cam.appendChild(t1);
+  const t2=document.createElementNS(SVGNS,'text'); t2.setAttribute('x',x); t2.setAttribute('y',70);
+  t2.setAttribute('class','colhdr sub'); t2.textContent=CATHDR[cat][1]; cam.appendChild(t2);
+});
+
+/* ----- edges (drawn first, under nodes) ----- */
+const edges=[];
+NODES.forEach(n=>(n.from||[]).forEach(s=>{
+  if(!pos[s]||!pos[n.id]) return;
+  const a=pos[s], b=pos[n.id];
+  const x1=a.rightX, y1=a.cy, x2=b.leftX, y2=b.cy;
+  const mx=(x1+x2)/2;
+  const p=document.createElementNS(SVGNS,'path');
+  p.setAttribute('class','edge');
+  p.setAttribute('d',`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
+  cam.appendChild(p);
+  edges.push({s, t:n.id, el:p});
+}));
+
+/* ----- nodes ----- */
+const isOrigin = n => !(n.from && n.from.length);     // nothing precedes it — a chain start
+const isTerminal = n => !(consumers[n.id] && consumers[n.id].length);  // nothing follows it
+const nodeEls={};
+NODES.forEach(n=>{
+  const p=pos[n.id]; if(!p) return;
+  const cls='node'+(n.off?' off':'')+(isOrigin(n)?' origin':'')+(isTerminal(n)?' terminal':'');
+  const g=document.createElementNS(SVGNS,'g'); g.setAttribute('class',cls); g.dataset.id=n.id;
+  g.setAttribute('transform',`translate(${p.x},${p.y})`);
+  const acc=document.createElementNS(SVGNS,'rect');
+  acc.setAttribute('class','accent'); acc.setAttribute('x',0); acc.setAttribute('y',0);
+  acc.setAttribute('width',4); acc.setAttribute('height',NH); acc.setAttribute('rx',2);
+  acc.setAttribute('fill',KCOL[n.kind]||'#888');
+  const r=document.createElementNS(SVGNS,'rect');
+  r.setAttribute('x',0); r.setAttribute('y',0); r.setAttribute('width',NW); r.setAttribute('height',NH); r.setAttribute('rx',8);
+  const t=document.createElementNS(SVGNS,'text'); t.setAttribute('x',13); t.setAttribute('y',NH/2+4);
+  let lbl=shortLabel(n); if(lbl.length>20) lbl=lbl.slice(0,19)+'…'; t.textContent=lbl;
+  g.appendChild(r); g.appendChild(acc); g.appendChild(t);
+  if(isOrigin(n)){  // a left-pointing cap that reads "the chain starts here"
+    const cap=document.createElementNS(SVGNS,'path'); cap.setAttribute('class','startcap');
+    cap.setAttribute('d',`M-12,${NH/2} L-4,${NH/2-6} L-4,${NH/2+6} Z`); g.appendChild(cap);
+  }
+  if(n.badge){ const b=document.createElementNS(SVGNS,'circle'); b.setAttribute('cx',NW-11); b.setAttribute('cy',11); b.setAttribute('r',4); b.setAttribute('fill','#ef4444'); g.appendChild(b); }
+  g.addEventListener('click', e=>{ e.stopPropagation(); select(n.id); });
+  cam.appendChild(g); nodeEls[n.id]=g;
+});
+
+/* ----- lineage colouring ----- */
+function upstream(id){ const s=new Set(); (function climb(x){ if(!byId[x])return; (byId[x].from||[]).forEach(f=>{ if(!s.has(f)){s.add(f); climb(f);} }); })(id); return s; }
+function downstream(id){ const s=new Set(); (function fall(x){ (consumers[x]||[]).forEach(c=>{ if(!s.has(c)){s.add(c); fall(c);} }); })(id); return s; }
+
+let current=null;
+function select(id){
+  current=id;
+  const up=upstream(id), down=downstream(id);
+  document.body.classList.add('sel');
+  Object.entries(nodeEls).forEach(([nid,g])=>{
+    g.classList.remove('up','down','focus');
+    if(nid===id) g.classList.add('focus');
+    else if(up.has(nid)) g.classList.add('up');
+    else if(down.has(nid)) g.classList.add('down');
+  });
+  edges.forEach(({s,t,el})=>{
+    el.classList.remove('eup','edown');
+    const inUp   = (s===id||up.has(s))   && (t===id||up.has(t));
+    const inDown = (s===id||down.has(s)) && (t===id||down.has(t));
+    if(inUp) el.classList.add('eup'); else if(inDown) el.classList.add('edown');
+  });
+  openDrawer(id, up, down);
+  recenter(id);
+  document.getElementById('hint').innerHTML='<b>'+shortLabel(byId[id])+'</b> — '+up.size+' upstream · '+down.size+' downstream. Esc or Reset to clear.';
+}
+// keep the focused node + its chain in the area left of the drawer
+function recenter(id){
+  const p=pos[id]; if(!p) return;
+  const drawerW=Math.min(480, window.innerWidth*0.94);
+  const visW=window.innerWidth-drawerW;
+  const tx=visW/2, ty=(window.innerHeight+PADTOP)/2;
+  view.x=tx-p.cx*view.k; view.y=ty-p.cy*view.k;
+  cam.classList.add('glide'); apply();
+  setTimeout(()=>cam.classList.remove('glide'),320);
+}
+function clearSel(){
+  current=null; document.body.classList.remove('sel');
+  Object.values(nodeEls).forEach(g=>g.classList.remove('up','down','focus'));
+  edges.forEach(e=>e.el.classList.remove('eup','edown'));
+  closeDrawer();
+  document.getElementById('hint').innerHTML='Click any node to trace its lineage.';
+}
+
+/* ----- drawer ----- */
+const drawer=document.getElementById('drawer');
+function chip(i, cls){ return '<span class="chip '+cls+(byId[i].off?' off':'')+'" data-go="'+i+'">'+esc(shortLabel(byId[i]))+'</span>'; }
+function relGroup(ids, cls){ // live chips first, off-by-default ones broken out below
+  const on=ids.filter(i=>!byId[i].off), off=ids.filter(i=>byId[i].off);
+  let h=on.map(i=>chip(i,cls)).join('');
+  if(off.length) h+='<div class="offsub"><span class="offlbl">off by default</span>'+off.map(i=>chip(i,cls)).join('')+'</div>';
+  return h;
+}
+function openDrawer(id, up, down){
+  const n=byId[id];
+  document.getElementById('dTag').textContent=n.tag; document.getElementById('dTag').className='tag '+n.kind;
+  document.getElementById('dTitle').innerHTML=esc(n.title)+(n.off?' <span class="offpill">off by default</span>':'');
+  document.getElementById('dPath').textContent=n.path||'';
+  const froms=(n.from||[]), feeds=(consumers[id]||[]);
+  document.getElementById('dRel').innerHTML=
+    (froms.length
+       ? '<div class="grp"><span class="lbl up">came from</span>'+relGroup(froms,'up')+'</div>'
+       : '<div class="grp start"><span class="lbl start">▶ start of chain</span> nothing precedes this — it is a raw input the pipeline starts from</div>')
+   +(feeds.length
+       ? '<div class="grp"><span class="lbl down">feeds</span>'+relGroup(feeds,'down')+'</div>'
+       : '<div class="grp end"><span class="lbl end">■ end of chain</span> nothing consumes this — it is the final output</div>');
+  document.getElementById('dBody').innerHTML=n.body();
+  document.querySelectorAll('#dRel .chip').forEach(c=>c.addEventListener('click',()=>select(c.dataset.go)));
+  document.querySelectorAll('#dBody .srctag').forEach(c=>c.addEventListener('click', e=>{ e.stopPropagation(); select(c.dataset.go); }));
+  drawer.classList.add('open');
+}
+function closeDrawer(){ drawer.classList.remove('open'); }
+document.getElementById('closeBtn').addEventListener('click', clearSel);
+document.getElementById('reset').addEventListener('click', clearSel);
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') clearSel(); });
+
+/* ----- pan + zoom ----- */
+let view={x:0,y:0,k:1};
+function apply(){ cam.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); }
+function fit(){
+  const vw=svg.clientWidth, vh=svg.clientHeight;
+  const k=Math.min((vw-40)/worldW, (vh-PADTOP-30)/worldH, 1.1);
+  view.k=k; view.x=(vw-worldW*k)/2; view.y=PADTOP*0.2 + 8;
+  apply();
+}
+let drag=null;
+stage.addEventListener('pointerdown', e=>{
+  drag={ x:e.clientX, y:e.clientY, vx:view.x, vy:view.y, moved:false,
+         onNode:!!(e.target.closest && e.target.closest('.node')) };
+  stage.classList.add('grabbing');
+});
+window.addEventListener('pointermove', e=>{
+  if(!drag) return;
+  const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+  if(Math.abs(dx)+Math.abs(dy)>4) drag.moved=true;
+  view.x=drag.vx+dx; view.y=drag.vy+dy; apply();
+});
+window.addEventListener('pointerup', ()=>{
+  // a click on empty graph (no drag, not on a node) clears the selection; a drag just pans
+  if(drag && !drag.moved && !drag.onNode) clearSel();
+  drag=null; stage.classList.remove('grabbing');
+});
+stage.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const rect=svg.getBoundingClientRect(), mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  const f=e.deltaY<0?1.12:1/1.12; const nk=Math.max(.25,Math.min(2.4,view.k*f));
+  view.x=mx-(mx-view.x)*(nk/view.k); view.y=my-(my-view.y)*(nk/view.k); view.k=nk; apply();
+}, {passive:false});
+document.getElementById('fit').addEventListener('click', fit);
+window.addEventListener('resize', ()=>{ if(view.k) apply(); });
+
+svg.setAttribute('viewBox',`0 0 ${Math.max(worldW, window.innerWidth)} ${Math.max(worldH, window.innerHeight)}`);
+fit();
+</script>
+</body>
+</html>
