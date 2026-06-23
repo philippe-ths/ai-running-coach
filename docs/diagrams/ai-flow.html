@@ -109,6 +109,24 @@
     vertical-align: middle;
   }
 
+  /* a block whose output is pulled into the LLM prompt (context pack + runner-declared voice) */
+  .node.feeds-llm {
+    padding-bottom: 26px;
+    box-shadow: 0 0 0 1px rgba(245,158,11,.32), 0 0 16px -7px rgba(245,158,11,.55);
+  }
+  .node.feeds-llm::before {
+    content: "→ LLM"; position: absolute; bottom: 8px; right: 10px;
+    font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+    color: var(--llm); background: rgba(245,158,11,.14);
+    border: 1px solid rgba(245,158,11,.42); border-radius: 4px; padding: 1px 5px;
+  }
+  .feeds-key {
+    display: inline-flex; align-items: center; font-size: 9.5px; font-weight: 700;
+    letter-spacing: .5px; text-transform: uppercase; color: var(--llm);
+    background: rgba(245,158,11,.14); border: 1px solid rgba(245,158,11,.42);
+    border-radius: 4px; padding: 1px 6px;
+  }
+
   .tag {
     display: inline-block; font-size: 9.5px; letter-spacing: .6px; text-transform: uppercase;
     padding: 1px 6px; border-radius: 4px; margin-bottom: 6px; font-weight: 700;
@@ -194,7 +212,7 @@
 
 <h1>Running Coach — AI &amp; Data Flow</h1>
 <p class="sub">How one Strava run becomes an opinionated, voiced coach report. Blocks are coloured by what they
-<em>are</em>. <strong>Click any block</strong> for files, functions, and the details. Press <kbd>Esc</kbd> to close.</p>
+<em>are</em>. The amber <span class="feeds-key">→ LLM</span> badge marks the blocks whose output is pulled into the model prompt (the context pack + runner-declared voice). <strong>Click any block</strong> for files, functions, and the details. Press <kbd>Esc</kbd> to close.</p>
 <div class="picker">
   <label for="activityPicker"><span style="color:#5eead4;font-weight:600">Real data</span> activity</label>
   <select id="activityPicker" aria-label="Choose the activity whose real data fills the blocks"></select>
@@ -209,6 +227,7 @@
   <div class="item"><span class="swatch" style="background:var(--gate)"></span>Policy / safety gate</div>
   <div class="item"><span class="swatch" style="background:var(--runner)"></span>Runner-declared input</div>
   <div class="item"><span class="swatch" style="background:var(--notify)"></span>Outbound notification</div>
+  <div class="item"><span class="feeds-key">→ LLM</span> Output pulled into the model prompt</div>
 </div>
 
 <div class="flow" id="flow">
@@ -238,9 +257,9 @@
       <div class="node code" data-key="streamview"><span class="tag code">function</span><h3>stream_view</h3><p>Bounded aligned downsample for deep-dive.</p></div>
     </div>
     <div class="row" style="margin-top:14px">
-      <div class="node store" data-key="derived"><span class="tag store">table</span><h3>DerivedMetric</h3><p><strong>The truth the LLM never overrides.</strong></p></div>
-      <div class="node code" data-key="blocks"><span class="tag code">function</span><h3>blocks.assign</h3><p>Group contiguous activities into a training Block.</p></div>
-      <div class="node code" data-key="baseline"><span class="tag code">function</span><h3>baseline.recompute</h3><p>Rolling per-bucket EF / HR-drift typicals.</p></div>
+      <div class="node store feeds-llm" data-key="derived"><span class="tag store">table</span><h3>DerivedMetric</h3><p><strong>The truth the LLM never overrides.</strong></p></div>
+      <div class="node code feeds-llm" data-key="blocks"><span class="tag code">function</span><h3>blocks.assign</h3><p>Group contiguous activities into a training Block.</p></div>
+      <div class="node code feeds-llm" data-key="baseline"><span class="tag code">function</span><h3>baseline.recompute</h3><p>Rolling per-bucket EF / HR-drift typicals.</p></div>
     </div>
   </div>
 
@@ -250,19 +269,20 @@
   <div class="stage">
     <h2>3 · Context pack — assemble what the coach reasons over (deterministic)</h2>
     <div class="row">
-      <div class="node code" data-key="focus"><span class="tag code">facts</span><h3>focus + B-baseline</h3><p>This run's metrics + lean always-present baseline.</p></div>
-      <div class="node code" data-key="load"><span class="tag code">facts</span><h3>training_load</h3><p>EWMA fitness / fatigue / form — a citable fact.</p></div>
-      <div class="node code" data-key="volume"><span class="tag code">facts</span><h3>training_volume</h3><p>This week's distance / time / sessions / load vs the runner's own norm.</p></div>
-      <div class="node code" data-key="calibration"><span class="tag code">facts</span><h3>baseline trend · calibration</h3><p>Your typical drift for these conditions; non-diagnostic referral on red flags.</p></div>
-      <div class="node code off" data-key="adherence"><span class="tag code">facts</span><span class="offpill">disabled</span><h3>prior reports · adherence</h3><p>Last reports' digest + did-you-act loop — <strong>off by default</strong> (PR #418).</p></div>
-      <div class="node code" data-key="perceived"><span class="tag code">facts</span><h3>perceived_effort · salience</h3><p>RPE-vs-HR, pain trend; novelty + safety override.</p></div>
+      <div class="node code feeds-llm" data-key="focus"><span class="tag code">facts</span><h3>focus + B-baseline</h3><p>This run's metrics + lean always-present baseline.</p></div>
+      <div class="node code feeds-llm" data-key="load"><span class="tag code">facts</span><h3>training_load</h3><p>EWMA fitness / fatigue / form — a citable fact.</p></div>
+      <div class="node code feeds-llm" data-key="volume"><span class="tag code">facts</span><h3>training_volume</h3><p>This week's distance / time / sessions / load vs the runner's own norm.</p></div>
+      <div class="node code feeds-llm" data-key="calibration"><span class="tag code">facts</span><h3>baseline trend · calibration</h3><p>Your typical drift for these conditions; non-diagnostic referral on red flags.</p></div>
+      <div class="node code off feeds-llm" data-key="adherence"><span class="tag code">facts</span><span class="offpill">disabled</span><h3>prior reports · adherence</h3><p>Last reports' digest + did-you-act loop — <strong>off by default</strong> (PR #418).</p></div>
+      <div class="node code feeds-llm" data-key="perceived"><span class="tag code">facts</span><h3>perceived_effort · salience</h3><p>RPE-vs-HR, pain trend; novelty + safety override.</p></div>
     </div>
     <div class="row" style="margin-top:14px">
-      <div class="node store off" data-key="beliefs"><span class="tag store">memory</span><span class="offpill">disabled</span><h3>CoachingContext (beliefs)</h3><p>Deterministic learned facts — <strong>off by default</strong> (PR #403).</p></div>
-      <div class="node store off" data-key="narrative"><span class="tag store">memory</span><span class="offpill">disabled</span><h3>CoachNarrative</h3><p>Voice-only memory — <strong>off by default</strong> (PR #403).</p></div>
-      <div class="node runner" data-key="voice"><span class="tag runner">runner-declared</span><h3>Voice · Stance · Corpus</h3><p>Tone, emphasis + school, uploaded materials.</p></div>
+      <div class="node store off feeds-llm" data-key="beliefs"><span class="tag store">memory</span><span class="offpill">disabled</span><h3>CoachingContext (beliefs)</h3><p>Deterministic learned facts — <strong>off by default</strong> (PR #403).</p></div>
+      <div class="node store off feeds-llm" data-key="narrative"><span class="tag store">memory</span><span class="offpill">disabled</span><h3>CoachNarrative</h3><p>Voice-only memory — <strong>off by default</strong> (PR #403).</p></div>
+      <div class="node runner feeds-llm" data-key="voice"><span class="tag runner">runner-declared</span><h3>Voice · Stance · Corpus</h3><p>Tone, emphasis + school, uploaded materials.</p></div>
     </div>
-    <p class="note">Every section is <em>Optional-and-drop</em>: a pack stays byte-stable under prompts that don't consume it, so prompt cutover/rollback is a pure config flip.<br>
+    <p class="note"><strong style="color:var(--llm)">Everything in this stage carries the → LLM badge: the context pack <em>is</em> exactly what the model sees.</strong> The stage-2 analysis functions (metrics, classifier, intervals, flags, effort) reach the model only after aggregation into <code>DerivedMetric</code>, which enters here as <code>focus</code>; <code>baseline</code> enters via <code>calibration</code> and <code>blocks</code> via the block section. <code>stream_view</code> is pulled only on a deep-dive, not on the default report path. The three <span style="color:#fca5a5">disabled</span> sections still occupy the pack but emit their empty form.<br>
+    Every section is <em>Optional-and-drop</em>: a pack stays byte-stable under prompts that don't consume it, so prompt cutover/rollback is a pure config flip.<br>
     <span style="color:#fca5a5">The prior-report-driven loops are currently OFF</span> — <code>beliefs</code> + <code>narrative</code> (PR #403) plus the M4 prior-report digest and M7 <code>adherence</code> (PR #418) — after they replayed a rest-day fixation into every report. They emit their empty form. The numeric <code>baseline trend</code> and M9 <code>calibration</code> (which carries the safety referral) stay ON. Re-enable is a config flip (#401 / #402).</p>
   </div>
 

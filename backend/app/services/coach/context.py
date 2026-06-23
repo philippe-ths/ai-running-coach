@@ -450,6 +450,69 @@ def assemble_working_context(
     )
 
 
+# Deadband for the coarse efficiency-shape descriptor (#441): the run's first
+# third vs last third must differ by more than this to read as improving/declining
+# rather than stable, so ordinary minute-to-minute wobble is not narrated as a trend.
+_EFFICIENCY_TREND_DEADBAND_PCT = 5.0
+
+
+def _efficiency_trend(curve) -> Optional[str]:
+    """A coarse shape descriptor for the efficiency curve: did efficiency hold,
+    rise, or fade across the run (first third vs last third)?
+
+    Returns "improving" / "declining" / "stable", or None when the curve is too
+    short or carries no usable values. Stopped/invalid samples (stored as 0.0 in the
+    chart curve) are ignored WITHIN each third so a mid-run stop does not masquerade
+    as a fade; the thirds stay positional in time so the descriptor reads the run's
+    actual arc. This is the lean coaching signal #441 keeps in place of the raw
+    chart-resolution series.
+    """
+    if not curve or not isinstance(curve, list):
+        return None
+    n = len(curve)
+    third = n // 3
+    if third == 0:
+        return None  # fewer than 3 points: no shape to read
+
+    def _mean_nonzero(segment) -> Optional[float]:
+        nums = [v for v in segment if isinstance(v, (int, float)) and v > 0]
+        return sum(nums) / len(nums) if nums else None
+
+    first = _mean_nonzero(curve[:third])
+    last = _mean_nonzero(curve[-third:])
+    if first is None or last is None or first <= 0:
+        return None
+
+    pct = (last - first) / first * 100.0
+    if pct > _EFFICIENCY_TREND_DEADBAND_PCT:
+        return "improving"
+    if pct < -_EFFICIENCY_TREND_DEADBAND_PCT:
+        return "declining"
+    return "stable"
+
+
+def _summarize_efficiency_for_coach(efficiency: Optional[dict]) -> Optional[dict]:
+    """Project the stored efficiency analysis to the decision-relevant summary the
+    coach pack carries (#441).
+
+    The stored `efficiency_analysis` includes a full chart-resolution `curve` (a long
+    per-sample series built for the activity-detail chart). The coach cannot reason
+    over a raw numeric series dumped as text, and it costs tokens, so this drops the
+    `curve` and keeps the summary scalars (average, best_sustained, unit) plus a
+    coarse `trend` shape descriptor derived from the curve. The STORED metric and the
+    activity-detail efficiency chart read `efficiency_analysis` directly and are
+    untouched — only this projection into the coach pack changes.
+
+    Pass-through for None / an empty dict (no analysis to project)."""
+    if not efficiency:
+        return efficiency
+    summary = {k: v for k, v in efficiency.items() if k != "curve"}
+    trend = _efficiency_trend(efficiency.get("curve"))
+    if trend is not None:
+        summary["trend"] = trend
+    return summary
+
+
 def build_focus_payload(
     db: Session,
     subject: Activity,
@@ -522,7 +585,11 @@ def build_focus_payload(
             time_in_zones=metrics.time_in_zones if metrics else None,
             zones_calibrated=zones_calibrated,
             zones_basis=zones_basis,
-            efficiency_analysis=metrics.efficiency_analysis if metrics else None,
+            efficiency_analysis=(
+                _summarize_efficiency_for_coach(metrics.efficiency_analysis)
+                if metrics
+                else None
+            ),
             stops_analysis=metrics.stops_analysis if metrics else None,
             interval_structure=metrics.interval_structure if metrics else None,
             workout_match=metrics.workout_match if metrics else None,

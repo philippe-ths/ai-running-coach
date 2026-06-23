@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from app.services.units.cadence import cadence_doubling_factor
+
 # Target resolution. "Tens of points, not thousands" (brief § A2a): ~60 points
 # is roughly one point per minute over an hour run, lean enough for context yet
 # dense enough to show where HR drifted, pace surged, or the route climbed.
@@ -41,10 +43,6 @@ STREAM_VIEW_MAX_POINTS = 60
 # derived pace would blow up toward infinity, so we report None instead. 0.5 m/s
 # is ~33 min/km, slower than any real running or walking pace.
 _MIN_MOVING_SPEED_MPS = 0.5
-
-# Cadence below this series-average looks like strides/min (one leg) rather than
-# steps/min; double it. Mirrors the read-path rule in splits.py / units.cadence.
-_CADENCE_STRIDES_THRESHOLD = 130
 
 _TIME = "time"
 _HR = "heartrate"
@@ -138,8 +136,11 @@ def build_stream_view(
         view["grade_pct"] = [_round_opt(v, 1) for v in grade_ds]
 
     if _CADENCE in present:
-        factor = _cadence_factor(present[_CADENCE][:common_len])
-        cad_ds = _bucket_means(present[_CADENCE][:common_len], n_buckets)
+        cad_raw = present[_CADENCE][:common_len]
+        # Decide the per-leg factor once from the series mean (the shared rule,
+        # #442), so a momentary low-cadence dip is never spuriously doubled.
+        factor = cadence_doubling_factor(_series_mean(cad_raw))
+        cad_ds = _bucket_means(cad_raw, n_buckets)
         view["cadence_spm"] = [
             int(round(v * factor)) if v is not None else None for v in cad_ds
         ]
@@ -153,15 +154,10 @@ def _velocity_to_pace(velocity: Optional[float]) -> Optional[int]:
     return int(round(1000.0 / velocity))
 
 
-def _cadence_factor(cadence: List[Any]) -> int:
-    """1 if the series already looks like steps/min, else 2 (strides/min -> spm).
-
-    Decided once from the series mean (not per sample) so a momentary low-cadence
-    dip during a slowdown is not spuriously doubled. Mirrors splits.py / the
-    units.cadence read-path heuristic.
-    """
-    nums = [v for v in cadence if isinstance(v, (int, float))]
+def _series_mean(values: List[Any]) -> Optional[float]:
+    """The mean of the numeric entries in `values`, or None when there are none.
+    The representative figure the shared cadence rule judges (units.cadence)."""
+    nums = [v for v in values if isinstance(v, (int, float))]
     if not nums:
-        return 1
-    mean = sum(nums) / len(nums)
-    return 2 if mean < _CADENCE_STRIDES_THRESHOLD else 1
+        return None
+    return sum(nums) / len(nums)
