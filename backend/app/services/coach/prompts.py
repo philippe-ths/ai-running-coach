@@ -980,8 +980,61 @@ def render_voice_block(base_prompt_id: str, voice=None) -> str:
     return "\n".join(lines)
 
 
+def _pack_has_user_materials(pack) -> bool:
+    """True when the pack carries at least one distilled user material (#439).
+
+    The SINGLE predicate that couples the USER MATERIALS addendum to the materials
+    data: both the addendum decision (below) and the materials the model receives
+    read the same `corpus.user_materials` list — the very list
+    `pack.to_serializable_dict()` serialises into the user message — so the addendum's
+    inclusion and the materials data's presence cannot diverge (ADR 0017). An empty
+    list is the ABSENCE of materials, not materials data.
+    """
+    corpus = getattr(pack, "corpus", None)
+    return bool(corpus is not None and corpus.user_materials)
+
+
+def _gate_optional_addenda(prompt: str, base_prompt_id: str, pack) -> str:
+    """Drop the data-dependent optional addenda whose pack section carries no usable
+    data for this runner (#439), so the prompt never ships instructions describing a
+    section that is empty for them.
+
+    A no-op when `pack` is None (legacy/structured callers and every prompt-pinning
+    test pass no pack), so the registered prompt strings stay byte-stable; and a no-op
+    when the data IS present, so a fully-populated runner's prompt is unchanged.
+
+    GATED (dropped only when their data is absent):
+      - USER MATERIALS (ADR 0017 containment): the addendum is the containment layer
+        for untrusted uploaded content, so it MUST be present if and only if distilled
+        materials are in the pack. Both this drop and the materials the model sees read
+        the same `_pack_has_user_materials(pack)` value, so they cannot diverge.
+      - TRAINING LOAD (readiness): `training_load` is None when history is too thin;
+        without it the readiness addendum would describe an absent section.
+
+    DECIDED IN (always kept under their prompt — "no data" is not a real state):
+      - VOICE / CORPUS / STANCE always resolve to a default (the runner always has a
+        voice; the house corpus is always present; stance falls to the balanced
+        default), so their addenda always describe present data.
+      - VOLUME: `training_volume` is always emitted under a volume prompt and always
+        carries the current-window figures (a thin baseline just abstains via
+        `has_baseline`, which the addendum itself handles), so it is not absent-data.
+    """
+    if pack is None:
+        return prompt
+    if is_user_materials_prompt(base_prompt_id) and not _pack_has_user_materials(pack):
+        prompt = prompt.replace(_USER_MATERIALS_ADDENDUM, "")
+    if is_training_load_prompt(base_prompt_id) and getattr(pack, "training_load", None) is None:
+        prompt = prompt.replace(_READINESS_ADDENDUM, "")
+    return prompt
+
+
 def build_system_prompt(
-    base_prompt_id: str, playbook_key: str = None, *, mode: str = "fuller", voice=None
+    base_prompt_id: str,
+    playbook_key: str = None,
+    *,
+    mode: str = "fuller",
+    voice=None,
+    pack=None,
 ) -> str:
     """Build the full system prompt, optionally with an activity-type playbook and
     a per-runner voice block.
@@ -994,10 +1047,19 @@ def build_system_prompt(
     appended only for voice-aware prompts (VOICE_PROMPT_IDS) via render_voice_block,
     which is a no-op for every other prompt — so all legacy/structured callers and
     coach_message_v1/v2 are byte-stable regardless of what `voice` is passed.
+
+    `pack` (the CoachContextPack the same call will serialise into the user message)
+    gates the data-dependent optional addenda (#439): an addendum for an optional
+    section the runner has no data for is dropped, so the prompt never spends
+    instruction budget describing an absent section. Passing no pack (the default)
+    keeps every addendum, so the registered strings and their pins stay byte-stable;
+    a fully-populated runner's prompt is also unchanged.
     """
     if mode == "opener" and base_prompt_id in _OPENER_PROMPTS:
-        return _OPENER_PROMPTS[base_prompt_id] + render_voice_block(base_prompt_id, voice)
+        base = _gate_optional_addenda(_OPENER_PROMPTS[base_prompt_id], base_prompt_id, pack)
+        return base + render_voice_block(base_prompt_id, voice)
     base = PROMPT_VERSIONS[base_prompt_id]
     if playbook_key and playbook_key in ACTIVITY_PLAYBOOKS:
         base = base + "\n\n" + ACTIVITY_PLAYBOOKS[playbook_key]
+    base = _gate_optional_addenda(base, base_prompt_id, pack)
     return base + render_voice_block(base_prompt_id, voice)
