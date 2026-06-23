@@ -12,8 +12,8 @@ actually receives at the chosen prompt version. The hand-authored NODES / fate m
 helpers below the data in flow-nodes.js are left untouched.
 
 Usage:
-    python docs/diagrams/generate_flow_nodes_data.py                  # newest good activity, v9
-    PROMPT_ID=coach_message_v9 ACTIVITY_ID=<uuid> python ...          # pin both
+    python docs/diagrams/generate_flow_nodes_data.py                  # newest good activity, v11 (prod)
+    PROMPT_ID=coach_message_v11 ACTIVITY_ID=<uuid> python ...         # pin both
 
 Read-only against the DB; rewrites only the two generated lines of flow-nodes.js.
 Local DB only.
@@ -46,13 +46,18 @@ from app.services.coach.service import (  # noqa: E402
     _resolve_voice_for_activity,
 )
 
-PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_v9")
+# Default to the LIVE prod prompt so the diagram is a one-to-one picture of what the
+# coach actually receives in production. v11 is stream-view-aware (#443) and
+# recent-training-aware (#444), so pack.stream_view and pack.recent_training are
+# populated; under v9 (the prior default) both were absent and stream_view dead-ended
+# at DerivedMetric. Override with PROMPT_ID=... to inspect another version.
+PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_v11")
 TARGET = Path(__file__).parent / "flow-nodes.js"
 
 # DerivedMetric columns the diagram shows (order = render order; excludes id / fks /
 # timestamps). stream_view is the deferred consolidated view, undeferred below.
 _DM_FIELDS = [
-    "effort_score", "pace_variability", "hr_drift", "time_in_zones", "flags",
+    "effort_score", "pace_variability", "hr_drift", "time_in_zones", "efficiency_analysis", "flags",
     "confidence", "confidence_reasons", "structure", "effort", "duration_class",
     "is_hilly", "is_race", "risk_level", "risk_score", "risk_reasons",
     "interval_structure", "workout_match", "interval_kpis", "discount_signals",
@@ -100,6 +105,10 @@ def _pick_activity(db):
     # fall back to any qualifying activity if no Run qualifies.
     def _qualifies(a):
         if a.metrics is None:
+            return False
+        # The stream-view nodes (a_streamview + pack.stream_view) need a real
+        # downsample to render. Accessing the deferred column lazy-loads it.
+        if a.metrics.stream_view is None:
             return False
         has_streams = db.execute(
             select(ActivityStream.id).where(ActivityStream.activity_id == a.id).limit(1)
@@ -223,6 +232,7 @@ def build_data(db):
             "avg_hr": activity.avg_hr,
             "max_hr": activity.max_hr,
             "avg_cadence": activity.avg_cadence,
+            "average_speed_mps": activity.average_speed_mps,
             "elev_gain_m": activity.elev_gain_m,
             "start_date": activity.start_date,
             "start_date_local": activity.start_date_local,
@@ -267,8 +277,11 @@ def main():
     _rewrite(data, system_prompt)
     pack_sections = list(data["pack"].keys())
     print(f"regenerated flow-nodes.js from activity {activity.id} ({activity.name})")
+    def _has(k):
+        return "YES" if k in pack_sections else "no"
     print(f"  prompt_id={PROMPT_ID}  pack sections={len(pack_sections)}  "
-          f"training_volume={'YES' if 'training_volume' in pack_sections else 'no'}")
+          f"training_volume={_has('training_volume')}  "
+          f"stream_view={_has('stream_view')}  recent_training={_has('recent_training')}")
     print(f"  system prompt: {len(system_prompt):,} chars")
 
 
