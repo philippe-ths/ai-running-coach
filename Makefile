@@ -1,4 +1,4 @@
-.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest
+.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest diagram-check
 
 # Prefer the project venv interpreter when it exists, fall back to bare python.
 # Path is relative to backend/ since the targets cd there first. CI has no
@@ -32,6 +32,12 @@ seed-local:
 	TOK="$$(tr -d '[:space:]' < $$HOME/.railway_token)" && \
 	SRC="$$(RAILWAY_TOKEN="$$TOK" railway variables --service Postgres --kv | grep '^DATABASE_PUBLIC_URL=' | cut -d= -f2-)" && \
 	SEED_SOURCE_URL="$$SRC" $(BACKEND_PY) scripts/seed_from_prod.py $(SEED_ARGS)
+
+# Drift guard for the ai-flow-graph data-flow diagram: fails if a CoachContextPack
+# section or a DerivedMetric column has no representation in flow-nodes.js. Also runs
+# automatically in the backend-test suite (backend/tests/test_diagram_drift.py).
+diagram-check:
+	cd backend && $(BACKEND_PY) ../docs/diagrams/check_diagram_drift.py
 
 # Offline coach-report eval harness (M5) — THE GATE for the learning milestones.
 # Scores the coach reports in the local DB against the deterministic rubric and
