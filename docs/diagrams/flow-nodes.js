@@ -66,8 +66,13 @@ function _fateChip(f){
   return ' <span class="fatetag fate-'+f.f+'" title="'+esc(f.note||f.f)+'">'+_FATE_GLYPH[f.f]+' '+esc(f.f)+'</span>';
 }
 // DerivedMetric row \u2192 pack.metrics (context.build_focus_payload, context.py:593-627). MOST columns are
-// forwarded, but the hop is NOT uniformly verbatim: efficiency_analysis is reshaped, the scalar
-// drift/variability/load values are rounded, and stream_view is gated onto a separate deferred pull.
+// forwarded, but the hop is NOT uniformly verbatim: efficiency_analysis is reshaped and the scalar
+// drift/variability/load values are rounded. stream_view is the one column that does NOT flatten into
+// pack.metrics at all; it rides a SEPARATE deferred edge to its own pack.stream_view section (the
+// p_stream_view node), which feeds the model under stream-view-aware prompts (v10/v11, incl. this prod
+// v11 capture). Like its peer prompt-scoped sections (corpus/stance/training_volume/recent_training) it
+// is shown flowing under the captured prompt, with the version condition kept in the note, not
+// singled out as blocked.
 const FATE_DERIVED = (()=>{ const fwd={f:'forwarded',note:'copied verbatim into pack.metrics (context.build_focus_payload, context.py:593-627)'};
   const m={}; ['time_in_zones','flags','confidence','confidence_reasons',
     'structure','effort','duration_class','is_hilly','is_race','risk_level','risk_score','risk_reasons',
@@ -76,7 +81,7 @@ const FATE_DERIVED = (()=>{ const fwd={f:'forwarded',note:'copied verbatim into 
   const rounded={f:'reduced',note:'rounded to 1 dp into pack.metrics; hr_drift/pace_variability nulled when 0 (context.py:600-606)'};
   m.effort_score=rounded; m.hr_drift=rounded; m.pace_variability=rounded;
   m.efficiency_analysis={f:'reduced',note:'reshaped for the coach \u2014 the 128-pt curve dropped, a coarse trend descriptor added (context._summarize_efficiency_for_coach, #441)'};
-  m.stream_view={f:'gated',note:'a \u226460-pt \u00d7 4-channel downsample on a deferred column \u2014 pulled into pack.stream_view by retrieval.fetch_stream_view ONLY under a stream-view-aware prompt (deep=is_stream_view_prompt: v10/v11, incl. prod v11). Inert under v9 and below.'};
+  m.stream_view={f:'forwarded',note:'the one column that does NOT flatten into pack.metrics. The stored \u226460-pt \u00d7 4-channel view is forwarded unchanged onto a SEPARATE deferred edge to its own pack.stream_view section (retrieval.fetch_stream_view), which feeds the model under stream-view-aware prompts (v10/v11, incl. this prod v11 capture); absent under v9 and below.'};
   return m; })();
 // ActivityStream raw series \u2192 analysis / read-time detail. The raw per-sample series never reaches the model.
 const FATE_STREAMS = {
@@ -300,7 +305,7 @@ const NODES = [
 /* ===== LAYER: DERIVATION ===== */
 { id:'derivedmetric', layer:'deriv', kind:'store', span:true, tag:'table — keystone', title:'DerivedMetric (one row per activity)', path:'app/models/derived_metric.py',
   from:['a_metrics','a_effort','a_classifier','a_intervals','a_flags','a_discount','a_streamview','a_confidence','a_training_context'],
-  body:()=> '<p class="desc"><b>The truth the LLM never overrides.</b> Every analysis stage below writes into this one row; <code>analyze</code> upserts it. It is then flattened into <code>pack.metrics</code> above. The second chip on each field is its <b>fate</b> on that hop: most columns are <span class="fate-forwarded">forwarded</span>, but the hop is NOT uniformly verbatim — <code>efficiency_analysis</code> is <span class="fate-reduced">reduced</span> (128-pt curve dropped, trend added), the scalar <code>effort_score</code>/<code>hr_drift</code>/<code>pace_variability</code> are rounded, and <code>stream_view</code> is <span class="fate-gated">gated</span> onto a separate deferred pull.</p>'+ renderTree(DM, true, FIELD_SOURCE, FATE_DERIVED) },
+  body:()=> '<p class="desc"><b>The truth the LLM never overrides.</b> Every analysis stage below writes into this one row; <code>analyze</code> upserts it. It is then flattened into <code>pack.metrics</code> above. The second chip on each field is its <b>fate</b> on that hop: most columns are <span class="fate-forwarded">forwarded</span>, but the hop is NOT uniformly verbatim: <code>efficiency_analysis</code> is <span class="fate-reduced">reduced</span> (128-pt curve dropped, trend added) and the scalar <code>effort_score</code>/<code>hr_drift</code>/<code>pace_variability</code> are rounded. <code>stream_view</code> is the one column that does NOT flatten into <code>pack.metrics</code>: it is <span class="fate-forwarded">forwarded</span> unchanged onto a <b>separate deferred edge</b> to its own <code>pack.stream_view</code> section (the node below), which feeds the model under stream-view-aware prompts (v10/v11, incl. this prod v11 capture).</p>'+ renderTree(DM, true, FIELD_SOURCE, FATE_DERIVED) },
 { id:'d_volume', layer:'deriv', kind:'code', tag:'read-time', title:'volume.build_training_volume (#400/#451)', path:'services/coach/volume.py',
   from:['act_row','derivedmetric'], body:()=> '<p class="desc">The weekly vs-norm VERDICT: rolling-7d and calendar-week totals against the runner\'s norm, with a dual baseline (12-week stable + 4-week recent) and direction labels. The norm is the clamped per-day rate projected to a week (#451), the SAME definition the Trends page and <code>recent_training</code> use — so "typical" means one thing across the product and a short/gappy history is not deflated.</p>'+ j(P.training_volume) },
 { id:'d_recent_training', layer:'deriv', kind:'code', tag:'read-time', title:'recent_training.build_recent_training (#444)', path:'services/coach/recent_training.py',
