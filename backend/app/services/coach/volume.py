@@ -10,9 +10,12 @@ Two framings, both surfaced (the runner reasons in both):
   - calendar_week: the current Monday-Sunday block to date (partial until Sunday),
     judged against the norm PRO-RATED to the elapsed days so a partial week is fair.
 
-The norm is per-week, all-activities, computed over history BEFORE the current 7
-days (so "current vs norm" compares this week to prior typical weeks, not to
-itself): a 12-week stable baseline plus a 4-week recent baseline. Direction uses a
+The norm is the runner's own per-day training rate over history BEFORE the current
+7 days, projected to a weekly figure (#451): the SAME clamped per-day-rate
+definition the Trends page and `recent_training` use, so "typical" means one thing
+across the product. A 12-week stable baseline plus a 4-week recent baseline, each
+clamped to the runner's first activity so a short or gappy history is not deflated
+by dividing it across weeks the runner had not started training. Direction uses a
 deadband so small fluctuations read as in_line.
 
 Metrics are reported holistically (every logged activity — the cardio view the
@@ -144,20 +147,28 @@ def build_training_volume(facts: List[Any], as_of: date) -> TrainingVolumeContex
     week_facts = [f for f in facts if week_start <= f.local_date <= as_of]
     week_days_elapsed = as_of.weekday() + 1  # Mon=1 .. Sun=7
 
-    # Norm baselines: history strictly BEFORE the current 7-day window.
+    # Norm baselines: the runner's own per-day training rate over history strictly
+    # BEFORE the current 7-day window, projected to a weekly figure (#451). This is the
+    # SAME clamped per-day-rate definition the Trends page and recent_training use
+    # (_baseline_window clamps the window to the runner's first activity, _norm_per_day
+    # divides by actual calendar days), so "typical" has ONE meaning across the product
+    # — and a newer/returning runner's norm is no longer deflated by dividing a short
+    # history by a fixed 12 (or 4) weeks.
     baseline_end = as_of - timedelta(days=7)
-    base_12w_start = baseline_end - timedelta(weeks=_BASELINE_WEEKS)
-    base_4w_start = baseline_end - timedelta(weeks=_RECENT_WEEKS)
-    base_12w = [f for f in facts if base_12w_start < f.local_date <= baseline_end]
-    base_4w = [f for f in facts if base_4w_start < f.local_date <= baseline_end]
 
-    has_baseline = len(base_12w) >= _MIN_BASELINE_ACTIVITIES
-    if has_baseline:
-        norms_weekly = {m: _sum(base_12w, m) / _BASELINE_WEEKS for m in _METRICS}
-        norms_recent = {m: _sum(base_4w, m) / _RECENT_WEEKS for m in _METRICS}
-    else:
-        norms_weekly = {m: None for m in _METRICS}
-        norms_recent = {m: None for m in _METRICS}
+    def _weekly_norm(nominal_weeks: int) -> Dict[str, Optional[float]]:
+        bl = _baseline_window(facts, baseline_end, nominal_weeks * 7)
+        if bl is None:
+            return {m: None for m in _METRICS}
+        b_start, b_end, b_count = bl
+        per_day = _norm_per_day(facts, b_start, b_end, b_count)
+        return {m: (per_day[m] * 7 if per_day[m] is not None else None) for m in _METRICS}
+
+    norms_weekly = _weekly_norm(_BASELINE_WEEKS)
+    norms_recent = _weekly_norm(_RECENT_WEEKS)
+    # has_baseline tracks whether the stable (12-week) norm resolved; every metric
+    # resolves together (one shared activity-count threshold), so any metric answers.
+    has_baseline = norms_weekly[_METRICS[0]] is not None
 
     return TrainingVolumeContext(
         rolling_7d=_window("rolling_7d", rolling_facts, 7, norms_weekly, norms_recent),

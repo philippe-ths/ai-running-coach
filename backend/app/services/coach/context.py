@@ -84,11 +84,9 @@ from app.schemas.coach_context import (
     PerceivedEffortContext,
     PreferenceProfile,
     ProfileContext,
-    RecentTrainingSummary,
     SafetyOverride,
     SafetyRules,
     SalienceContext,
-    TrainingPeriodSummary,
 )
 from app.services.trends import _query_activity_facts
 from app.services.units.cadence import normalize_cadence_spm
@@ -155,7 +153,6 @@ class BBaseline:
     preference), and the safety rules."""
 
     profile: ProfileContext
-    recent_training_summary: RecentTrainingSummary
     longitudinal: LongitudinalContext
     perceived_effort: PerceivedEffortContext
     adherence: AdherenceContext
@@ -224,7 +221,6 @@ def build_context_pack(
         metrics=f.metrics,
         check_in=f.check_in,
         profile=b.profile,
-        recent_training_summary=b.recent_training_summary,
         longitudinal=b.longitudinal,
         perceived_effort=b.perceived_effort,
         adherence=b.adherence,
@@ -652,25 +648,6 @@ def build_b_baseline(
     if profile is None:
         profile = _load_profile(db, activity.user_id)
 
-    # Recent training summary relative to this activity's date. The three
-    # windows (7d, 28d, prev_28d) all fall within [activity_date-56d,
-    # activity_date), so fetch that span once and partition in Python (#365)
-    # instead of issuing three queries (each was a select + selectinload = 6 SQL
-    # statements). The window edges are date midnights and a fact's local_date
-    # is start_date.date(), so partitioning by local_date reproduces the prior
-    # per-window start_date bounds exactly — and _summarize_period is unchanged,
-    # so every summary value is byte-identical.
-    activity_date = activity.start_date.date()
-    facts_56d = _query_activity_facts(
-        db, activity_date - timedelta(days=56), activity_date,
-        user_id=activity.user_id,
-    )
-    since_7d = activity_date - timedelta(days=7)
-    since_28d = activity_date - timedelta(days=28)
-    facts_7d = [f for f in facts_56d if f.local_date >= since_7d]
-    facts_28d = [f for f in facts_56d if f.local_date >= since_28d]
-    facts_prev_28d = [f for f in facts_56d if f.local_date < since_28d]
-
     return BBaseline(
         profile=ProfileContext(
             goal_type=profile.goal_type if profile else None,
@@ -680,11 +657,6 @@ def build_b_baseline(
             max_hr=profile.max_hr if profile else None,
             max_hr_source=getattr(profile, "max_hr_source", None) if profile else None,
             current_weekly_km=profile.current_weekly_km if profile else None,
-        ),
-        recent_training_summary=RecentTrainingSummary(
-            last_7d=_summarize_period(facts_7d),
-            last_28d=_summarize_period(facts_28d),
-            previous_28d=_summarize_period(facts_prev_28d),
         ),
         longitudinal=_build_longitudinal_context(db, activity),
         perceived_effort=build_perceived_effort(
@@ -737,15 +709,6 @@ def _load_profile(db: Session, user_id) -> Optional[UserProfile]:
         db.query(UserProfile)
         .filter(UserProfile.user_id == user_id)
         .first()
-    )
-
-
-def _summarize_period(facts) -> TrainingPeriodSummary:
-    return TrainingPeriodSummary(
-        activity_count=len(facts),
-        total_distance_m=sum(f.distance_m for f in facts),
-        total_moving_time_s=sum(f.moving_time_s for f in facts),
-        total_effort=round(sum(f.effort_score or 0 for f in facts), 1),
     )
 
 
