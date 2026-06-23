@@ -183,6 +183,24 @@ def test_cadence_already_in_spm_is_left_alone():
     assert all(c == 170 for c in view["cadence_spm"])
 
 
+def test_cadence_normalisation_shares_the_units_threshold():
+    """#442: the stream-view builder applies the SAME per-leg rule as the read-path
+    units helper, so the threshold cannot drift between the two. Just below the
+    shared threshold doubles; exactly at it does not."""
+    from app.services.units.cadence import CADENCE_SINGLE_LEG_THRESHOLD_SPM
+
+    n = 120
+    below = CADENCE_SINGLE_LEG_THRESHOLD_SPM - 1
+    at = CADENCE_SINGLE_LEG_THRESHOLD_SPM
+
+    view_below = build_stream_view({"time": list(range(n)), "cadence": _const(below, n)})
+    view_at = build_stream_view({"time": list(range(n)), "cadence": _const(at, n)})
+
+    assert view_below is not None and view_at is not None
+    assert all(c == below * 2 for c in view_below["cadence_spm"])  # single-leg -> doubled
+    assert all(c == at for c in view_at["cadence_spm"])  # at threshold -> left alone
+
+
 # --- None handling within a bucket ------------------------------------------
 
 def test_all_none_bucket_becomes_none():
