@@ -86,6 +86,13 @@ Clerk production instance, and verification) is **[custom-domain.md](custom-doma
   authenticity is instead checked by `_event_is_authentic` in `app/api/webhooks.py`.
 - In production a missing `BASIC_AUTH_USER`/`BASIC_AUTH_PASSWORD` fails closed with 503. Outside
   production the middleware is a no-op when either is unset, so local dev needs no credentials.
+- Deploy safety (#480): in production the **web** process refuses to boot (crashes with a
+  `production_config_incomplete` CRITICAL log) when `CLERK_JWKS_URL`, `BASIC_AUTH_USER`, or
+  `BASIC_AUTH_PASSWORD` is unset, so a deploy whose env was not applied crash-loops and the platform
+  keeps the previous healthy deploy serving instead of promoting one that 503s every route (the Phase 2
+  outage). If a web deploy crash-loops right after a merge, check these env vars first. The worker is
+  not gated this way (it serves no HTTP). Belt-and-suspenders: set Railway's web Health Check Path to
+  `/api/health` so the cutover also waits on readiness.
 - This whole layer is throwaway: ADR 0005 replaces it with magic-link sessions in Phase 2.
 
 ### Configuration (where each secret lives)

@@ -5,11 +5,20 @@ from app.api import health, auth, activities, blocks, webhooks, profile, trends,
 from app.core.auth import BasicAuthMiddleware
 from app.core.clerk_auth import verify_clerk_session
 from app.core.config import settings
-from app.core.observability import init_logging, init_sentry, warn_if_coach_prompt_inert
+from app.core.observability import (
+    assert_production_config,
+    init_logging,
+    init_sentry,
+    warn_if_coach_prompt_inert,
+)
 
 init_logging()
 init_sentry("web")
 warn_if_coach_prompt_inert()
+# Crash the boot if a fail-closed production setting is unset, so the platform
+# keeps the last healthy deploy serving instead of promoting one that 503s every
+# route (the Phase 2 deploy-outran-config outage). No-op outside production.
+assert_production_config()
 
 app = FastAPI(
     title="Running Coach",
