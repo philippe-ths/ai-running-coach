@@ -25,7 +25,7 @@ export default function NavBar() {
         >
           AI Coach
         </Link>
-        <div className="flex items-center gap-1 sm:gap-2">
+        <div className="hidden md:flex items-center gap-1 sm:gap-2">
           {LINKS.map(({ href, label }) => (
             <Link
               key={href}
