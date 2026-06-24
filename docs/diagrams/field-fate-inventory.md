@@ -32,12 +32,16 @@ verbatim — three exceptions:
 - **efficiency_analysis → reduced (reshaped).** The stored column carries a 128-pt
   curve; `_summarize_efficiency_for_coach` (`context.py`, #441) drops the curve and adds
   a coarse `trend` descriptor before it enters the pack — not a verbatim copy.
-- **stream_view (sv_points) → reduced + deferred + gated.** A ≤60-pt aligned downsample
-  (`stream_view.py`), stored on a `deferred=True` column (`derived_metric.py:51`),
-  pulled into `pack.stream_view` by `retrieval.fetch_stream_view` only when `deep=True`.
-  Since #443, `deep = is_stream_view_prompt(prompt_id)` (`context.py:217`), so it rides
-  EVERY report under a stream-view-aware prompt — v10/v11, including the live prod prompt
-  v11. Absent only under v9 and below.
+- **stream_view (sv_points) → forwarded (separate deferred edge).** Unlike every other
+  DerivedMetric column, this one does NOT flatten into `pack.metrics`. The ≤60-pt aligned
+  downsample (`stream_view.py`) is written to a `deferred=True` column
+  (`derived_metric.py:51`) at analysis time, then forwarded unchanged onto its OWN
+  `pack.stream_view` section by `retrieval.fetch_stream_view` (a separate `undefer` query),
+  gated on `deep=True`. Since #443, `deep = is_stream_view_prompt(prompt_id)`
+  (`context.py:217`), so it rides EVERY report under a stream-view-aware prompt (v10/v11,
+  including the live prod prompt v11) and is absent only under v9 and below. The diagram is
+  captured under prod v11, so this edge is open and the view flows to the model. The
+  ≤60-pt reduction is an analysis-time write, not a loss on this hop.
 
 pack.metrics also adds three fields composed at read time (not DM columns), all
 **forwarded**: headline (`context.py:497`), zones_calibrated / zones_basis
