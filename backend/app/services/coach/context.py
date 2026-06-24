@@ -538,6 +538,27 @@ def _summarize_efficiency_for_coach(efficiency: Optional[dict]) -> Optional[dict
     return summary
 
 
+def _strip_stops_for_coach(stops_analysis: Optional[dict]) -> Optional[dict]:
+    """Project the stored stops analysis to what the coach pack carries.
+
+    Each stored stop carries a raw `[lat, lng]` `location` (consumed by the
+    activity-detail StopsPanel). The coach cannot reason over raw coordinates and
+    it costs tokens, so this drops `location` from each stop while keeping the
+    decision-relevant fields (timing, duration, distance) and the summary scalars.
+    The STORED metric and the detail view read `stops_analysis` directly and are
+    untouched — only this projection into the coach pack changes.
+
+    Pass-through for None / an empty dict (no analysis to project)."""
+    if not stops_analysis:
+        return stops_analysis
+    summary = dict(stops_analysis)
+    summary["stops"] = [
+        {k: v for k, v in stop.items() if k != "location"}
+        for stop in stops_analysis.get("stops", [])
+    ]
+    return summary
+
+
 def build_focus_payload(
     db: Session,
     subject: Activity,
@@ -622,7 +643,9 @@ def build_focus_payload(
                 if metrics
                 else None
             ),
-            stops_analysis=metrics.stops_analysis if metrics else None,
+            stops_analysis=(
+                _strip_stops_for_coach(metrics.stops_analysis) if metrics else None
+            ),
             interval_structure=metrics.interval_structure if metrics else None,
             workout_match=metrics.workout_match if metrics else None,
             interval_kpis=metrics.interval_kpis if metrics else None,
