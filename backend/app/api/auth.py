@@ -28,7 +28,14 @@ def strava_login():
 
 @router.get("/auth/strava/status", response_model=StravaConnectionStatus)
 def strava_status(db: Session = Depends(get_db)) -> StravaConnectionStatus:
-    """Reports whether a Strava account is linked, and surfaces the athlete id and token scope."""
+    """Reports whether a Strava account is linked, and surfaces the athlete id and token scope.
+
+    NOTE: the whole Strava OAuth surface (login/callback/status) is ADR-exempt
+    from the per-user session (ADR 0022 exempts /api/auth/*), so this stays
+    single-user (the first linked account) until the multi-user Strava-linking
+    follow-up threads the verified user through OAuth state. It returns no
+    training data; only the connection's athlete id and scope.
+    """
     account = db.execute(select(StravaAccount)).scalars().first()
     if account is None:
         return StravaConnectionStatus(connected=False)
@@ -67,9 +74,24 @@ async def strava_callback(
         strava_account.expires_at = tokens.expires_at
         strava_account.scope = "read,activity:read_all,profile:read_all"
     else:
-        new_user = User(email=None)
-        db.add(new_user)
-        db.flush()
+        # A brand-new Strava athlete. In single-owner prod this branch is
+        # dormant (the owner is already connected, so the token-refresh branch
+        # above fires). Under Phase 2 (ADR 0022) email is non-null, so attach to
+        # the single existing app user when there is exactly one (the realistic
+        # single-owner first-connect), else create a user with a unique
+        # placeholder email so the non-null constraint holds.
+        # TODO(P2.1): thread the verified Clerk user through the OAuth `state`
+        # param so a new Strava account links to the signed-in user, not a
+        # placeholder. The Strava callback is a direct browser redirect from
+        # Strava and carries no Clerk session, so true multi-user linking needs
+        # a server-verifiable state token. Tracked as a follow-up issue.
+        existing_users = db.execute(select(User)).scalars().all()
+        if len(existing_users) == 1:
+            new_user = existing_users[0]
+        else:
+            new_user = User(email=f"strava-{athlete_id}@placeholder.invalid")
+            db.add(new_user)
+            db.flush()
 
         strava_account = StravaAccount(
             user_id=new_user.id,

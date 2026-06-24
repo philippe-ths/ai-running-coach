@@ -244,22 +244,23 @@ async function main() {
     mockApiServer.listen(MOCK_API_PORT, "127.0.0.1", resolve);
   });
 
-  await runCommand("npm", ["run", "build"], {
-    env: {
-      ...process.env,
-      NEXT_PUBLIC_API_BASE_URL: MOCK_API_BASE_URL,
-    },
-  });
+  // The smoke runs against a mock backend with no auth, so Clerk must be off:
+  // an empty publishable key makes the middleware/layout pass-through (CI has no
+  // .env.local, but a dev machine does, and Next would otherwise inline its key
+  // into the build and gate every route behind a sign-in redirect).
+  const smokeEnv = {
+    ...process.env,
+    NEXT_PUBLIC_API_BASE_URL: MOCK_API_BASE_URL,
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "",
+    CLERK_SECRET_KEY: "",
+  };
+
+  await runCommand("npm", ["run", "build"], { env: smokeEnv });
 
   const nextServer = spawnProcess(
     "npm",
     ["run", "start", "--", "--hostname", "127.0.0.1", "--port", `${FRONTEND_PORT}`],
-    {
-      env: {
-        ...process.env,
-        NEXT_PUBLIC_API_BASE_URL: MOCK_API_BASE_URL,
-      },
-    },
+    { env: smokeEnv },
   );
   runningChildren.push(nextServer);
 

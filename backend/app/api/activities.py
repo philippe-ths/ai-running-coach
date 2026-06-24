@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
+from app.core.clerk_auth import require_current_user
 from app.db.session import get_db
-from app.models import Activity, StravaAccount, CheckIn
+from app.models import Activity, StravaAccount, User
 from app.models.user_profile import UserProfile
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead, TrainingLoadRead
 from app.services import activity_queries, analysis
@@ -19,15 +20,30 @@ from app.services.strava_ingestion import get_strava_port, ingest_recent_activit
 
 router = APIRouter()
 
+
+def _require_owned_activity(db: Session, activity_id: UUID, user: User) -> Activity:
+    """Load an activity, 404ing if it does not exist OR is not the user's (P2.1).
+
+    A cross-tenant id must be indistinguishable from a missing one, so the same
+    404 covers both — no information about other users' activities leaks.
+    """
+    activity = activity_queries.get_owned_activity(db, activity_id, user.id)
+    if activity is None:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return activity
+
+
 @router.post("/activities/{activity_id}/process_deep", response_model=DerivedMetricRead)
 async def process_activity_deep(
     activity_id: UUID,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
     """
     Fetches full streams from Strava (if Rate Limits allow) and re-runs processing.
     Useful for detailed breakdown of 'Complex' runs.
     """
+    _require_owned_activity(db, activity_id, user)
     metrics = await analysis.analyze_with_streams(db, str(activity_id))
     if not metrics:
         raise HTTPException(status_code=400, detail="Processing failed or activity not found.")
@@ -38,6 +54,9 @@ async def process_activity_deep(
 
 @router.post("/activities/backfill-streams")
 def backfill_streams(db: Session = Depends(get_db)):
+    # Auth-gated by the router-level session dependency (P2.0). Per-user scoping
+    # of this owner-maintenance job (it currently processes all users' eligible
+    # activities) is a tracked follow-up; it returns no cross-tenant data.
     """Kick off a paced backfill of stream-derived analysis for historical
     summary-only activities (#110).
 
@@ -77,17 +96,14 @@ def reanalyze_history(db: Session = Depends(get_db)):
 def update_activity_intent(
     activity_id: UUID,
     payload: ActivityIntentUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
     """
     Updates the manual user intent for an activity and re-runs analysis.
     """
-    stmt = select(Activity).where(Activity.id == activity_id)
-    activity = db.execute(stmt).scalars().first()
-    
-    if not activity:
-        raise HTTPException(status_code=404, detail="Activity not found")
-        
+    activity = _require_owned_activity(db, activity_id, user)
+
     activity.user_intent = payload.user_intent
     db.add(activity)
     db.commit()
@@ -107,9 +123,6 @@ _STREAM_FETCH_WINDOW_DAYS = 30
 
 @router.post("/sync", response_model=SyncResponse)
 async def sync_activities(
-    # In a real app, we'd get current_user from token.
-    # Here, we optionally take an ID or default to the first account found.
-    strava_athlete_id: Optional[int] = None,
     since_days: Annotated[
         int,
         Query(
@@ -121,7 +134,8 @@ async def sync_activities(
             ),
         ),
     ] = _STREAM_FETCH_WINDOW_DAYS,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
     """
     Triggers a manual sync of the last `since_days` days of activities.
@@ -130,12 +144,10 @@ async def sync_activities(
     backfills summaries only (streams cost one Strava call each and would breach
     the rate limit over a long window); analysis still runs from the summary.
     """
-    if strava_athlete_id:
-        stmt = select(StravaAccount).where(StravaAccount.strava_athlete_id == strava_athlete_id)
-        account = db.execute(stmt).scalars().first()
-    else:
-        # Default: take the first account (Single Player Mode)
-        account = db.query(StravaAccount).first()
+    # P2.1: sync only the authenticated user's own Strava account.
+    account = db.execute(
+        select(StravaAccount).where(StravaAccount.user_id == user.id)
+    ).scalars().first()
 
     if not account:
         raise HTTPException(status_code=404, detail="No linked Strava account found. Connect Strava first.")
@@ -187,7 +199,8 @@ def read_activities(
     types: Optional[List[str]] = Query(None, description="Activity types to include (multi-select)"),
     start_date: Optional[date] = Query(None, description="Only activities on/after this date (UTC, inclusive)"),
     end_date: Optional[date] = Query(None, description="Only activities on/before this date (UTC, inclusive)"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
     """
     Get stored activities (paginated), optionally filtered by type and date range (#404).
@@ -195,9 +208,9 @@ def read_activities(
     Filters apply server-side before pagination, so they narrow the whole history
     rather than only the rows already loaded by the client.
     """
-    # Note: In multi-user app, filter by current_user.id
     activities = activity_queries.get_activities(
-        db, skip=skip, limit=limit, types=types, start_date=start_date, end_date=end_date
+        db, skip=skip, limit=limit, user_id=user.id,
+        types=types, start_date=start_date, end_date=end_date,
     )
     responses = []
     for activity in activities:
@@ -211,10 +224,11 @@ def read_activities(
 
 @router.get("/activities/{activity_id}", response_model=ActivityDetailRead)
 def read_activity(
-    activity_id: UUID, 
-    db: Session = Depends(get_db)
+    activity_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
-    activity = activity_queries.get_activity(db, str(activity_id))
+    activity = activity_queries.get_activity(db, str(activity_id), user_id=user.id)
     if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
         
@@ -263,8 +277,11 @@ def read_activity(
 def create_checkin(
     activity_id: UUID,
     checkin_data: CheckInCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
+    # P2.1: verify the activity is the user's before writing (404 otherwise).
+    _require_owned_activity(db, activity_id, user)
     # Shared with the Telegram inbound callback path (I1b) so both writes are
     # identical: upsert + re-analyze + conditional A4 fuller-turn trigger.
     return write_checkin(db, activity_id, checkin_data)

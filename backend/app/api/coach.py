@@ -7,9 +7,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.profile import get_current_user_profile
+from app.core.clerk_auth import require_current_user
 from app.db.session import get_db
-from app.models import Activity, CoachingRelationship
+from app.models import Activity, CoachingRelationship, User
 from app.models.coach_report import CoachReport
+from app.services import activity_queries
 from app.schemas.chat import ChatHistoryResponse, ChatMessageSend
 from app.schemas.coach import CoachReportRead
 from app.schemas.voice import VoiceConfigRead, VoiceDials, build_catalog
@@ -45,14 +47,22 @@ def _sse_data(text: str) -> str:
     return f"data: {json.dumps(text)}\n\n"
 
 
-def _get_or_create_relationship(db: Session) -> CoachingRelationship:
-    """Resolve the current runner's coaching_relationship row, creating it if needed.
+def _require_owned_activity(db: Session, activity_id: UUID, user: User) -> Activity:
+    """404 unless the activity belongs to the authenticated user (P2.1)."""
+    activity = activity_queries.get_owned_activity(db, activity_id, user.id)
+    if activity is None:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return activity
 
-    Reuses the profile helper's user resolution (Strava-linked user first), which
-    also auto-creates the thin relationship row the way it auto-creates the default
-    profile, so a runner who never edited their profile still has a row to read/write.
+
+def _get_or_create_relationship(db: Session, user: User) -> CoachingRelationship:
+    """Resolve the runner's coaching_relationship row, creating it if needed.
+
+    P2.1: scoped to the authenticated user. get_current_user_profile ensures the
+    thin relationship row exists (auto-created like the default profile), so a
+    runner who never edited their profile still has a row to read/write.
     """
-    profile = get_current_user_profile(db)
+    profile = get_current_user_profile(db, user)
     return (
         db.query(CoachingRelationship)
         .filter(CoachingRelationship.user_id == profile.user_id)
@@ -73,13 +83,20 @@ def _read_voice(relationship: CoachingRelationship) -> VoiceConfigRead:
 
 
 @router.get("/coach/voice", response_model=VoiceConfigRead)
-def get_voice(db: Session = Depends(get_db)):
+def get_voice(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """The runner's declared coach voice plus the catalog the UI renders from."""
-    return _read_voice(_get_or_create_relationship(db))
+    return _read_voice(_get_or_create_relationship(db, user))
 
 
 @router.put("/coach/voice", response_model=VoiceConfigRead)
-def update_voice(voice_in: VoiceDials, db: Session = Depends(get_db)):
+def update_voice(
+    voice_in: VoiceDials,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Set the runner's declared coach voice (preset + four dials + free-text).
 
     Runner-sovereign (ADR 0012): this is the only writer of voice state — no
@@ -87,7 +104,7 @@ def update_voice(voice_in: VoiceDials, db: Session = Depends(get_db)):
     free-text is stored verbatim and framed as untrusted tone-data at prompt time,
     never as instructions.
     """
-    relationship = _get_or_create_relationship(db)
+    relationship = _get_or_create_relationship(db, user)
     relationship.voice_preset = voice_in.preset
     relationship.voice_warmth = voice_in.warmth
     relationship.voice_humor = voice_in.humor
@@ -122,20 +139,27 @@ def _read_stance(relationship: CoachingRelationship) -> StanceConfigRead:
 
 
 @router.get("/coach/stance", response_model=StanceConfigRead)
-def get_stance(db: Session = Depends(get_db)):
+def get_stance(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """The runner's declared coaching stance plus the catalog the UI renders from."""
-    return _read_stance(_get_or_create_relationship(db))
+    return _read_stance(_get_or_create_relationship(db, user))
 
 
 @router.put("/coach/stance", response_model=StanceConfigRead)
-def update_stance(stance_in: StanceSelection, db: Session = Depends(get_db)):
+def update_stance(
+    stance_in: StanceSelection,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Set the runner's declared coaching stance (school + two emphasis dials).
 
     Runner-sovereign (ADR 0015): this is the only writer of stance state — no
     background job ever changes it. Stance reweights emphasis/method-framing only
     (ADR 0014/0015); it never overrides the run's measured data or the safety floor.
     """
-    relationship = _get_or_create_relationship(db)
+    relationship = _get_or_create_relationship(db, user)
     relationship.stance_school = stance_in.school
     relationship.stance_data_sentiment = stance_in.data_sentiment
     relationship.stance_process_outcome = stance_in.process_outcome
@@ -154,7 +178,10 @@ async def get_coach_report(
     generate: bool = Query(True, description="If false, only return cached report (404 if none)"),
     force: bool = Query(False, description="If true, regenerate the active-version report (prior versions retained)"),
     db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
+    # P2.1: the report rides an activity; deny if it is not the user's.
+    _require_owned_activity(db, activity_id, user)
     # Display-safe (#261): unless an explicit regenerate (force) was asked for,
     # prefer ANY cached report over a synchronous regeneration. A COACH_PROMPT_ID
     # flip (e.g. activating voice coach_message_v3) leaves prior-version reports
@@ -185,7 +212,11 @@ async def get_coach_report(
     "/activities/{activity_id}/coach-report/regenerate",
     status_code=202,
 )
-def regenerate_coach_report(activity_id: UUID, db: Session = Depends(get_db)):
+def regenerate_coach_report(
+    activity_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Kick off an asynchronous coach-report regeneration (#260).
 
     The two-stage generation is a 30-120s LLM call — far past the gateway timeout —
@@ -194,7 +225,11 @@ def regenerate_coach_report(activity_id: UUID, db: Session = Depends(get_db)):
     the GET endpoint for the fresh report. Returns 404 when the activity has no
     metrics to regenerate from.
     """
-    activity = db.query(Activity).filter(Activity.id == activity_id).first()
+    # P2.1: scope by owner; a cross-tenant activity is indistinguishable from one
+    # without metrics (both 404), leaking nothing.
+    activity = db.query(Activity).filter(
+        Activity.id == activity_id, Activity.user_id == user.id
+    ).first()
     if not activity or not activity.metrics:
         raise HTTPException(
             status_code=404,
@@ -206,6 +241,25 @@ def regenerate_coach_report(activity_id: UUID, db: Session = Depends(get_db)):
     from app.core.queue import queue
     from app.jobs.process_new_activity import PIPELINE_RETRY, regenerate_report_job
 
+    # P2.2 / going-live landmine 1: the regenerate endpoint is the single most
+    # exposed cost lever — a stuck "Regenerate" button can fan out full two-stage
+    # LLM generations. A per-activity cooldown (atomic Redis SET NX EX) dedups
+    # rapid re-taps: the first within the window acquires the key and enqueues;
+    # later taps short-circuit. A deterministic job id makes RQ collapse any
+    # racing enqueue onto one job rather than queuing duplicates. The cooldown
+    # degrades open (enqueues) if Redis is unreachable — a cost guard must never
+    # block a legitimate single regeneration.
+    cooldown_key = f"coach_regen_cooldown:{activity_id}"
+    job_id = f"coach-regenerate:{activity_id}"
+    try:
+        acquired = queue.connection.set(
+            cooldown_key, "1", nx=True, ex=settings.COACH_REGEN_COOLDOWN_SECONDS,
+        )
+    except Exception:  # noqa: BLE001 — Redis blip must not block regeneration
+        acquired = True
+    if not acquired:
+        return {"status": "cooldown"}
+
     # job_timeout (#264): the two-stage regeneration runs ~120-360s, past RQ's 180s
     # default; without this the worker's death penalty kills it before it stores the
     # report. (The queue default_timeout also covers it; explicit here documents it.)
@@ -216,6 +270,7 @@ def regenerate_coach_report(activity_id: UUID, db: Session = Depends(get_db)):
     # RQ level rather than silently leaving the runner with a stale fallback report.
     queue.enqueue(
         regenerate_report_job, str(activity_id),
+        job_id=job_id,
         job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
         retry=PIPELINE_RETRY,
     )
@@ -226,15 +281,25 @@ def regenerate_coach_report(activity_id: UUID, db: Session = Depends(get_db)):
     "/activities/{activity_id}/coach-chat",
     response_model=ChatHistoryResponse,
 )
-def get_chat(activity_id: UUID, db: Session = Depends(get_db)):
+def get_chat(
+    activity_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Return conversation history for an activity."""
+    _require_owned_activity(db, activity_id, user)
     messages = get_chat_history(db, str(activity_id))
     return ChatHistoryResponse(messages=messages)
 
 
 @router.delete("/activities/{activity_id}/coach-chat", status_code=204)
-def delete_chat(activity_id: UUID, db: Session = Depends(get_db)):
+def delete_chat(
+    activity_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Clear conversation history for an activity."""
+    _require_owned_activity(db, activity_id, user)
     from app.models.coach_chat_message import CoachChatMessage
 
     db.query(CoachChatMessage).filter(
@@ -248,8 +313,11 @@ async def post_chat(
     activity_id: UUID,
     body: ChatMessageSend,
     db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
     """Send a message and stream the coach's response via SSE."""
+    # P2.1: deny before opening the stream if the activity is not the user's.
+    _require_owned_activity(db, activity_id, user)
     # Validate that a coach report exists
     existing = (
         db.query(CoachReport)

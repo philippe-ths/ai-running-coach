@@ -37,6 +37,9 @@ export async function fetchFromAPI(endpoint: string, options: RequestInit = {}) 
     const auth = buildAuthHeader();
     if (auth) headers.Authorization = auth;
   }
+  // Server components forward the verified Clerk session token via
+  // options.headers (see lib/serverSession.serverFetch); the Clerk server SDK
+  // is kept out of this client-shared module to avoid poisoning client bundles.
   const res = await fetch(`${baseUrl}${endpoint}`, {
     ...options,
     headers,

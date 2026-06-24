@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, auth, activities, blocks, webhooks, profile, trends, coach, debug, strava_import, materials
+from app.api import health, auth, activities, blocks, webhooks, profile, trends, coach, debug, strava_import, materials, account
 from app.core.auth import BasicAuthMiddleware
+from app.core.clerk_auth import verify_clerk_session
 from app.core.config import settings
 from app.core.observability import init_logging, init_sentry, warn_if_coach_prompt_inert
 
@@ -16,10 +17,12 @@ app = FastAPI(
     version="0.2.0",
 )
 
-# TODO(phase-2): remove BasicAuthMiddleware when session auth from ADR 0005 lands.
-# /api/auth/strava/callback is exempt because Strava redirects the user's browser
-# there directly with an OAuth code; the code itself is the auth, and Strava has
-# no way to send basic auth credentials.
+# BasicAuthMiddleware is REPURPOSED under ADR 0022 as the frontend-to-backend
+# service secret ("proves it is our frontend"), defense in depth beneath the
+# per-user Clerk session verified by verify_clerk_session below. It is not
+# removed. /api/auth/strava/callback is exempt because Strava redirects the
+# user's browser there directly with an OAuth code; the code itself is the auth,
+# and Strava has no way to send basic auth credentials.
 app.add_middleware(
     BasicAuthMiddleware,
     exempt_prefixes=(
@@ -29,6 +32,13 @@ app.add_middleware(
     ),
 )
 
+# Per-user identity (ADR 0022). Applied to every APPLICATION router below, so a
+# new router is gated by default if it is added to that list. NOT applied to
+# health, auth (OAuth handshakes), or webhooks (public, separately
+# authenticated). The fence test (tests/test_clerk_auth.py) asserts every
+# non-exempt route denies an unauthenticated request when Clerk is configured.
+_require_session = [Depends(verify_clerk_session)]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins_list,
@@ -37,18 +47,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
+# Include routers. Public (no per-user session): health, auth, webhooks.
 app.include_router(health.router, prefix="/api", tags=["System"])
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
-app.include_router(profile.router, prefix="/api", tags=["Profile"])
-app.include_router(activities.router, prefix="/api", tags=["Activities"])
-app.include_router(strava_import.router, prefix="/api", tags=["Strava Import"])
-app.include_router(blocks.router, prefix="/api", tags=["Blocks"])
 app.include_router(webhooks.router, prefix="/api", tags=["Webhooks"])
-app.include_router(trends.router, prefix="/api", tags=["Trends"])
-app.include_router(coach.router, prefix="/api", tags=["Coach"])
-app.include_router(materials.router, prefix="/api", tags=["Coach"])
-app.include_router(debug.router, prefix="/api", tags=["Debug"])
+
+# Application routers: every route requires a verified Clerk session.
+app.include_router(profile.router, prefix="/api", tags=["Profile"], dependencies=_require_session)
+app.include_router(account.router, prefix="/api", tags=["Account"], dependencies=_require_session)
+app.include_router(activities.router, prefix="/api", tags=["Activities"], dependencies=_require_session)
+app.include_router(strava_import.router, prefix="/api", tags=["Strava Import"], dependencies=_require_session)
+app.include_router(blocks.router, prefix="/api", tags=["Blocks"], dependencies=_require_session)
+app.include_router(trends.router, prefix="/api", tags=["Trends"], dependencies=_require_session)
+app.include_router(coach.router, prefix="/api", tags=["Coach"], dependencies=_require_session)
+app.include_router(materials.router, prefix="/api", tags=["Coach"], dependencies=_require_session)
+app.include_router(debug.router, prefix="/api", tags=["Debug"], dependencies=_require_session)
 
 if __name__ == "__main__":
     import uvicorn

@@ -21,9 +21,16 @@ def _make_activity(
     start_local: datetime | None = None,
     is_deleted: bool = False,
 ) -> Activity:
-    user_id = uuid.uuid4()
-    db.add(User(id=user_id, email=f"filt_{user_id}@example.com"))
-    db.flush()
+    # P2.1: the list endpoint now scopes to the authenticated user, which the
+    # test harness resolves to the single seeded user. Share one user across a
+    # test's activities (reuse the first) so they all belong to that user and the
+    # scoped list still returns the whole seeded history.
+    user = db.query(User).first()
+    if user is None:
+        user = User(id=uuid.uuid4(), email=f"filt_{uuid.uuid4()}@example.com")
+        db.add(user)
+        db.flush()
+    user_id = user.id
     a = Activity(
         id=uuid.uuid4(),
         user_id=user_id,

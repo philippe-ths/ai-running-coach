@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { fetchFromAPI } from '@/lib/api';
+import { serverFetch } from '@/lib/serverSession';
 import { WeeklyStatsData } from '@/lib/types';
 import { formatDistanceKm, formatDuration } from '@/lib/format';
 import ActivityList from '@/components/ActivityList';
@@ -30,8 +30,8 @@ export default async function Dashboard() {
   let stats: WeeklyStatsData | null = null;
   try {
     [activities, stats] = await Promise.all([
-      fetchFromAPI('/api/activities?limit=10').then((a) => a || []),
-      fetchFromAPI('/api/stats/weekly') as Promise<WeeklyStatsData | null>,
+      serverFetch('/api/activities?limit=10').then((a) => a || []),
+      serverFetch('/api/stats/weekly') as Promise<WeeklyStatsData | null>,
     ]);
   } catch (e) {
     console.error('Failed to fetch dashboard data', e);

@@ -12,27 +12,41 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.clerk_auth import require_current_user
 from app.db.session import get_db
-from app.models import Activity, Block
+from app.models import Activity, Block, User
 from app.schemas.block import BlockMergeRequest, BlockRead, BlockSplitRequest
 from app.services.blocks import merge_blocks, split_block
 
 router = APIRouter()
 
 
-def _get_block(db: Session, block_id: uuid.UUID) -> Block:
-    block = db.query(Block).filter(Block.id == block_id).first()
+def _get_block(db: Session, block_id: uuid.UUID, user: User) -> Block:
+    # P2.1: a block of another user reads as not-found, so a correction can
+    # never reach across tenants.
+    block = (
+        db.query(Block)
+        .filter(Block.id == block_id, Block.user_id == user.id)
+        .first()
+    )
     if block is None:
         raise HTTPException(status_code=404, detail="Block not found")
     return block
 
 
 @router.post("/blocks/{block_id}/split", response_model=list[BlockRead])
-def split(block_id: uuid.UUID, request: BlockSplitRequest, db: Session = Depends(get_db)):
+def split(
+    block_id: uuid.UUID,
+    request: BlockSplitRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Split the block at the named member: it and every later member move to a
     new block. Returns both halves."""
-    block = _get_block(db, block_id)
-    activity = db.query(Activity).filter(Activity.id == request.activity_id).first()
+    block = _get_block(db, block_id, user)
+    activity = db.query(Activity).filter(
+        Activity.id == request.activity_id, Activity.user_id == user.id
+    ).first()
     if activity is None:
         raise HTTPException(status_code=404, detail="Activity not found")
     try:
@@ -43,11 +57,16 @@ def split(block_id: uuid.UUID, request: BlockSplitRequest, db: Session = Depends
 
 
 @router.post("/blocks/{block_id}/merge", response_model=BlockRead)
-def merge(block_id: uuid.UUID, request: BlockMergeRequest, db: Session = Depends(get_db)):
+def merge(
+    block_id: uuid.UUID,
+    request: BlockMergeRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Merge the named ADJACENT block into this one. Adjacency: no other block
     of the user lies between the two in time."""
-    block = _get_block(db, block_id)
-    other = _get_block(db, request.other_block_id)
+    block = _get_block(db, block_id, user)
+    other = _get_block(db, request.other_block_id, user)
 
     earlier, later = sorted([block, other], key=lambda b: b.start_date)
     between = (

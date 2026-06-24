@@ -4,23 +4,21 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.clerk_auth import require_current_user
 from app.db.session import get_db
-from app.models import StravaAccount, StravaImport
+from app.models import StravaAccount, StravaImport, User
 from app.schemas import StravaImportCreate, StravaImportRead
 
 router = APIRouter()
 
 
-def _resolve_account(db: Session, strava_athlete_id: Optional[int]) -> StravaAccount:
-    if strava_athlete_id:
-        account = (
-            db.query(StravaAccount)
-            .filter(StravaAccount.strava_athlete_id == strava_athlete_id)
-            .first()
-        )
-    else:
-        # Single-player mode: default to the only connected account.
-        account = db.query(StravaAccount).first()
+def _resolve_account(db: Session, user: User) -> StravaAccount:
+    # P2.1: the authenticated user's own Strava account, never the first found.
+    account = (
+        db.query(StravaAccount)
+        .filter(StravaAccount.user_id == user.id)
+        .first()
+    )
     if not account:
         raise HTTPException(
             status_code=404,
@@ -32,8 +30,8 @@ def _resolve_account(db: Session, strava_athlete_id: Optional[int]) -> StravaAcc
 @router.post("/strava/import", response_model=StravaImportRead)
 def start_import(
     payload: StravaImportCreate,
-    strava_athlete_id: Optional[int] = None,
     db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
     """Start a resumable historical Strava import from `since_date` to today.
 
@@ -45,7 +43,7 @@ def start_import(
     if payload.since_date > date.today():
         raise HTTPException(status_code=400, detail="since_date cannot be in the future.")
 
-    account = _resolve_account(db, strava_athlete_id)
+    account = _resolve_account(db, user)
 
     from app.jobs.strava_import import enqueue_import
 
@@ -55,14 +53,14 @@ def start_import(
 
 @router.get("/strava/import/status", response_model=Optional[StravaImportRead])
 def import_status(
-    strava_athlete_id: Optional[int] = None,
     db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
     """Return the most recent historical import for the account, or null if none.
 
     The frontend polls this to show import progress and the final summary.
     """
-    account = _resolve_account(db, strava_athlete_id)
+    account = _resolve_account(db, user)
     latest = (
         db.query(StravaImport)
         .filter(StravaImport.user_id == account.user_id)

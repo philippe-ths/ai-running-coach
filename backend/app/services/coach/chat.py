@@ -361,6 +361,21 @@ async def stream_chat_response(
         yield ChatStreamEvent(text="Activity not found.")
         return
 
+    # P2.2: chat resends the full report + context every turn, so it is an
+    # unbounded input-token lever. At the per-user/global spend cap, decline the
+    # turn with a plain message instead of calling the LLM (cap observed before
+    # the call), keyed by activity-owner user_id.
+    from app.services.coach.budget import over_budget as _over_budget
+
+    if _over_budget(activity.user_id):
+        yield ChatStreamEvent(
+            text=(
+                "I've hit the usage limit for now, so I can't write a full reply "
+                "to this one. Your data is all saved — try again a little later."
+            )
+        )
+        return
+
     # Build context from the stored context pack
     context_pack = report_row.context_pack or {}
     report_content = report_row.report or {}

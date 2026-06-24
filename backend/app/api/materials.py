@@ -30,9 +30,10 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from app.api.profile import get_current_user_profile
+from app.core.clerk_auth import require_current_user
 from app.core.config import settings
 from app.db.session import get_db
-from app.models import UserMaterial
+from app.models import User, UserMaterial
 from app.schemas.material import MaterialKind, UserMaterialRead
 from app.services.coach.material_distiller import enqueue_distillation
 
@@ -69,6 +70,7 @@ async def upload_material(
     kind: MaterialKind = Form(...),
     title: Optional[str] = Form(None),
     db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
     """Accept one markdown coaching material, store the raw text, and kick off
     background distillation. Returns 202 with status=processing; the frontend polls
@@ -78,7 +80,7 @@ async def upload_material(
     re-uploads dedup on `content_hash`; re-uploading content that previously FAILED
     re-runs the distillation on the same row.
     """
-    profile = get_current_user_profile(db)
+    profile = get_current_user_profile(db, user)
     user_id = profile.user_id
 
     # Size cap, bounded read: read at most cap+1 bytes so an oversize file never
@@ -169,10 +171,11 @@ async def upload_material(
 def list_materials(
     include_archived: bool = False,
     db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
 ):
     """List the runner's materials, most recent first. Archived materials are
     excluded unless `include_archived=true`."""
-    profile = get_current_user_profile(db)
+    profile = get_current_user_profile(db, user)
     q = _owned_query(db, profile.user_id)
     if not include_archived:
         q = q.filter(UserMaterial.status != "archived")
@@ -180,9 +183,13 @@ def list_materials(
 
 
 @router.get("/coach/materials/{material_id}", response_model=UserMaterialRead)
-def get_material(material_id: UUID, db: Session = Depends(get_db)):
+def get_material(
+    material_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Fetch one material (the status-poll endpoint the frontend hits until active)."""
-    profile = get_current_user_profile(db)
+    profile = get_current_user_profile(db, user)
     material = (
         _owned_query(db, profile.user_id)
         .filter(UserMaterial.id == material_id)
@@ -194,10 +201,14 @@ def get_material(material_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/coach/materials/{material_id}/archive", response_model=UserMaterialRead)
-def archive_material(material_id: UUID, db: Session = Depends(get_db)):
+def archive_material(
+    material_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Soft-hide a material (status=archived). Reversible by re-uploading the same
     content; the distilled record is retained on the row."""
-    profile = get_current_user_profile(db)
+    profile = get_current_user_profile(db, user)
     material = (
         _owned_query(db, profile.user_id)
         .filter(UserMaterial.id == material_id)
@@ -213,9 +224,13 @@ def archive_material(material_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.delete("/coach/materials/{material_id}", status_code=204)
-def delete_material(material_id: UUID, db: Session = Depends(get_db)):
+def delete_material(
+    material_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Hard-delete a material (raw text and distilled record removed)."""
-    profile = get_current_user_profile(db)
+    profile = get_current_user_profile(db, user)
     material = (
         _owned_query(db, profile.user_id)
         .filter(UserMaterial.id == material_id)
