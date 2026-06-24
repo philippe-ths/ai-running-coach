@@ -27,6 +27,7 @@ from typing import Callable, Optional
 import jwt
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -234,11 +235,7 @@ def resolve_user_by_email(db: Session, email: str) -> User:
     behind a fresh empty account.
     """
     normalized = email.strip().lower()
-    user = (
-        db.execute(select(User).where(func.lower(User.email) == normalized))
-        .scalars()
-        .first()
-    )
+    user = _lookup_user_by_email(db, normalized)
     if user is not None:
         return user
 
@@ -252,11 +249,40 @@ def resolve_user_by_email(db: Session, email: str) -> User:
             logger.info("owner_user_reconciled", extra={"user_id": str(legacy.id)})
             return legacy
 
+    # Race-safe create. A new user's first authenticated page load fires several
+    # API calls concurrently; each one lands here having missed the lookup above,
+    # so they all attempt the INSERT. The first wins; the rest violate the unique
+    # email constraint and would otherwise 500 on the user's very first screen.
+    # Recover by rolling back and reusing the row the winner created. This also
+    # covers the owner-reconcile race above: a competing request that already
+    # adopted the legacy row makes _find_legacy_user miss here, so we fall through
+    # and recover the just-reconciled owner the same way.
     user = User(email=normalized)
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Lost the unique-email race. Roll back our failed INSERT and reuse the
+        # row the winner committed. Expunge the failed instance so a later
+        # autoflush cannot retry the conflicting INSERT.
+        db.rollback()
+        if user in db:
+            db.expunge(user)
+        existing = _lookup_user_by_email(db, normalized)
+        if existing is None:
+            raise
+        return existing
     db.refresh(user)
     return user
+
+
+def _lookup_user_by_email(db: Session, normalized: str) -> Optional[User]:
+    """Case-insensitive lookup of a user by an already-normalized email."""
+    return (
+        db.execute(select(User).where(func.lower(User.email) == normalized))
+        .scalars()
+        .first()
+    )
 
 
 def _degraded_single_user(db: Session) -> Optional[User]:

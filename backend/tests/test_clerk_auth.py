@@ -250,6 +250,36 @@ class TestEmailResolution:
 
 # --- identity resolution + owner reconcile (unit) --------------------------
 
+@pytest.fixture
+def committing_db():
+    """A session whose commits actually persist.
+
+    The shared `db` fixture binds the session inside one outer transaction that
+    is rolled back at teardown, so an inner `db.commit()` does not truly persist
+    and a later `db.rollback()` reverts it too. The race-recovery path in
+    resolve_user_by_email rolls back its own failed INSERT and must still find
+    the row a prior request committed, so it needs real commit isolation.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.db.base import Base
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+
+
 class TestUserResolution:
     def test_returning_user_resolves_same_account(self, db):
         a = resolve_user_by_email(db, "Runner@Example.com")
@@ -305,6 +335,63 @@ class TestUserResolution:
         resolved = resolve_user_by_email(db, "stranger@example.com")
         assert resolved.email == "stranger@example.com"
         assert db.query(User).count() == 2  # legacy untouched
+
+    def test_concurrent_create_recovers_instead_of_raising(
+        self, committing_db, monkeypatch
+    ):
+        """A new user's first page load fires several API calls at once; they all
+        miss the initial lookup and race on the INSERT. The losers must recover
+        from the unique-email violation, not 500. Threat: a fresh user's very
+        first screen erroring out."""
+        db = committing_db
+        # A competing request already won the INSERT, so the row exists...
+        winner = User(email="racer@example.com")
+        db.add(winner)
+        db.commit()
+        winner_id = winner.id
+
+        # ...but our request's initial lookup missed it (the race window between
+        # the SELECT and our own INSERT). Force the first lookup to miss; the
+        # recovery lookup uses the real query.
+        real_lookup = clerk_auth._lookup_user_by_email
+        calls = {"n": 0}
+
+        def flaky_lookup(session, normalized):
+            calls["n"] += 1
+            return None if calls["n"] == 1 else real_lookup(session, normalized)
+
+        monkeypatch.setattr(clerk_auth, "_lookup_user_by_email", flaky_lookup)
+
+        resolved = resolve_user_by_email(db, "Racer@example.com")
+        assert resolved.id == winner_id  # reused the winner's row, no error
+        assert db.query(User).count() == 1  # no duplicate, no orphan
+
+    def test_owner_reconcile_race_recovers(self, committing_db, monkeypatch):
+        """When a competing owner request already adopted the legacy row, our
+        _find_legacy_user misses (the row is no longer a placeholder) and we fall
+        through to the create path -- which must recover the just-reconciled
+        owner instead of 500ing on the unique-email violation."""
+        db = committing_db
+        monkeypatch.setattr(settings, "OWNER_EMAIL", "owner@gmail.com")
+        # The winning request already reconciled: one row with the owner email,
+        # no placeholder remains.
+        owner_row = User(email="owner@gmail.com")
+        db.add(owner_row)
+        db.commit()
+        owner_id = owner_row.id
+
+        real_lookup = clerk_auth._lookup_user_by_email
+        calls = {"n": 0}
+
+        def flaky_lookup(session, normalized):
+            calls["n"] += 1
+            return None if calls["n"] == 1 else real_lookup(session, normalized)
+
+        monkeypatch.setattr(clerk_auth, "_lookup_user_by_email", flaky_lookup)
+
+        resolved = resolve_user_by_email(db, "owner@gmail.com")
+        assert resolved.id == owner_id
+        assert db.query(User).count() == 1
 
 
 # --- structural fence: every app route is gated ----------------------------
