@@ -1,6 +1,6 @@
-# Running Coach — an AI coach for your Strava runs (single-user MVP)
+# Running Coach — an AI coach for your Strava runs
 
-Running Coach connects to Strava, deeply processes each run into deterministic training signals, and turns those signals into an ongoing relationship with an LLM coach: short, human, opinionated coaching that arrives after you run and remembers you over time. It runs locally via `docker compose`, or as a deployed single-user instance on Railway (backend) and Vercel (frontend) — see [Production deployment](#production-deployment).
+Running Coach connects to Strava, deeply processes each run into deterministic training signals, and turns those signals into an ongoing relationship with an LLM coach: short, human, opinionated coaching that arrives after you run and remembers you over time. It runs locally via `docker compose`, or as a deployed multi-user app on Railway (backend) and Vercel (frontend) — see [Production deployment](#production-deployment).
 
 Most Strava-based tools surface raw stats but little actionable insight — they tell you what happened, not what to do next. This project bridges that gap: a correct, auditable deterministic substrate (metrics, blocks, training load) under an LLM coaching layer that has a voice, a point of view, and durable memory — while never letting personality override the measured data or a safety floor.
 
@@ -25,14 +25,15 @@ A deterministic policy validator gates every coach message (medical scope, HR-zo
 
 ## Stack
 - **Backend:** FastAPI, SQLAlchemy, Alembic, Postgres
-- **Jobs:** Redis + RQ (with `rq-scheduler` for polling)
+- **Auth:** Clerk social login (verified email is the identity); the backend verifies the session JWT against Clerk's JWKS
+- **Jobs:** Redis + RQ (the worker's embedded scheduler drains deferred and retry jobs)
 - **Coach:** Anthropic Claude (prose message + structured tail), a deterministic policy validator, and an offline eval gate
 - **Notifications:** Telegram Bot API (the deployed channel) or SMTP email (optional)
 - **Frontend:** Next.js (App Router), React, Recharts, Tailwind
 
 ## Production deployment
 
-The app runs in production on **Railway** (backend as three services off one image — `web`, `worker`, `scheduler` — plus managed Postgres and Redis) and **Vercel** (frontend). It is single-user and gated by HTTP basic auth; the deployed coach-notification channel is **Telegram** (Railway blocks outbound SMTP from the worker). Multi-user readiness is tracked under Phase 2 (see [ADR 0005](docs/adr/0005-magic-link-is-identity-strava-is-an-integration.md) and [ADR 0006](docs/adr/0006-multi-user-drops-polling-for-user-triggered-self-healing.md)). The full production and local-dev topology, the connection seam, and per-service env var ownership are documented in [`docs/deployment/topology.md`](docs/deployment/topology.md).
+The app runs in production on **Railway** (backend as two services off one image — `web`, `worker` — plus managed Postgres and Redis) and **Vercel** (frontend). It is **multi-user**, authenticated with **Clerk** social login ([ADR 0022](docs/adr/0022-identity-is-social-login-via-clerk-strava-stays-an-integration.md)): the Vercel frontend holds the Clerk session and forwards the session token, the backend verifies it against Clerk's JWKS and resolves the user from the verified email, and every query is scoped to that user. HTTP Basic auth is repurposed as the frontend↔backend service secret rather than the user gate. The deployed coach-notification channel is **Telegram** (Railway blocks outbound SMTP from the worker; per-user routing is [ADR 0023](docs/adr/0023-per-user-notifications-via-telegram-binding.md)). The polling fallback was retired in favour of user-triggered self-healing ([ADR 0006](docs/adr/0006-multi-user-drops-polling-for-user-triggered-self-healing.md)). The full production and local-dev topology, the connection seam, and per-service env var ownership are documented in [`docs/deployment/topology.md`](docs/deployment/topology.md).
 
 ## Repo structure
 ```
@@ -58,6 +59,9 @@ The app runs in production on **Railway** (backend as three services off one ima
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
 ```
+Auth (Clerk) is **optional locally**: leave the `CLERK_*` and `NEXT_PUBLIC_CLERK_*` vars
+empty and the app runs without sign-in, degrading to a single local user (the pre-Phase-2
+behaviour). Set them to require sign-in and exercise the multi-user path.
 
 ### 2) Start Postgres + Redis
 ```bash
@@ -83,14 +87,11 @@ rq worker --with-scheduler --url $REDIS_URL
 ```
 The worker runs the background pipeline for each new activity: ingest → analyze → assign block → generate the coach exchange → notify.
 
-### 4b) Run the polling scheduler (optional, catches activities the webhook missed)
-In a third terminal (from `backend/`, venv activated):
-```bash
-python -m app.jobs.scheduler   # registers the recurring polling schedule once
-rqscheduler --url $REDIS_URL   # long-running process that actually fires jobs
-```
-The polling fallback periodically asks Strava for new activities and converges on the
-same pipeline, in case your local backend cannot receive Strava webhooks directly.
+There is no separate scheduler process: the worker's `--with-scheduler` flag drains the
+deferred and retry jobs, and activities the webhook missed are caught by user-triggered
+self-healing — a Refresh action on app-open enqueues one bounded Strava check — rather
+than polling (see [ADR 0006](docs/adr/0006-multi-user-drops-polling-for-user-triggered-self-healing.md)).
+
 Coach notifications are off until a channel is configured: Telegram (`TELEGRAM_BOT_TOKEN`
 + `TELEGRAM_CHAT_ID`) or email (`SMTP_HOST` + `NOTIFY_TO`) in `backend/.env`.
 
