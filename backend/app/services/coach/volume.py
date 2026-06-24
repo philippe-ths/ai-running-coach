@@ -94,8 +94,8 @@ def _metric_comparison(
     norm_weekly: Optional[float],
     norm_recent: Optional[float],
 ) -> VolumeMetricComparison:
-    current_all = _sum(window_facts, metric)
-    current_runs = _sum(window_facts, metric, runs_only=True)
+    current_all = round(_sum(window_facts, metric), 1)
+    current_runs = round(_sum(window_facts, metric, runs_only=True), 1)
 
     pct: Optional[float] = None
     if norm_weekly is not None and norm_weekly * factor > 0:
@@ -237,8 +237,8 @@ def _report_metric(
     norm_days: int,
     norm_pd: Dict[str, Optional[float]],
 ) -> VolumeMetricVsNorm:
-    current_all = _sum(window_facts, metric)
-    current_runs = _sum(window_facts, metric, runs_only=True)
+    current_all = round(_sum(window_facts, metric), 1)
+    current_runs = round(_sum(window_facts, metric, runs_only=True), 1)
     pd = norm_pd.get(metric)
     # Scale the per-day norm to the framing's FULL period length (#436), so the
     # period-to-date total is judged against the runner's typical full-period total
