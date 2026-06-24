@@ -128,7 +128,10 @@ def build_load_report(
     return LoadResponse(weeks=weeks)
 
 
-def get_load_report(db: Session, today: Optional[date] = None) -> LoadResponse:
+def get_load_report(
+    db: Session, *, user_id, today: Optional[date] = None
+) -> LoadResponse:
+    # P2.1: user_id is required so the weekly-load scan can never span tenants.
     # Bound the scan to the served window (#362). build_load_report only keeps
     # weeks from `earliest_served` onward, so an activity older than that Monday
     # is discarded anyway — fetching it was wasted work on an unbounded
@@ -162,6 +165,7 @@ def get_load_report(db: Session, today: Optional[date] = None) -> LoadResponse:
             DerivedMetric.is_race,
         )
         .join(DerivedMetric, DerivedMetric.activity_id == Activity.id)
+        .filter(Activity.user_id == user_id)
         .filter(Activity.is_deleted.is_(False))
         .filter(Activity.start_date >= earliest_served)
         # Deterministic chronological order. build_load_report sorts members
@@ -183,6 +187,7 @@ def get_load_report(db: Session, today: Optional[date] = None) -> LoadResponse:
     older_exists = (
         db.query(Activity.id)
         .join(DerivedMetric, DerivedMetric.activity_id == Activity.id)
+        .filter(Activity.user_id == user_id)
         .filter(Activity.is_deleted.is_(False))
         .filter(Activity.start_date < earliest_served)
         .first()

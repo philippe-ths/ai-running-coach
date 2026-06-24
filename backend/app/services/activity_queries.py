@@ -12,6 +12,7 @@ def get_activities(
     skip: int = 0,
     limit: int = 20,
     *,
+    user_id: uuid.UUID,
     types: list[str] | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
@@ -44,6 +45,9 @@ def get_activities(
         # Exclude soft-deleted activities (#410), consistent with every other
         # read path (trends, readiness, training load, coach context/retrieval).
         .filter(Activity.is_deleted == False)  # noqa: E712
+        # P2.1: scope to the authenticated user. A missing user_id filter here is
+        # a cross-tenant list leak, so user_id is a required argument.
+        .filter(Activity.user_id == user_id)
     )
     if types:
         query = query.filter(Activity.type.in_(types))
@@ -65,11 +69,16 @@ def get_activities(
     )
 
 
-def get_activity(db: Session, activity_id: str | uuid.UUID) -> Activity | None:
+def get_activity(
+    db: Session,
+    activity_id: str | uuid.UUID,
+    *,
+    user_id: uuid.UUID | None = None,
+) -> Activity | None:
     # Bind a real UUID: Postgres adapts a string, but SQLite (tests) does not.
     if isinstance(activity_id, str):
         activity_id = uuid.UUID(activity_id)
-    return (
+    query = (
         db.query(Activity)
         .options(
             joinedload(Activity.metrics),
@@ -83,5 +92,30 @@ def get_activity(db: Session, activity_id: str | uuid.UUID) -> Activity | None:
         # A soft-deleted activity reads as not-present (#410): the detail view
         # 404s on it, consistent with the list and every other read path.
         .filter(Activity.is_deleted == False)  # noqa: E712
+    )
+    # P2.1: when a user_id is supplied, another user's activity reads as absent
+    # (the endpoint then 404s) rather than leaking across tenants.
+    if user_id is not None:
+        query = query.filter(Activity.user_id == user_id)
+    return query.first()
+
+
+def get_owned_activity(
+    db: Session, activity_id: str | uuid.UUID, user_id: uuid.UUID
+) -> Activity | None:
+    """A lean ownership check: the activity by id IF it belongs to ``user_id``.
+
+    Returns None when the activity does not exist OR belongs to another user, so
+    the calling endpoint raises one 404 for both and leaks nothing about other
+    tenants' activities. No eager loads — callers that need the full graph use
+    get_activity. Soft-deleted state is intentionally not filtered here: this is
+    an ownership gate for the coach/checkin/intent write paths, which must reach
+    the same set of activities they did pre-P2.1 for the owning user.
+    """
+    if isinstance(activity_id, str):
+        activity_id = uuid.UUID(activity_id)
+    return (
+        db.query(Activity)
+        .filter(Activity.id == activity_id, Activity.user_id == user_id)
         .first()
     )

@@ -234,6 +234,6 @@ def test_same_day_activities_are_ordered_chronologically(db):
     _run("OrdTest-Mid", 12)
     db.commit()
 
-    resp = get_load_report(db, today=day.date())
+    resp = get_load_report(db, user_id=user_id, today=day.date())
     names = [a.name for w in resp.weeks for a in w.activities if a.name.startswith("OrdTest")]
     assert names == ["OrdTest-Early", "OrdTest-Mid", "OrdTest-Late"]
