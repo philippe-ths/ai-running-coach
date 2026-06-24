@@ -24,10 +24,12 @@ def main() -> None:
     logger.info("Worker booting; listening on %s", ",".join(LISTEN))
     queues = [Queue(name, connection=redis_conn) for name in LISTEN]
     worker = Worker(queues, connection=redis_conn)
-    # with_scheduler: RQ's retry intervals (#215 PIPELINE_RETRY) park retried jobs
-    # in the ScheduledJobRegistry, which only a worker-embedded scheduler thread
-    # moves back onto the queue. Without it an interval retry is stranded forever.
-    # Independent of the separate rq-scheduler process (polling/fuller timers).
+    # with_scheduler: the worker-embedded scheduler thread drains the
+    # ScheduledJobRegistry — both RQ's retry intervals (#215 PIPELINE_RETRY) and
+    # every deferred queue.enqueue_in job (block-complete opener, fuller-turn timer,
+    # backfill/reanalyze/import batches). Without it those are stranded forever.
+    # Since #123/ADR 0006 there is no separate rq-scheduler process: removing the
+    # polling fallback let all deferred jobs move to RQ-native scheduling here.
     worker.work(with_scheduler=True)
 
 
