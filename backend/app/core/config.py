@@ -186,9 +186,45 @@ class Settings(BaseSettings):
     USER_MATERIAL_MAX_BYTES: int = 262144  # 256 KB per uploaded .md file
     USER_MATERIAL_MAX_COUNT: int = 50  # max non-archived materials per user
 
-    # Phase 1 deployment: throwaway basic auth in front of /api/*.
-    # Both must be set for the middleware to enforce; either empty disables it.
-    # TODO(phase-2): remove when session auth lands.
+    # Phase 2 identity: social login via Clerk (ADR 0022). The frontend (Vercel)
+    # owns the Clerk session; the backend VERIFIES the session token itself via
+    # Clerk's JWKS and resolves user_id from the verified email, so it never
+    # blindly trusts a header (the webhook routes are public). See
+    # app/core/clerk_auth.py.
+    #
+    # CLERK_JWKS_URL is the only setting REQUIRED to turn auth on: when it is set
+    # the backend enforces a verified session on every non-exempt /api route.
+    # When it is empty AND APP_ENV != production, auth degrades to the single
+    # local user (local dev + the test suite keep working with no Clerk); in
+    # production an empty value fails closed, mirroring BasicAuthMiddleware.
+    CLERK_JWKS_URL: str = ""
+    # Clerk Backend API secret (sk_*). Used only as a fallback to fetch a
+    # signed-in user's verified email when the session token carries no `email`
+    # claim (the recommended setup adds `email` to the Clerk session-token
+    # template, which avoids this call entirely). Never logged.
+    CLERK_SECRET_KEY: str = ""
+    # Expected token issuer. When empty it is derived from CLERK_JWKS_URL by
+    # stripping the well-known JWKS path, which is correct for every Clerk
+    # instance; set explicitly only to override.
+    CLERK_ISSUER: str = ""
+    # Optional comma-separated allowlist of authorized parties (the `azp` claim,
+    # the frontend origin Clerk issued the token to). Empty disables the check.
+    CLERK_AUTHORIZED_PARTIES: str = ""
+    # Clock-skew tolerance (seconds) for token exp/nbf/iat checks.
+    CLERK_LEEWAY_SECONDS: int = 30
+    # The owner's Google email. On first sign-in the pre-Phase-2 single user
+    # (whose email was backfilled to a placeholder by the email-non-null
+    # migration) is reconciled to this address by adopting it, so the owner's
+    # existing data is not orphaned behind a fresh empty account. Empty disables
+    # reconciliation (every verified email gets/creates its own user).
+    OWNER_EMAIL: str = ""
+
+    # Phase 1 deployment: HTTP basic auth in front of /api/*. Under Phase 2
+    # (ADR 0022) this is REPURPOSED as the frontend-to-backend service secret
+    # (defense in depth: "proves it is our frontend"), no longer as identity --
+    # per-user identity rides on top via the verified Clerk token. Both must be
+    # set for the middleware to enforce; either empty disables it (fails closed
+    # in production).
     BASIC_AUTH_USER: str = ""
     BASIC_AUTH_PASSWORD: str = ""
 
@@ -222,6 +258,36 @@ class Settings(BaseSettings):
     @property
     def cors_allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def clerk_issuer(self) -> str:
+        """The expected token issuer.
+
+        Explicit ``CLERK_ISSUER`` wins; otherwise derive it from the JWKS URL by
+        stripping the ``/.well-known/jwks.json`` suffix (the Clerk convention,
+        e.g. ``https://fine-octopus-89.clerk.accounts.dev``).
+        """
+        if self.CLERK_ISSUER:
+            return self.CLERK_ISSUER.rstrip("/")
+        url = self.CLERK_JWKS_URL
+        marker = "/.well-known/"
+        if marker in url:
+            return url.split(marker, 1)[0].rstrip("/")
+        return url.rstrip("/")
+
+    @property
+    def clerk_authorized_parties_list(self) -> list[str]:
+        return [p.strip() for p in self.CLERK_AUTHORIZED_PARTIES.split(",") if p.strip()]
+
+    @property
+    def clerk_enabled(self) -> bool:
+        """Whether the backend should enforce verified Clerk sessions.
+
+        Auth turns on as soon as a JWKS URL is configured. With no JWKS URL,
+        production fails closed (handled in the dependency) while non-production
+        degrades to the single local user.
+        """
+        return bool(self.CLERK_JWKS_URL)
 
     model_config = SettingsConfigDict(
         env_file=".env",

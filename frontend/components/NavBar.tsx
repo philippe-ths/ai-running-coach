@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { User } from 'lucide-react';
+import AuthControls from '@/components/AuthControls';
 
 const LINKS = [
   { href: '/activities', label: 'Activities' },
@@ -10,6 +11,10 @@ const LINKS = [
   { href: '/trends', label: 'Trends' },
   { href: '/profile', label: 'Profile' },
 ];
+
+// Inlined at build time; with no Clerk key the auth menu is omitted entirely
+// (CI build + smoke run against a mock backend with no auth).
+const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 export default function NavBar() {
   const pathname = usePathname();
@@ -26,35 +31,38 @@ export default function NavBar() {
         >
           AI Coach
         </Link>
-        <div className="hidden md:flex items-center gap-1 sm:gap-2">
-          {LINKS.map(({ href, label }) => (
-            <Link
-              key={href}
-              href={href}
-              className={`flex items-center min-h-[44px] px-3 rounded-md text-sm font-medium transition-colors ${
-                isActive(href)
-                  ? 'text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/30'
-                  : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:text-blue-400 dark:hover:bg-gray-800'
-              }`}
-            >
-              {label}
-            </Link>
-          ))}
+        <div className="flex items-center gap-1 sm:gap-2">
+          <div className="hidden md:flex items-center gap-1 sm:gap-2">
+            {LINKS.map(({ href, label }) => (
+              <Link
+                key={href}
+                href={href}
+                className={`flex items-center min-h-[44px] px-3 rounded-md text-sm font-medium transition-colors ${
+                  isActive(href)
+                    ? 'text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/30'
+                    : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:text-blue-400 dark:hover:bg-gray-800'
+                }`}
+              >
+                {label}
+              </Link>
+            ))}
+          </div>
+          {/* On mobile the nav links live in the bottom tab bar; Profile stays
+              here as a top-right icon (the bottom bar omits it). */}
+          <Link
+            href="/profile"
+            aria-label="Profile"
+            aria-current={isActive('/profile') ? 'page' : undefined}
+            className={`md:hidden flex items-center justify-center h-11 w-11 rounded-full transition-colors ${
+              isActive('/profile')
+                ? 'text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/30'
+                : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:text-blue-400 dark:hover:bg-gray-800'
+            }`}
+          >
+            <User className="h-6 w-6" aria-hidden="true" />
+          </Link>
+          {clerkEnabled && <AuthControls />}
         </div>
-        {/* On mobile the nav links live in the bottom tab bar; Profile stays
-            here as a top-right icon (the bottom bar omits it). */}
-        <Link
-          href="/profile"
-          aria-label="Profile"
-          aria-current={isActive('/profile') ? 'page' : undefined}
-          className={`md:hidden flex items-center justify-center h-11 w-11 rounded-full transition-colors ${
-            isActive('/profile')
-              ? 'text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/30'
-              : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:text-blue-400 dark:hover:bg-gray-800'
-          }`}
-        >
-          <User className="h-6 w-6" aria-hidden="true" />
-        </Link>
       </div>
     </nav>
   );

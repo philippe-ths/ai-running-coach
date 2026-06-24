@@ -146,11 +146,17 @@ class TestProductionFailsClosed:
         assert response.status_code == 200
 
     def test_production_with_credentials_set_authenticates_normally(self, client, monkeypatch):
+        # Targets /api/auth/strava/status: gated by the basic-auth service-secret
+        # middleware but NOT by the Phase 2 Clerk session dependency (the auth
+        # router is the OAuth handshake surface, ADR-exempt from per-user
+        # sessions). An application route like /api/profile would now also fail
+        # closed (503) under Clerk-unconfigured-in-production, which is the Clerk
+        # layer's job, not the basic middleware's; this test isolates the latter.
         monkeypatch.setattr(settings, "APP_ENV", "production")
         monkeypatch.setattr(settings, "BASIC_AUTH_USER", _AUTH_USER)
         monkeypatch.setattr(settings, "BASIC_AUTH_PASSWORD", _AUTH_PASSWORD)
         response = client.get(
-            "/api/profile",
+            "/api/auth/strava/status",
             headers={"Authorization": _basic(_AUTH_USER, _AUTH_PASSWORD)},
         )
         assert response.status_code == 200

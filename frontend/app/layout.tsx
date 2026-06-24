@@ -1,9 +1,16 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import { Fraunces, Hanken_Grotesk, IBM_Plex_Mono } from 'next/font/google';
+import { ClerkProvider } from '@clerk/nextjs';
 import NavBar from '@/components/NavBar';
 import BottomNav from '@/components/BottomNav';
 import ThemeProvider from '@/components/ThemeProvider';
+
+// Clerk wraps the app only when a publishable key is configured (Vercel prod +
+// local dev). Without it -- CI build, the smoke harness -- the app renders
+// exactly as before, with no auth surface. See middleware.ts for the matching
+// pass-through gate.
+const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 // Three deliberate type roles: Fraunces (serif) is the coach's voice + display
 // headings, Hanken Grotesk (sans) is body + UI, IBM Plex Mono is numbers/data.
@@ -47,7 +54,7 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return (
+  const tree = (
     <html
       lang="en"
       suppressHydrationWarning
@@ -63,5 +70,19 @@ export default function RootLayout({
         </ThemeProvider>
       </body>
     </html>
+  );
+
+  if (!clerkEnabled) {
+    return tree;
+  }
+  return (
+    <ClerkProvider
+      signInUrl={process.env.NEXT_PUBLIC_CLERK_SIGN_IN_URL || '/sign-in'}
+      signUpUrl={process.env.NEXT_PUBLIC_CLERK_SIGN_UP_URL || '/sign-up'}
+      afterSignInUrl={process.env.NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL || '/'}
+      afterSignOutUrl="/sign-in"
+    >
+      {tree}
+    </ClerkProvider>
   );
 }
