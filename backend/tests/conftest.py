@@ -25,6 +25,26 @@ def _isolate_notification_channels(monkeypatch):
     for var in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SMTP_HOST", "NOTIFY_TO"):
         monkeypatch.setattr(settings, var, "")
 
+
+@pytest.fixture(autouse=True)
+def _disable_clerk_auth(monkeypatch):
+    """Run the suite in the Clerk-disabled single-user path by default.
+
+    `settings` loads `backend/.env`, which on a developer machine now carries a
+    real CLERK_JWKS_URL. Left in place that would flip verify_clerk_session into
+    enforcement and 401 every existing endpoint test. Resetting the Clerk
+    settings here makes every test start from "Clerk not configured" (the
+    degrade-to-single-user path, identical to pre-Phase-2 behaviour). The auth
+    tests opt back in via their own monkeypatch + injected verifier.
+    """
+    from app.core import clerk_auth
+
+    for var in ("CLERK_JWKS_URL", "CLERK_SECRET_KEY", "CLERK_ISSUER",
+                "CLERK_AUTHORIZED_PARTIES", "OWNER_EMAIL"):
+        monkeypatch.setattr(settings, var, "")
+    monkeypatch.setattr(settings, "APP_ENV", "local")
+    clerk_auth.reset_verifier_cache()
+
 # Use an in-memory SQLite database for tests, or a separate test DB
 # For simplicity with SQLAlchemy features, an in-memory SQLite is easiest 
 # but might have dialect differences with Postgres.

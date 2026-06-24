@@ -1,8 +1,14 @@
 import { NextRequest } from 'next/server';
+import { auth } from '@clerk/nextjs/server';
 
 const BACKEND_URL = process.env.BACKEND_URL;
 const BASIC_USER = process.env.BACKEND_BASIC_AUTH_USER;
 const BASIC_PASS = process.env.BACKEND_BASIC_AUTH_PASSWORD;
+// NEXT_PUBLIC_* is inlined at build; with no Clerk key the proxy forwards only
+// the basic service secret (CI/smoke). The session token rides a dedicated
+// header so it never collides with the basic Authorization credential.
+const CLERK_ENABLED = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+const SESSION_TOKEN_HEADER = 'x-clerk-session-token';
 
 const HOP_BY_HOP = new Set([
   'connection',
@@ -37,6 +43,22 @@ async function proxy(
   if (BASIC_USER && BASIC_PASS) {
     const token = Buffer.from(`${BASIC_USER}:${BASIC_PASS}`).toString('base64');
     upstreamHeaders.set('authorization', `Basic ${token}`);
+  }
+  // Forward the verified Clerk session token so the backend can resolve the
+  // user. The browser carries the Clerk cookie; auth().getToken() mints the JWT
+  // server-side. Never trust an incoming session-token header from the client.
+  upstreamHeaders.delete(SESSION_TOKEN_HEADER);
+  if (CLERK_ENABLED) {
+    try {
+      const { getToken } = auth();
+      const sessionToken = await getToken();
+      if (sessionToken) {
+        upstreamHeaders.set(SESSION_TOKEN_HEADER, sessionToken);
+      }
+    } catch {
+      // No active session (or called outside Clerk context): forward nothing
+      // and let the backend reject with 401.
+    }
   }
 
   const init: RequestInit = {

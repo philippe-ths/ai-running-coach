@@ -1,4 +1,4 @@
-import { fetchFromAPI } from '@/lib/api';
+import { serverFetch } from '@/lib/serverSession';
 import { format } from 'date-fns';
 import { formatPace, formatDuration, formatDistanceKm, activityStartDate } from '@/lib/format';
 import CheckInForm from '@/components/CheckInForm';
@@ -24,7 +24,7 @@ const SHOW_DEBUG_PANEL =
   process.env.NEXT_PUBLIC_SHOW_DEBUG_PANEL === '1';
 
 export default async function ActivityDetail({ params }: { params: { id: string } }) {
-  const activity: Activity | null = await fetchFromAPI(`/api/activities/${params.id}`);
+  const activity: Activity | null = await serverFetch(`/api/activities/${params.id}`);
   
   if (!activity) return <div>Activity not found</div>;
 
