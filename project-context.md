@@ -71,7 +71,7 @@ The Vercel frontend reaches the backend over HTTP: server components call `BACKE
 The backend gates all routes with `BasicAuthMiddleware`, exempting `/api/health`, `/api/webhooks`, and `/api/auth/strava/callback`; this Phase 1 layer is replaced by ADR 0005 magic-link sessions in Phase 2.
 Build and deploy config lives on the platforms rather than in an in-repo deploy manifest; the repo's only committed automation is the CI workflow under `.github/workflows/`.
 Locally `docker compose` provides only Postgres and Redis, while the host runs `uvicorn`, `rq worker --with-scheduler` (the `--with-scheduler` flag is what drains deferred/retry jobs now that the separate rqscheduler process is gone), and `next dev`.
-The full production and local-dev topology, the connection seam, and per-service env var ownership are documented in `docs/deployment/topology.md`.
+The full production and local-dev topology, the connection seam, and per-service env var ownership are documented in `docs/deployment/topology.md`. No production hostname is hardcoded in code — every seam URL (`BACKEND_URL`, `APP_BASE_URL`, `API_BASE_URL`, `CORS_ALLOWED_ORIGINS`, `STRAVA_REDIRECT_URI`, `STRAVA_WEBHOOK_CALLBACK_URL`) is an env var, so a custom domain is a config+DNS change, not a code change (#124); the turnkey operator cutover checklist is `docs/deployment/custom-domain.md`.
 
 ## Important Constraints
 
