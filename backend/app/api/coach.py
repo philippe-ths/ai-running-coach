@@ -241,6 +241,25 @@ def regenerate_coach_report(
     from app.core.queue import queue
     from app.jobs.process_new_activity import PIPELINE_RETRY, regenerate_report_job
 
+    # P2.2 / going-live landmine 1: the regenerate endpoint is the single most
+    # exposed cost lever — a stuck "Regenerate" button can fan out full two-stage
+    # LLM generations. A per-activity cooldown (atomic Redis SET NX EX) dedups
+    # rapid re-taps: the first within the window acquires the key and enqueues;
+    # later taps short-circuit. A deterministic job id makes RQ collapse any
+    # racing enqueue onto one job rather than queuing duplicates. The cooldown
+    # degrades open (enqueues) if Redis is unreachable — a cost guard must never
+    # block a legitimate single regeneration.
+    cooldown_key = f"coach_regen_cooldown:{activity_id}"
+    job_id = f"coach-regenerate:{activity_id}"
+    try:
+        acquired = queue.connection.set(
+            cooldown_key, "1", nx=True, ex=settings.COACH_REGEN_COOLDOWN_SECONDS,
+        )
+    except Exception:  # noqa: BLE001 — Redis blip must not block regeneration
+        acquired = True
+    if not acquired:
+        return {"status": "cooldown"}
+
     # job_timeout (#264): the two-stage regeneration runs ~120-360s, past RQ's 180s
     # default; without this the worker's death penalty kills it before it stores the
     # report. (The queue default_timeout also covers it; explicit here documents it.)
@@ -251,6 +270,7 @@ def regenerate_coach_report(
     # RQ level rather than silently leaving the runner with a stale fallback report.
     queue.enqueue(
         regenerate_report_job, str(activity_id),
+        job_id=job_id,
         job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
         retry=PIPELINE_RETRY,
     )

@@ -30,6 +30,25 @@ class Settings(BaseSettings):
     # Coach AI
     ANTHROPIC_API_KEY: str = ""
     COACH_MODEL_ID: str = "claude-sonnet-4-6"
+
+    # Per-user LLM cost cap (P2.2, #122, Ring 3 of docs/vision/going-live-cost-control.md).
+    # A Redis-backed running spend counter degrades coach generation to the
+    # deterministic is_fallback path once a window is at or over its dollar
+    # ceiling, so one user can never drain the shared Anthropic budget. Each
+    # ceiling is a USD amount; 0 disables that window (so all-zero defaults are a
+    # no-op until the owner sets real numbers — the owner owns the real dollars).
+    # Per-user windows cap any single runner; the global windows cap the whole
+    # deployment. See app/services/coach/budget.py.
+    LLM_BUDGET_USER_DAILY_USD: float = 0.0
+    LLM_BUDGET_USER_MONTHLY_USD: float = 0.0
+    LLM_BUDGET_GLOBAL_DAILY_USD: float = 0.0
+    LLM_BUDGET_GLOBAL_MONTHLY_USD: float = 0.0
+    # Minimum seconds between on-demand coach-report regenerations for one
+    # activity (#122 / going-live landmine 1). The regenerate endpoint is the
+    # single most exposed cost lever (it enqueues a full two-stage generation);
+    # this cooldown plus a deterministic per-activity job id dedups rapid
+    # re-taps so a stuck "Regenerate" button cannot fan out LLM spend.
+    COACH_REGEN_COOLDOWN_SECONDS: int = 60
     # The active coach prompt. The default tracks the production prompt (see
     # project-context.md), NOT a legacy non-feature-bearing id: a prompt that
     # carries none of the runner-facing coaching features (voice/corpus/stance/
