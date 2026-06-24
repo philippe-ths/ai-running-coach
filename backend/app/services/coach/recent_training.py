@@ -132,8 +132,12 @@ def _comparisons(
     """The vs-prev comparison per metric for a window of `n` days ending `as_of`, plus
     the vs-typical (per-day-rate, reused from build_volume_report) ONLY when
     `with_typical` (the 30d window). The 7d window omits vs-typical (#451): its weekly
-    vs-norm verdict lives in `training_volume`, so recent_training does not duplicate
-    it — those metrics carry vs-prev and a `no_norm` vs-typical with no basis."""
+    vs-norm verdict lives in `training_volume`, so those rows carry only vs-prev and a
+    null vs-typical direction.
+
+    Pack-trimmed: the per-metric current_all/current_runs (already in the window roll-up
+    + by_type and in training_volume) and the self-describing basis strings (now carried
+    once per window, set by `_window`) are NOT re-emitted on each row."""
     typical_by_metric: dict = {}
     if with_typical:
         range_key = "7D" if n == 7 else "30D"
@@ -153,14 +157,10 @@ def _comparisons(
         out.append(
             RecentComparison(
                 metric=metric,
-                current_all=t.current_all if t else _sum(window_facts, metric),
-                current_runs=t.current_runs if t else _sum(window_facts, metric, runs_only=True),
                 vs_typical_pct=t.pct_vs_norm if t else None,
-                vs_typical_direction=t.direction if t else "no_norm",
+                vs_typical_direction=t.direction if t else None,
                 vs_prev_pct=prev_pct,
                 vs_prev_direction=prev_dir,
-                typical_basis=_TYPICAL_BASIS[n] if with_typical else None,
-                prev_basis=f"the {n} days immediately before this window",
             )
         )
     return out
@@ -193,6 +193,12 @@ def _window(
             else []
         ),
         activities=_recent_activities(window_facts) if with_activities else [],
+        # Pack trim: the comparison basis strings live once per window now. prev_basis on
+        # any window with comparisons; typical_basis only where a vs-typical read exists.
+        prev_basis=(
+            f"the {n} days immediately before this window" if with_comparisons else None
+        ),
+        typical_basis=(_TYPICAL_BASIS[n] if (with_comparisons and with_typical) else None),
     )
 
 
@@ -219,11 +225,11 @@ def build_recent_training(facts: List[Any], as_of: date) -> RecentTrainingContex
 
     # has_baseline mirrors the vs-typical abstention: true when a 30d metric resolved a
     # norm (build_volume_report sets direction 'no_norm' when too thin). Only the 30d
-    # window carries vs-typical now (#451), so the 7d comparisons are all 'no_norm' and
-    # do not contribute — checking both is harmless and keeps the intent explicit.
+    # window carries vs-typical now (#451); the 7d rows carry a null vs-typical direction
+    # (pack trim), so a resolved norm is read off the 30d window alone.
     has_baseline = any(
-        c.vs_typical_direction != "no_norm"
-        for c in (last_7d.comparisons + last_30d.comparisons)
+        c.vs_typical_direction not in (None, "no_norm")
+        for c in last_30d.comparisons
     )
 
     return RecentTrainingContext(

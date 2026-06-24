@@ -602,17 +602,25 @@ class RecentComparison(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metric: str  # sessions | distance_m | moving_time_s | effort_score
-    current_all: Union[int, float]
-    current_runs: Union[int, float]
+    # Pack trim: current_all/current_runs are no longer emitted per row — they duplicate
+    # the window's own roll-up (current_all == total_*/activity_count, current_runs ==
+    # the by_type["Run"] entry) and, for the 7d window, training_volume's rolling_7d.
+    # Kept Optional so a pre-trim stored pack (extra="forbid") still validates; dropped
+    # from serialization when None.
+    current_all: Optional[Union[int, float]] = None
+    current_runs: Optional[Union[int, float]] = None
     vs_typical_pct: Optional[float] = None
-    vs_typical_direction: str  # up | in_line | down | no_norm
+    # Optional/None on the 7d window, which carries no vs-typical read (#451: its weekly
+    # vs-norm verdict lives in `training_volume`). A real direction on the 30d window.
+    # Dropped from serialization when None.
+    vs_typical_direction: Optional[str] = None  # up | in_line | down | no_norm
     vs_prev_pct: Optional[float] = None
     vs_prev_direction: str     # up | in_line | down | no_norm
-    # #451: None on a window that carries no vs-typical read (the 7d window — its
-    # weekly vs-norm verdict lives in `training_volume`, so recent_training does not
-    # duplicate it). Present (a self-describing string) wherever vs_typical is computed.
+    # Pack trim: the self-describing basis strings moved UP to the window level (one copy
+    # per window, not one per metric row — they were identical across all four). Kept
+    # Optional here so a pre-trim stored pack still validates; dropped when None.
     typical_basis: Optional[str] = None
-    prev_basis: str
+    prev_basis: Optional[str] = None
 
 
 class RecentTrainingWindow(BaseModel):
@@ -630,6 +638,12 @@ class RecentTrainingWindow(BaseModel):
     total_effort: float
     comparisons: List[RecentComparison]   # 7d/30d only; empty for previous_30d
     activities: List[RecentActivityItem]  # 7d only; empty for the longer windows
+    # Pack trim: the comparison basis strings live once per window now (they were
+    # identical across every metric row). `prev_basis` is set on any window that carries
+    # comparisons; `typical_basis` only on the window with a vs-typical read (30d). Both
+    # Optional (absent on previous_30d and on pre-trim stored packs); dropped when None.
+    prev_basis: Optional[str] = None
+    typical_basis: Optional[str] = None
 
 
 class RecentTrainingContext(BaseModel):
@@ -750,6 +764,25 @@ class CoachContextPack(BaseModel):
         if data.get("recent_training") is None:
             # #444: a non-recent-training prompt emits nothing — not even a null key.
             data.pop("recent_training", None)
+        else:
+            # Pack trim: drop the deduplicated/empty fields from the recent-training
+            # section so they cost no tokens. Per window: the basis strings now live once
+            # on the window (None on previous_30d). Per comparison: current_all/
+            # current_runs (already in the window totals/by_type and in training_volume),
+            # the per-row basis (moved up a level), and the 7d vs_typical_direction are
+            # all None and dropped. Re-parse stays safe — every dropped field is Optional
+            # and defaults to None when absent.
+            rt = data["recent_training"]
+            for wkey in ("last_7d", "last_30d", "previous_30d"):
+                win = rt.get(wkey)
+                if not win:
+                    continue
+                for k in ("prev_basis", "typical_basis"):
+                    if win.get(k) is None:
+                        win.pop(k, None)
+                for comp in win.get("comparisons", []):
+                    for k in [k for k, v in comp.items() if v is None]:
+                        comp.pop(k, None)
         if data.get("recent_training_summary") is None:
             # #451: the legacy summary is retired and no longer populated; drop the
             # null key so new packs omit it. A pre-#451 stored pack still carries the
