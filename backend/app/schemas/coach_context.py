@@ -55,9 +55,18 @@ class MetricsContext(BaseModel):
     zones_basis: str
     efficiency_analysis: Optional[Dict[str, Any]]
     stops_analysis: Optional[Dict[str, Any]]
-    interval_structure: Optional[Dict[str, Any]]
-    workout_match: Optional[Dict[str, Any]]
-    interval_kpis: Optional[Dict[str, Any]]
+    # The interval/workout group. When a session is detected these carry the structure;
+    # when none is detected all three are empty and `to_serializable_dict` collapses them
+    # to the single `interval_workout` signal below, so the model reads one "no workout"
+    # fact instead of three null fields. Defaulted to None so the collapsed pack (which
+    # omits them) re-parses; an old stored pack still carries them explicitly.
+    interval_structure: Optional[Dict[str, Any]] = None
+    workout_match: Optional[Dict[str, Any]] = None
+    interval_kpis: Optional[Dict[str, Any]] = None
+    # The collapsed signal, present in the serialized pack ONLY when no session was
+    # detected (the three fields above are then omitted). None — and dropped from
+    # serialization — whenever a session is present.
+    interval_workout: Optional[str] = None
     risk_level: Optional[str]
     risk_score: Optional[int]
     risk_reasons: Optional[List[str]]
@@ -788,6 +797,26 @@ class CoachContextPack(BaseModel):
             # null key so new packs omit it. A pre-#451 stored pack still carries the
             # real object (non-None), so it round-trips unchanged.
             data.pop("recent_training_summary", None)
+        metrics = data.get("metrics")
+        if isinstance(metrics, dict):
+            # Collapse the gated interval/workout group to ONE signal when no session was
+            # detected: the model needs a single "no workout" fact, not three null fields.
+            # `interval_workout` is the collapsed field; it exists ONLY in this case. When a
+            # session IS present, drop the (null) collapsed field and keep the structured
+            # trio. Re-parse stays safe: all four fields default to None when absent.
+            metrics.pop("interval_workout", None)
+            wm = metrics.get("workout_match") or {}
+            no_session = (
+                metrics.get("interval_structure") is None
+                and metrics.get("interval_kpis") is None
+                and wm.get("match_score") is None
+                and wm.get("detected_workout") is None
+            )
+            if no_session:
+                metrics.pop("interval_structure", None)
+                metrics.pop("workout_match", None)
+                metrics.pop("interval_kpis", None)
+                metrics["interval_workout"] = "none detected"
         return data
 
     def fingerprint(self) -> str:

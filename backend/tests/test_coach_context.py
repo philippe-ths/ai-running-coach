@@ -232,8 +232,10 @@ def test_context_pack_normalizes_raw_strava_cadence(db):
     assert pack.activity.avg_cadence == 160.8
 
 
-def test_context_pack_passes_training_context_through(db):
-    """build_context_pack returns the value persisted on DerivedMetric.training_context."""
+def test_context_pack_carries_training_context_recency_signals_only(db):
+    """The coach pack carries training_context's recovery-recency signals but drops the
+    unreferenced intensity_distribution_7d (#462). The stored DerivedMetric keeps it
+    (risk.py reads the full dict at analyse time)."""
     user_id = uuid.uuid4()
     from app.models.user import User
     db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
@@ -249,7 +251,13 @@ def test_context_pack_passes_training_context_through(db):
 
     pack = build_context_pack(db, activity)
 
-    assert pack.metrics.training_context == persisted
+    # The pack carries the recovery-recency signals, NOT the intensity distribution.
+    assert pack.metrics.training_context == {
+        "days_since_last_hard": 3,
+        "hard_sessions_this_week": 1,
+    }
+    # The stored column is untouched (still the full dict for risk.py).
+    assert activity.metrics.training_context == persisted
 
 
 def test_context_pack_training_context_none_when_unset(db):

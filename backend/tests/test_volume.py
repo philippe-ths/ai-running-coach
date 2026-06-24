@@ -58,6 +58,24 @@ def test_deliberate_easy_week_reads_down():
     assert r["distance_m"].pct_vs_norm == -60.0  # 20km vs 50km
 
 
+def test_current_totals_are_rounded_not_float_noise():
+    """The pack must not ship binary-float noise (e.g. 700.0999999999999) to the LLM:
+    current_all / current_runs are rounded to 1 dp at the source. Three 0.1 effort
+    sessions sum to 0.30000000000000004 in raw float; the section reports 0.3."""
+    as_of = date(2026, 6, 20)
+    facts = _baseline(as_of)
+    facts += [_fact(as_of - timedelta(days=d), effort_score=0.1) for d in range(3)]
+
+    vol = build_training_volume(facts, as_of)
+    eff = _by_metric(vol.rolling_7d)["effort_score"]
+    assert eff.current_all == 0.3
+    assert eff.current_runs == 0.3
+    # And the Trends-page report path rounds identically.
+    report = build_volume_report(facts, as_of, "7D")
+    reff = {m.metric: m for m in report.rolling.metrics}["effort_score"]
+    assert reff.current_all == 0.3
+
+
 def test_short_history_uses_honest_per_day_rate_not_deflated_per_week():
     """#451: 'typical' is the clamped per-day rate, not total / a fixed 12 weeks. A
     runner with only ~4 weeks of history (28 consecutive daily runs) has a true rate of

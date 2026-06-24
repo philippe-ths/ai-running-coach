@@ -559,6 +559,23 @@ def _strip_stops_for_coach(stops_analysis: Optional[dict]) -> Optional[dict]:
     return summary
 
 
+def _strip_training_context_for_coach(training_context: Optional[dict]) -> Optional[dict]:
+    """Project the stored training_context to what the coach pack carries (#462).
+
+    The stored `DerivedMetric.training_context` carries `intensity_distribution_7d`
+    (easy/moderate/hard session counts) plus the recovery-recency signals
+    `days_since_last_hard` / `hard_sessions_this_week`. The intensity distribution is
+    referenced by NO prompt rule and NO deterministic consumer, and its modality picture
+    is already covered by the `recent_training` section, so it is dropped from the coach
+    pack — the recency signals (which `risk.py` and prompt rule 11 use) are kept. The
+    STORED column is untouched: `risk.py` reads the full dict at analyse time, before this.
+
+    Pass-through for None / an empty dict."""
+    if not training_context:
+        return training_context
+    return {k: v for k, v in training_context.items() if k != "intensity_distribution_7d"}
+
+
 def build_focus_payload(
     db: Session,
     subject: Activity,
@@ -600,9 +617,13 @@ def build_focus_payload(
     else:
         zones_basis = "uncalibrated"
 
-    # Training context: intensity distribution and recency signals (persisted
-    # by the analysis pipeline on DerivedMetric).
-    training_context = metrics.training_context if metrics else None
+    # Training context: the recovery-recency signals (days_since_last_hard /
+    # hard_sessions_this_week) the coach uses for recovery advice. The redundant,
+    # unreferenced intensity_distribution_7d sub-field is stripped from the pack (#462);
+    # the stored DerivedMetric column keeps it for risk.py, which already ran.
+    training_context = (
+        _strip_training_context_for_coach(metrics.training_context) if metrics else None
+    )
 
     return FocusPayload(
         activity=ActivityContext(

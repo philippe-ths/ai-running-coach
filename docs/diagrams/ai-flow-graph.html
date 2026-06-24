@@ -45,7 +45,10 @@
   body.sel .edge:not(.eup):not(.edown) { stroke-opacity:.025; }
 
   .node { cursor:pointer; }
-  .node rect { fill:#1e222b; stroke:var(--line); stroke-width:1.3; rx:8;
+  /* every node carries its kind colour: a tinted fill + a kind-coloured border, set from
+     the per-node --kind variable (assigned in JS). Selection rules below override the stroke. */
+  .node rect { fill:color-mix(in srgb, var(--kind,#8892a0) 14%, #1a1e26);
+    stroke:color-mix(in srgb, var(--kind,#8892a0) 62%, #2c313c); stroke-width:1.5; rx:8;
     transition:opacity .15s, stroke .15s, stroke-width .15s; }
   .node .kdot { }
   .node text { fill:#dfe4ee; font:600 11.5px/1 -apple-system,system-ui; pointer-events:none; }
@@ -152,7 +155,7 @@
     padding:0 5px; margin-left:7px; cursor:pointer; vertical-align:middle; white-space:nowrap; }
   .kv .srctag:hover { background:rgba(16,185,129,.26); color:#a7f3d0; }
   /* the second chip: a field's FATE on the hop to its next node */
-  .fate-forwarded,.fate-transformed,.fate-reduced,.fate-gated,.fate-dropped {
+  .fate-forwarded,.fate-transformed,.fate-reduced,.fate-gated,.fate-gated-blocked,.fate-dropped {
     display:inline-block; font-weight:700; font-size:11px; border-radius:4px; padding:0 4px;
     vertical-align:middle; white-space:nowrap; }
   .kv .fatetag { font-size:9px; letter-spacing:.3px; margin-left:5px; padding:0 5px; cursor:default; }
@@ -161,7 +164,11 @@
   .fate-transformed { color:#c4b5fd; background:rgba(167,139,250,.15); border:1px solid rgba(167,139,250,.38); }
   .fate-reduced     { color:#fdba74; background:rgba(251,146,60,.14); border:1px solid rgba(251,146,60,.36); }
   .fate-gated       { color:#9ca3af; background:rgba(156,163,175,.10); border:1px dashed rgba(156,163,175,.52); }
+  .fate-gated-blocked { color:#fca5a5; background:rgba(248,81,73,.09); border:1px dashed rgba(248,81,73,.5); }
   .fate-dropped     { color:#fca5a5; background:rgba(248,81,73,.14); border:1px solid rgba(248,81,73,.42); }
+  /* the destination label inside a fate chip ("where it went") */
+  .fate-to { color:#aeb8c9; font-weight:600; }
+  .fate-to::before { content:'→\00a0'; color:#6b7280; font-weight:400; }
   .fatebanner { font-size:11.5px; color:var(--muted); line-height:1.5; background:rgba(252,211,77,.06);
     border:1px solid rgba(252,211,77,.18); border-left:3px solid #fcd34d; border-radius:5px; padding:7px 10px; margin:9px 0; }
   /* the system prompt, rendered as labelled layers (each tagged with the version that added it) */
@@ -176,6 +183,27 @@
   .pseg-add    { border-left-color:#14b8a6; } .pseg-add .pseghdr { color:#5eead4; }
   .pseg-play   { border-left-color:#f59e0b; } .pseg-play .pseghdr { color:#fcd34d; }
   .pseg-voice  { border-left-color:#a78bfa; } .pseg-voice .pseghdr { color:#c4b5fd; }
+
+  /* ---- Key panel (the legend, moved out of the header into its own described panel) ---- */
+  .keypanel { position:fixed; top:58px; left:14px; z-index:30; width:340px; max-width:92vw;
+    max-height:calc(100vh - 86px); overflow-y:auto; background:var(--panel); border:1px solid var(--line);
+    border-radius:12px; box-shadow:0 18px 50px rgba(0,0,0,.55); padding:15px 17px; display:none; }
+  .keypanel.open { display:block; }
+  .keypanel h3 { margin:0 0 5px; font-size:15px; letter-spacing:-.2px; }
+  .keypanel .ksub { margin:0 0 6px; font-size:11.5px; line-height:1.5; color:var(--muted); }
+  .keypanel .kgrp { font:700 9px/1 ui-sans-serif,system-ui; letter-spacing:.6px; text-transform:uppercase;
+    color:#6b7280; margin:13px 0 8px; border-top:1px solid var(--line); padding-top:11px; }
+  .keypanel .krow { display:flex; gap:10px; align-items:flex-start; margin:0 0 8px; }
+  .keypanel .kmark { flex:none; width:40px; display:flex; justify-content:center; align-items:center;
+    padding-top:1px; }
+  .keypanel .ktext { font-size:11.5px; line-height:1.46; color:#cdd5e1; }
+  .keypanel .ktext b { color:var(--ink); }
+  .keypanel .srctag { display:inline-block; font-size:11px; font-weight:700; color:#6ee7b7;
+    background:rgba(16,185,129,.13); border:1px solid rgba(16,185,129,.34); border-radius:4px; padding:0 5px; }
+  .keypanel .fatetag { display:inline-block; font-weight:700; font-size:11px; border-radius:4px; padding:0 5px; white-space:nowrap; }
+  .keypanel .kclose { position:absolute; top:11px; right:13px; width:26px; height:26px; border-radius:7px;
+    cursor:pointer; background:#11141a; border:1px solid var(--line); color:var(--muted); font-size:13px; }
+  .keypanel .kclose:hover { color:var(--ink); }
 </style>
 </head>
 <body>
@@ -184,27 +212,42 @@
   <h1>Data-Flow Graph</h1>
   <div class="tip">One run's <b>context pack</b>, every block traced to its source. <b>Click a node</b>: <span style="color:var(--up)">cyan = where it came from</span>, <span style="color:var(--down)">amber = where it goes</span>, and its real data opens on the right. Each field carries two chips: <span style="color:#6ee7b7">↤ which stage wrote it</span> and its <b>fate</b> — where it goes on the next hop. Drag to pan, scroll to zoom.</div>
   <div class="legend">
-    <div class="item"><span class="sw" style="background:var(--source)"></span>Raw</div>
-    <div class="item"><span class="sw" style="background:var(--code)"></span>Code/fact</div>
-    <div class="item"><span class="sw" style="background:var(--store)"></span>DB</div>
-    <div class="item"><span class="sw" style="background:var(--runner)"></span>Runner</div>
-    <div class="item"><span class="sw" style="background:var(--memory)"></span>Memory</div>
-    <div class="item"><span class="sw" style="background:#15171c;border:1px dashed #6b7280"></span>off by default</div>
-    <div class="item"><span style="color:#5eead4;font-size:14px;line-height:1">▶</span>start of chain</div>
-    <div class="item"><span class="sw" style="background:var(--llm)"></span>LLM</div>
-    <div class="item"><span class="dash" style="border-color:var(--up)"></span>came from</div>
-    <div class="item"><span class="dash" style="border-color:var(--down)"></span>feeds</div>
-    <div class="item" style="color:#3a3f47">|</div>
-    <div class="item">fate:</div>
-    <div class="item"><span class="fchip fate-forwarded">→</span>forwarded</div>
-    <div class="item"><span class="fchip fate-transformed">↝</span>transformed</div>
-    <div class="item"><span class="fchip fate-reduced">▽</span>reduced</div>
-    <div class="item"><span class="fchip fate-gated">◇</span>gated</div>
-    <div class="item"><span class="fchip fate-dropped">✕</span>dropped</div>
+    <button class="ctrl" id="keyToggle">Key</button>
     <button class="ctrl" id="fit">Fit</button>
     <button class="ctrl" id="reset">Reset</button>
   </div>
 </header>
+
+<!-- The Key, in its own panel (toggle with the header button). Every mark is described. -->
+<aside class="keypanel" id="keyPanel">
+  <button class="kclose" id="keyClose" title="close">✕</button>
+  <h3>Key</h3>
+  <p class="ksub">How to read the graph. Each node is a stage in the data flow from Strava to the coach report; click any node to trace its lineage and open its real data on the right.</p>
+
+  <div class="kgrp">Node colour — what a node IS</div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--source)"></span></span><div class="ktext"><b>Raw</b> — an external input the pipeline starts from (the Strava API).</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--code)"></span></span><div class="ktext"><b>Code / fact</b> — a deterministic computed value or an analysis/read-time stage. The facts the coach may cite.</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--store)"></span></span><div class="ktext"><b>DB</b> — a stored table/row (Activity, DerivedMetric, …). The persisted truth the LLM never overrides.</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--runner)"></span></span><div class="ktext"><b>Runner</b> — runner-declared or runner-uploaded input (check-in, voice/stance, materials).</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--memory)"></span></span><div class="ktext"><b>Memory</b> — durable learned memory (beliefs, narrative, preferences). Mostly off by default now.</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--llm)"></span></span><div class="ktext"><b>LLM</b> — the single Anthropic model call and the report it writes.</div></div>
+
+  <div class="kgrp">Node state</div>
+  <div class="krow"><span class="kmark"><span style="color:#5eead4;font-size:15px;line-height:1">▶</span></span><div class="ktext"><b>Start of chain</b> — nothing precedes this node; it is a raw input the pipeline begins from.</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:#15171c;border:1px dashed #6b7280"></span></span><div class="ktext"><b>Off by default</b> (dashed + dimmed) — a section disabled by config; it still rides the pack but emits empty.</div></div>
+
+  <div class="kgrp">Edges — appear when you click a node</div>
+  <div class="krow"><span class="kmark"><span class="dash" style="border-color:var(--up)"></span></span><div class="ktext"><b>Came from</b> (cyan) — the upstream lineage this node's data was built from.</div></div>
+  <div class="krow"><span class="kmark"><span class="dash" style="border-color:var(--down)"></span></span><div class="ktext"><b>Feeds</b> (amber) — everything downstream that consumes this node.</div></div>
+
+  <div class="kgrp">Field chips — in the detail panel, two per field</div>
+  <div class="krow"><span class="kmark"><span class="srctag" style="cursor:default">↤</span></span><div class="ktext"><b>Source</b> — which stage WROTE this field (click it to jump there).</div></div>
+  <div class="krow"><span class="kmark"><span class="fatetag fate-forwarded">→</span></span><div class="ktext"><b>forwarded</b> — reaches the next node unchanged. The chip also names the <b>destination</b> (e.g. <span class="fate-to">the model</span>).</div></div>
+  <div class="krow"><span class="kmark"><span class="fatetag fate-transformed">↝</span></span><div class="ktext"><b>transformed</b> — consumed by the next stage and re-emerges under a different name.</div></div>
+  <div class="krow"><span class="kmark"><span class="fatetag fate-reduced">▽</span></span><div class="ktext"><b>reduced</b> — reaches the next node but lossily shrunk (rounded, downsampled, or digested).</div></div>
+  <div class="krow"><span class="kmark"><span class="fatetag fate-gated">◇</span></span><div class="ktext"><b>gated</b> — conditional on the prompt version or the data. The chip says what happened for THIS run: <span class="fatetag fate-gated">◇ gated:passed</span> got through, <span class="fatetag fate-gated-blocked">◇ gated:blocked</span> did not.</div></div>
+  <div class="krow"><span class="kmark"><span class="fatetag fate-dropped">✕</span></span><div class="ktext"><b>dropped</b> — terminal; nothing downstream consumes it on the path to the report.</div></div>
+</aside>
 
 <div id="stage"><svg id="svg"><g id="cam"></g></svg></div>
 
@@ -299,9 +342,10 @@ NODES.forEach(n=>{
   const cls='node'+(n.off?' off':'')+(isOrigin(n)?' origin':'')+(isTerminal(n)?' terminal':'');
   const g=document.createElementNS(SVGNS,'g'); g.setAttribute('class',cls); g.dataset.id=n.id;
   g.setAttribute('transform',`translate(${p.x},${p.y})`);
+  g.style.setProperty('--kind', KCOL[n.kind]||'#8892a0');  // drives the node's fill/border tint (CSS)
   const acc=document.createElementNS(SVGNS,'rect');
   acc.setAttribute('class','accent'); acc.setAttribute('x',0); acc.setAttribute('y',0);
-  acc.setAttribute('width',4); acc.setAttribute('height',NH); acc.setAttribute('rx',2);
+  acc.setAttribute('width',6); acc.setAttribute('height',NH); acc.setAttribute('rx',2);
   acc.setAttribute('fill',KCOL[n.kind]||'#888');
   const r=document.createElementNS(SVGNS,'rect');
   r.setAttribute('x',0); r.setAttribute('y',0); r.setAttribute('width',NW); r.setAttribute('height',NH); r.setAttribute('rx',8);
@@ -425,6 +469,9 @@ stage.addEventListener('wheel', e=>{
   view.x=mx-(mx-view.x)*(nk/view.k); view.y=my-(my-view.y)*(nk/view.k); view.k=nk; apply();
 }, {passive:false});
 document.getElementById('fit').addEventListener('click', fit);
+const keyPanel=document.getElementById('keyPanel');
+document.getElementById('keyToggle').addEventListener('click', ()=> keyPanel.classList.toggle('open'));
+document.getElementById('keyClose').addEventListener('click', ()=> keyPanel.classList.remove('open'));
 window.addEventListener('resize', ()=>{ if(view.k) apply(); });
 
 svg.setAttribute('viewBox',`0 0 ${Math.max(worldW, window.innerWidth)} ${Math.max(worldH, window.innerHeight)}`);

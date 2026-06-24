@@ -68,11 +68,13 @@ def _canonical_derived_columns() -> set[str]:
 
 
 def _pack_keys_bound_by_nodes(src: str) -> set[str]:
-    """Each `p_*` node renders exactly one pack section via the first `P.<key>` in its body.
-    Extract that binding for every pack node so we can diff node coverage against the schema."""
+    """Each `p_*` node renders exactly one pack section, bound either via a
+    `jProv('<key>')` / `jTallProv('<key>')` provenance render or, for the few nodes that
+    render P directly, via the first `P.<key>` reference. Extract that binding for every
+    pack node so we can diff node coverage against the schema."""
     keys: set[str] = set()
-    # Split the NODES text on node boundaries, then for each `id:'p_xxx'` chunk take the
-    # FIRST `P.<key>` reference as the section it represents.
+    # Split the NODES text on node boundaries, then for each `id:'p_xxx'` chunk take its
+    # section binding: prefer the explicit jProv('key') form, else the first `P.<key>`.
     node_starts = [m.start() for m in re.finditer(r"\{\s*id:'", src)]
     node_starts.append(len(src))
     for i in range(len(node_starts) - 1):
@@ -80,7 +82,7 @@ def _pack_keys_bound_by_nodes(src: str) -> set[str]:
         id_m = re.match(r"\{\s*id:'(p_\w+)'", chunk)
         if not id_m:
             continue
-        key_m = re.search(r"\bP\.(\w+)", chunk)
+        key_m = re.search(r"\bj(?:Tall)?Prov\('(\w+)'\)", chunk) or re.search(r"\bP\.(\w+)", chunk)
         if key_m:
             keys.add(key_m.group(1))
     return keys
