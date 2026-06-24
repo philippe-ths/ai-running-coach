@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import String, DateTime, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -18,6 +19,10 @@ class User(Base):
     # placeholder by migration a9d4f2c7e1b6 and reconciled to the owner's real
     # email on first sign-in (app/core/clerk_auth.resolve_user_by_email).
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    # Per-user notification routing (P2.4, #120, ADR 0023): the user's bound
+    # Telegram chat. Null until they link; an unbound user falls back to the
+    # configured global recipient (single-user back-compat).
+    telegram_chat_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

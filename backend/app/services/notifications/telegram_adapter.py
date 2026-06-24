@@ -107,8 +107,11 @@ class TelegramNotifier:
 
     def send(self, notification: Notification) -> None:
         url = f"{self.api_base}/bot{self.bot_token}/sendMessage"
+        # P2.4 (#120, ADR 0023): route to the per-notification recipient when set
+        # (the activity owner's bound chat), falling back to the adapter's
+        # configured chat for the single-user / back-compat path.
         body = {
-            "chat_id": self.chat_id,
+            "chat_id": notification.to or self.chat_id,
             "text": self._format(notification),
             "parse_mode": "HTML",
             "disable_web_page_preview": True,

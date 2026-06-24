@@ -53,6 +53,7 @@ from app.services.notifications import (
     build_coach_notification,
     build_receipt_notification,
     get_notifier,
+    resolve_recipient,
 )
 from app.services.notifications.port import NotifierPort
 from app.services.strava_ingestion import (
@@ -109,6 +110,9 @@ def _notify(
         distance_m=activity.distance_m or 0,
         app_base_url=settings.APP_BASE_URL,
         stage=stage,
+        # P2.4 (#120): route to the activity owner's bound channel; None falls
+        # back to the configured global recipient (single-user back-compat).
+        recipient=resolve_recipient(activity.user),
     )
     if notification is None:
         logger.info(
@@ -242,6 +246,9 @@ async def _send_receipt(
         activity_id=str(activity.id),
         distance_m=activity.distance_m or 0,
         app_base_url=settings.APP_BASE_URL,
+        # P2.4 (#120): route the receipt to the activity owner's bound channel;
+        # None falls back to the configured global recipient.
+        recipient=resolve_recipient(activity.user),
     )
 
     # Open the exchange on the first receipt, independent of delivery (A4 posture):
