@@ -326,6 +326,45 @@ def test_summarize_efficiency_drops_curve_keeps_summary():
     assert _summarize_efficiency_for_coach({}) == {}
 
 
+def test_strip_stops_drops_location_keeps_rest():
+    from app.services.coach.context import _strip_stops_for_coach
+
+    stored = {
+        "total_stopped_time_s": 90,
+        "stopped_count": 2,
+        "longest_stop_s": 60,
+        "stops": [
+            {
+                "start_time": 100,
+                "duration_s": 30,
+                "location": [51.5074, -0.1278],
+                "distance_m": 1200,
+            },
+            {
+                "start_time": 500,
+                "duration_s": 60,
+                "location": [51.5080, -0.1290],
+                "distance_m": 4500,
+            },
+        ],
+    }
+    out = _strip_stops_for_coach(stored)
+    # Summary scalars survive.
+    assert out["total_stopped_time_s"] == 90
+    assert out["stopped_count"] == 2
+    assert out["longest_stop_s"] == 60
+    # Each stop keeps timing/duration/distance but loses the raw coordinates.
+    for stop in out["stops"]:
+        assert "location" not in stop
+        assert "start_time" in stop and "duration_s" in stop and "distance_m" in stop
+    # The stored dict (read by the detail view) is not mutated.
+    assert all("location" in s for s in stored["stops"])
+
+    # Pass-through for empty / None.
+    assert _strip_stops_for_coach(None) is None
+    assert _strip_stops_for_coach({}) == {}
+
+
 def test_coach_pack_efficiency_carries_summary_not_full_curve(db):
     """#441: the coach pack carries the efficiency summary + a coarse trend, never
     the full chart-resolution curve."""

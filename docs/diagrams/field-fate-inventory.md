@@ -21,10 +21,10 @@ Captured reference: activity `256ebb60` ("Afternoon Run", 2026-06-18), prompt
 
 The whole row is flattened into `MetricsContext` (`build_focus_payload`,
 `context.py:593-627`). MOST columns are **forwarded**, but the hop is NOT uniformly
-verbatim — three exceptions:
+verbatim — four exceptions:
 
 - forwarded (verbatim): effort, duration_class, structure, is_hilly, is_race,
-  time_in_zones, stops_analysis, flags, confidence, confidence_reasons,
+  time_in_zones, flags, confidence, confidence_reasons,
   interval_structure, workout_match, interval_kpis, risk_level, risk_score,
   risk_reasons, training_context, discount_signals.
 - **effort_score / hr_drift / pace_variability → reduced (rounded).** Rounded to 1 dp
@@ -32,6 +32,11 @@ verbatim — three exceptions:
 - **efficiency_analysis → reduced (reshaped).** The stored column carries a 128-pt
   curve; `_summarize_efficiency_for_coach` (`context.py`, #441) drops the curve and adds
   a coarse `trend` descriptor before it enters the pack — not a verbatim copy.
+- **stops_analysis → reduced (location stripped).** The stored column carries a per-stop
+  `[lat, lng]` `location`; `_strip_stops_for_coach` (`context.py`, #460) drops `location`
+  from each stop before it enters the pack — the LLM cannot use raw coordinates — keeping
+  the timing/duration/distance fields and the summary scalars. The stored DerivedMetric
+  and the activity-detail StopsPanel still read `location` directly.
 - **stream_view (sv_points) → forwarded (separate deferred edge).** Unlike every other
   DerivedMetric column, this one does NOT flatten into `pack.metrics`. The ≤60-pt aligned
   downsample (`stream_view.py`) is written to a `deferred=True` column
@@ -58,13 +63,16 @@ derived numbers. Fate is relative to the coach report.
   - time — zone binning / stops / intervals (`metrics.py`, `stops.py:12`, `intervals.py`)
   - distance — stops / intervals / workout_matching (`stops.py:14`, `intervals.py:100`)
   - moving — stops_analysis (`stops.py:11`, `metrics.py:113`)
-  - latlng — stop locations inside stops_analysis (`stops.py:13,45`)
 - **internal** (read-time detail view only — `splits.py` is imported by
   `api/activities.py` + `coach/chat.py`, NOT by `_orchestrator.py`):
   - grade_smooth — splits + stream_view (`splits.py:40`, `stream_view.py:52`)
   - cadence — splits + stream_view + detail-view smoothing (`splits.py:41`, `stream_view.py:53`, `smoothing.py`)
   - altitude — splits only (`splits.py:43`)
   - watts — splits only (`splits.py:42`)
+  - latlng — stop locations inside `stops_analysis` (`stops.py:13,45`), rendered by the
+    StopsPanel detail view. Since #460 the coach path is severed: `_strip_stops_for_coach`
+    drops the per-stop `location` before stops_analysis enters the pack, so latlng reaches
+    the detail view only, never the coach report.
 - **dropped**:
   - **temp** — no analysis stage reads the temp STREAM. The coach's temperature
     comes from the scalar `raw_summary.average_temp`, not this series
