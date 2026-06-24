@@ -31,12 +31,15 @@ export const metadata: Metadata = {
 };
 
 // Lock the viewport so the app behaves like a native screen: no pinch-to-zoom
-// and no double-tap zoom on mobile.
+// and no double-tap zoom on mobile. `viewportFit: 'cover'` lets the layout
+// extend under the iOS safe areas so `env(safe-area-inset-*)` resolves to real
+// values, which the bottom tab bar uses to clear the home indicator.
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({
