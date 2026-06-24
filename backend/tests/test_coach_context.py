@@ -72,10 +72,56 @@ def _create_profile(db, user_id, max_hr=None, max_hr_source=None, **overrides):
         current_weekly_km=overrides.get("current_weekly_km", 30),
         max_hr=max_hr,
         max_hr_source=max_hr_source,
+        hr_zones=overrides.get("hr_zones"),
+        hr_zones_source=overrides.get("hr_zones_source"),
     )
     db.add(p)
     db.flush()
     return p
+
+
+def test_zones_calibrated_true_when_profile_has_strava_zones(db):
+    """zones_calibrated should be True when the runner has Strava-sourced HR zones,
+    even with no explicitly-sourced max_hr (#458). Strava zones are the binning
+    basis, so the coach must not be told they are uncalibrated."""
+    user_id = uuid.uuid4()
+    from app.models.user import User
+    db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
+    db.flush()
+
+    activity = _create_activity(db, user_id)
+    _add_metrics(db, activity)
+    # Strava zones present; max_hr present but with no source (the real-data case).
+    _create_profile(
+        db, user_id, max_hr=180, max_hr_source=None,
+        hr_zones=[105, 140, 158, 173, 187], hr_zones_source="strava",
+    )
+
+    pack = build_context_pack(db, activity)
+
+    assert pack.metrics.zones_calibrated is True
+    assert pack.metrics.zones_basis == "strava_zones"
+
+
+def test_zones_basis_prefers_strava_over_max_hr(db):
+    """When both Strava zones and an explicit max_hr exist, Strava zones win the
+    basis (they are the actual binning source)."""
+    user_id = uuid.uuid4()
+    from app.models.user import User
+    db.add(User(id=user_id, email=f"test_{user_id}@example.com"))
+    db.flush()
+
+    activity = _create_activity(db, user_id)
+    _add_metrics(db, activity)
+    _create_profile(
+        db, user_id, max_hr=185, max_hr_source="user_entered",
+        hr_zones=[105, 140, 158, 173, 187], hr_zones_source="strava",
+    )
+
+    pack = build_context_pack(db, activity)
+
+    assert pack.metrics.zones_calibrated is True
+    assert pack.metrics.zones_basis == "strava_zones"
 
 
 def test_zones_calibrated_true_when_profile_has_max_hr(db):
