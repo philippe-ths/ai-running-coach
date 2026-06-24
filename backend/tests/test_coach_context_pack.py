@@ -215,9 +215,9 @@ def _legacy_sparse_pack() -> dict:
             "zones_basis": "uncalibrated",
             "efficiency_analysis": None,
             "stops_analysis": None,
-            "interval_structure": None,
-            "workout_match": None,
-            "interval_kpis": None,
+            # No session detected: the interval/workout group collapses to one signal in
+            # the canonical serialized shape (the three structured fields are omitted).
+            "interval_workout": "none detected",
             "risk_level": None,
             "risk_score": None,
             "risk_reasons": [],
@@ -314,6 +314,53 @@ def test_roundtrip_preserves_sparse_dict_shape():
     pack_dict = _legacy_sparse_pack()
     pack = CoachContextPack.model_validate(pack_dict)
     assert pack.to_serializable_dict() == pack_dict
+
+
+def test_no_session_collapses_interval_group_to_one_signal():
+    """A run with no detected interval/workout serialises ONE `interval_workout` signal,
+    not three null fields — the model reads a single 'no workout' fact."""
+    pack_dict = _legacy_full_pack()
+    pack_dict["metrics"]["interval_structure"] = None
+    pack_dict["metrics"]["interval_kpis"] = None
+    pack_dict["metrics"]["workout_match"] = {
+        "match_score": None, "detection_confidence": "low",
+        "confidence_reasons": ["no_intervals_detected"], "detected_workout": None,
+    }
+    out = CoachContextPack.model_validate(pack_dict).to_serializable_dict()["metrics"]
+    assert out["interval_workout"] == "none detected"
+    assert "interval_structure" not in out
+    assert "workout_match" not in out
+    assert "interval_kpis" not in out
+
+
+def test_detected_session_keeps_structured_interval_group():
+    """When a session IS detected the structured trio rides through unchanged and the
+    collapsed `interval_workout` field is absent."""
+    pack_dict = _legacy_full_pack()
+    pack_dict["metrics"]["interval_structure"] = {
+        "source": "recorded_laps",
+        "work_segments": [{"duration_s": 90}],
+        "summary": {"rep_count": 6},
+    }
+    pack_dict["metrics"]["workout_match"] = {"detection_confidence": "high", "match_score": 0.9}
+    out = CoachContextPack.model_validate(pack_dict).to_serializable_dict()["metrics"]
+    assert out["interval_structure"]["summary"]["rep_count"] == 6
+    assert out["workout_match"]["detection_confidence"] == "high"
+    assert "interval_workout" not in out
+
+
+def test_old_verbose_no_session_pack_still_validates_and_collapses():
+    """Backward compat: a pre-collapse stored pack (the three interval fields present and
+    null, no `interval_workout`) still validates under extra='forbid', and re-serialises to
+    the new collapsed shape — so the eval harness / chat re-parse of history never breaks."""
+    old = _legacy_full_pack()
+    old["metrics"]["interval_structure"] = None
+    old["metrics"]["workout_match"] = None
+    old["metrics"]["interval_kpis"] = None
+    old["metrics"].pop("interval_workout", None)
+    pack = CoachContextPack.model_validate(old)  # must not raise
+    out = pack.to_serializable_dict()["metrics"]
+    assert out["interval_workout"] == "none detected"
 
 
 def test_fingerprint_matches_legacy_hash_full():

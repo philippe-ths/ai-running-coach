@@ -24,9 +24,16 @@ The whole row is flattened into `MetricsContext` (`build_focus_payload`,
 verbatim — four exceptions:
 
 - forwarded (verbatim): effort, duration_class, structure, is_hilly, is_race,
-  time_in_zones, flags, confidence, confidence_reasons,
-  interval_structure, workout_match, interval_kpis, risk_level, risk_score,
+  time_in_zones, flags, confidence, confidence_reasons, risk_level, risk_score,
   risk_reasons, training_context, discount_signals.
+- **interval_structure / workout_match / interval_kpis → gated (collapsed).** The
+  interval/workout group rides into `pack.metrics` as the structured trio only when a
+  session is detected. When none is detected, `to_serializable_dict` collapses all three
+  into the single `pack.metrics.interval_workout = "none detected"` field, so the model
+  reads one "no workout" fact instead of three null fields. The stored `DerivedMetric`
+  columns are unchanged; this is a pack-serialisation collapse. The collapsed field is
+  Optional and the three remain Optional/declared, so an old stored pack (verbose nulls)
+  still re-parses.
 - **effort_score / hr_drift / pace_variability → reduced (rounded).** Rounded to 1 dp
   into the pack; hr_drift / pace_variability are nulled when 0 (`context.py:600-606`).
 - **efficiency_analysis → reduced (reshaped).** The stored column carries a 128-pt
