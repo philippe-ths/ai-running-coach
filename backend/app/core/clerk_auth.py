@@ -190,6 +190,43 @@ def fetch_email_from_clerk_api(clerk_user_id: str) -> Optional[str]:
     return None
 
 
+def delete_clerk_user_by_email(email: str) -> bool:
+    """Delete the Clerk user for ``email`` via the Backend API (P2.3, ADR 0022).
+
+    Returns True when the Clerk side is clean (deleted, no such user, or Clerk
+    not configured so there is nothing to delete) and False on a hard API error.
+    The caller blocks the local cascade on a False so a half-delete never leaves a
+    signed-in account whose data is gone (an empty shell). Best-effort, never raises.
+    """
+    if not settings.CLERK_SECRET_KEY:
+        return True  # Clerk not configured (local/test) — nothing to delete
+    import httpx
+
+    headers = {"Authorization": f"Bearer {settings.CLERK_SECRET_KEY}"}
+    try:
+        resp = httpx.get(
+            "https://api.clerk.com/v1/users",
+            params={"email_address": [email]},
+            headers=headers,
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        users = resp.json() or []
+        for user in users:
+            uid = user.get("id")
+            if not uid:
+                continue
+            d = httpx.delete(
+                f"https://api.clerk.com/v1/users/{uid}", headers=headers, timeout=10.0
+            )
+            if d.status_code not in (200, 404):  # 404 = already gone
+                d.raise_for_status()
+        return True
+    except Exception as exc:  # noqa: BLE001 — surface as False, never raise
+        logger.warning("clerk_user_delete_failed", extra={"error": str(exc)})
+        return False
+
+
 def resolve_email(claims: dict) -> str:
     """The verified email for a set of claims, or raise ClerkAuthError."""
     email = _email_from_claims(claims)
