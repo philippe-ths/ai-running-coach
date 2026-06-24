@@ -146,6 +146,62 @@ def warn_if_coach_prompt_inert() -> None:
     )
 
 
+class ProductionConfigError(RuntimeError):
+    """A setting that fails closed in production is unset at startup."""
+
+
+# Settings whose request-time code FAILS CLOSED in production: an empty value
+# does not stop the process booting, but every application route then returns
+# 503. CLERK_JWKS_URL empty -> verify_clerk_session 503s every app route
+# (clerk_auth.py); BASIC_AUTH_USER/PASSWORD empty -> BasicAuthMiddleware 503s
+# every non-exempt route (auth.py). /api/health is auth-exempt and only checks
+# process + DB, so it stays green and the platform promotes the broken deploy
+# (the Phase 2 outage). Asserting these at boot turns that silent "up but
+# serving errors" deploy into a boot crash, so the platform keeps the previous
+# healthy deploy live instead of cutting over to one that 503s. These are the
+# WEB process's HTTP gate settings only (web-only per docs/deployment/topology.md);
+# the worker serves no HTTP and is intentionally not gated by this (see worker.py).
+_REQUIRED_IN_PRODUCTION = (
+    "CLERK_JWKS_URL",
+    "BASIC_AUTH_USER",
+    "BASIC_AUTH_PASSWORD",
+)
+
+
+def assert_production_config() -> None:
+    """Refuse to boot when a fail-closed production setting is unset.
+
+    No-op unless ``APP_ENV == "production"``: local dev and the test suite run
+    with these unset and degrade to the single local user, so they must not
+    raise. In production a missing (or whitespace-only) value raises
+    ``ProductionConfigError``, which crashes the process before it serves
+    traffic; the hosting platform then keeps the last healthy deploy running
+    rather than promoting one that would 503 every request. The failure
+    direction is safe -- a false positive can only block a new deploy, never
+    take down the running one. Called once per process group right after
+    ``init_logging``.
+    """
+    if settings.APP_ENV != "production":
+        return
+    missing = [
+        name
+        for name in _REQUIRED_IN_PRODUCTION
+        if not str(getattr(settings, name, "") or "").strip()
+    ]
+    if not missing:
+        return
+    logging.getLogger(__name__).critical(
+        "production_config_incomplete",
+        extra={"missing": missing},
+    )
+    raise ProductionConfigError(
+        "Refusing to boot: required production settings are unset: "
+        + ", ".join(missing)
+        + ". The frontend-facing routes would fail closed (503) without them. "
+        "Set them in the deploy environment and redeploy."
+    )
+
+
 def sentry_capture_active() -> bool:
     """True only when Sentry error capture is actually live.
 

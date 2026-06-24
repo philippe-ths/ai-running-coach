@@ -21,6 +21,11 @@ def main() -> None:
     init_logging()
     init_sentry("worker")
     warn_if_coach_prompt_inert()
+    # No assert_production_config() here: the preflight guards the web process's
+    # fail-closed HTTP settings (CLERK_JWKS_URL, BASIC_AUTH_*), which are web-only
+    # (docs/deployment/topology.md). The worker serves no HTTP, so requiring them
+    # would crash a correctly-configured worker. Its hard deps (DATABASE_URL) are
+    # already required by Settings and crash the boot on their own.
     logger.info("Worker booting; listening on %s", ",".join(LISTEN))
     queues = [Queue(name, connection=redis_conn) for name in LISTEN]
     worker = Worker(queues, connection=redis_conn)
