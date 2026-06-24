@@ -33,6 +33,32 @@ class TestRegenerateEndpoint:
         assert call.kwargs.get("job_timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
         assert settings.RQ_JOB_TIMEOUT_SECONDS > 180
 
+    def test_passes_deterministic_job_id(self, client: TestClient, db):
+        # P2.2: a deterministic per-activity job id lets RQ collapse a racing
+        # re-tap onto one job instead of queuing duplicate generations.
+        activity = _seed_activity(db)
+        fake_queue = MagicMock()
+        with patch("app.core.queue.queue", fake_queue):
+            client.post(f"/api/activities/{activity.id}/coach-report/regenerate")
+        assert fake_queue.enqueue.call_args.kwargs.get("job_id") == (
+            f"coach-regenerate:{activity.id}"
+        )
+
+    def test_cooldown_dedups_rapid_retaps(self, client: TestClient, db):
+        # P2.2 / going-live landmine 1: the atomic Redis cooldown (SET NX EX)
+        # short-circuits a second rapid regenerate so a stuck button cannot fan
+        # out LLM spend. First tap acquires the key (set -> True), second is
+        # within the window (set -> None).
+        activity = _seed_activity(db)
+        fake_queue = MagicMock()
+        fake_queue.connection.set.side_effect = [True, None]
+        with patch("app.core.queue.queue", fake_queue):
+            first = client.post(f"/api/activities/{activity.id}/coach-report/regenerate")
+            second = client.post(f"/api/activities/{activity.id}/coach-report/regenerate")
+        assert first.json() == {"status": "regenerating"}
+        assert second.json() == {"status": "cooldown"}
+        fake_queue.enqueue.assert_called_once()  # only the first tap enqueued
+
     def test_404_when_activity_missing(self, client: TestClient, db):
         from uuid import uuid4
         fake_queue = MagicMock()

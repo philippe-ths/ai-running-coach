@@ -41,6 +41,9 @@ class MessageResult:
     logic stays out of the client."""
     content_blocks: List[Any]
     stop_reason: Optional[str]
+    # Usage for the per-user budget gate (P2.2); 0 when no usage was returned.
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class LLMClient(Protocol):
@@ -226,9 +229,12 @@ class AnthropicClient:
                     timeout=_MESSAGE_TIMEOUT_SECONDS,
                 ) as stream:
                     final = await stream.get_final_message()
+                usage = getattr(final, "usage", None)
                 return MessageResult(
                     content_blocks=list(final.content),
                     stop_reason=final.stop_reason,
+                    input_tokens=getattr(usage, "input_tokens", 0) or 0,
+                    output_tokens=getattr(usage, "output_tokens", 0) or 0,
                 )
             except (
                 anthropic.APITimeoutError,

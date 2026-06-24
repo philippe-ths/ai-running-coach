@@ -30,6 +30,7 @@ from app.schemas.coach import (
     CoachReportRead,
 )
 from app.schemas.coach_context import CoachContextPack, ContinuityContext
+from app.services.coach.budget import over_budget as budget_over, record as budget_record
 from app.services.coach.belief_store import write_back_beliefs
 from app.services.coach.consolidation import enqueue_consolidation
 from app.services.coach.context import build_context_pack
@@ -348,9 +349,13 @@ async def get_or_generate_coach_report(
     # Dispatch on prompt family (ADR 0009): the A3 prose-message path vs the
     # legacy structured path. Both normalise to a _GenOutcome so storage is shared.
     if prompt_id.startswith(MESSAGE_PROMPT_PREFIX):
-        outcome = await _generate_message(client, system_prompt, user_message, pack)
+        outcome = await _generate_message(
+            client, system_prompt, user_message, pack, user_id=activity.user_id
+        )
     else:
-        outcome = await _generate_structured(client, system_prompt, user_message, pack)
+        outcome = await _generate_structured(
+            client, system_prompt, user_message, pack, user_id=activity.user_id
+        )
 
     read = _persist_report(
         db,
@@ -437,7 +442,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
         api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
     )
     outcome = await _generate_message(
-        client, system_prompt, user_message, pack, is_opener=True
+        client, system_prompt, user_message, pack, is_opener=True, user_id=activity.user_id
     )
 
     read = _persist_report(
@@ -535,7 +540,9 @@ async def generate_fuller(
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
     )
-    outcome = await _generate_message(client, system_prompt, user_message, pack)
+    outcome = await _generate_message(
+        client, system_prompt, user_message, pack, user_id=activity.user_id
+    )
 
     # Preserve the opener prose on the evolving row — the fuller LLM does not emit
     # opener_message, so carry it forward so the two-line thread (opener + fuller)
@@ -769,10 +776,19 @@ async def _generate_structured(
     system_prompt: str,
     user_message: str,
     pack: CoachContextPack,
+    *,
+    user_id=None,
 ) -> _GenOutcome:
     """The legacy structured path: constrained-JSON generation, policy gate, one
     corrective retry, templated fallback on failure. Behaviour preserved from the
     prior inline implementation."""
+    # P2.2: at the per-user/global spend cap, degrade to the deterministic
+    # fallback BEFORE spending any tokens (the cap is observed before the call).
+    if user_id is not None and budget_over(user_id):
+        logger.info("coach_budget_degraded_structured", extra={"user_id": str(user_id)})
+        return _GenOutcome(
+            report_dump=_structured_fallback_dump(), raw_response="", is_fallback=True,
+        )
     raw_response = ""
     policy_violations: List[str] = []
     try:
@@ -848,13 +864,19 @@ async def _call_message(
     user_message: str,
     *,
     max_tokens: int = _MESSAGE_MAX_TOKENS,
+    user_id=None,
 ):
-    return await client.generate_coach_message(
+    result = await client.generate_coach_message(
         system=system_prompt,
         user=user_message,
         tools=[RECORD_COACH_TAIL_TOOL],
         max_tokens=max_tokens,
     )
+    # P2.2: count EVERY sub-call's spend (the retry/escalation fan-out is the
+    # cost lever the going-live doc flags), keyed by activity-owner user_id.
+    if user_id is not None:
+        budget_record(user_id, client.model, result.input_tokens, result.output_tokens)
+    return result
 
 
 async def _reattempt_if_truncated(
@@ -865,6 +887,7 @@ async def _reattempt_if_truncated(
     *,
     escalated: int,
     context: str,
+    user_id=None,
 ):
     """If a prose-message call stopped on the token ceiling, re-attempt it ONCE at
     a larger budget and return whichever result is better (#295/#282).
@@ -888,7 +911,7 @@ async def _reattempt_if_truncated(
         context,
     )
     retried = await _call_message(
-        client, system_prompt, user_message, max_tokens=escalated
+        client, system_prompt, user_message, max_tokens=escalated, user_id=user_id
     )
     if retried.stop_reason != "refusal":
         result = retried
@@ -947,6 +970,7 @@ async def _generate_message(
     pack: CoachContextPack,
     *,
     is_opener: bool = False,
+    user_id=None,
 ) -> _GenOutcome:
     """The prose-message path: one adaptive-thinking call producing prose + a tool
     tail, with stop_reason-aware retries, the policy gate over message+tail, and
@@ -968,6 +992,12 @@ async def _generate_message(
     escalated = _OPENER_MAX_TOKENS_ESCALATED if is_opener else _MESSAGE_MAX_TOKENS_ESCALATED
     merge = merge_opener if is_opener else merge_report
     fallback = _opener_fallback_outcome if is_opener else _message_fallback_outcome
+    # P2.2: at the spend cap, degrade to the deterministic fallback BEFORE the
+    # call (cap observed before tokens are spent; one user's cap never affects
+    # another since the counter is keyed by activity-owner user_id).
+    if user_id is not None and budget_over(user_id):
+        logger.info("coach_budget_degraded_message", extra={"user_id": str(user_id)})
+        return fallback()
     # #217: the prose call occasionally returns no text block at all (an empty-prose
     # response, observed as transient — an immediate re-run recovers it). A single
     # in-process retry turns that one hiccup into a real turn instead of a fallback,
@@ -984,7 +1014,9 @@ async def _generate_message(
     for attempt in range(_EMPTY_PROSE_ATTEMPTS):
         budget = max_tokens if attempt == 0 else escalated
         try:
-            result = await _call_message(client, system_prompt, user_message, max_tokens=budget)
+            result = await _call_message(
+                client, system_prompt, user_message, max_tokens=budget, user_id=user_id
+            )
             if result.stop_reason == "refusal":
                 logger.warning("coach message refused; storing fallback")
                 return fallback()
@@ -992,7 +1024,7 @@ async def _generate_message(
             # Shared with the policy-fix retry's truncation re-attempt (#282).
             result = await _reattempt_if_truncated(
                 client, system_prompt, user_message, result,
-                escalated=escalated, context="first attempt",
+                escalated=escalated, context="first attempt", user_id=user_id,
             )
 
             parsed = parse_blocks(result.content_blocks)
@@ -1002,7 +1034,7 @@ async def _generate_message(
                 logger.info("coach message skipped the tail tool; one corrective retry")
                 nudge = f"{user_message}\n\n{_TAIL_REMINDER}"
                 result2 = await _call_message(
-                    client, system_prompt, nudge, max_tokens=budget
+                    client, system_prompt, nudge, max_tokens=budget, user_id=user_id
                 )
                 parsed2 = parse_blocks(result2.content_blocks)
                 if parsed2.tail is not None and parsed2.message.strip():
@@ -1042,7 +1074,7 @@ async def _generate_message(
         )
         retry_attempt = await _retry_message_with_fixes(
             client, system_prompt, user_message, pack, chosen.violations,
-            is_opener=is_opener,
+            is_opener=is_opener, user_id=user_id,
         )
         if retry_attempt is not None:
             # #274: store the BETTER attempt — a complete attempt is not clobbered by
@@ -1082,6 +1114,7 @@ async def _retry_message_with_fixes(
     violations: List[PolicyViolation],
     *,
     is_opener: bool = False,
+    user_id=None,
 ) -> Optional[_MsgAttempt]:
     """Re-prompt once with fix instructions for the message-policy violations.
     Returns the retry as a _MsgAttempt (#274), or None when the retry produced
@@ -1109,7 +1142,7 @@ async def _retry_message_with_fixes(
     )
     try:
         result = await _call_message(
-            client, system_prompt, retry_message, max_tokens=max_tokens
+            client, system_prompt, retry_message, max_tokens=max_tokens, user_id=user_id
         )
         if result.stop_reason == "refusal":
             return None
@@ -1119,7 +1152,7 @@ async def _retry_message_with_fixes(
         # re-attempt refuses, so the refusal check above still covers that case.
         result = await _reattempt_if_truncated(
             client, system_prompt, retry_message, result,
-            escalated=escalated, context="policy retry",
+            escalated=escalated, context="policy retry", user_id=user_id,
         )
         report = merge(parse_blocks(result.content_blocks))
     except (EmptyMessageError, anthropic.APIError) as e:
