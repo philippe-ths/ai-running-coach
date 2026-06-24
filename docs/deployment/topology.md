@@ -64,6 +64,20 @@ There are two paths, both adding HTTP Basic credentials server-side so the brows
 `frontend/vercel.json` has a `/api/:path* → /api/:path*` rewrite that keeps `/api` paths handled by the
 app (the route handler) rather than treated as static; the route handler, not the rewrite, is the proxy.
 
+Because client calls are same-origin (the browser only ever talks to the frontend, which proxies
+server-side), the browser never makes a cross-origin call to the backend on the normal path, so
+`CORS_ALLOWED_ORIGINS` is not on the seam's critical path — it only matters if a direct browser→backend
+call is ever added.
+
+### Custom domain (#124)
+
+No hostname is hardcoded in the code — every seam URL is an env var
+(`BACKEND_URL`, `APP_BASE_URL`, `API_BASE_URL`, `CORS_ALLOWED_ORIGINS`,
+`STRAVA_REDIRECT_URI`, `STRAVA_WEBHOOK_CALLBACK_URL`), so putting a custom domain
+in front of both platforms is a config + DNS change, not a code change. The
+turnkey operator checklist (DNS, per-platform env, Strava callback re-registration,
+Clerk production instance, and verification) is **[custom-domain.md](custom-domain.md)**.
+
 ### Auth model (Phase 1)
 
 - The backend gates every route with `BasicAuthMiddleware` (`backend/app/core/auth.py`).
