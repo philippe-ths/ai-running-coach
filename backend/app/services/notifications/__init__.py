@@ -40,6 +40,27 @@ def _recipient_for_channel(channel: str) -> str:
     return settings.NOTIFY_TO
 
 
+def resolve_recipient(user) -> Optional[str]:
+    """The per-user recipient address for the active channel (P2.4, #120).
+
+    Telegram routes to the user's bound chat (`telegram_chat_id`) — the decided
+    per-user channel (ADR 0023). Returns None when the user has no bound chat,
+    which the composer turns into the configured global recipient (single-user
+    back-compat) and, if that is also unset, into no notification. Tolerant of a
+    None/partial user so a missing relationship never breaks the pipeline.
+
+    Email is intentionally NOT per-user-routed here: ADR 0023 defers the per-user
+    email-API channel, so the email path stays on the global NOTIFY_TO (its
+    existing behavior). Routing it to `user.email` would silently change where the
+    single-user deployment's email lands.
+    """
+    if user is None:
+        return None
+    if _active_channel() == "telegram":
+        return getattr(user, "telegram_chat_id", None)
+    return None
+
+
 def _active_channel() -> Optional[str]:
     """Return the configured notification channel, or None if unconfigured.
 
@@ -100,6 +121,7 @@ def build_coach_notification(
     distance_m: int,
     app_base_url: str,
     stage: str = "fuller",
+    recipient: Optional[str] = None,
 ) -> Optional[Notification]:
     """Render a coach report into a Notification for the configured channel.
 
@@ -116,6 +138,10 @@ def build_coach_notification(
     `stage` is the A4 Exchange stage ("fuller" default, "opener" for the
     stage-one notification). Both stages are CoachMessageReport rows, so the stage
     cannot be sniffed from the report shape — it is passed explicitly by the job.
+
+    `recipient` (P2.4, #120) is the activity owner's per-user address on the
+    active channel (from `resolve_recipient`). When None it falls back to the
+    configured global recipient, so the single-user path is byte-identical.
     """
     channel = _active_channel()
     renderer = _renderer_for_channel(channel)
@@ -127,7 +153,7 @@ def build_coach_notification(
         distance_m=distance_m,
         app_base_url=app_base_url,
         stage=stage,
-        to=_recipient_for_channel(channel),
+        to=recipient or _recipient_for_channel(channel),
     )
 
 
@@ -138,6 +164,7 @@ def build_receipt_notification(
     activity_id: str,
     distance_m: int,
     app_base_url: str,
+    recipient: Optional[str] = None,
 ) -> Optional[Notification]:
     """Render a deterministic receipt (#296) into a Notification for the configured
     channel, or None when no channel is configured.
@@ -147,7 +174,10 @@ def build_receipt_notification(
     for the title, and the activity id for the deep link + tap tokens. Telegram
     carries the RPE/pain/done tap keyboard; email renders the prose only (it cannot
     tap). A thin dispatcher (#333): channel selection here, rendering in the
-    adapter."""
+    adapter.
+
+    `recipient` (P2.4, #120) is the activity owner's per-user address; when None it
+    falls back to the configured global recipient (single-user back-compat)."""
     channel = _active_channel()
     renderer = _renderer_for_channel(channel)
     if renderer is None:
@@ -158,7 +188,7 @@ def build_receipt_notification(
         activity_id=activity_id,
         distance_m=distance_m,
         app_base_url=app_base_url,
-        to=_recipient_for_channel(channel),
+        to=recipient or _recipient_for_channel(channel),
     )
 
 
@@ -176,5 +206,6 @@ __all__ = [
     "build_coach_notification",
     "build_receipt_notification",
     "get_notifier",
+    "resolve_recipient",
     "set_notifier",
 ]
