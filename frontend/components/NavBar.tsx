@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { User } from 'lucide-react';
 
 const LINKS = [
   { href: '/activities', label: 'Activities' },
@@ -40,6 +41,20 @@ export default function NavBar() {
             </Link>
           ))}
         </div>
+        {/* On mobile the nav links live in the bottom tab bar; Profile stays
+            here as a top-right icon (the bottom bar omits it). */}
+        <Link
+          href="/profile"
+          aria-label="Profile"
+          aria-current={isActive('/profile') ? 'page' : undefined}
+          className={`md:hidden flex items-center justify-center h-11 w-11 rounded-full transition-colors ${
+            isActive('/profile')
+              ? 'text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/30'
+              : 'text-gray-600 hover:text-blue-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:text-blue-400 dark:hover:bg-gray-800'
+          }`}
+        >
+          <User className="h-6 w-6" aria-hidden="true" />
+        </Link>
       </div>
     </nav>
   );

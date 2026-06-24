@@ -2,14 +2,13 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Activity, Gauge, TrendingUp, User, LucideIcon } from 'lucide-react';
+import { Home, Activity, Gauge, TrendingUp, LucideIcon } from 'lucide-react';
 
 const TABS: { href: string; label: string; Icon: LucideIcon }[] = [
   { href: '/', label: 'Home', Icon: Home },
   { href: '/activities', label: 'Activities', Icon: Activity },
   { href: '/load', label: 'Load', Icon: Gauge },
   { href: '/trends', label: 'Trends', Icon: TrendingUp },
-  { href: '/profile', label: 'Profile', Icon: User },
 ];
 
 // Native-app-style bottom tab bar. Mobile only (md:hidden); the top NavBar's
