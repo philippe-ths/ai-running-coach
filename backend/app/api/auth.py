@@ -28,7 +28,14 @@ def strava_login():
 
 @router.get("/auth/strava/status", response_model=StravaConnectionStatus)
 def strava_status(db: Session = Depends(get_db)) -> StravaConnectionStatus:
-    """Reports whether a Strava account is linked, and surfaces the athlete id and token scope."""
+    """Reports whether a Strava account is linked, and surfaces the athlete id and token scope.
+
+    NOTE: the whole Strava OAuth surface (login/callback/status) is ADR-exempt
+    from the per-user session (ADR 0022 exempts /api/auth/*), so this stays
+    single-user (the first linked account) until the multi-user Strava-linking
+    follow-up threads the verified user through OAuth state. It returns no
+    training data; only the connection's athlete id and scope.
+    """
     account = db.execute(select(StravaAccount)).scalars().first()
     if account is None:
         return StravaConnectionStatus(connected=False)

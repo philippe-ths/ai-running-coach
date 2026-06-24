@@ -131,7 +131,7 @@ def _list_query_count(db, n_activities: int) -> int:
         _seed_activity(db, uid, days_ago=i + 1)
     db.expire_all()
     with _capture(db) as cap:
-        activities = activity_queries.get_activities(db, limit=100)
+        activities = activity_queries.get_activities(db, limit=100, user_id=uid)
         # replicate the endpoint's per-item headline composition (reads raw_summary)
         for act in activities:
             if act.metrics:

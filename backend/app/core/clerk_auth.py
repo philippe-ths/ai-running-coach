@@ -336,3 +336,29 @@ def verify_clerk_session(
         ) from exc
 
     return resolve_user_by_email(db, email)
+
+
+def require_current_user(
+    user: Optional[User] = Depends(verify_clerk_session),
+    db: Session = Depends(get_db),
+) -> User:
+    """The authenticated user, guaranteed non-None — the P2.1 scoping anchor.
+
+    Clerk mode: verify_clerk_session has already resolved the user (or raised
+    401), so it is non-None. Degrade mode (Clerk unconfigured, non-production):
+    returns the single local user, creating the default one for a fresh local DB
+    (preserving the legacy auto-create convenience for local dev + the test
+    suite). Endpoints scope every query to this user's id.
+    """
+    if user is not None:
+        return user
+    if settings.clerk_enabled:
+        # Defensive: verify_clerk_session would already have raised.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
+    new_user = User(email="local@runner.com")
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
