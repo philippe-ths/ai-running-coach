@@ -86,14 +86,14 @@ class Settings(BaseSettings):
     SMTP_USE_STARTTLS: bool = True
     NOTIFY_TO: str = ""
 
-    # Polling fallback for missed Strava webhooks
-    POLLING_INTERVAL_SECONDS: int = 120
-    # How far back each poll asks Strava for activities. Must exceed the
-    # longest outage we expect the self-healing poll to recover from: any gap
-    # older than this window can only be closed by a manual sync. Default 7
-    # days. For a single recreational runner this stays within one page, so it
-    # does not increase the steady-state Strava call budget. See #109.
-    POLLING_LOOKBACK_SECONDS: int = 604800  # 7 days
+    # User-triggered self-healing for missed Strava webhooks (#123, ADR 0006).
+    # The time-based polling fallback was removed: Strava's rate limit is
+    # per-application, so steady-state polling across many users exhausts the
+    # shared budget. Instead, an authenticated app-open (or a Refresh tap) makes
+    # ONE Strava call to detect activities the webhook missed. This bound caps how
+    # often that check runs per user, so rapid refreshes do not multiply Strava
+    # calls. Default: at most one check per user per minute.
+    SELF_HEAL_MIN_INTERVAL_SECONDS: int = 60
 
     # Historical stream-analysis backfill (#110). A manually-triggered,
     # self-pacing job fetches streams + re-runs analysis for activities that

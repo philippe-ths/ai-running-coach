@@ -102,21 +102,22 @@ class TestJobTimeouts:
         assert queue._default_timeout == settings.RQ_JOB_TIMEOUT_SECONDS
 
     def test_scheduled_fuller_turn_sets_timeout(self):
+        # #123/ADR 0006: deferred jobs now use RQ-native queue.enqueue_in (drained
+        # by the worker's with_scheduler), and RQ-native uses `job_timeout`, not
+        # rq-scheduler's `timeout`.
         from app.core.config import settings
         from app.jobs import process_new_activity as job_mod
 
-        fake_scheduler = MagicMock()
-        with patch("rq_scheduler.Scheduler", return_value=fake_scheduler), \
-             patch("redis.Redis.from_url", return_value=MagicMock()):
+        fake_queue = MagicMock()
+        with patch("app.core.queue.queue", fake_queue):
             job_mod._schedule_fuller_turn("act-1")
-        assert fake_scheduler.enqueue_in.call_args.kwargs.get("timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
+        assert fake_queue.enqueue_in.call_args.kwargs.get("job_timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
 
     def test_scheduled_block_complete_sets_timeout(self):
         from app.core.config import settings
         from app.jobs import process_new_activity as job_mod
 
-        fake_scheduler = MagicMock()
-        with patch("rq_scheduler.Scheduler", return_value=fake_scheduler), \
-             patch("redis.Redis.from_url", return_value=MagicMock()):
+        fake_queue = MagicMock()
+        with patch("app.core.queue.queue", fake_queue):
             job_mod._schedule_block_complete("block-1", "act-1")
-        assert fake_scheduler.enqueue_in.call_args.kwargs.get("timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
+        assert fake_queue.enqueue_in.call_args.kwargs.get("job_timeout") == settings.RQ_JOB_TIMEOUT_SECONDS

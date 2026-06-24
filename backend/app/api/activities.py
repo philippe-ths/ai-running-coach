@@ -169,6 +169,29 @@ async def sync_activities(
 
     return stats
 
+
+@router.post("/activities/refresh")
+def refresh_activities(db: Session = Depends(get_db)):
+    """Self-healing check for activities a Strava webhook missed (#123, ADR 0006).
+
+    Triggered on app-open and by the user-facing Refresh affordance; replaces the
+    removed time-based polling fallback. Enqueues a bounded per-user check (one
+    Strava call) on the worker and returns immediately, so it never adds Strava
+    latency to the page. The bound (one check per user per
+    SELF_HEAL_MIN_INTERVAL_SECONDS) means rapid taps do not multiply Strava calls,
+    and the existing per-activity dedup still guarantees once-only processing.
+    """
+    from app.jobs.self_heal import maybe_enqueue_self_heal
+
+    # Single Player Mode: resolve the one linked account's owner. P2.1's
+    # require_current_user replaces this with the authenticated user.
+    account = db.query(StravaAccount).first()
+    if account is None:
+        return {"status": "no_account"}
+    triggered = maybe_enqueue_self_heal(account.user_id)
+    return {"status": "checking" if triggered else "throttled"}
+
+
 @router.get("/activities", response_model=List[ActivityRead])
 def read_activities(
     skip: int = 0,

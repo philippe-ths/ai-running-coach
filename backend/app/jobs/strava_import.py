@@ -155,13 +155,14 @@ async def run_import_batch(
 
 
 def _schedule_next_batch(import_id: str) -> None:
-    """Schedule the next batch after the configured pause via rq-scheduler, so the
-    single worker stays free for webhooks and polling between batches."""
-    from redis import Redis
-    from rq_scheduler import Scheduler
+    """Schedule the next batch after the configured pause, so the single worker
+    stays free for webhooks between batches.
 
-    scheduler = Scheduler(connection=Redis.from_url(settings.REDIS_URL))
-    scheduler.enqueue_in(
+    Uses RQ-native deferred scheduling (drained by the worker's `with_scheduler`),
+    so no separate rq-scheduler process is needed (#123/ADR 0006)."""
+    from app.core.queue import queue
+
+    queue.enqueue_in(
         timedelta(seconds=settings.IMPORT_BATCH_PAUSE_SECONDS),
         strava_import_job,
         import_id,

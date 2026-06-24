@@ -374,14 +374,14 @@ async def test_opener_crash_before_schedule_recovers_on_rerun(db, configured, no
 
 async def test_schedule_fuller_turn_uses_enqueue_in(monkeypatch):
     # (sync body; async only to satisfy the module-wide asyncio mark)
+    # #123/ADR 0006: deferred jobs use RQ-native queue.enqueue_in (drained by the
+    # worker's with_scheduler — no separate rq-scheduler process). RQ-native uses
+    # `job_timeout`, not rq-scheduler's `timeout`.
     from datetime import timedelta
 
     captured = {}
 
-    class _FakeScheduler:
-        def __init__(self, connection=None):
-            captured["constructed"] = True
-
+    class _FakeQueue:
         def enqueue_in(self, delta, func, *args, **kwargs):
             captured["delta"] = delta
             captured["func"] = func
@@ -389,8 +389,7 @@ async def test_schedule_fuller_turn_uses_enqueue_in(monkeypatch):
             captured["kwargs"] = kwargs
 
     monkeypatch.setattr(settings, "EXCHANGE_STAGE2_DELAY_SECONDS", 10800)
-    monkeypatch.setattr("rq_scheduler.Scheduler", _FakeScheduler)
-    monkeypatch.setattr("redis.Redis.from_url", staticmethod(lambda url: object()))
+    monkeypatch.setattr("app.core.queue.queue", _FakeQueue())
 
     _schedule_fuller_turn("abc-123")
 
@@ -398,7 +397,7 @@ async def test_schedule_fuller_turn_uses_enqueue_in(monkeypatch):
     assert captured["func"] is pna.fuller_turn_job
     assert captured["args"] == ("abc-123",)
     # #264: the slow fuller turn must outlast RQ's 180s default death penalty.
-    assert captured["kwargs"].get("timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
+    assert captured["kwargs"].get("job_timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
 
 
 async def test_schedule_block_complete_uses_enqueue_in(monkeypatch):
@@ -406,10 +405,7 @@ async def test_schedule_block_complete_uses_enqueue_in(monkeypatch):
 
     captured = {}
 
-    class _FakeScheduler:
-        def __init__(self, connection=None):
-            pass
-
+    class _FakeQueue:
         def enqueue_in(self, delta, func, *args, **kwargs):
             captured["delta"] = delta
             captured["func"] = func
@@ -417,12 +413,11 @@ async def test_schedule_block_complete_uses_enqueue_in(monkeypatch):
             captured["kwargs"] = kwargs
 
     monkeypatch.setattr(settings, "BLOCK_GAP_SECONDS", 1800)
-    monkeypatch.setattr("rq_scheduler.Scheduler", _FakeScheduler)
-    monkeypatch.setattr("redis.Redis.from_url", staticmethod(lambda url: object()))
+    monkeypatch.setattr("app.core.queue.queue", _FakeQueue())
 
     pna._schedule_block_complete("block-1", "act-1")
 
     assert captured["delta"] == timedelta(seconds=1800)
     assert captured["func"] is pna.block_complete_job
     assert captured["args"] == ("block-1", "act-1")
-    assert captured["kwargs"].get("timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
+    assert captured["kwargs"].get("job_timeout") == settings.RQ_JOB_TIMEOUT_SECONDS

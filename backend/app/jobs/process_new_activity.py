@@ -412,41 +412,47 @@ async def _run_opener_stage(
 
 
 def _schedule_block_complete(block_id: str, activity_id: str) -> None:
-    """Enqueue the block-complete check after the grouping gap via rq-scheduler
-    (the fuller-timer pattern): every processed activity schedules one; stale
-    checks no-op instead of being cancelled."""
-    from redis import Redis
-    from rq_scheduler import Scheduler
+    """Enqueue the block-complete check after the grouping gap (the fuller-timer
+    pattern): every processed activity schedules one; stale checks no-op instead
+    of being cancelled.
 
-    scheduler = Scheduler(connection=Redis.from_url(settings.REDIS_URL))
-    # timeout (#264): rq-scheduler pops `timeout` into the created job. block-complete
-    # runs the opener generation, so it needs the same generous death-penalty ceiling
-    # as the rest of the coach jobs rather than RQ's 180s default.
-    scheduler.enqueue_in(
+    Uses RQ-native deferred scheduling (drained by the worker's `with_scheduler`),
+    so no separate rq-scheduler process is needed (#123/ADR 0006)."""
+    from app.core.queue import queue
+
+    # job_timeout (#264): block-complete runs the opener generation, so it needs
+    # the same generous death-penalty ceiling as the rest of the coach jobs rather
+    # than RQ's 180s default. RQ-native enqueue_in uses `job_timeout` (rq-scheduler
+    # used `timeout`); the shared queue's default_timeout already supplies it, but
+    # we pass it explicitly to keep the #264 intent legible.
+    queue.enqueue_in(
         timedelta(seconds=settings.BLOCK_GAP_SECONDS),
         block_complete_job,
         block_id,
         activity_id,
-        timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
+        job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
     )
 
 
 def _schedule_fuller_turn(activity_id: str) -> None:
-    """Enqueue the fuller-turn job after the stage-two delay via rq-scheduler (same
-    pattern as the backfill self-pacing), so the worker stays free between stages.
-    A reply may fire the fuller earlier; the fuller job's sentinel makes the late
-    timer a harmless no-op (no timer cancellation, which rq-scheduler does racily)."""
-    from redis import Redis
-    from rq_scheduler import Scheduler
+    """Enqueue the fuller-turn job after the stage-two delay (same pattern as the
+    backfill self-pacing), so the worker stays free between stages. A reply may
+    fire the fuller earlier; the fuller job's sentinel makes the late timer a
+    harmless no-op (no timer cancellation).
 
-    scheduler = Scheduler(connection=Redis.from_url(settings.REDIS_URL))
-    # timeout (#264): the fuller turn is the heavy two-stage generation (~120-360s),
-    # so it must outlast RQ's 180s default or the death penalty kills it mid-write.
-    scheduler.enqueue_in(
+    Uses RQ-native deferred scheduling (drained by the worker's `with_scheduler`),
+    so no separate rq-scheduler process is needed (#123/ADR 0006)."""
+    from app.core.queue import queue
+
+    # job_timeout (#264): the fuller turn is the heavy two-stage generation
+    # (~120-360s), so it must outlast RQ's 180s default or the death penalty kills
+    # it mid-write. RQ-native enqueue_in uses `job_timeout` (rq-scheduler used
+    # `timeout`).
+    queue.enqueue_in(
         timedelta(seconds=settings.EXCHANGE_STAGE2_DELAY_SECONDS),
         fuller_turn_job,
         activity_id,
-        timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
+        job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
     )
 
 
