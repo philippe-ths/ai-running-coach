@@ -1,7 +1,7 @@
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, auth, activities, blocks, webhooks, profile, trends, coach, debug, strava_import, materials
+from app.api import health, auth, activities, blocks, webhooks, profile, trends, coach, debug, strava_import, materials, account
 from app.core.auth import BasicAuthMiddleware
 from app.core.clerk_auth import verify_clerk_session
 from app.core.config import settings
@@ -54,6 +54,7 @@ app.include_router(webhooks.router, prefix="/api", tags=["Webhooks"])
 
 # Application routers: every route requires a verified Clerk session.
 app.include_router(profile.router, prefix="/api", tags=["Profile"], dependencies=_require_session)
+app.include_router(account.router, prefix="/api", tags=["Account"], dependencies=_require_session)
 app.include_router(activities.router, prefix="/api", tags=["Activities"], dependencies=_require_session)
 app.include_router(strava_import.router, prefix="/api", tags=["Strava Import"], dependencies=_require_session)
 app.include_router(blocks.router, prefix="/api", tags=["Blocks"], dependencies=_require_session)
