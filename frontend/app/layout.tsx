@@ -2,6 +2,7 @@ import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import { Fraunces, Hanken_Grotesk, IBM_Plex_Mono } from 'next/font/google';
 import NavBar from '@/components/NavBar';
+import BottomNav from '@/components/BottomNav';
 import ThemeProvider from '@/components/ThemeProvider';
 
 // Three deliberate type roles: Fraunces (serif) is the coach's voice + display
@@ -52,9 +53,10 @@ export default function RootLayout({
       <body className="font-sans min-h-screen flex flex-col">
         <ThemeProvider>
           <NavBar />
-          <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-8">
+          <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-8 pb-[calc(4rem+env(safe-area-inset-bottom)+1rem)] md:pb-8">
             {children}
           </main>
+          <BottomNav />
         </ThemeProvider>
       </body>
     </html>
