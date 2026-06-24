@@ -25,7 +25,12 @@ verbatim — four exceptions:
 
 - forwarded (verbatim): effort, duration_class, structure, is_hilly, is_race,
   time_in_zones, flags, confidence, confidence_reasons, risk_level, risk_score,
-  risk_reasons, training_context, discount_signals.
+  risk_reasons, discount_signals.
+- **training_context → reduced.** The stored column carries `intensity_distribution_7d`
+  plus the recovery-recency signals. `_strip_training_context_for_coach` (`context.py`,
+  #462) drops the unreferenced `intensity_distribution_7d` from the coach pack, keeping
+  `days_since_last_hard` / `hard_sessions_this_week` (used by `risk.py` at analyse time and
+  by prompt rule 11). The stored `DerivedMetric` column keeps the full dict.
 - **interval_structure / workout_match / interval_kpis → gated (collapsed).** The
   interval/workout group rides into `pack.metrics` as the structured trio only when a
   session is detected. When none is detected, `to_serializable_dict` collapses all three
