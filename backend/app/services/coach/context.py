@@ -559,15 +559,22 @@ def build_focus_payload(
     if profile is None:
         profile = _load_profile(db, subject.user_id)
 
-    # Zone calibration: only true if user explicitly set max_hr with a known source
+    # Zone calibration: calibrated when the runner has Strava-sourced HR zones
+    # (the actual time-in-zone binning basis, #297/#458) OR explicitly set max_hr
+    # with a known source. Strava zones take precedence as the basis and are never
+    # discounted; the analysis pipeline already treats them as calibrated for
+    # interval KPIs, and this gate keeps the coach pack consistent.
+    has_strava_zones = bool(profile and getattr(profile, "hr_zones", None))
     has_explicit_max_hr = bool(
         profile
         and profile.max_hr
         and profile.max_hr > 100
         and getattr(profile, "max_hr_source", None)  # must have a source
     )
-    zones_calibrated = has_explicit_max_hr
-    if has_explicit_max_hr:
+    zones_calibrated = has_strava_zones or has_explicit_max_hr
+    if has_strava_zones:
+        zones_basis = "strava_zones"
+    elif has_explicit_max_hr:
         zones_basis = f"user_{profile.max_hr_source}"
     else:
         zones_basis = "uncalibrated"
