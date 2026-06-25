@@ -278,12 +278,33 @@ def regenerate_coach_report(
     # (3 attempts, 60/300/900s backoffs) used by the create/poll paths, so a
     # transient streaming disconnect (httpx.RemoteProtocolError) retries at the
     # RQ level rather than silently leaving the runner with a stale fallback report.
-    queue.enqueue(
-        regenerate_report_job, str(activity_id),
-        job_id=job_id,
-        job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
-        retry=PIPELINE_RETRY,
-    )
+    # #483: the cooldown guard above degrades open on a Redis error, so a queue/
+    # Redis blip lands here with the enqueue still to do. Left unguarded, an enqueue
+    # failure propagated as a raw 500 to the runner ("Couldn't start regeneration
+    # (500)"). Guard it: a failed start must never surface a 500. Free the cooldown
+    # key first (best-effort) so the runner's "Try again" can actually re-enqueue
+    # instead of short-circuiting on a key set for a job that never started, then
+    # return an actionable 503.
+    try:
+        queue.enqueue(
+            regenerate_report_job, str(activity_id),
+            job_id=job_id,
+            job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
+            retry=PIPELINE_RETRY,
+        )
+    except Exception as exc:  # noqa: BLE001 — a queue failure must not 500 the runner
+        logger.warning(
+            "regenerate_enqueue_failed",
+            extra={"activity_id": str(activity_id), "error": str(exc)},
+        )
+        try:
+            queue.connection.delete(cooldown_key)
+        except Exception:  # noqa: BLE001 — Redis already unreachable; best-effort
+            pass
+        raise HTTPException(
+            status_code=503,
+            detail="Couldn't start the coach analysis just now — please try again in a moment.",
+        )
     return {"status": "regenerating"}
 
 

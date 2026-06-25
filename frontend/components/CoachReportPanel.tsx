@@ -219,7 +219,21 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
         `/api/activities/${activityId}/coach-report/regenerate`,
         { method: 'POST' },
       );
-      if (!res.ok) throw new Error(`Couldn't start regeneration (${res.status})`);
+      if (!res.ok) {
+        // #483: surface the server's actionable message (a 503 from a queue blip
+        // carries one) rather than a bare status code. The error state already
+        // renders a working "Try again", so the runner lands on a retry, never a
+        // raw 500.
+        let detail = '';
+        try {
+          detail = ((await res.json())?.detail as string) ?? '';
+        } catch {
+          // non-JSON error body; fall back to the friendly default below
+        }
+        throw new Error(
+          detail || 'Could not start your coach analysis. Please try again in a moment.',
+        );
+      }
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : 'Could not start regeneration.');
       setStatus('error');

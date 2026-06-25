@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from tests.test_coach_report_versioning import _seed_activity
 
@@ -76,6 +77,63 @@ class TestRegenerateEndpoint:
                    side_effect=AssertionError("must not call the LLM in the request")):
             res = client.post(f"/api/activities/{activity.id}/coach-report/regenerate")
         assert res.status_code == 202
+
+
+class TestRegenerateEnqueueFailure:
+    """#483: a queue/Redis failure on START must never surface a raw 500.
+
+    The cooldown guard degrades open on a Redis error, so an enqueue failure lands
+    in the request with the job unstarted. Before the fix the unguarded enqueue
+    propagated as a 500 ("Couldn't start regeneration (500)"); now it returns an
+    actionable 503 and frees the cooldown so "Try again" can re-enqueue.
+    """
+
+    def test_enqueue_failure_returns_503_not_500(self, client: TestClient, db):
+        activity = _seed_activity(db)
+        fake_queue = MagicMock()
+        fake_queue.connection.set.return_value = True  # cooldown acquired
+        fake_queue.enqueue.side_effect = RedisConnectionError("redis down")
+        with patch("app.core.queue.queue", fake_queue):
+            res = client.post(f"/api/activities/{activity.id}/coach-report/regenerate")
+        assert res.status_code == 503  # not a raw 500
+        # the runner gets an actionable message, not a stack trace
+        assert "try again" in res.json()["detail"].lower()
+
+    def test_enqueue_failure_frees_cooldown_so_retry_can_reenqueue(self, client: TestClient, db):
+        # The cooldown key was set for a job that never started; it must be cleared
+        # so the next tap is not short-circuited to {"status": "cooldown"}.
+        activity = _seed_activity(db)
+        fake_queue = MagicMock()
+        fake_queue.connection.set.return_value = True
+        fake_queue.enqueue.side_effect = RedisConnectionError("redis down")
+        with patch("app.core.queue.queue", fake_queue):
+            client.post(f"/api/activities/{activity.id}/coach-report/regenerate")
+        fake_queue.connection.delete.assert_called_once_with(
+            f"coach_regen_cooldown:{activity.id}"
+        )
+
+    def test_cooldown_delete_failure_still_returns_503(self, client: TestClient, db):
+        # Redis fully unreachable: even the best-effort cooldown cleanup raises. The
+        # endpoint must still degrade to 503, never a 500.
+        activity = _seed_activity(db)
+        fake_queue = MagicMock()
+        fake_queue.connection.set.return_value = True
+        fake_queue.enqueue.side_effect = RedisConnectionError("redis down")
+        fake_queue.connection.delete.side_effect = RedisConnectionError("redis down")
+        with patch("app.core.queue.queue", fake_queue):
+            res = client.post(f"/api/activities/{activity.id}/coach-report/regenerate")
+        assert res.status_code == 503
+
+    def test_healthy_enqueue_unchanged(self, client: TestClient, db):
+        # Guard must not change the happy path: a healthy queue still enqueues + 202s.
+        activity = _seed_activity(db)
+        fake_queue = MagicMock()
+        with patch("app.core.queue.queue", fake_queue):
+            res = client.post(f"/api/activities/{activity.id}/coach-report/regenerate")
+        assert res.status_code == 202
+        assert res.json() == {"status": "regenerating"}
+        fake_queue.enqueue.assert_called_once()
+        fake_queue.connection.delete.assert_not_called()  # cooldown untouched on success
 
 
 class TestRegenerateJob:
