@@ -23,7 +23,7 @@ from typing import Optional, Sequence
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Activity, Block, Exchange
+from app.models import Activity, Block, CoachReport, Exchange
 
 logger = logging.getLogger(__name__)
 
@@ -259,19 +259,41 @@ def _latest(a: Optional[datetime], b: Optional[datetime]) -> Optional[datetime]:
     return max(a, b)
 
 
+def _primary_has_report(db: Session, block: Block) -> bool:
+    """True once a CoachReport has been written for the block's current primary.
+
+    This is the real invariant behind the freeze: the report row is keyed on the
+    primary, so once it exists a late arrival must not move the anchor out from
+    under it. Under the two-stage LLM exchange the opener writes that row (and
+    sets `opened_at` at the same time, which is why the old `opened_at` proxy
+    held). Under the receipt cadence the first activity's deterministic receipt
+    sets `opened_at` but writes NO report, so the proxy froze the primary to a
+    warmup walk before the run could win it (#487). Gating on the report itself
+    is cadence-agnostic: the primary stays recomputable until a report is keyed
+    to it, so a joining run still wins the anchor under either cadence.
+    """
+    if block.primary_activity_id is None:
+        return False
+    return (
+        db.query(CoachReport.id)
+        .filter(CoachReport.activity_id == block.primary_activity_id)
+        .first()
+        is not None
+    )
+
+
 def _recompute_block(db: Session, block: Block, *, force_primary: bool = False) -> None:
     """Recompute start/end/primary from the block's current members.
 
-    The primary is FROZEN once the block's exchange has opened: the opener
-    spoke about it and the coach report row is keyed on it, so a late arrival
-    may grow the block's bounds but never moves the exchange's anchor. A
-    runner split/merge correction (`force_primary`) recomputes it regardless —
-    an explicit correction outranks the frozen anchor.
+    The primary is FROZEN once a coach report has been keyed to it (see
+    `_primary_has_report`): the report speaks about that activity, so a late
+    arrival may grow the block's bounds but never moves the anchor out from
+    under an existing report. A runner split/merge correction (`force_primary`)
+    recomputes it regardless — an explicit correction outranks the frozen anchor.
     """
     members = db.query(Activity).filter(Activity.block_id == block.id).all()
     block.start_date = min(a.start_date for a in members)
     block.end_date = max(activity_end(a) for a in members)
-    exchange = db.query(Exchange).filter(Exchange.block_id == block.id).first()
-    if force_primary or exchange is None or exchange.opened_at is None:
+    if force_primary or not _primary_has_report(db, block):
         block.primary_activity_id = pick_primary(members).id
     db.add(block)
