@@ -260,7 +260,10 @@ def regenerate_coach_report(
     # degrades open (enqueues) if Redis is unreachable — a cost guard must never
     # block a legitimate single regeneration.
     cooldown_key = f"coach_regen_cooldown:{activity_id}"
-    job_id = f"coach-regenerate:{activity_id}"
+    # RQ forbids ":" in a job id (Job.set_id raises), so use "-" — the colon made
+    # every regeneration enqueue throw and 503 (#490). The cooldown_key above is a
+    # plain Redis key, where ":" is fine and idiomatic.
+    job_id = f"coach-regenerate-{activity_id}"
     try:
         acquired = queue.connection.set(
             cooldown_key, "1", nx=True, ex=settings.COACH_REGEN_COOLDOWN_SECONDS,

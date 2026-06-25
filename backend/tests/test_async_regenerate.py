@@ -34,16 +34,23 @@ class TestRegenerateEndpoint:
         assert call.kwargs.get("job_timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
         assert settings.RQ_JOB_TIMEOUT_SECONDS > 180
 
-    def test_passes_deterministic_job_id(self, client: TestClient, db):
+    def test_passes_deterministic_and_rq_legal_job_id(self, client: TestClient, db):
         # P2.2: a deterministic per-activity job id lets RQ collapse a racing
-        # re-tap onto one job instead of queuing duplicate generations.
+        # re-tap onto one job instead of queuing duplicate generations. It MUST
+        # also be a legal RQ job id: RQ rejects an id outside "letters, numbers,
+        # underscores and dashes" (a ":" silently 503'd every regeneration in
+        # prod, #490). The mocked queue does not run RQ's validation, so assert
+        # the charset rule here. (Asserting the rule rather than calling RQ's
+        # validator keeps this independent of RQ-version-specific internals.)
+        import re
+
         activity = _seed_activity(db)
         fake_queue = MagicMock()
         with patch("app.core.queue.queue", fake_queue):
             client.post(f"/api/activities/{activity.id}/coach-report/regenerate")
-        assert fake_queue.enqueue.call_args.kwargs.get("job_id") == (
-            f"coach-regenerate:{activity.id}"
-        )
+        job_id = fake_queue.enqueue.call_args.kwargs.get("job_id")
+        assert job_id == f"coach-regenerate-{activity.id}"  # deterministic per activity
+        assert re.fullmatch(r"[A-Za-z0-9_-]+", job_id), f"RQ-illegal job id: {job_id!r}"
 
     def test_cooldown_dedups_rapid_retaps(self, client: TestClient, db):
         # P2.2 / going-live landmine 1: the atomic Redis cooldown (SET NX EX)
