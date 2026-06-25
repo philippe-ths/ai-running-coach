@@ -8,7 +8,7 @@
   :root {
     --bg:#0f1115; --panel:#181b22; --ink:#e6e9ef; --muted:#9aa3b2; --line:#2c313c;
     --source:#3b82f6; --code:#10b981; --store:#a78bfa; --llm:#f59e0b;
-    --gate:#ef4444; --runner:#14b8a6; --memory:#a78bfa;
+    --gate:#ef4444; --runner:#ec4899; --memory:#a78bfa;
     --up:#22d3ee; --down:#f59e0b;
   }
   * { box-sizing:border-box; }
@@ -78,7 +78,7 @@
     padding:1px 6px; border-radius:4px; }
   .tag.source{background:rgba(59,130,246,.18);color:#93c5fd;} .tag.code{background:rgba(16,185,129,.18);color:#6ee7b7;}
   .tag.store{background:rgba(167,139,250,.18);color:#c4b5fd;} .tag.llm{background:rgba(245,158,11,.2);color:#fcd34d;}
-  .tag.gate{background:rgba(239,68,68,.2);color:#fca5a5;} .tag.runner{background:rgba(20,184,166,.2);color:#5eead4;}
+  .tag.gate{background:rgba(239,68,68,.2);color:#fca5a5;} .tag.runner{background:rgba(236,72,153,.2);color:#f9a8d4;}
   .tag.memory{background:rgba(167,139,250,.18);color:#c4b5fd;}
   .drawer .body { padding:16px 22px 50px; overflow-y:auto; }
   .drawer .desc { margin:0 0 8px; font-size:12.5px; color:var(--muted); }
@@ -139,6 +139,9 @@
   .kv .k { color:#7dd3fc; }
   .kv .meta { color:#5b6472; font-size:10px; }
   .kv .vline { flex:1 1 auto; min-width:0; color:#e6e9ef; word-break:break-word; }
+  /* basis 0 keeps value+trailing chips on the '=' line; only the chips wrap when tight */
+  .kv .rw > .vline { flex:1 1 0; }
+  .kv .rowchips { margin-top:3px; }
   .kv .sep { color:#525a68; }
   .kv .v.vnum{ color:#f0abfc; } .kv .v.vstr{ color:#fcd34d; } .kv .v.vbool{ color:#86efac; } .kv .v.vnull{ color:#6ee7b7; }
   .kv .nest { border-left:1px solid var(--line); margin:3px 0 4px 4px; padding-left:12px; }
@@ -159,6 +162,8 @@
     display:inline-block; font-weight:700; font-size:11px; border-radius:4px; padding:0 4px;
     vertical-align:middle; white-space:nowrap; }
   .kv .fatetag { font-size:9px; letter-spacing:.3px; margin-left:5px; padding:0 5px; cursor:default; }
+  .kv .fatetag.fatelink { cursor:pointer; }
+  .kv .fatetag.fatelink:hover { filter:brightness(1.25); }
   .legend .fchip { font-size:11px; padding:0 5px; }
   .fate-forwarded   { color:#fcd34d; background:rgba(252,211,77,.12); border:1px solid rgba(252,211,77,.34); }
   .fate-transformed { color:#c4b5fd; background:rgba(167,139,250,.15); border:1px solid rgba(167,139,250,.38); }
@@ -308,7 +313,7 @@ const worldW = LEFT + (totalCols-1)*COLPITCH + (CATS.length-1)*CATGAP + NW + 60;
 const worldH = PADTOP + maxStack + 60;
 
 const shortLabel = n => n.title.split('—')[0].split('(')[0].trim();
-const KCOL = { source:'#3b82f6', code:'#10b981', store:'#a78bfa', llm:'#f59e0b', gate:'#ef4444', runner:'#14b8a6', memory:'#a78bfa' };
+const KCOL = { source:'#3b82f6', code:'#10b981', store:'#a78bfa', llm:'#f59e0b', gate:'#ef4444', runner:'#ec4899', memory:'#a78bfa' };
 
 /* ----- category headers (one per category, at its leftmost sub-column) ----- */
 CATS.forEach(cat=>{
@@ -428,7 +433,7 @@ function openDrawer(id, up, down){
        : '<div class="grp end"><span class="lbl end">■ end of chain</span> nothing consumes this — it is the final output</div>');
   document.getElementById('dBody').innerHTML=n.body();
   document.querySelectorAll('#dRel .chip').forEach(c=>c.addEventListener('click',()=>select(c.dataset.go)));
-  document.querySelectorAll('#dBody .srctag').forEach(c=>c.addEventListener('click', e=>{ e.stopPropagation(); select(c.dataset.go); }));
+  document.querySelectorAll('#dBody .srctag, #dBody .fatetag[data-go]').forEach(c=>c.addEventListener('click', e=>{ e.stopPropagation(); select(c.dataset.go); }));
   drawer.classList.add('open');
 }
 function closeDrawer(){ drawer.classList.remove('open'); }

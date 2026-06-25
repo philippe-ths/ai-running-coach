@@ -70,14 +70,40 @@ function _fateWord(f){
   if(f.f==='gated') return 'gated:'+(f.passed===false?'blocked':'passed');
   return f.f;
 }
+// Resolve a fate's destination LABEL to a node id so the chip can link to where the field
+// went (symmetric with the source chip linking to where it was written). "the model" maps to
+// the LLM node; a "pack.activity.avg_hr"-style label resolves to its owning pack node by
+// stripping trailing field segments. Descriptive non-node targets ("(not in pack.activity)",
+// "RunnerBaseline + Trends") resolve to null and stay unlinked. Resolved lazily at render
+// time, when the inline-script globals (NODES/byId/shortLabel) exist.
+let _fateLabelMap = null;
+function _fateGo(to){
+  if(!to) return null;
+  if(to==='the model') return (typeof byId!=='undefined' && byId['llm']) ? 'llm' : null;
+  if(!_fateLabelMap){
+    _fateLabelMap = {};
+    if(typeof NODES!=='undefined') NODES.forEach(n=>{ _fateLabelMap[shortLabel(n)] = n.id; });
+  }
+  if(_fateLabelMap[to]) return _fateLabelMap[to];
+  let t = to;
+  while(t.includes('.')){
+    t = t.slice(0, t.lastIndexOf('.'));
+    if(_fateLabelMap[t]) return _fateLabelMap[t];
+  }
+  return null;
+}
 // A fate chip carries the fate GLYPH + WORD (what happened on the next hop) and \u2014 when
-// known \u2014 the DESTINATION it reached (the "where it went" label the field gets).
+// known \u2014 the DESTINATION it reached (the "where it went" label the field gets). When that
+// destination resolves to a node, the chip is a link (data-go) like the source chip.
 function _fateChip(f){
   const blocked = f.f==='gated' && f.passed===false;
   const cls = 'fate-'+(blocked?'gated-blocked':f.f);
   const word = _fateWord(f);
   const to = f.to ? ' <span class="fate-to">'+esc(f.to)+'</span>' : '';
-  return ' <span class="fatetag '+cls+'" title="'+esc(f.note||word)+'">'+_FATE_GLYPH[f.f]+' '+esc(word)+to+'</span>';
+  const go = _fateGo(f.to);
+  const goCls = go ? ' fatelink' : '';
+  const goAttr = go ? ' data-go="'+go+'"' : '';
+  return ' <span class="fatetag '+cls+goCls+'"'+goAttr+' title="'+esc(f.note||word)+'">'+_FATE_GLYPH[f.f]+' '+esc(word)+to+'</span>';
 }
 // DerivedMetric row \u2192 pack.metrics (context.build_focus_payload, context.py:593-627). MOST columns are
 // forwarded, but the hop is NOT uniformly verbatim: efficiency_analysis is reshaped and the scalar
@@ -175,27 +201,31 @@ function _rows(obj, depth, sources, fates){
     const _tag=_src ? ' <span class="srctag" data-go="'+_src.id+'" title="written by the '+esc(_src.label)+' stage">\u21a4 '+esc(_src.label)+'</span>' : '';
     const _fate=(depth===0 && fates && fates[k]) ? fates[k] : null;
     const _ftag=_fate ? _fateChip(_fate) : '';
-    const key='<span class="k">'+esc(k)+'</span>'+_tag+_ftag;
+    // the source/fate chips ride AFTER the value, not the field name: inline for scalar
+    // rows, on a trailing line (cblock) for multi-line block rows.
+    const name='<span class="k">'+esc(k)+'</span>';
+    const chips=_tag+_ftag;
+    const cblock=chips ? '<div class="rowchips">'+chips+'</div>' : '';
     if(Array.isArray(v)){
       if(_allNum(v) && v.length>10){
-        h+='<div class="rw col"><div class="kline">'+key+' <span class="meta">'+v.length+' points</span></div>'+_sparkline(v)+'</div>';
+        h+='<div class="rw col"><div class="kline">'+name+' <span class="meta">'+v.length+' points</span></div>'+_sparkline(v)+cblock+'</div>';
       } else if(v.length===0){
-        h+='<div class="rw"><div class="kline">'+key+'</div><span class="eq">=</span><div class="vline"><span class="v vnull">[ ]</span></div></div>';
+        h+='<div class="rw"><div class="kline">'+name+'</div><span class="eq">=</span><div class="vline"><span class="v vnull">[ ]</span>'+chips+'</div></div>';
       } else if(_allNum(v) || (_allPrim(v) && v.every(x=>typeof x!=='string'))){
-        h+='<div class="rw"><div class="kline">'+key+' <span class="meta">'+v.length+'</span></div><span class="eq">=</span><div class="vline">'
-          +v.map(x=>_valHTML(x)).join('<span class="sep">, </span>')+'</div></div>';
+        h+='<div class="rw"><div class="kline">'+name+' <span class="meta">'+v.length+'</span></div><span class="eq">=</span><div class="vline">'
+          +v.map(x=>_valHTML(x)).join('<span class="sep">, </span>')+chips+'</div></div>';
       } else if(v.every(x=>typeof x==='string')){
-        h+='<div class="rw col"><div class="kline">'+key+' <span class="meta">'+v.length+' items</span></div>'
-          +'<div class="strlist">'+v.map(x=>'<span class="si">'+esc(x)+'</span>').join('')+'</div></div>';
+        h+='<div class="rw col"><div class="kline">'+name+' <span class="meta">'+v.length+' items</span></div>'
+          +'<div class="strlist">'+v.map(x=>'<span class="si">'+esc(x)+'</span>').join('')+'</div>'+cblock+'</div>';
       } else {
         const show=v.slice(0,10), more=v.length>10?' (first 10 of '+v.length+')':'';
-        h+='<div class="rw col"><div class="kline">'+key+' <span class="meta">'+v.length+' items'+more+'</span></div>'
-          +'<div class="nest">'+_rows(show, depth+1, sources, fates)+'</div></div>';
+        h+='<div class="rw col"><div class="kline">'+name+' <span class="meta">'+v.length+' items'+more+'</span></div>'
+          +'<div class="nest">'+_rows(show, depth+1, sources, fates)+'</div>'+cblock+'</div>';
       }
     } else if(v && typeof v==='object'){
-      h+='<div class="rw col"><div class="kline">'+key+'</div><div class="nest">'+_rows(v)+'</div></div>';
+      h+='<div class="rw col"><div class="kline">'+name+'</div><div class="nest">'+_rows(v)+'</div>'+cblock+'</div>';
     } else {
-      h+='<div class="rw"><div class="kline">'+key+'</div><span class="eq">=</span><div class="vline">'+_valHTML(v)+'</div></div>';
+      h+='<div class="rw"><div class="kline">'+name+'</div><span class="eq">=</span><div class="vline">'+_valHTML(v)+chips+'</div></div>';
     }
   }
   return h;
