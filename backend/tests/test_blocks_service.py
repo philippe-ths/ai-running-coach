@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.models import Activity, Block, Exchange, User
+from app.models import Activity, Block, CoachReport, Exchange, User
 from app.services.blocks import activity_end as activity_end_of
 from app.services.blocks import (
     assign_activity_to_block,
@@ -145,16 +145,25 @@ def test_out_of_order_sync_converges_to_one_block(db):
     assert joined.primary_activity_id == later.id  # still the longest run
 
 
-def test_primary_is_frozen_once_the_exchange_has_opened(db):
-    # The opener spoke about the primary activity and the report row is keyed
-    # on it; a late arrival into the open exchange must not move that anchor,
-    # however long it is.
+def _add_report(db, activity) -> None:
+    """A coach report keyed to an activity — the anchor commitment that freezes
+    the block's primary (the LLM opener writes this row; the receipt does not)."""
+    db.add(CoachReport(activity_id=activity.id, report={}, meta={}, context_pack={}))
+    db.commit()
+
+
+def test_primary_is_frozen_once_a_report_is_keyed_to_it(db):
+    # A report speaks about the primary activity and is keyed on it; a late
+    # arrival into the open exchange must not move that anchor, however long it
+    # is. (Under the LLM exchange the opener writes this report and opens the
+    # exchange together.)
     user = _make_user(db)
     run = _make_activity(db, user, start=T0, elapsed=1500, type="Run")
     block = assign_activity_to_block(db, run, gap_seconds=GAP)
     exchange = db.query(Exchange).filter(Exchange.block_id == block.id).one()
     exchange.opened_at = datetime.now(timezone.utc)
     db.commit()
+    _add_report(db, run)  # the opener's report row, keyed to the primary
 
     longer = _make_activity(
         db, user, start=T0 + timedelta(seconds=1800), elapsed=7200, type="Run"
@@ -166,6 +175,27 @@ def test_primary_is_frozen_once_the_exchange_has_opened(db):
     assert _aware(joined.end_date) == _aware(
         longer.start_date + timedelta(seconds=7200)
     )  # bounds still grow
+
+
+def test_receipt_opened_exchange_does_not_freeze_primary_before_a_report(db):
+    # Under the receipt cadence the first activity's deterministic receipt opens
+    # the exchange (sets opened_at) but writes NO coach report. A run joining the
+    # block afterwards must still win the primary, so the single session report
+    # is about the run and not the warmup walk (#487).
+    user = _make_user(db)
+    walk = _make_activity(db, user, start=T0, elapsed=1200, type="Walk")
+    block = assign_activity_to_block(db, walk, gap_seconds=GAP)
+    exchange = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+    exchange.opened_at = datetime.now(timezone.utc)  # the receipt opened it
+    db.commit()
+    assert block.primary_activity_id == walk.id  # nothing else yet
+
+    run_start = T0 + timedelta(seconds=1800)
+    run = _make_activity(db, user, start=run_start, elapsed=2400, type="Run")
+    joined = assign_activity_to_block(db, run, gap_seconds=GAP)
+
+    assert joined.id == block.id
+    assert joined.primary_activity_id == run.id  # not frozen to the walk
 
 
 def _grouped_pair(db, user):
