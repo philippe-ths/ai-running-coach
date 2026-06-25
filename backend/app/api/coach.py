@@ -22,6 +22,7 @@ from app.schemas.stance import (
 )
 from app.services.coach.chat import get_chat_history, stream_chat_response
 from app.services.coach.service import (
+    get_block_primary_report_row,
     get_displayable_report_row,
     get_or_generate_coach_report,
     report_voice_stale,
@@ -196,6 +197,15 @@ async def get_coach_report(
             # next view). A read-time flag only — the stored report is untouched.
             read.meta.voice_stale = report_voice_stale(db, existing)
             return read
+        # #482: block-aware display fallback. A non-primary member of a multi-
+        # activity block owns no report (the session report is keyed to the block
+        # primary), so show the session's report read-only instead of 404-ing and
+        # leaving the panel spinning. voice_stale is deliberately left False: the
+        # borrowed report belongs to the primary, so it must not auto-trigger a
+        # per-member regeneration here (read-only, no generation).
+        borrowed = get_block_primary_report_row(db, str(activity_id))
+        if borrowed:
+            return _to_read(borrowed)
         if not generate:
             raise HTTPException(status_code=404, detail="No cached report.")
 

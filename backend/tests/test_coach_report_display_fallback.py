@@ -16,9 +16,11 @@ from uuid import uuid4
 import pytest
 
 from app.core.config import settings
+from app.models import Activity, Block, DerivedMetric
 from app.models.coach_report import CoachReport
 from app.services.coach.service import (
     get_active_report_row,
+    get_block_primary_report_row,
     get_displayable_report_row,
 )
 
@@ -87,4 +89,90 @@ class TestEndpointDisplaySafe:
         monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_message_v3")
         activity = _seed_activity(db)
         res = client.get(f"/api/activities/{activity.id}/coach-report?generate=false")
+        assert res.status_code == 404
+
+
+def _add_block_member(db, primary) -> Activity:
+    """Add a sibling member to `primary`'s block under the SAME user, with `primary`
+    as the block primary. Returns the non-primary member. Mirrors the prod #482
+    instance: two close-in-time activities grouped into one block, the session
+    report keyed to the primary, the other member owning zero coach_reports rows.
+    """
+    member = Activity(
+        user_id=primary.user_id, strava_activity_id=primary.strava_activity_id + 1,
+        start_date=datetime(2026, 5, 27, 10, 30, 0), type="Walk", name="Cooldown walk",
+        distance_m=800, moving_time_s=600, elapsed_time_s=600, elev_gain_m=2.0,
+        avg_hr=110, raw_summary={},
+    )
+    db.add(member)
+    db.commit()
+    db.add(DerivedMetric(
+        activity_id=member.id, effort="easy", structure="continuous",
+        duration_class="standard", effort_score=10.0, flags=[],
+        confidence="medium", confidence_reasons=[],
+    ))
+    block = Block(
+        user_id=primary.user_id, start_date=primary.start_date,
+        end_date=member.start_date, primary_activity_id=primary.id,
+    )
+    db.add(block)
+    db.commit()
+    primary.block_id = block.id
+    member.block_id = block.id
+    db.commit()
+    db.refresh(member)
+    return member
+
+
+class TestBlockAwareDisplayFallback:
+    """#482: a non-primary block member must display the block's report (the
+    primary's), read-only, instead of 404-ing and spinning forever."""
+
+    def test_helper_returns_primary_report_for_non_primary_member(self, db, monkeypatch):
+        monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_message_v3")
+        primary = _seed_activity(db)
+        member = _add_block_member(db, primary)
+        primary_report = _insert_report(
+            db, primary.id, "coach_message_v3", "2.0", message="the session report"
+        )
+        # The member owns no report of its own ...
+        assert get_displayable_report_row(db, str(member.id)) is None
+        # ... so the block fallback borrows the primary's.
+        got = get_block_primary_report_row(db, str(member.id))
+        assert got is not None and got.id == primary_report.id
+
+    def test_helper_none_for_the_primary_itself(self, db, monkeypatch):
+        # The primary owns its report; the fallback must not loop back to it.
+        monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_message_v3")
+        primary = _seed_activity(db)
+        _add_block_member(db, primary)
+        _insert_report(db, primary.id, "coach_message_v3", "2.0", message="the session report")
+        assert get_block_primary_report_row(db, str(primary.id)) is None
+
+    def test_helper_none_for_activity_without_a_block(self, db, monkeypatch):
+        monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_message_v3")
+        solo = _seed_activity(db)
+        assert get_block_primary_report_row(db, str(solo.id)) is None
+
+    def test_endpoint_serves_block_report_on_non_primary_member(self, client, db, monkeypatch):
+        # The #482 regression: opening a non-primary member returns the session
+        # report (200) rather than 404, without calling the LLM.
+        monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_message_v3")
+        primary = _seed_activity(db)
+        member = _add_block_member(db, primary)
+        _insert_report(db, primary.id, "coach_message_v3", "2.0", message="the session report")
+
+        with patch("app.services.coach.service.AnthropicClient",
+                   side_effect=AssertionError("must not call the LLM on the display path")):
+            res = client.get(f"/api/activities/{member.id}/coach-report?generate=true")
+        assert res.status_code == 200
+        assert res.json()["report"]["message"] == "the session report"
+
+    def test_member_404s_when_primary_has_no_report_yet(self, client, db, monkeypatch):
+        # Nothing to borrow yet: the member still 404s under generate=false rather
+        # than borrowing a non-existent report.
+        monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_message_v3")
+        primary = _seed_activity(db)
+        member = _add_block_member(db, primary)
+        res = client.get(f"/api/activities/{member.id}/coach-report?generate=false")
         assert res.status_code == 404

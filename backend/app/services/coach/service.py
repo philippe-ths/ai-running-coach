@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, undefer
 
 from app.core.config import settings
-from app.models import Activity
+from app.models import Activity, Block
 from app.models.coach_report import CoachReport
 from app.models.coaching_relationship import CoachingRelationship
 from app.schemas.coach import (
@@ -276,6 +276,33 @@ def get_displayable_report_row(db: Session, activity_id) -> Optional[CoachReport
         .order_by(CoachReport.created_at.desc())
         .first()
     )
+
+
+def get_block_primary_report_row(db: Session, activity_id) -> Optional[CoachReport]:
+    """Block-aware DISPLAY fallback (#482): the displayable report of this
+    activity's block PRIMARY, when the activity itself owns none.
+
+    The session report is generated once per block, keyed to the primary activity
+    (the run, else the longest member). A non-primary member therefore has zero
+    coach_reports rows, so its page 404s and the panel spins forever. This lets the
+    read path show the session's report on any member instead.
+
+    Read-only, no generation: the M0 versioned-cache identity used for regeneration
+    (get_active_report_row / get_or_generate_coach_report) is unchanged, so the
+    per-activity "Re-run" still mints a member-specific report. Returns None when the
+    activity is not in a block, IS its block's primary (it would have its own report),
+    or the primary has no displayable report yet.
+    """
+    activity_uuid = _coerce_uuid(activity_id)
+    activity = (
+        db.query(Activity).filter(Activity.id == activity_uuid).first()
+    )
+    if activity is None or activity.block_id is None:
+        return None
+    block = db.query(Block).filter(Block.id == activity.block_id).first()
+    if block is None or block.primary_activity_id == activity_uuid:
+        return None
+    return get_displayable_report_row(db, block.primary_activity_id)
 
 
 async def get_or_generate_coach_report(
