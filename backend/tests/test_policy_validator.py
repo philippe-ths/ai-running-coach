@@ -254,8 +254,8 @@ class TestMedicalScopeRule:
     single wearable number into a health claim. Permit interpretive metric
     correction and the (future M9) non-diagnostic referral nudge.
 
-    Oracle: the medical-scope boundary stated in
-    docs/coach-report-improvement-plan.md section 8.
+    Oracle: the medical-scope boundary recorded in
+    docs/adr/0024-the-coach-medical-scope-floor-is-a-deterministic-validator-rule.md.
     """
 
     def test_dose_advice_in_milligrams_rejected(self):

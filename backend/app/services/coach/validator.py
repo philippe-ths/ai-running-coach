@@ -30,7 +30,7 @@ _INTERVAL_CLAIM_PATTERNS = [
 
 
 # --- Rule 5: medical-scope boundary (N2) -----------------------------------
-# Oracle: plan section 8. Reject dose advice and diagnosis verbs; never let a
+# Oracle: ADR 0024 (the medical-scope floor). Reject dose advice and diagnosis verbs; never let a
 # single wearable number escalate into a health claim. Permit interpretive
 # metric correction ("discount this drift, it was hot") and the non-diagnostic
 # referral nudge ("consider seeing a clinician"). High precision is the
@@ -289,7 +289,7 @@ def check_ungated_interval_claim(workout_match, full_text: str) -> List[PolicyVi
 
 
 def check_medical_overreach(full_text: str) -> List[PolicyViolation]:
-    """Rule 5: medical-scope boundary — reject medical overreach (plan section 8)."""
+    """Rule 5: medical-scope boundary — reject medical overreach (ADR 0024)."""
     medical_reason = None
     if _DOSE_PATTERN.search(full_text):
         medical_reason = "contains dose advice (a pharmaceutical dose or dosage instruction)"
