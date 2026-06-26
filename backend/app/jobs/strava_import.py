@@ -49,7 +49,10 @@ from app.services.strava_ingestion import (
     get_strava_port,
     upsert_activity,
 )
-from app.services.strava_ingestion.ingestion import _assign_block
+from app.services.strava_ingestion.ingestion import (
+    _assign_block,
+    reconcile_unassigned_activities,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +134,10 @@ async def run_import_batch(
         except Exception as exc:  # noqa: BLE001 - one bad activity must not sink the batch
             db.rollback()
             logger.error("Error importing activity %s: %s", raw.get("id"), exc)
+
+    # Once per batch (not per activity): recover any activity an earlier ingest
+    # committed but left block-less because its guarded assignment raised (#515).
+    reconcile_unassigned_activities(db, account.user_id)
 
     import_obj.activities_imported += imported
     # A short page means we have reached the end of the window: done. A full page

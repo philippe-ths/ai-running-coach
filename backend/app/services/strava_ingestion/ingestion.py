@@ -280,6 +280,11 @@ async def ingest_recent_activities(
                 msg = f"Error ingesting activity {raw.get('id')}: {exc}"
                 logger.error(msg)
                 stats.errors.append(msg)
+
+        # Once per batch (not per activity): recover any activity an earlier
+        # ingest committed but left block-less because its guarded assignment
+        # raised (#515).
+        reconcile_unassigned_activities(db, account.user_id)
     except Exception as exc:
         msg = f"Ingestion failed globally: {exc}"
         logger.error(msg)
@@ -308,22 +313,94 @@ async def ingest_activity_by_id(
     db.commit()
     db.refresh(activity)
     _assign_block(db, activity)
+    # One sweep per ingest event (single-activity path, e.g. self-heal diff):
+    # recover any earlier activity left block-less by a guarded failure (#515).
+    reconcile_unassigned_activities(db, account.user_id)
     return activity
+
+
+# How many stranded activities one reconcile sweep will re-attempt. The sweep
+# runs once per ingest call/batch, oldest-first; the cap keeps a backlog (or a
+# chronically-unassignable orphan that re-appears every sweep) from blowing up
+# query and assignment-attempt cost. A real backlog drains a few per sync.
+RECONCILE_MAX_PER_RUN = 25
 
 
 def _assign_block(db: Session, activity) -> None:
     """A1: every newly-ingested activity is grouped into its Block here, so all
     ingest paths (webhook, polling, manual sync, backfill) converge on the same
     grouping. A re-synced activity keeps its block. Guarded: a grouping failure
-    must never break ingestion (the baseline-recompute pattern)."""
+    must never break ingestion (the baseline-recompute pattern).
+
+    Handles ONLY the current activity. Recovery of previously-stranded
+    activities is the batch-level `reconcile_unassigned_activities` sweep (#515),
+    invoked once per ingest call/batch by the caller so the per-activity loop
+    does not multiply it.
+    """
     if activity.block_id is not None:
         return
+    # Capture the id before the attempt: on failure the guard rolls back, which
+    # expires the instance, so reading it inside the except could itself raise.
+    strava_id = activity.strava_activity_id
     try:
         from app.services.blocks import assign_activity_to_block
 
         assign_activity_to_block(db, activity)
     except Exception:
         db.rollback()
-        logger.exception(
-            "block assignment failed for activity %s", activity.strava_activity_id
+        logger.exception("block assignment failed for activity %s", strava_id)
+
+
+def reconcile_unassigned_activities(
+    db: Session, user_id, *, limit: int = RECONCILE_MAX_PER_RUN
+) -> int:
+    """Re-attempt block assignment for a user's stranded (block_id NULL) live
+    activities (#515). Returns the number reconciled into a block.
+
+    A previous ingest can leave an activity committed with `block_id IS NULL`
+    when its guarded `assign_activity_to_block` raised (the row is committed
+    first, assignment runs after). Nothing retried it: self-heal treats the row
+    as already known and no sweep existed, so it was permanently stranded.
+
+    This sweep is invoked ONCE per ingest call/batch (not per activity, so the
+    ingest loop does not multiply it), oldest-first and capped at `limit`, so a
+    backlog or a chronically-unassignable orphan that re-appears every sweep
+    cannot blow up cost. Each activity is reconciled under its own guard so one
+    failure neither breaks ingestion nor blocks the rest of the sweep, and a
+    failure is logged as a single concise warning (not a full stack trace) since
+    an unassignable orphan recurs on every ingest. Soft-deleted activities are
+    skipped (they belong in no block).
+    """
+    from app.services.blocks import assign_activity_to_block
+
+    stranded = (
+        db.execute(
+            select(Activity)
+            .where(
+                Activity.user_id == user_id,
+                Activity.block_id.is_(None),
+                Activity.is_deleted.is_(False),
+            )
+            .order_by(Activity.start_date)
+            .limit(limit)
         )
+        .scalars()
+        .all()
+    )
+
+    reconciled = 0
+    for orphan in stranded:
+        # Capture the id before the attempt: a guarded failure rolls back and
+        # expires the instance, so reading it in the except would itself raise.
+        orphan_strava_id = orphan.strava_activity_id
+        try:
+            assign_activity_to_block(db, orphan)
+            reconciled += 1
+        except Exception as exc:  # noqa: BLE001 - one failure must not break ingestion
+            db.rollback()
+            logger.warning(
+                "block reconcile failed for stranded activity %s: %s",
+                orphan_strava_id,
+                exc,
+            )
+    return reconciled
