@@ -78,9 +78,10 @@ in front of both platforms is a config + DNS change, not a code change. The
 turnkey operator checklist (DNS, per-platform env, Strava callback re-registration,
 Clerk production instance, and verification) is **[custom-domain.md](custom-domain.md)**.
 
-### Auth model (Phase 1)
+### Auth model (Phase 2 / Clerk)
 
-- The backend gates every route with `BasicAuthMiddleware` (`backend/app/core/auth.py`).
+- User identity is a Clerk session JWT verified against Clerk's JWKS (`backend/app/core/clerk_auth.py`, ADR 0022; the frontend uses `ClerkProvider` + `clerkMiddleware`). `require_current_user` resolves the user by verified email and scopes every application router per user; the user is got-or-created on first authenticated request.
+- Beneath that, the backend still applies `BasicAuthMiddleware` (`backend/app/core/auth.py`) to every route, repurposed under ADR 0022 as the frontend-to-backend service secret (defense in depth), not the user gate.
 - Exempt prefixes (`backend/app/main.py`): `/api/health`, `/api/webhooks`, `/api/auth/strava/callback`.
   Strava cannot send Basic credentials, so its webhook and OAuth-callback hits must be exempt; webhook
   authenticity is instead checked by `_event_is_authentic` in `app/api/webhooks.py`.
@@ -93,7 +94,7 @@ Clerk production instance, and verification) is **[custom-domain.md](custom-doma
   outage). If a web deploy crash-loops right after a merge, check these env vars first. The worker is
   not gated this way (it serves no HTTP). Belt-and-suspenders: set Railway's web Health Check Path to
   `/api/health` so the cutover also waits on readiness.
-- This whole layer is throwaway: ADR 0005 replaces it with magic-link sessions in Phase 2.
+- ADR 0005 originally planned magic-link sessions for this layer; that mechanism was superseded by Clerk social login (ADR 0022), which shipped in Phase 2. `BasicAuthMiddleware` was repurposed as the service secret rather than removed.
 
 ### Configuration (where each secret lives)
 

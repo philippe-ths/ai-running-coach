@@ -1,5 +1,7 @@
 # Email magic-link is the identity; data sources are connected integrations
 
+> **Status: Superseded by [ADR 0022](0022-identity-is-social-login-via-clerk-strava-stays-an-integration.md).** The *principle* below stands unchanged (identity lives at the email level; Strava is a connected integration, not the identity). The magic-link *mechanism* was replaced by Clerk social login, which shipped in Phase 2 (2026-06-24), because Railway blocks the outbound SMTP the in-house link delivery relied on. This ADR is retained as the original record.
+
 The current codebase has no auth layer: `app/api/profile.py` auto-creates a single `User` row on first read, and every other endpoint implicitly trusts that user. Multi-user deployment is on the roadmap, and the natural-looking shortcut is to promote Strava OAuth to the identity layer — the user signs in with Strava, `strava_athlete_id` becomes the user identity, no second IdP needed.
 
 We reject that shortcut. Garmin Connect and Apple Health are planned future integrations, and they are peers of Strava, not children of it. A Garmin-first user with no Strava account must be able to sign up; a user who later disconnects Strava must not lose access to their own historical data. Strava-as-identity collapses identity and data-source into one concept, which produces a painful "decouple identity from Strava" migration the moment a second integration ships.
