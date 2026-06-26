@@ -334,6 +334,55 @@ class TestInboundWrite:
         assert db.query(CheckIn).count() == 0
         isolate_side_effects["answer"].assert_called_once()
 
+    @pytest.mark.parametrize(
+        "kind,value",
+        [
+            ("rpe", 99),    # RPE schema bound is 1-10
+            ("rpe", 0),     # below the RPE floor (ge=1)
+            ("rpe", -3),    # negative
+            ("pain", 99),   # pain_score schema bound is 0-10
+            ("pain", -1),   # below the pain_score floor (ge=0)
+        ],
+    )
+    def test_out_of_range_value_is_ignored_without_write_or_500(
+        self, client, db, configured, isolate_side_effects, kind, value
+    ):
+        # #504: an authentic-but-forged callback carrying an out-of-range value must
+        # not raise an uncaught ValidationError (HTTP 500) — Telegram treats a 500 as
+        # failed delivery and retries, amplifying it. It is acked and ignored (200),
+        # no CheckIn is written, and the bound is the CheckInCreate schema's own.
+        a = _seed_activity(db)
+        token = encode(kind=kind, activity_id=str(a.id), value=value)
+        resp = self._post(client, token)
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ignored"
+        assert resp.json()["reason"] == "bad_value"
+        assert db.query(CheckIn).filter(CheckIn.activity_id == a.id).first() is None
+        isolate_side_effects["answer"].assert_called_once()
+
+    def test_in_range_boundary_values_still_write(
+        self, client, db, configured, isolate_side_effects
+    ):
+        # The guard must not over-reject: the schema's RPE 1-10 / pain 0-10 bounds
+        # are inclusive, so the boundaries are the happy path, not forged input.
+        a = _seed_activity(db)
+        token = encode(kind="rpe", activity_id=str(a.id), value=10)
+        resp = self._post(client, token)
+        assert resp.status_code == 200
+        row = db.query(CheckIn).filter(CheckIn.activity_id == a.id).first()
+        assert row is not None and row.rpe == 10
+
+    def test_malformed_token_value_is_ignored_at_handler(
+        self, client, db, configured, isolate_side_effects
+    ):
+        # A non-integer value token never decodes (decode returns None), so the
+        # handler ignores it before any CheckIn construction — no 500, no write.
+        resp = self._post(client, "cb1|rpe|abc|notanint")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ignored"
+        assert db.query(CheckIn).count() == 0
+        isolate_side_effects["answer"].assert_called_once()
+
     def test_non_callback_update_is_ignored(
         self, client, db, configured, isolate_side_effects
     ):
