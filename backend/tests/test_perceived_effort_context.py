@@ -77,6 +77,34 @@ class TestPerceivedEffortInPack:
         assert pe.hr_confounded is True
         assert pe.recommended_weighting == "rpe_over_hr"
 
+    def test_serialization_folds_out_duplicate_scalars(self, db):
+        """One-fact-one-place: the builder populates perceived_effort.rpe/effort_score
+        and the drift copies, but serialization drops them — the coach reads each fact
+        from its sole home (check_in.rpe, metrics.effort_score, metrics.hr_drift)."""
+        user_id = _user(db)
+        act = _activity(db, user_id, datetime(2026, 3, 1, 10, tzinfo=timezone.utc))
+        _metrics(db, act, effort="easy", effort_score=4.0, hr_drift=9.0, discount_signals=_HEAT)
+        _checkin(db, act, rpe=8, pain_score=1)
+        db.refresh(act)
+
+        pack = build_context_pack(db, act)
+        # The model object still carries them (the derived read is computed from rpe).
+        assert pack.perceived_effort.rpe == 8
+        assert pack.perceived_effort.effort_score == 4.0
+
+        out = pack.to_serializable_dict()
+        # Copies dropped from what the LLM receives.
+        assert "rpe" not in out["perceived_effort"]
+        assert "effort_score" not in out["perceived_effort"]
+        assert "hr_drift_pct" not in out["metrics"]["discount_signals"]
+        # Sole homes intact.
+        assert out["check_in"]["rpe"] == 8
+        assert out["metrics"]["effort_score"] == 4.0
+        assert out["metrics"]["hr_drift"] == 9.0
+        # The derived read the section exists for survives.
+        assert out["perceived_effort"]["divergence"] == 2
+        assert out["perceived_effort"]["recommended_weighting"] == "rpe_over_hr"
+
     def test_no_checkin_degrades_safely(self, db):
         user_id = _user(db)
         act = _activity(db, user_id, datetime(2026, 3, 1, 10, tzinfo=timezone.utc))

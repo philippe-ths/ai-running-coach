@@ -112,9 +112,9 @@ def _legacy_full_pack() -> dict:
             },
         },
         "perceived_effort": {
-            "rpe": 6,
+            # rpe / effort_score folded out (one-fact-one-place): they live in
+            # check_in.rpe / metrics.effort_score. This is the canonical post-fold shape.
             "effort_axis": "tempo",
-            "effort_score": 3.0,
             "divergence": -1,
             "divergence_direction": "felt_easier",
             "hr_confounded": False,
@@ -147,9 +147,9 @@ def _legacy_full_pack() -> dict:
         },
         "calibration": {
             "hr_drift": {
+                # observed_drift_pct folded out (one-fact-one-place): == metrics.hr_drift.
                 "calibrated": True,
                 "expected_drift_pct": 5.5,
-                "observed_drift_pct": 9.0,
                 "delta_pct": 3.5,
                 "comparison": "above",
                 "sample_count": 6,
@@ -265,9 +265,8 @@ def _legacy_sparse_pack() -> dict:
             "baseline_trend": None,
         },
         "perceived_effort": {
-            "rpe": None,
+            # rpe / effort_score folded out (one-fact-one-place); canonical post-fold shape.
             "effort_axis": None,
-            "effort_score": None,
             "divergence": None,
             "divergence_direction": None,
             "hr_confounded": False,
@@ -282,7 +281,7 @@ def _legacy_sparse_pack() -> dict:
             "facts": [],
         },
         "calibration": {
-            "hr_drift": {"calibrated": False, "observed_drift_pct": None, "basis": "n/a"},
+            "hr_drift": {"calibrated": False, "basis": "n/a"},
             "referral": None,
         },
         "preference_profile": {"themes": []},
@@ -361,6 +360,36 @@ def test_old_verbose_no_session_pack_still_validates_and_collapses():
     pack = CoachContextPack.model_validate(old)  # must not raise
     out = pack.to_serializable_dict()["metrics"]
     assert out["interval_workout"] == "none detected"
+
+
+def test_folds_redundant_scalar_copies_out_of_serialization():
+    """One-fact-one-place fold: a pack carrying the redundant scalar COPIES
+    (perceived_effort.rpe/effort_score, calibration.hr_drift.observed_drift_pct,
+    metrics.discount_signals.hr_drift_pct) re-serialises with those copies DROPPED,
+    while their sole homes (check_in.rpe, metrics.effort_score, metrics.hr_drift)
+    remain. Doubles as the backward-compat check: a stored pre-fold pack carrying the
+    copies still validates under extra='forbid' and round-trips to the folded shape, so
+    the eval harness / chat re-parse of history never breaks."""
+    old = _legacy_full_pack()
+    old["perceived_effort"]["rpe"] = 6
+    old["perceived_effort"]["effort_score"] = 3.0
+    old["calibration"]["hr_drift"]["observed_drift_pct"] = 9.0
+    old["metrics"]["discount_signals"] = {"likely_inflated_by": ["heat"], "hr_drift_pct": 4.2}
+
+    out = CoachContextPack.model_validate(old).to_serializable_dict()  # must not raise
+
+    assert "rpe" not in out["perceived_effort"]
+    assert "effort_score" not in out["perceived_effort"]
+    assert "observed_drift_pct" not in out["calibration"]["hr_drift"]
+    assert "hr_drift_pct" not in out["metrics"]["discount_signals"]
+    # The sole homes are untouched.
+    assert out["check_in"]["rpe"] == 6
+    assert out["metrics"]["effort_score"] == 3.0
+    assert out["metrics"]["hr_drift"] == 4.2
+    # The sections keep their value-add.
+    assert out["perceived_effort"]["divergence"] == -1
+    assert out["calibration"]["hr_drift"]["delta_pct"] == 3.5
+    assert out["metrics"]["discount_signals"]["likely_inflated_by"] == ["heat"]
 
 
 def test_fingerprint_matches_legacy_hash_full():

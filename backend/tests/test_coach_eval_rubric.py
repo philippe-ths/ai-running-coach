@@ -182,11 +182,14 @@ class TestDiscountedInflatedHr:
         # nothing to discount; the coach is not penalised for declining to. Same
         # "did not discount" shape as the FAIL case above, but with a low drift ->
         # NOT_APPLICABLE instead of FAIL (the contrast proves the magnitude gate).
-        signal = {**_HEAT_DISCOUNT, "hr_drift_pct": 0.8}
+        # The run's drift is its sole home metrics.hr_drift; the guard reads it there
+        # (the duplicate discount_signals.hr_drift_pct is folded out of the pack).
         content = _make_content(
             thesis="Drift was just 0.8%, strong aerobic control throughout.",
         )
-        result = assert_discounted_inflated_hr(content, _make_pack(metrics={"discount_signals": signal}))
+        result = assert_discounted_inflated_hr(
+            content, _make_pack(metrics={"discount_signals": _HEAT_DISCOUNT, "hr_drift": 0.8})
+        )
         assert result.status is AssertionStatus.NOT_APPLICABLE
 
 

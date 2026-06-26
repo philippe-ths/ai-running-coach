@@ -73,6 +73,9 @@ class MetricsContext(BaseModel):
     risk_score: Optional[int]
     risk_reasons: Optional[List[str]]
     training_context: Optional[Dict[str, Any]]
+    # discount_signals carries the confound annotation (likely_inflated_by, reasons).
+    # Its `hr_drift_pct` is a copy of `hr_drift` above (its sole home) and is dropped
+    # from serialization by the one-fact-one-place fold in to_serializable_dict.
     discount_signals: Optional[Dict[str, Any]]
 
 
@@ -182,14 +185,23 @@ class PerceivedEffortContext(BaseModel):
     `pain_trend` is None (no data), an abstention marker (too few samples), or a
     direction+slope trend dict scoped to this run's pain location; never a
     diagnosis. All RPE/pain fields degrade to None/empty when
-    no CheckIn exists. `effort_score` is the raw TRIMP-like load, carried for
-    context only — divergence is computed against the `effort_axis` intensity.
+    no CheckIn exists.
+
+    One-fact-one-place fold: `rpe` and `effort_score` are the runner's reported RPE
+    (== `check_in.rpe`) and the run's TRIMP-like load (== `metrics.effort_score`) —
+    the same facts already in their own sections. This section's VALUE-ADD is the
+    derived read (`divergence`, `divergence_direction`, `hr_confounded`,
+    `recommended_weighting`), computed against the `effort_axis` intensity, not the raw
+    `effort_score`. So both raw copies are DROPPED from serialization here; the coach
+    reads them from `check_in`/`metrics`. Optional + default None so a dropped pack and
+    a stored pre-fold pack both strict-parse; the builder still populates them on the
+    model object (the derived fields are computed from `rpe`).
     """
     model_config = ConfigDict(extra="forbid")
 
-    rpe: Optional[int]
+    rpe: Optional[int] = None
     effort_axis: Optional[str]
-    effort_score: Optional[float]
+    effort_score: Optional[float] = None
     divergence: Optional[int]
     divergence_direction: Optional[str]
     hr_confounded: bool
@@ -274,6 +286,13 @@ class CalibrationContext(BaseModel):
     a non-diagnostic clinician nudge for a computable red-flag pattern, or None;
     it is templated, pipeline-owned, and never names a condition or diagnoses.
     Neither overrides the re-derived DerivedMetric.
+
+    One-fact-one-place fold: `hr_drift.observed_drift_pct` is the run's own HR drift
+    (== `metrics.hr_drift`), so it is DROPPED from serialization here; the section's
+    value-add is the calibrated comparison (`expected_drift_pct`, `delta_pct`,
+    `comparison`, `basis`), and the coach reads the raw drift from `metrics.hr_drift`.
+    `hr_drift` is a freeform dict, so dropping the key needs no schema change and a
+    stored pre-fold pack still validates.
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -808,6 +827,24 @@ class CoachContextPack(BaseModel):
                 metrics.pop("workout_match", None)
                 metrics.pop("interval_kpis", None)
                 metrics["interval_workout"] = "none detected"
+            # One-fact-one-place fold: discount_signals restates the run's HR drift,
+            # which is already metrics.hr_drift (its sole home). Drop the copy.
+            ds = metrics.get("discount_signals")
+            if isinstance(ds, dict):
+                ds.pop("hr_drift_pct", None)
+        # One-fact-one-place fold (the analytical sections restated a scalar that has
+        # its own home elsewhere in the pack). Drop the copy at serialization; each
+        # field stays declared so a stored pre-fold pack still re-parses. Sole homes:
+        #   perceived_effort.rpe          -> check_in.rpe
+        #   perceived_effort.effort_score -> metrics.effort_score
+        #   calibration.hr_drift.observed_drift_pct -> metrics.hr_drift
+        pe = data.get("perceived_effort")
+        if isinstance(pe, dict):
+            pe.pop("rpe", None)
+            pe.pop("effort_score", None)
+        cal = data.get("calibration")
+        if isinstance(cal, dict) and isinstance(cal.get("hr_drift"), dict):
+            cal["hr_drift"].pop("observed_drift_pct", None)
         return data
 
     def fingerprint(self) -> str:
