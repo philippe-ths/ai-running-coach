@@ -17,7 +17,7 @@ default pack.
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from sqlalchemy import func
@@ -38,16 +38,15 @@ from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.preference import build_preference_profile
 from app.services.coach.salience import compute_safety_override
 from app.services.coach.corpus import DEFAULT_SCHOOL_ID
+from app.services.coach.prompt_features import PromptFeature
 from app.services.coach.prompts import (
     _describe_dial,
     is_corpus_prompt,
-    is_recent_training_prompt,
     is_stance_prompt,
     is_stream_view_prompt,
-    is_training_load_prompt,
     is_user_materials_prompt,
-    is_volume_prompt,
 )
+from app.services.coach.read_time_signals import ReadTimeSignal, gather
 from app.services.coach.stance import StanceProfile, resolve_stance
 from app.services.coach.volume import build_training_volume
 from app.services.coach.recent_training import build_recent_training
@@ -216,6 +215,11 @@ def build_context_pack(
     # byte-stable (stream_view stays None and is dropped from serialization).
     wc = assemble_working_context(db, activity, deep=is_stream_view_prompt(prompt_id))
     b, f = wc.b_baseline, wc.focus
+    # The read anchor shared across the read-time signal seam (#492). Calibration and
+    # adherence (always-emitted, in the B baseline above) ignore it; the gated
+    # training-load/volume/recent-training signals key on it (each derives the exact
+    # flavour it needs — start_date for readiness, the local calendar day for volume).
+    as_of = activity.start_date
     return CoachContextPack(
         activity=f.activity,
         metrics=f.metrics,
@@ -242,21 +246,21 @@ def build_context_pack(
             school_id=stance.school_id if (stance and is_stance_prompt(prompt_id)) else None,
         ),
         stance=_build_stance_context(prompt_id, stance),
-        # P3 readiness (ADR 0016): emitted ONLY under a training-load-aware prompt id,
-        # computed read-time as of this activity (so the run is in the acute load).
-        training_load=_build_training_load_context(db, activity, prompt_id),
-        # #400 volume-vs-norm: emitted ONLY under a volume-aware prompt id, computed
-        # read-time over the runner's local-day windows so a deliberate easy week reads
-        # as down-vs-norm rather than alarming.
-        training_volume=_build_training_volume_context(db, activity, prompt_id),
+        # The three prompt-gated read-time signals go through the shared seam (#492):
+        # `gather` applies each signal's PromptFeature gate ONCE, returning None
+        # (dropped from serialization, byte-stable) under a prompt that lacks it. The
+        # bounded scan + abstention live inside each adapter's compute.
+        #   - P3 readiness (ADR 0016): as-of this activity, so the run is in the acute load.
+        #   - #400 volume-vs-norm: over the runner's local-day windows.
+        #   - #444 modality-aware recent-training picture.
+        training_load=gather(_TRAINING_LOAD_SIGNAL, db, activity, prompt_id, as_of),
+        training_volume=gather(_TRAINING_VOLUME_SIGNAL, db, activity, prompt_id, as_of),
         # #443 consolidated stream view: present in the DEFAULT pack only under a
         # stream-view-aware prompt (focus.stream_view is None otherwise, dropped from
-        # serialization), so the pack stays byte-stable under v9 and below.
+        # serialization), so the pack stays byte-stable under v9 and below. (Not a
+        # history-scan signal — it rides the focus payload via the deep flag above.)
         stream_view=f.stream_view,
-        # #444 modality-aware recent-training picture: emitted ONLY under a
-        # recent-training-aware prompt (the rich successor to recent_training_summary),
-        # computed read-time over the runner's local-day windows.
-        recent_training=_build_recent_training_context(db, activity, prompt_id),
+        recent_training=gather(_RECENT_TRAINING_SIGNAL, db, activity, prompt_id, as_of),
         safety_rules=b.safety_rules,
     )
 
@@ -351,21 +355,20 @@ def _build_stance_context(
 
 
 def _build_training_load_context(
-    db: Session, activity: Activity, prompt_id: Optional[str]
+    db: Session, activity: Activity, as_of: datetime
 ) -> Optional[TrainingLoadContext]:
     """The P3 training-load readiness pack section (ADR 0016), or None.
 
-    Emitted ONLY under a training-load-aware prompt id (`is_training_load_prompt`), so
-    the pack is byte-stable for every other prompt (AC1) — the section is dropped from
+    A read-time history-scan signal behind the shared `ReadTimeSignal` seam (#492):
+    the `TRAINING_LOAD` gating is applied once in `gather`, so this `compute` is
+    reached ONLY under a training-load-aware prompt — the section is dropped from
     serialization when None, exactly like `corpus`/`stance`/`block`. Computed at read
-    time (mirroring M9 calibration) as of the activity's `start_date`, so this run is
-    in the acute load and a regen of an old activity reproduces the condition as of
-    then. A tier-3 deterministic FACT the coach may cite, but it never overrides the
-    run's re-derived DerivedMetric or the safety floor (prompt rule 27). Degrades to
-    None when no history is available (build_readiness guards)."""
-    if not is_training_load_prompt(prompt_id):
-        return None
-    model = build_readiness(db, activity.user_id, activity.start_date)
+    time (mirroring M9 calibration) as of `as_of` (the activity's `start_date`), so
+    this run is in the acute load and a regen of an old activity reproduces the
+    condition as of then. A tier-3 deterministic FACT the coach may cite, but it never
+    overrides the run's re-derived DerivedMetric or the safety floor (prompt rule 27).
+    Degrades to None when no history is available (build_readiness guards)."""
+    model = build_readiness(db, activity.user_id, as_of)
     if model is None:
         return None
     return TrainingLoadContext(
@@ -382,37 +385,38 @@ def _build_training_load_context(
 
 
 def _build_training_volume_context(
-    db: Session, activity: Activity, prompt_id: Optional[str]
+    db: Session, activity: Activity, as_of: datetime
 ) -> Optional[TrainingVolumeContext]:
     """The #400 frequency-/volume-vs-norm pack section, or None.
 
-    Emitted ONLY under a volume-aware prompt id (`is_volume_prompt`), so the pack is
-    byte-stable for every other prompt — the section is dropped from serialization
-    when None, exactly like `training_load`/`corpus`/`block`. Computed read-time as of
-    this activity's LOCAL day (so the windows match the runner's calendar, #399) over
-    a 91-day fact span (the trailing 7d plus the 12-week norm baseline before it). A
+    A read-time history-scan signal behind the shared `ReadTimeSignal` seam (#492):
+    the `VOLUME` gating is applied once in `gather`, so this `compute` is reached ONLY
+    under a volume-aware prompt — the section is dropped from serialization when None,
+    exactly like `training_load`/`corpus`/`block`. Computed read-time as of this
+    activity's LOCAL day (so the windows match the runner's calendar, #399) over a
+    91-day fact span (the trailing 7d plus the 12-week norm baseline before it). A
     deterministic FACT the coach may cite, but it never overrides the run's re-derived
     DerivedMetric or the safety floor (the volume addendum). Degrades gracefully:
     thin history yields `has_baseline=False` and `no_norm` directions."""
-    if not is_volume_prompt(prompt_id):
-        return None
-    as_of = activity.local_start.date()
+    local_day = activity.local_start.date()
     # _query_activity_facts filters on UTC start_date with an EXCLUSIVE end, so pass
-    # as_of+1 to keep the current local day (today's run) inside the rolling window;
+    # local_day+1 to keep the current local day (today's run) inside the rolling window;
     # the builder partitions the fetched span by local_date. The start is widened to
     # 91 days to cover the trailing 7d plus the 12-week norm baseline before it.
     facts = _query_activity_facts(
-        db, as_of - timedelta(days=91), as_of + timedelta(days=1), user_id=activity.user_id
+        db, local_day - timedelta(days=91), local_day + timedelta(days=1), user_id=activity.user_id
     )
-    return build_training_volume(facts, as_of)
+    return build_training_volume(facts, local_day)
 
 
 def _build_recent_training_context(
-    db: Session, activity: Activity, prompt_id: Optional[str]
+    db: Session, activity: Activity, as_of: datetime
 ) -> Optional[RecentTrainingContext]:
     """The #444 modality-aware recent-training section, or None.
 
-    Emitted ONLY under a recent-training-aware prompt id, so the pack stays byte-stable
+    A read-time history-scan signal behind the shared `ReadTimeSignal` seam (#492):
+    the `RECENT_TRAINING` gating is applied once in `gather`, so this `compute` is
+    reached ONLY under a recent-training-aware prompt — the pack stays byte-stable
     otherwise (the Optional-and-drop idiom). Computed read-time as of this activity's
     LOCAL day over a ~210-day fact span (the 30d window plus its ~6-month vs-typical
     baseline), reusing the Trends per-day-rate core so "typical" has one meaning across
@@ -420,13 +424,11 @@ def _build_recent_training_context(
     run's re-derived DerivedMetric or the safety floor (the recent-training addendum).
     Degrades gracefully: thin history yields `has_baseline=False` and `no_norm`
     directions."""
-    if not is_recent_training_prompt(prompt_id):
-        return None
-    as_of = activity.local_start.date()
+    local_day = activity.local_start.date()
     facts = _query_activity_facts(
-        db, as_of - timedelta(days=210), as_of + timedelta(days=1), user_id=activity.user_id
+        db, local_day - timedelta(days=210), local_day + timedelta(days=1), user_id=activity.user_id
     )
-    return build_recent_training(facts, as_of)
+    return build_recent_training(facts, local_day)
 
 
 def _build_block_context(db: Session, activity: Activity) -> Optional[BlockContext]:
@@ -718,9 +720,13 @@ def build_b_baseline(
             pain_scores=_recent_pain_scores(db, activity),
         ),
         # M7 adherence is gated off pending recalibration (it nagged about prior
-        # next_steps the runner had already moved past); off => the empty form.
+        # next_steps the runner had already moved past); off => the empty form. When
+        # on, it resolves through the shared read-time signal seam (#492) — an
+        # always-emitted signal (no PromptFeature gate), so `gather` runs its compute
+        # on every prompt. (The COACH_ADHERENCE_ENABLED feature-flag is orthogonal to
+        # the prompt-feature gate and stays here, an explicit kill switch.)
         adherence=(
-            _build_adherence_context(db, activity)
+            gather(_ADHERENCE_SIGNAL, db, activity, None, activity.start_date)
             if settings.COACH_ADHERENCE_ENABLED
             else AdherenceContext(prior_report_date=None, outcomes=[])
         ),
@@ -732,7 +738,9 @@ def build_b_baseline(
             if settings.COACH_BELIEFS_ENABLED
             else BelievedFactsContext(facts=[])
         ),
-        calibration=_build_calibration_context(db, activity),
+        # M9 calibration: an always-emitted read-time signal through the shared seam
+        # (#492; no PromptFeature gate, so `gather` runs its compute on every prompt).
+        calibration=gather(_CALIBRATION_SIGNAL, db, activity, None, activity.start_date),
         preference_profile=(
             _build_preference_profile(db, activity)
             if settings.COACH_BELIEFS_ENABLED
@@ -859,7 +867,9 @@ def _matching_baseline_trend(
     )
 
 
-def _build_adherence_context(db: Session, activity: Activity) -> AdherenceContext:
+def _build_adherence_context(
+    db: Session, activity: Activity, as_of: Optional[datetime] = None
+) -> AdherenceContext:
     """Assemble the M7 adherence section: did the runner act on the LAST report's
     next_steps?
 
@@ -871,7 +881,13 @@ def _build_adherence_context(db: Session, activity: Activity) -> AdherenceContex
     re-querying and carrying the full report body. Degrades to empty when there is
     no prior report. All judging lives in the pure `adherence` module; this
     function only gathers rows.
-    """
+
+    An ALWAYS-EMITTED read-time history-scan signal (#492): no `gate_feature`, so it
+    is reached on every prompt and always produces a section (empty when no prior
+    report), never dropped. `as_of` is part of the shared seam signature and is
+    unused here — the scans key on the source report / this run's start_date. This
+    compute-now adapter is exactly the swappable seam #203 turns into a read-stored
+    one without touching `context.py`."""
     prior = fetch_prior_commitments(db, activity)
     if prior is None or not prior.next_steps:
         return AdherenceContext(prior_report_date=None, outcomes=[])
@@ -956,12 +972,19 @@ def _detect_pushback(db: Session, source_activity_id) -> bool:
     return any(phrase in blob for phrase in _PUSHBACK_PHRASES)
 
 
-def _build_calibration_context(db: Session, activity: Activity) -> CalibrationContext:
+def _build_calibration_context(
+    db: Session, activity: Activity, as_of: Optional[datetime] = None
+) -> CalibrationContext:
     """Assemble the M9 calibration section: individualise this run's HR-drift
     reading against the runner's own typical drift for these conditions, and a
     non-diagnostic referral nudge for any computable red-flag pattern. Both are
     computed at read time (the baseline is recomputed after the pipeline) and
-    degrade cleanly. Neither overrides the re-derived DerivedMetric."""
+    degrade cleanly. Neither overrides the re-derived DerivedMetric.
+
+    An ALWAYS-EMITTED read-time history-scan signal (#492): no `gate_feature`, so it
+    is reached on every prompt and always produces a section (empty/degraded when no
+    drift was measured), never dropped. `as_of` is part of the shared seam signature
+    and is unused here — the scans key on the activity's own bucket/window."""
     metrics = activity.metrics
     observed_drift = metrics.hr_drift if metrics else None
     comparable_drifts = _comparable_bucket_drifts(db, activity) if metrics else []
@@ -1110,6 +1133,45 @@ def _build_preference_profile(db: Session, activity: Activity):
         if b.kind == "adherence_pattern"
     ]
     return build_preference_profile(beliefs)
+
+
+# --- The read-time history-scan signal registry (#492) ----------------------
+# The five signals reached through the one `ReadTimeSignal` seam. Each pairs a
+# `_build_*_context` adapter (the bounded scan + thin-history abstention) with its
+# optional prompt-feature gate, so `gather` applies gating + dispatch uniformly and
+# `build_context_pack` / `build_b_baseline` never repeat a private convention.
+#
+# Two are ALWAYS-EMITTED (gate_feature=None — calibration and adherence live in the
+# B baseline and always produce a section, possibly empty/degraded). Three are
+# PROMPT-GATED (the section is dropped from serialization when the active prompt does
+# not carry the feature, keeping the pack byte-stable elsewhere).
+#
+# #203 slots a stored-artifact adapter in by re-registering the same `name` with a
+# read-stored compute of the SAME (db, activity, as_of) shape — no `context.py` change.
+_CALIBRATION_SIGNAL = ReadTimeSignal("calibration", _build_calibration_context)
+_ADHERENCE_SIGNAL = ReadTimeSignal("adherence", _build_adherence_context)
+_TRAINING_LOAD_SIGNAL = ReadTimeSignal(
+    "training_load", _build_training_load_context, PromptFeature.TRAINING_LOAD
+)
+_TRAINING_VOLUME_SIGNAL = ReadTimeSignal(
+    "training_volume", _build_training_volume_context, PromptFeature.VOLUME
+)
+_RECENT_TRAINING_SIGNAL = ReadTimeSignal(
+    "recent_training", _build_recent_training_context, PromptFeature.RECENT_TRAINING
+)
+
+# All five signals, keyed by name — the registry a stored-artifact adapter (#203)
+# would look up and swap an entry in without touching the call sites above.
+READ_TIME_SIGNALS: Dict[str, ReadTimeSignal] = {
+    s.name: s
+    for s in (
+        _CALIBRATION_SIGNAL,
+        _ADHERENCE_SIGNAL,
+        _TRAINING_LOAD_SIGNAL,
+        _TRAINING_VOLUME_SIGNAL,
+        _RECENT_TRAINING_SIGNAL,
+    )
+}
 
 
 def hash_context_pack(pack: Dict[str, Any]) -> str:
