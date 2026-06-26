@@ -6,11 +6,15 @@ failure left the row committed with `block_id IS NULL` and nothing ever retried
 it: self-heal treated the row as already known and no sweep existed, so it was
 permanently block-less.
 
-These tests pin both halves of the contract:
-1. The guard is intact: an assignment failure during ingestion still commits the
-   activity, leaves `block_id` NULL, and does not break ingestion.
+These tests pin the contract:
+1. The guard is intact: an assignment failure still leaves the activity stranded
+   (block_id NULL) and does not break ingestion.
 2. The recovery reconciles a stranded activity into a block on the next ingest
-   opportunity for that user.
+   for that user.
+3. The recovery sweep runs at most ONCE per batch, not once per activity, so an
+   N-activity sync does not multiply the sweep.
+4. The sweep is bounded: a backlog (or a chronically-unassignable orphan) is
+   capped per run so cost and logs cannot blow up.
 
 The InMemory Strava adapter is real test setup (a fake of the Strava port), not
 ground truth; the ground truth here is the block-grouping invariant in
@@ -19,11 +23,16 @@ ground truth; the ground truth here is the block-grouping invariant in
 
 import pytest
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.models import Activity, Block, StravaAccount, User
 from app.services.strava_ingestion import InMemoryStravaAdapter, ingest_recent_activities
-from app.services.strava_ingestion.ingestion import _assign_block
+from app.services.strava_ingestion import ingestion as ingestion_module
+from app.services.strava_ingestion.ingestion import (
+    RECONCILE_MAX_PER_RUN,
+    _assign_block,
+    reconcile_unassigned_activities,
+)
 
 
 def _make_account(db, athlete_id: int) -> StravaAccount:
@@ -41,6 +50,29 @@ def _make_account(db, athlete_id: int) -> StravaAccount:
     db.add(account)
     db.commit()
     return account
+
+
+def _make_orphan(db, user_id, *, strava_id: int, start: datetime, **overrides) -> Activity:
+    """A previously-stranded activity: committed, live, but block_id NULL (the
+    #515 state a guarded assignment failure leaves behind)."""
+    fields = dict(
+        user_id=user_id,
+        strava_activity_id=strava_id,
+        name=f"Stranded {strava_id}",
+        type="Run",
+        start_date=start,
+        distance_m=5000,
+        moving_time_s=1500,
+        elapsed_time_s=1500,
+        elev_gain_m=10,
+        raw_summary={},
+        block_id=None,
+    )
+    fields.update(overrides)
+    orphan = Activity(**fields)
+    db.add(orphan)
+    db.commit()
+    return orphan
 
 
 def _raw_activity(activity_id: int, name: str = "Run") -> dict:
@@ -182,3 +214,95 @@ async def test_reconcile_skips_soft_deleted_orphans(db):
 
     db.refresh(deleted_orphan)
     assert deleted_orphan.block_id is None
+
+
+@pytest.mark.asyncio
+async def test_sweep_runs_once_per_batch_not_once_per_activity(db, monkeypatch):
+    """The recovery sweep is invoked at most once for a multi-activity batch.
+
+    Regression guard for the first review finding: the sweep used to run inside
+    `_assign_block`, which the ingest loop calls per activity, so an N-activity
+    sync ran the full stranded-sweep N times. It must run once per batch.
+    """
+    account = _make_account(db, athlete_id=51503)
+    adapter = InMemoryStravaAdapter()
+
+    raws = [_raw_activity(8000 + i, f"Run {i}") for i in range(4)]
+    for raw in raws:
+        adapter.seed_activities([raw])
+        adapter.seed_streams(raw["id"], {"time": {"data": [0, 1, 2]}})
+    # seed_activities replaces; seed the full set once.
+    adapter.seed_activities(raws)
+
+    calls = {"n": 0}
+    real = reconcile_unassigned_activities
+
+    def _spy(db_, user_id, **kwargs):
+        calls["n"] += 1
+        return real(db_, user_id, **kwargs)
+
+    monkeypatch.setattr(ingestion_module, "reconcile_unassigned_activities", _spy)
+
+    ingested, _ = await ingest_recent_activities(db, account, adapter)
+
+    assert len(ingested) == 4
+    # Once for the whole batch, not once per activity (would be 4).
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sweep_is_bounded_per_run(db):
+    """A backlog larger than the cap reconciles at most RECONCILE_MAX_PER_RUN
+    activities in one sweep, so cost and logs cannot blow up (#515 review)."""
+    account = _make_account(db, athlete_id=51504)
+
+    backlog = RECONCILE_MAX_PER_RUN + 5
+    base = datetime(2024, 1, 1, 6, 0, 0)
+    for i in range(backlog):
+        # Spread far apart so each forms its own block-of-one (no joining).
+        _make_orphan(db, account.user_id, strava_id=9000 + i, start=base + timedelta(days=i))
+
+    reconciled = reconcile_unassigned_activities(db, account.user_id)
+
+    assert reconciled == RECONCILE_MAX_PER_RUN
+
+    remaining = (
+        db.query(Activity)
+        .filter(Activity.user_id == account.user_id, Activity.block_id.is_(None))
+        .count()
+    )
+    assert remaining == backlog - RECONCILE_MAX_PER_RUN
+
+
+@pytest.mark.asyncio
+async def test_chronically_unassignable_orphan_is_logged_quietly_not_with_stacktrace(
+    db, monkeypatch, caplog
+):
+    """A permanently-failing orphan must not emit a full stack trace every run.
+
+    Regression guard for the second review finding (log-noise landmine): the
+    per-orphan failure path logs a single concise WARNING, not logger.exception.
+    """
+    import logging
+
+    account = _make_account(db, athlete_id=51505)
+    _make_orphan(db, account.user_id, strava_id=9999, start=datetime(2024, 2, 1, 9, 0, 0))
+
+    import app.services.blocks as blocks_module
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("permanently unassignable")
+
+    monkeypatch.setattr(blocks_module, "assign_activity_to_block", _boom)
+
+    with caplog.at_level(logging.WARNING):
+        reconciled = reconcile_unassigned_activities(db, account.user_id)
+
+    assert reconciled == 0
+    reconcile_records = [
+        r for r in caplog.records if "block reconcile failed" in r.getMessage()
+    ]
+    assert len(reconcile_records) == 1
+    # A concise warning, not a full-stack-trace ERROR.
+    assert reconcile_records[0].levelno == logging.WARNING
+    assert reconcile_records[0].exc_info is None
