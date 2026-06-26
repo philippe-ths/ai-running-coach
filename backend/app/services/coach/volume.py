@@ -21,6 +21,19 @@ deadband so small fluctuations read as in_line.
 Metrics are reported holistically (every logged activity — the cardio view the
 runner intends) with a runs-only figure alongside, so the coach never reads a walk
 as a run. The norm and the direction verdict are on the holistic total.
+
+One lane per fact: in the COACH PACK, under a recent-training-aware prompt (v11+),
+the `rolling_7d` window drops its raw `current_all`/`current_runs` at serialization,
+because it spans the same trailing 7 days as `recent_training.last_7d` and so its
+totals were a second copy of that section's roll-up. `rolling_7d` then carries the
+vs-norm VERDICT only (norm + direction + pct); the actual trailing-7d numbers live in
+`recent_training`. The drop is GATED on `recent_training` being present (v9/v10 keep
+the values, since no descriptive lane exists there to carry them).
+`calendar_week` keeps its current values (no other section carries the Monday-to-date
+window). The builder below still COMPUTES current on both windows (direction/pct
+derive from it); the drop is a pack-serialization concern only (see
+`coach_context._drop_training_volume_rolling_current`), so this module and the
+Trends-page `build_volume_report` are unchanged.
 """
 
 from __future__ import annotations

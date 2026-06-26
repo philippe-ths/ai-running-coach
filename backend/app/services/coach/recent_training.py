@@ -136,8 +136,10 @@ def _comparisons(
     null vs-typical direction.
 
     Pack-trimmed: the per-metric current_all/current_runs (already in the window roll-up
-    + by_type and in training_volume) and the self-describing basis strings (now carried
-    once per window, set by `_window`) are NOT re-emitted on each row."""
+    + by_type) and the self-describing basis strings (now carried once per window, set by
+    `_window`) are NOT re-emitted on each row. (This section is now the single home for
+    the trailing-7d numbers — training_volume.rolling_7d carries the vs-norm verdict
+    only, with its raw current values folded out.)"""
     typical_by_metric: dict = {}
     if with_typical:
         range_key = "7D" if n == 7 else "30D"

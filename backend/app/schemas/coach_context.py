@@ -528,12 +528,24 @@ class VolumeMetricComparison(BaseModel):
     (the stable baseline), `norm_weekly_recent` over ~4 weeks (recent context).
     `direction`/`direction_recent` are the labelled read against each norm with a
     deadband, so a deliberate easy week reads as `down` rather than alarming. A
-    deterministic FACT; it never overrides this run's re-derived DerivedMetric."""
+    deterministic FACT; it never overrides this run's re-derived DerivedMetric.
+
+    Fold (one lane per fact): `current_all`/`current_runs` are Optional and are
+    DROPPED from serialization on the `rolling_7d` window — but ONLY when a
+    `recent_training` section is present to carry the numbers (recent-training-aware
+    prompts, v11+). That window spans the same trailing 7 days as
+    `recent_training.last_7d`, so its raw totals were a second copy of that section's
+    roll-up/by_type. `rolling_7d` then carries the vs-norm VERDICT (norm + direction +
+    pct); the actual trailing-7d numbers live in `recent_training`. Under v9/v10 (no
+    descriptive lane) `rolling_7d` KEEPS them. The `calendar_week` framing always KEEPS
+    them (it has no counterpart elsewhere). The builder still computes both
+    (direction/pct derive from them); Optional + default None so a serialized-and-
+    dropped pack — and a stored pre-fold pack — both strict-parse."""
     model_config = ConfigDict(extra="forbid")
 
     metric: str  # sessions | distance_m | moving_time_s | effort_score
-    current_all: Union[int, float]
-    current_runs: Union[int, float]
+    current_all: Optional[Union[int, float]] = None
+    current_runs: Optional[Union[int, float]] = None
     norm_weekly: Optional[float] = None
     norm_weekly_recent: Optional[float] = None
     pct_vs_norm: Optional[float] = None
@@ -615,9 +627,10 @@ class RecentComparison(BaseModel):
     metric: str  # sessions | distance_m | moving_time_s | effort_score
     # Pack trim: current_all/current_runs are no longer emitted per row — they duplicate
     # the window's own roll-up (current_all == total_*/activity_count, current_runs ==
-    # the by_type["Run"] entry) and, for the 7d window, training_volume's rolling_7d.
-    # Kept Optional so a pre-trim stored pack (extra="forbid") still validates; dropped
-    # from serialization when None.
+    # the by_type["Run"] entry). (training_volume.rolling_7d no longer carries current
+    # either — that overlap was folded out there too; recent_training is the one home
+    # for the trailing-7d numbers.) Kept Optional so a pre-trim stored pack
+    # (extra="forbid") still validates; dropped from serialization when None.
     current_all: Optional[Union[int, float]] = None
     current_runs: Optional[Union[int, float]] = None
     vs_typical_pct: Optional[float] = None
@@ -760,17 +773,21 @@ class CoachContextPack(BaseModel):
         # The byte-stable-drop invariant lives in ONE place: every gated/optional
         # pack section that must vanish (not appear as a null key) when absent is a
         # PACK_SECTIONS descriptor, and this loop applies the drop uniformly. A
-        # descriptor's optional `nested_drop` post-processor handles the two sections
+        # descriptor's optional `nested_drop` post-processor handles the sections
         # whose byte-stable trim is NOT a simple top-level pop (corpus's nested
-        # `user_materials`, recent_training's deduplicated window/comparison fields).
-        # Adding a new gated section is ONE descriptor here + the declared Optional
-        # field above; no new branch in this method.
+        # `user_materials`, recent_training's deduplicated window/comparison fields,
+        # training_volume's rolling_7d current-value fold). It receives the section
+        # value AND the full pack dict, so a CROSS-section trim (training_volume only
+        # folds out rolling_7d's current values when `recent_training` is present to
+        # carry them) can see the other section. Adding a new gated section is ONE
+        # descriptor here + the declared Optional field above; no new branch in this
+        # method.
         for section in PACK_SECTIONS:
             value = data.get(section.field)
             if value is None:
                 data.pop(section.field, None)
             elif section.nested_drop is not None:
-                section.nested_drop(value)
+                section.nested_drop(value, data)
         metrics = data.get("metrics")
         if isinstance(metrics, dict):
             # Collapse the gated interval/workout group to ONE signal when no session was
@@ -842,15 +859,19 @@ class PackSection:
     that is droppable but not prompt-gated (the retired ``recent_training_summary``).
     ``nested_drop``, when set, is a post-processor applied to the NON-None value to
     perform a byte-stable trim that is not a simple top-level pop (corpus's nested
-    ``user_materials`` key, recent_training's deduplicated window/comparison fields).
+    ``user_materials`` key, recent_training's deduplicated window/comparison fields,
+    training_volume's rolling_7d current-value fold). It is called as
+    ``nested_drop(value, data)`` — ``data`` is the full serialized pack dict, so a
+    CROSS-section trim can consult another section (training_volume only folds out
+    its rolling_7d current values when ``recent_training`` is present to carry them).
     """
 
     field: str
     gate_feature: Optional[PromptFeature] = None
-    nested_drop: Optional[Callable[[Any], None]] = None
+    nested_drop: Optional[Callable[[Any, Dict[str, Any]], None]] = None
 
 
-def _drop_corpus_user_materials(corpus: Dict[str, Any]) -> None:
+def _drop_corpus_user_materials(corpus: Dict[str, Any], _data: Dict[str, Any]) -> None:
     """P4 (#286): ``user_materials`` rides INSIDE the corpus section, but only under
     a user-materials-aware prompt. When None (every non-v7 corpus prompt) drop the
     nested key entirely, so the corpus section is byte-identical to its P1.2/P1.3
@@ -860,7 +881,36 @@ def _drop_corpus_user_materials(corpus: Dict[str, Any]) -> None:
         corpus.pop("user_materials", None)
 
 
-def _drop_recent_training_dedup(rt: Dict[str, Any]) -> None:
+def _drop_training_volume_rolling_current(
+    tv: Dict[str, Any], data: Dict[str, Any]
+) -> None:
+    """#400 fold (one lane per fact): drop `current_all`/`current_runs` from the
+    `rolling_7d` window only. That window spans the same trailing 7 days as
+    `recent_training.last_7d`, so its raw totals (current_all == that window's
+    total_*/activity_count, current_runs == its by_type Run entry) were a second copy
+    of the descriptive section. `rolling_7d` keeps only the vs-norm VERDICT
+    (norm + direction + pct); the actual trailing-7d numbers live in `recent_training`.
+    `calendar_week` is left untouched — it is the current Monday-to-date window, which
+    no other section carries. Re-parse stays safe: both fields are Optional and default
+    to None when absent.
+
+    GATED on `recent_training` being present: the fold only holds when the descriptive
+    lane exists to carry the numbers (recent-training-aware prompts, v11+). Under a
+    volume-aware-but-not-recent-training prompt (v9/v10) `recent_training` is absent, so
+    we KEEP rolling_7d's current values — dropping them there would lose the trailing-7d
+    numbers entirely. (recent_training is dropped LATER in the PACK_SECTIONS loop, so its
+    raw value is still readable here.)"""
+    if not data.get("recent_training"):
+        return
+    rolling = tv.get("rolling_7d")
+    if not rolling:
+        return
+    for comp in rolling.get("metrics", []):
+        comp.pop("current_all", None)
+        comp.pop("current_runs", None)
+
+
+def _drop_recent_training_dedup(rt: Dict[str, Any], _data: Dict[str, Any]) -> None:
     """#444/#451 pack trim: drop the deduplicated/empty fields from the
     recent-training section so they cost no tokens. Per window: the basis strings
     live once on the window (None on previous_30d). Per comparison: current_all/
@@ -898,7 +948,11 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
     ),  # AC1
     PackSection("stance", PromptFeature.STANCE),  # AC1
     PackSection("training_load", PromptFeature.TRAINING_LOAD),  # AC1
-    PackSection("training_volume", PromptFeature.VOLUME),  # #400
+    PackSection(
+        "training_volume",
+        PromptFeature.VOLUME,
+        nested_drop=_drop_training_volume_rolling_current,
+    ),  # #400 (+ rolling_7d current-value fold)
     PackSection("stream_view", PromptFeature.STREAM_VIEW),  # #443
     PackSection(
         "recent_training",

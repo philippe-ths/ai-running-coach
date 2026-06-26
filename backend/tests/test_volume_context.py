@@ -12,6 +12,7 @@ from app.api.profile import get_current_user_profile
 from app.models import Activity, DerivedMetric, User, UserProfile
 from app.services.coach.context import build_context_pack
 
+V11 = "coach_message_v11"
 V9 = "coach_message_v9"
 V8 = "coach_message_v8"
 
@@ -97,6 +98,49 @@ def test_easy_week_reaches_section_as_down(db):
     # Runs-only rides alongside the holistic total (here all current activities are runs).
     assert by_metric["sessions"].current_all == 2
     assert by_metric["sessions"].current_runs == 2
+
+
+def test_rolling_7d_current_folded_out_of_serialized_pack(db):
+    """The 7-day overlap fold: `training_volume.rolling_7d` is the vs-norm VERDICT
+    lane (no raw current values in the serialized pack), while `calendar_week` keeps
+    its current values and `recent_training.last_7d` is the single home for the
+    trailing-7d numbers. The builder still COMPUTES current on the model (direction/
+    pct derive from it); only serialization drops it for rolling_7d."""
+    subject = _seed_normal_then_easy(db)
+    pack = build_context_pack(db, subject, prompt_id=V11)
+    d = pack.to_serializable_dict()
+    tv = d["training_volume"]
+
+    # rolling_7d: verdict only — current_all/current_runs dropped, direction kept.
+    for m in tv["rolling_7d"]["metrics"]:
+        assert "current_all" not in m
+        assert "current_runs" not in m
+        assert "direction" in m and "norm_weekly" in m
+
+    # calendar_week: keeps its current values (no counterpart section).
+    for m in tv["calendar_week"]["metrics"]:
+        assert "current_all" in m
+        assert "current_runs" in m
+
+    # The trailing-7d numbers are not lost: they live once in recent_training.last_7d
+    # and equal what rolling_7d carried on the model (same window, same datum).
+    rt7 = d["recent_training"]["last_7d"]
+    model_roll = {m.metric: m for m in pack.training_volume.rolling_7d.metrics}
+    assert rt7["total_distance_m"] == model_roll["distance_m"].current_all
+    assert rt7["activity_count"] == model_roll["sessions"].current_all
+
+
+def test_rolling_7d_keeps_current_under_v9_without_recent_training(db):
+    """The fold is gated on the descriptive lane existing. Under v9 (volume-aware but
+    NOT recent-training-aware) there is no `recent_training` to carry the trailing-7d
+    numbers, so `rolling_7d` KEEPS its current values — dropping them would lose the
+    numbers entirely. This preserves a clean v11 -> v9 prompt rollback."""
+    subject = _seed_normal_then_easy(db)
+    d = build_context_pack(db, subject, prompt_id=V9).to_serializable_dict()
+    assert "recent_training" not in d  # v9 is not recent-training-aware
+    for m in d["training_volume"]["rolling_7d"]["metrics"]:
+        assert "current_all" in m
+        assert "current_runs" in m
 
 
 def test_volume_endpoint_returns_signal_as_of_today(client, db):
