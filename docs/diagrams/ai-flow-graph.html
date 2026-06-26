@@ -314,7 +314,8 @@ const LANES = [
   { key:'code',   label:'Deterministic facts', kinds:['code']       },
   { key:'store',  label:'Stored tables',       kinds:['store']      },
   { key:'memory', label:'Learned memory',      kinds:['memory']     },
-  { key:'model',  label:'The model',           kinds:['llm','gate'] },
+  { key:'gate',   label:'Policy gate',          kinds:['gate']       },
+  { key:'model',  label:'The model',           kinds:['llm']        },
 ];
 const laneKeyOf = n => (LANES.find(l=>l.kinds.includes(n.kind))||LANES[2]).key;  // unknown kinds → facts
 const stackH = arr => arr.length*NH + (arr.length-1)*VGAP;
