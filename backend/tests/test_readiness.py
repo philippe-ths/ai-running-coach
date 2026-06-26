@@ -128,11 +128,12 @@ def _seed_user(db):
     return user
 
 
-def _seed_activity(db, user, when, effort, *, idx=0):
+def _seed_activity(db, user, when, effort, *, idx=0, local=None):
     act = Activity(
         user_id=user.id,
         strava_activity_id=int(when.timestamp()) + idx,
         start_date=when,
+        start_date_local=local,   # naive local wall-clock; None => local_start falls back to UTC
         type="Run",
         name="Run",
         distance_m=5000,
@@ -235,6 +236,103 @@ def test_build_readiness_skips_activities_without_metrics(db):
     model = build_readiness(db, user.id, _BASE + timedelta(days=1, hours=2))
     assert model is not None
     assert model.sample_count == 1           # the metric-less activity is not counted
+
+
+# ---------------------------------------------------------------------------
+# build_readiness — LOCAL-day bucketing (#507)
+#
+# Readiness must key its daily-load series to the runner's LOCAL calendar day (the
+# `Activity.local_start` convention: start_date_local when present, else UTC
+# start_date), consistent with the volume vs-norm signal. Otherwise a late-evening
+# local run whose UTC instant has rolled to the next day, and a same-local-day double
+# session straddling the UTC midnight, split across two days and understate the acute
+# (fatigue) load spike the coach reads.
+#
+# The real callers now pass `activity.local_start` as `as_of`; these tests mirror that.
+# ---------------------------------------------------------------------------
+
+def test_build_readiness_buckets_late_evening_run_on_local_day(db):
+    # A run at 23:00 local in a UTC-2 zone => UTC instant is 01:00 the NEXT calendar
+    # day. Its local day is the EARLIER day; readiness must agree with volume and use
+    # the local day. Two such runs on the SAME local day (but different UTC days) must
+    # sum into ONE day's load, not split across two.
+    user = _seed_user(db)
+    local_day = datetime(2026, 6, 1)  # the runner's local calendar day
+
+    # Morning: 09:00 local (UTC 11:00, same UTC day) and evening: 23:00 local (UTC
+    # 01:00 the next UTC day). Both share local day 2026-06-01.
+    morning_local = local_day.replace(hour=9)
+    morning_utc = datetime(2026, 6, 1, 11, 0, tzinfo=timezone.utc)
+    evening_local = local_day.replace(hour=23)
+    evening_utc = datetime(2026, 6, 2, 1, 0, tzinfo=timezone.utc)  # rolled to next UTC day
+
+    _seed_activity(db, user, morning_utc, 30.0, idx=0, local=morning_local)
+    _seed_activity(db, user, evening_utc, 40.0, idx=1, local=evening_local)
+
+    # As-of the runner's local wall-clock end of the evening run (the real call site).
+    model = build_readiness(db, user.id, evening_local.replace(hour=23, minute=30))
+    assert model is not None
+    assert model.sample_count == 2
+    # One day of history seeded at 0 with summed load 30+40=70:
+    #   fitness = a_ctl * 70 = 0.0235284 * 70 = 1.6470 -> 1.6.
+    # If the two runs had split across two UTC days the series would be [70-ish split],
+    # giving a different (lower) fatigue spike; 1.6 confirms they summed into ONE day.
+    assert model.fitness == 1.6
+    assert model.history_span_days == 0   # both runs land on the single local day
+
+
+def test_build_readiness_double_session_one_acute_spike_not_split(db):
+    # The acute-fatigue point of the bug: a same-local-day double session must register
+    # as one day's load (a bigger fatigue spike), not two half-loads across two days.
+    user = _seed_user(db)
+    # Establish a flat baseline of one run/day for 60 prior local days at load 20, in a
+    # UTC-5 zone (so evening runs roll to the next UTC day but stay on their local day).
+    offset = timedelta(hours=5)  # local = UTC - 5h
+    base_local = datetime(2026, 4, 1, 18, 0)  # 18:00 local
+    last_local = None
+    for i in range(60):
+        d_local = base_local + timedelta(days=i)
+        d_utc = (d_local + offset).replace(tzinfo=timezone.utc)
+        _seed_activity(db, user, d_utc, 20.0, idx=i, local=d_local)
+        last_local = d_local
+
+    # The final local day gets a SECOND session in the evening that crosses UTC midnight.
+    second_local = last_local.replace(hour=23)          # 23:00 local, same local day
+    second_utc = (second_local + offset).replace(tzinfo=timezone.utc)  # 04:00 next UTC day
+    _seed_activity(db, user, second_utc, 60.0, idx=999, local=second_local)
+
+    model = build_readiness(db, user.id, second_local.replace(minute=30))
+    assert model is not None
+    # The final local day carries 20 + 60 = 80 of load summed into ONE series day, so
+    # the acute (fatigue) EWMA spikes above the steady ~20 baseline rather than being
+    # diluted across two UTC days.
+    assert model.fatigue > 25.0
+    assert model.sample_count == 61   # 60 baseline + the second session, all counted
+
+
+def test_build_readiness_dst_transition_day_uses_local_wall_clock(db):
+    # On a DST "spring forward" day the local wall-clock day is unambiguous (Strava
+    # supplies start_date_local already shifted), so _local_day just takes its date.
+    # A run on the DST day must bucket on its local day regardless of the UTC instant.
+    user = _seed_user(db)
+    # US spring-forward 2026: 2026-03-08, clocks jump 02:00->03:00 (UTC-5 -> UTC-4).
+    # An evening run at 22:00 local on the DST day, UTC-4 after the shift => UTC 02:00
+    # on 2026-03-09 (rolled to the next UTC day).
+    dst_local = datetime(2026, 3, 8, 22, 0)
+    dst_utc = datetime(2026, 3, 9, 2, 0, tzinfo=timezone.utc)
+    # A few prior days to give a non-trivial series, all UTC-4 evenings.
+    for i in range(1, 6):
+        prior_local = dst_local - timedelta(days=i)
+        prior_utc = dst_utc - timedelta(days=i)
+        _seed_activity(db, user, prior_utc, 25.0, idx=i, local=prior_local)
+    _seed_activity(db, user, dst_utc, 25.0, idx=0, local=dst_local)
+
+    model = build_readiness(db, user.id, dst_local.replace(minute=30))
+    assert model is not None
+    assert model.sample_count == 6
+    # History spans the 5 prior local days to the DST local day inclusive -> 5 days.
+    # (If the DST run were bucketed on its UTC day 2026-03-09 it would read 6.)
+    assert model.history_span_days == 5
 
 
 def _d(n):

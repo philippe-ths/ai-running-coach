@@ -180,13 +180,28 @@ def compute_readiness(
     )
 
 
+def _local_day(start_date, start_date_local) -> date:
+    """The runner's LOCAL calendar day for an activity, the ``Activity.local_start``
+    convention (#507): ``start_date_local`` when present, else the UTC ``start_date``.
+
+    Identical to the day-bucketing the volume / recent-training signals use (via
+    ``ActivityFact.local_date``), so readiness and volume agree on the day boundary
+    — a late-evening local run that has rolled to the next UTC day, and a same-local-
+    day double session, land on ONE day across both signals.
+    """
+    chosen = start_date_local if start_date_local is not None else start_date
+    return chosen.date() if isinstance(chosen, datetime) else chosen
+
+
 def build_readiness(db: Session, user_id, as_of) -> Optional[ReadinessModel]:
     """Read-time readiness from the user's windowed activity history up to ``as_of``.
 
     ``as_of`` is the reference instant — for a coach report this is the activity's
-    ``start_date``, so the read includes that run in the acute load and a regen of an
-    old activity reproduces the condition as of *then*. Activities strictly after
-    ``as_of`` are excluded; same-day loads are summed. The series is bounded to
+    ``local_start`` (the runner's local wall-clock start, #507), so the daily series
+    is keyed to the runner's local calendar and agrees with the volume signal on the
+    day boundary. The read includes that run in the acute load and a regen of an old
+    activity reproduces the condition as of *then*. Activities after ``as_of``'s local
+    day are excluded; same-local-day loads are summed. The series is bounded to
     ``READINESS_WINDOW_DAYS`` so per-read cost stays flat as history grows (#167).
 
     Guarded: returns ``None`` on no history or on any failure, so it never breaks the
@@ -196,44 +211,62 @@ def build_readiness(db: Session, user_id, as_of) -> Optional[ReadinessModel]:
         if not isinstance(user_id, uuid.UUID):
             user_id = uuid.UUID(str(user_id))
 
-        # The runner's first activity on or before as_of — a cheap aggregate that
-        # gives the true history span without materialising rows.
-        first_dt = db.execute(
-            select(func.min(Activity.start_date))
+        as_of_date = as_of.date() if isinstance(as_of, datetime) else as_of
+
+        # The runner's first activity day on or before as_of, by LOCAL day (#507).
+        # Fetch the earliest candidate cheaply (UTC min is a safe lower bound), then
+        # resolve its local day; widen the <= filter by a day so a local day that
+        # straddles the UTC boundary is never clipped at the edge.
+        first_row = db.execute(
+            select(Activity.start_date, Activity.start_date_local)
             .where(Activity.user_id == user_id)
             .where(Activity.is_deleted == False)  # noqa: E712
-            .where(Activity.start_date <= as_of)
-        ).scalar()
-        if first_dt is None:
+            .order_by(Activity.start_date)
+            .limit(1)
+        ).first()
+        if first_row is None:
             return None
-
-        as_of_date = as_of.date() if isinstance(as_of, datetime) else as_of
-        first_date = first_dt.date() if isinstance(first_dt, datetime) else first_dt
+        first_date = _local_day(first_row[0], first_row[1])
+        if first_date > as_of_date:
+            return None
         history_span_days = (as_of_date - first_date).days
 
-        window_start_dt = as_of - timedelta(days=READINESS_WINDOW_DAYS)
+        # The UTC window filter is a coarse perf bound (#167): widen both edges by a
+        # day so no local-vs-UTC boundary activity is dropped, then bucket precisely
+        # by local day below.
+        window_start_dt = as_of - timedelta(days=READINESS_WINDOW_DAYS + 1)
+        as_of_upper_dt = as_of + timedelta(days=1)
         rows = db.execute(
-            select(Activity.start_date, DerivedMetric.effort_score)
+            select(
+                Activity.start_date,
+                Activity.start_date_local,
+                DerivedMetric.effort_score,
+            )
             .join(DerivedMetric, DerivedMetric.activity_id == Activity.id)
             .where(Activity.user_id == user_id)
             .where(Activity.is_deleted == False)  # noqa: E712
             .where(Activity.start_date >= window_start_dt)
-            .where(Activity.start_date <= as_of)
+            .where(Activity.start_date <= as_of_upper_dt)
         ).all()
-
-        by_day: dict[date, float] = {}
-        sample_count = 0
-        for start, effort in rows:
-            if effort is None:
-                continue
-            d = start.date() if isinstance(start, datetime) else start
-            by_day[d] = by_day.get(d, 0.0) + float(effort)
-            sample_count += 1
 
         window_start_date = (
             window_start_dt.date() if isinstance(window_start_dt, datetime) else window_start_dt
         )
         series_start = max(window_start_date, first_date)
+
+        by_day: dict[date, float] = {}
+        sample_count = 0
+        for start, start_local, effort in rows:
+            if effort is None:
+                continue
+            d = _local_day(start, start_local)
+            # Bucket by LOCAL day, excluding anything after as_of's local day or
+            # before the series window (the widened UTC filter may admit a few).
+            if d > as_of_date or d < series_start:
+                continue
+            by_day[d] = by_day.get(d, 0.0) + float(effort)
+            sample_count += 1
+
         n_days = max((as_of_date - series_start).days + 1, 1)
         daily = [by_day.get(series_start + timedelta(days=i), 0.0) for i in range(n_days)]
 
