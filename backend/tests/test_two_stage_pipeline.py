@@ -301,6 +301,39 @@ async def test_fuller_claim_is_atomic_one_winner(db, configured, notifier):
     assert lifecycle.claim_fuller(db, exchange) is True   # claimable again
 
 
+async def test_fuller_raised_exception_releases_claim_and_stays_recoverable(
+    db, configured, notifier
+):
+    # #506 regression: the atomic claim sets `fuller_sent_at` (the CLOSED / at-most-once
+    # sentinel) BEFORE the slow `generate_fuller` runs. If generation RAISES mid-turn (an
+    # RQ JobTimeoutException over the ~120-360s window, a context-build/network error),
+    # the claim must be RELEASED — otherwise the exchange exits CLOSED-but-unsent and RQ
+    # retry's claim finds the sentinel set and bails, stranding the turn (strictly worse
+    # than the pre-claim null-on-crash posture, #114).
+    activity = _seed(db)
+    exchange = _exchange_of(db, activity)
+
+    boom = RuntimeError("simulated JobTimeout / network error mid-fuller")
+    with patch.object(pna, "generate_fuller", new=AsyncMock(side_effect=boom)):
+        with pytest.raises(RuntimeError):
+            await process_fuller_turn(db=db, activity=activity, notifier=notifier)
+
+    db.refresh(exchange)
+    assert exchange.fuller_sent_at is None  # claim released despite the raise
+    assert len(notifier.sent) == 0          # nothing was notified
+
+    # The turn is re-sendable: a retry re-claims and the real fuller lands + notifies.
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client(_result(_fuller_blocks()))), \
+         patch("app.services.coach.service.write_back_beliefs"), \
+         patch("app.services.coach.service.enqueue_consolidation"):
+        recovered = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
+    assert recovered is not None
+    assert len(notifier.sent) == 1
+    db.refresh(exchange)
+    assert exchange.fuller_sent_at is not None
+
+
 async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, notifier):
     # #217: a red-flag run forces a fuller turn. If that forced fuller's LLM call
     # falls back persistently (both prose attempts empty), the turn must NOT be
