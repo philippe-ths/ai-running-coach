@@ -363,12 +363,16 @@ def _build_training_load_context(
     the `TRAINING_LOAD` gating is applied once in `gather`, so this `compute` is
     reached ONLY under a training-load-aware prompt — the section is dropped from
     serialization when None, exactly like `corpus`/`stance`/`block`. Computed at read
-    time (mirroring M9 calibration) as of `as_of` (the activity's `start_date`), so
-    this run is in the acute load and a regen of an old activity reproduces the
-    condition as of then. A tier-3 deterministic FACT the coach may cite, but it never
+    time (mirroring M9 calibration) as of this activity's LOCAL day (#507, the
+    `local_start` convention the volume signal uses), so this run is in the acute load,
+    the daily series agrees with the volume signal on the day boundary, and a regen of
+    an old activity reproduces the condition as of then. A tier-3 deterministic FACT the coach may cite, but it never
     overrides the run's re-derived DerivedMetric or the safety floor (prompt rule 27).
     Degrades to None when no history is available (build_readiness guards)."""
-    model = build_readiness(db, activity.user_id, as_of)
+    # #507: anchor on the runner's LOCAL day so the daily-load series buckets by local
+    # calendar day, agreeing with the volume signal on the day boundary (a late-evening
+    # run that rolled to the next UTC day stays on its local day across both signals).
+    model = build_readiness(db, activity.user_id, activity.local_start)
     if model is None:
         return None
     return TrainingLoadContext(

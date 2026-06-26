@@ -257,7 +257,9 @@ def read_activity(
     # P3 readiness (ADR 0016): the current-condition read as of this activity,
     # computed read-time from the user's windowed history. Shown regardless of the
     # active coach prompt; None (card hidden) when there is no history.
-    readiness = build_readiness(db, activity.user_id, activity.start_date)
+    # #507: anchor on the runner's LOCAL day so readiness and the volume signal agree
+    # on the calendar-day boundary (the daily-load series is bucketed by local day).
+    readiness = build_readiness(db, activity.user_id, activity.local_start)
     if readiness is not None:
         response.training_load = TrainingLoadRead(
             fitness=readiness.fitness,
