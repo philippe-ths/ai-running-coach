@@ -261,14 +261,17 @@ const _PROMPT_SECTIONS = [
   ['HILLS FOCUS:', 'playbook · classification', 'play'], ['RACE FOCUS:', 'playbook · classification', 'play'],
   ['## YOUR VOICE FOR THIS RUNNER', 'voice block · runtime', 'voice'],
 ];
-function _promptHTML(text){
+// keep: optional predicate (cls)=>bool, so a single segment family (voice / playbook) can be
+// rendered in its own node while build_system_prompt renders the rest.
+function _promptHTML(text, keep){
   const lines=text.split('\n'), marks=[];
   lines.forEach((l,i)=>{ const s=l.trim();
     for(const [pre,label,cls] of _PROMPT_SECTIONS){ if(s.startsWith(pre)){ marks.push({i,label,cls}); break; } } });
   const segs=[];
   if(marks.length && marks[0].i>0) segs.push({label:'identity', cls:'base', a:0, b:marks[0].i});
   marks.forEach((m,k)=> segs.push({label:m.label, cls:m.cls, a:m.i, b:(k+1<marks.length?marks[k+1].i:lines.length)}));
-  return '<div class="prompt">'+segs.map(sg=>
+  const shown = keep ? segs.filter(sg=>keep(sg.cls)) : segs;
+  return '<div class="prompt">'+shown.map(sg=>
     '<div class="pseg pseg-'+sg.cls+'"><div class="pseghdr">'+esc(sg.label)+'</div>'
     +'<pre class="ptext">'+esc(lines.slice(sg.a,sg.b).join('\n').trim())+'</pre></div>').join('')+'</div>';
 }
@@ -372,11 +375,23 @@ const NODES = [
     +'Reason privately, write the prose <code>message</code>, then call <code>record_coach_tail</code> once for the structured tail. '
     +'Click this to light up <b>every</b> block that feeds the model.</p>'
 },
+{ id:'playbook', layer:'model', kind:'code', tag:'prompt',
+  title:'playbook (classification)', path:'services/coach/prompts.build_system_prompt',
+  from:['a_classifier'],
+  body:()=> '<p class="desc">The classification <b>playbook</b> injected into the system prompt for this run: <code>build_system_prompt</code> selects the coaching focus matching the run\'s class (easy / long / tempo / interval / hills / race) from the <code>classifier</code> output. It shapes <b>what the coach foregrounds</b>, never the facts or the safety floor.</p>'
+    + _promptHTML(SYSTEM_PROMPT, c=>c==='play')
+},
+{ id:'voice_block', layer:'model', kind:'code', tag:'prompt',
+  title:'voice block (rendered)', path:'services/coach/prompts.render_voice_block',
+  from:['d_relationship'],
+  body:()=> '<p class="desc">The runner\'s declared <b>Voice</b>, rendered into the system prompt at call time by <code>render_voice_block</code> from their <code>coaching_relationship</code> dials (warmth / humor / directness / energy + preset + free-text). It flexes <b>delivery only</b> — never the facts or the safety floor — and renders <b>here, into the instructions</b>, never into the context pack.</p>'
+    + _promptHTML(SYSTEM_PROMPT, c=>c==='voice')
+},
 { id:'sysprompt', layer:'model', kind:'code', tag:'prompt',
   title:'build_system_prompt('+D.meta.prompt_id+', mode, voice)', path:'services/coach/prompts.py',
-  from:['d_relationship','a_classifier'],
-  body:()=> '<p class="desc">The <b>system</b> half of the single model call (the instructions), built by <code>build_system_prompt(\''+D.meta.prompt_id+'\', playbook, voice)</code>: the prose base + the fuller-turn rule + the capability addenda + this run\'s playbook + the runner\'s rendered voice block. <b>'+SYSTEM_PROMPT.length.toLocaleString()+' chars, '+SYSTEM_PROMPT.split('\n').length+' lines.</b> Each section below is tagged with the prompt version that added it; the Voice dials render in <b>here</b>, never into the context pack.</p>'
-    + _promptHTML(SYSTEM_PROMPT)
+  from:['voice_block','playbook'],
+  body:()=> '<p class="desc">The <b>system</b> half of the single model call (the instructions), built by <code>build_system_prompt(\''+D.meta.prompt_id+'\', playbook, voice)</code>: the prose base + the fuller-turn rule + the capability addenda. <b>'+SYSTEM_PROMPT.length.toLocaleString()+' chars, '+SYSTEM_PROMPT.split('\n').length+' lines</b> total. This run\'s <b>playbook</b> and the runner\'s <b>voice block</b> are split out as their own upstream nodes; each section below is tagged with the prompt version that added it.</p>'
+    + _promptHTML(SYSTEM_PROMPT, c=>c!=='voice'&&c!=='play')
 },
 
 /* ===== LAYER: PACK ===== */
