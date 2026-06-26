@@ -174,6 +174,43 @@ def test_mark_done_is_idempotent(db):
     assert ex.done_at == before
 
 
+def test_mark_done_is_atomic_one_winner(db):
+    # #514 seam-level: the "done" guard is an atomic claim, not a check-then-act. Two
+    # callers marking the same exchange done must yield exactly one winner — the
+    # conditional UPDATE on done_at-IS-NULL serializes the race, so only the first tap
+    # schedules the full report.
+    ex = _exchange(db)
+    assert lifecycle.mark_done(db, ex) is True   # winner
+    assert lifecycle.mark_done(db, ex) is False  # loser: already done
+    db.refresh(ex)
+    assert ex.done_at is not None
+    assert ex.opened_at is not None  # defensively opened, atomically with the claim
+
+
+def test_mark_done_claim_consults_the_row_not_a_stale_instance(db):
+    # #514: simulate two processes that each loaded the exchange with `done_at` still
+    # null (the web service is multi-process) before either committed. The old guard read
+    # the in-memory instance's `done_at` — so a SECOND caller holding its own stale
+    # instance would re-pass the null check and double-win (both scheduling the full
+    # report). The atomic UPDATE's WHERE done_at IS NULL consults the committed ROW, so
+    # the second caller loses regardless of its stale in-memory view. A separate Session
+    # on the same connection gives a genuinely independent identity map (the second
+    # process's view), which a same-session second instance cannot.
+    from sqlalchemy.orm import Session as _Session
+
+    ex = _exchange(db)
+    db.commit()
+    other = _Session(bind=db.connection())
+    stale = other.query(Exchange).filter(Exchange.id == ex.id).one()
+    assert stale.done_at is None  # the second process still sees an unclaimed exchange
+
+    assert lifecycle.mark_done(db, ex) is True        # first process wins the claim
+    assert lifecycle.mark_done(other, stale) is False  # second loses on the committed ROW
+    db.refresh(ex)
+    assert ex.done_at is not None
+    other.close()
+
+
 def test_mark_done_preserves_existing_opened_at(db):
     opened = datetime(2026, 5, 27, 10, 0, 0, tzinfo=timezone.utc)
     ex = _exchange(db, opened_at=opened)
