@@ -41,7 +41,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import update
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -119,21 +119,40 @@ def record_receipt_sent(db: Session, activity: Activity, *, now: Optional[dateti
 
 
 def mark_done(db: Session, exchange: Exchange, *, now: Optional[datetime] = None) -> bool:
-    """Record the runner's explicit "done" tap (#296). Idempotent: a second tap is a
-    no-op on `done_at`. Defensively opens the exchange if the receipt somehow had not.
-    Returns True if it recorded the completion now.
+    """Atomically record the runner's explicit "done" tap (#296). Idempotent: a second
+    tap is a no-op on `done_at`. Defensively opens the exchange if the receipt somehow
+    had not. Returns True if THIS call recorded the completion now.
 
     The CALLER must already have checked the exchange is open and within window via
-    `can_fire_reply_fuller` (or the equivalent) — this only writes state."""
-    if exchange.done_at is not None:
-        return False
-    now = now or _now()
-    exchange.done_at = now
-    if exchange.opened_at is None:
-        exchange.opened_at = now
-    db.add(exchange)
+    `can_fire_reply_fuller` (or the equivalent) — this only writes state. The caller
+    schedules the full report only when this returns True, so exactly one tap schedules.
+
+    #514: the prior guard was a non-atomic check-then-act (`done_at` read, then the
+    write). The web service is multi-process and the Telegram "done" callback hits it, so
+    two SIMULTANEOUS taps could both read `done_at` null, both transition, and both
+    schedule the full report. This is a conditional UPDATE that sets `done_at` only WHERE
+    it is still NULL and inspects the rowcount, mirroring `claim_fuller`: the database
+    serializes the two taps so exactly one wins (rowcount 1) and the loser (rowcount 0)
+    learns it lost and does NOT schedule. `opened_at` is set in the SAME UPDATE only
+    where it is still null, so the defensive open stays atomic with the claim and never
+    moves an existing reply-window anchor."""
+    stamp = now or _now()
+    result = db.execute(
+        update(Exchange)
+        .where(Exchange.id == exchange.id, Exchange.done_at.is_(None))
+        .values(
+            done_at=stamp,
+            opened_at=func.coalesce(Exchange.opened_at, stamp),
+        )
+    )
     db.commit()
-    return True
+    won = result.rowcount == 1
+    if won:
+        # Keep the in-memory instance consistent with the row the winner just wrote.
+        exchange.done_at = stamp
+        if exchange.opened_at is None:
+            exchange.opened_at = stamp
+    return won
 
 
 # --- the at-most-once notification invariant (one place) ----------------------
