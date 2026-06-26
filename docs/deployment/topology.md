@@ -3,7 +3,7 @@
 How the system is wired in production and in local development, and how the pieces connect.
 This is the operational reference; `project-context.md` carries the one-line summary and points here.
 
-For the historical Fly/Neon/Upstash plan (now decommissioned) see `phase-1-plan.md`. Fly is gone: the
+The original Fly/Neon/Upstash plan is decommissioned. Fly is gone: the
 `running-coach-ths` app and the whole Fly account were deleted on 2026-06-02.
 
 ## Production

@@ -4,7 +4,7 @@
 maps to a downsampled, index-aligned, point-count-bounded, shape-preserving
 snapshot of HR / pace / grade / cadence. No DB, no I/O.
 
-The contract (see docs/coach-memory-retrieval-brief.md § A2a):
+The contract (see docs/adr/0008-coach-memory-is-a-four-layer-pull-model.md):
 - aligned: every returned channel array has the same length (== n_points),
   one entry per bucket, so the same index means the same moment across channels;
 - bounded: n_points <= STREAM_VIEW_MAX_POINTS regardless of input size;

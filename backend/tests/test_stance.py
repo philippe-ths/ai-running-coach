@@ -1,6 +1,6 @@
 """P1.3 Stance dials — resolution, axes, prompt composition, floor invariance.
 
-Structure mirrors the milestone deliverables and ACs (docs/coach-p1.3-stance-dials-brief.md):
+Structure mirrors the milestone deliverables and ACs (docs/adr/0015-coaching-stance-is-a-selected-school-plus-two-prompt-steered-emphasis-axes.md):
 
 - TestStanceResolution: stance.py maps a CoachingRelationship row -> StanceProfile
   (null -> default school aerobic-base + balanced 3/3; stored school + emphasis;
