@@ -4,7 +4,7 @@ import uuid
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import select, update
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
 from app.db.session import get_db
@@ -354,8 +354,19 @@ def receive_telegram_callback(
         return {"status": "processed", "action": "done_scheduled"}
 
     # RPE/pain: build the validated CheckIn payload from the token (range-checked
-    # the same as the in-app path), then write through the shared helper.
-    checkin_data = CheckInCreate(**{action.field: action.value})
+    # the same as the in-app path), then write through the shared helper. An
+    # authentic-but-forged callback can still carry an out-of-range value (#504),
+    # which CheckInCreate's schema bounds reject; treat that like any other bad
+    # callback — ack and ignore (200, no write) so Telegram does not retry on a 500.
+    try:
+        checkin_data = CheckInCreate(**{action.field: action.value})
+    except ValidationError:
+        logger.warning(
+            "telegram_callback_out_of_range_value",
+            extra={"kind": action.kind, "value": action.value},
+        )
+        _answer_callback(callback.id)
+        return {"status": "ignored", "reason": "bad_value"}
     write_checkin(db, activity_uuid, checkin_data)
 
     label = "RPE" if action.kind == "rpe" else "pain"

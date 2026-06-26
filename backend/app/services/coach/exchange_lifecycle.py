@@ -41,6 +41,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -167,3 +168,51 @@ def mark_notification_sent(
     setattr(sentinel_obj, sentinel_attr, now or _now())
     db.add(sentinel_obj)
     db.commit()
+
+
+# --- the atomic fuller-turn claim (#506) --------------------------------------
+
+
+def claim_fuller(db: Session, exchange: Exchange, *, now: Optional[datetime] = None) -> bool:
+    """Atomically CLAIM the fuller turn for this exchange, so exactly one of a racing
+    timer-fired and reply-fired trigger proceeds to generate + notify (#506).
+
+    The prior guard was a non-atomic check-then-act (`is_closed` read, then a long
+    `generate_fuller`, then the notification sentinel set). Under multiple workers both
+    triggers could pass the read, both generate, and both notify — two notifications and
+    a wasted second generation. This is a conditional UPDATE that sets `fuller_sent_at`
+    only WHERE it is still NULL and inspects the rowcount, so the database serializes the
+    two triggers: the winner gets rowcount 1 and owns the turn, the loser gets 0 and
+    bails BEFORE generating.
+
+    The claim doubles as the at-most-once notification sentinel (`fuller_sent_at` set =
+    CLOSED), so the winner does NOT re-mark it after the send. To preserve the
+    re-sendable-on-failure posture (#114), the caller MUST `release_fuller_claim` if the
+    generation falls back, produces no report, or the send fails — leaving the sentinel
+    null so the stage can be retried. Returns True if this caller won the claim."""
+    stamp = now or _now()
+    result = db.execute(
+        update(Exchange)
+        .where(Exchange.id == exchange.id, Exchange.fuller_sent_at.is_(None))
+        .values(fuller_sent_at=stamp)
+    )
+    db.commit()
+    won = result.rowcount == 1
+    if won:
+        # Keep the in-memory instance consistent with the row the winner just claimed.
+        exchange.fuller_sent_at = stamp
+    return won
+
+
+def release_fuller_claim(db: Session, exchange: Exchange) -> None:
+    """Release a fuller-turn claim taken by `claim_fuller` when the turn did not complete
+    (a fallback/empty generation, missing report, or a send failure), so the stage stays
+    re-sendable (#114). Only ever clears a sentinel this same caller set; never called on
+    a legitimately-closed exchange. The mirror of `claim_fuller`'s pre-send set."""
+    db.execute(
+        update(Exchange)
+        .where(Exchange.id == exchange.id)
+        .values(fuller_sent_at=None)
+    )
+    db.commit()
+    exchange.fuller_sent_at = None

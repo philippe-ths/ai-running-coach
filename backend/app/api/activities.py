@@ -171,7 +171,10 @@ async def sync_activities(
 
 
 @router.post("/activities/refresh")
-def refresh_activities(db: Session = Depends(get_db)):
+def refresh_activities(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Self-healing check for activities a Strava webhook missed (#123, ADR 0006).
 
     Triggered on app-open and by the user-facing Refresh affordance; replaces the
@@ -183,9 +186,10 @@ def refresh_activities(db: Session = Depends(get_db)):
     """
     from app.jobs.self_heal import maybe_enqueue_self_heal
 
-    # Single Player Mode: resolve the one linked account's owner. P2.1's
-    # require_current_user replaces this with the authenticated user.
-    account = db.query(StravaAccount).first()
+    # P2.1: self-heal only the authenticated user's own Strava account (#502).
+    account = db.execute(
+        select(StravaAccount).where(StravaAccount.user_id == user.id)
+    ).scalars().first()
     if account is None:
         return {"status": "no_account"}
     triggered = maybe_enqueue_self_heal(account.user_id)

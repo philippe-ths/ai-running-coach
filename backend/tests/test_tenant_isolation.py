@@ -10,7 +10,7 @@ Auth is injected by overriding verify_clerk_session (the resolution itself is
 covered by test_clerk_auth); here we pin the QUERY scoping that rides on top.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -229,3 +229,116 @@ def test_material_of_other_user_is_404(client, two_users, db):
     _act_as(a.user)
     b_material = db.query(UserMaterial).filter(UserMaterial.user_id == b.user.id).first()
     assert client.get(f"/api/coach/materials/{b_material.id}").status_code == 404
+
+
+# --- trends + Strava-import read/maintenance endpoints (#503) ----------------
+#
+# Per-user scoping lives in the service layer (test_trends_user_scoping.py), but
+# these endpoint-boundary tests pin that the scoping actually rides on the
+# authenticated caller, paralleling test_trends_types_scoped_to_own_activities.
+
+
+def _recent_activity(db, user_id, *, days_ago: int, distance_m: int, name: str) -> Activity:
+    """An analysed activity dated relative to today, so it lands inside the
+    rolling trends/load/volume windows regardless of when the suite runs."""
+    on = date.today() - timedelta(days=days_ago)
+    activity = Activity(
+        user_id=user_id,
+        strava_activity_id=int(uuid4().int % 1_000_000_000),
+        start_date=datetime.combine(on, time(12, 0)),
+        type="Run",
+        name=name,
+        distance_m=distance_m,
+        moving_time_s=1500,
+        elapsed_time_s=1500,
+        elev_gain_m=0.0,
+        raw_summary={},
+    )
+    db.add(activity)
+    db.flush()
+    db.add(DerivedMetric(
+        activity_id=activity.id, effort_score=50.0, flags=[],
+        confidence="high", confidence_reasons=[],
+    ))
+    db.commit()
+    db.refresh(activity)
+    return activity
+
+
+def test_trends_load_scoped_to_own_activities(client, two_users, db):
+    """GET /api/trends/load must never carry another user's activity contributions."""
+    a, b = two_users
+    a_act = _recent_activity(db, a.user.id, days_ago=2, distance_m=1000, name="A only")
+    b_act = _recent_activity(db, b.user.id, days_ago=2, distance_m=9999, name="B only")
+
+    _act_as(a.user)
+    weeks = client.get("/api/trends/load").json()["weeks"]
+    contrib_ids = {pt["id"] for w in weeks for pt in w["activities"]}
+    assert str(a_act.id) in contrib_ids
+    assert str(b_act.id) not in contrib_ids, "B's activity must not appear in A's load report"
+
+
+def test_trends_volume_scoped_to_own_activities(client, two_users, db):
+    """GET /api/trends/volume must not fold another user's distance into the caller's window."""
+    a, b = two_users
+    # A logs a modest week; B logs a huge week in the same rolling window.
+    _recent_activity(db, a.user.id, days_ago=1, distance_m=3000, name="A only")
+    _recent_activity(db, b.user.id, days_ago=1, distance_m=80000, name="B only")
+
+    _act_as(a.user)
+    report = client.get("/api/trends/volume?range=7D").json()
+    distance = next(
+        m for m in report["rolling"]["metrics"] if m["metric"] == "distance_m"
+    )
+    assert distance["current_all"] == 3000, (
+        "B's 80km must not inflate A's volume window"
+    )
+
+
+def test_refresh_scoped_to_callers_own_account(client, two_users, monkeypatch):
+    """POST /api/activities/refresh must self-heal the caller's own account only (#502).
+
+    Regression guard: before the fix the endpoint picked an arbitrary StravaAccount,
+    so user B's refresh could drive a self-heal against user A's account.
+    """
+    a, b = two_users
+    seen = []
+    import app.jobs.self_heal as self_heal
+
+    monkeypatch.setattr(
+        self_heal, "maybe_enqueue_self_heal", lambda user_id: seen.append(user_id) or True
+    )
+
+    _act_as(b.user)
+    resp = client.post("/api/activities/refresh")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "checking"
+    assert seen == [b.user.id], "refresh must target B's own account, never A's"
+
+
+def test_refresh_no_account_no_ops(client, db, monkeypatch):
+    """A user with no linked Strava account gets a clean no-op, never another user's account."""
+    # User A has a Strava account; user B (the caller) has none.
+    owner = User(email="owner@test.dev")
+    db.add(owner)
+    db.commit()
+    db.add(StravaAccount(
+        user_id=owner.id, strava_athlete_id=999, access_token="t",
+        refresh_token="r", expires_at=9999999999, scope="read",
+    ))
+    db.commit()
+    caller = User(email="caller@test.dev")
+    db.add(caller)
+    db.commit()
+
+    import app.jobs.self_heal as self_heal
+    called = []
+    monkeypatch.setattr(
+        self_heal, "maybe_enqueue_self_heal", lambda user_id: called.append(user_id) or True
+    )
+
+    _act_as(caller)
+    resp = client.post("/api/activities/refresh")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "no_account"
+    assert called == [], "no self-heal may fire on another user's account"
