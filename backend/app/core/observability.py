@@ -214,6 +214,27 @@ def sentry_capture_active() -> bool:
     return _SENTRY_AVAILABLE and bool(settings.SENTRY_DSN)
 
 
+def capture_exception(exc: BaseException) -> None:
+    """Route a caught exception to Sentry. No-op unless capture is active.
+
+    For a best-effort guard that swallows an exception so it never breaks the
+    caller (e.g. the runner-baseline / readiness recomputes), an ERROR-level
+    ``logger.exception`` already reaches Sentry via the ``LoggingIntegration``
+    (``event_level=logging.ERROR``). This helper makes that capture explicit and
+    unconditional at the swallow site so a genuine internal failure is visible as
+    its own event rather than indistinguishable from a normal "not enough data"
+    abstention. It is a no-op when Sentry is not wired up (the optional
+    ``observability`` extra absent or ``SENTRY_DSN`` unset; logs-only by default,
+    see issue #102), so it is safe to call from any code path.
+    """
+    if not sentry_capture_active():
+        return
+    try:
+        sentry_sdk.capture_exception(exc)
+    except Exception:  # pragma: no cover - capture must never break the caller
+        logging.getLogger(__name__).exception("sentry_capture_failed")
+
+
 def init_sentry(component: str) -> None:
     """Initialise the Sentry SDK. No-op unless the SDK is installed and
     SENTRY_DSN is set.

@@ -478,3 +478,69 @@ def test_recompute_in_window_history_is_unchanged(db):
     assert row.bucketed_trends[bucket]["abstained"] is False
     # median HR of [140,145,150,155] = 147.5
     assert row.typical_easy_hr == 147.5
+
+
+# ---------------------------------------------------------------------------
+# Baseline recompute failure VISIBILITY (#513)
+#
+# The runner-baseline recompute is best-effort: a failure must never break
+# analyze(), so the orchestrator swallows it and analysis continues. But a GENUINE
+# internal failure (a malformed stored bucketed_trends, a bad value type) must be
+# logged at ERROR and routed to Sentry capture rather than swallowed silently --
+# otherwise corruption is indistinguishable from a normal "not enough data"
+# abstention (which returns None cleanly without raising) and the baseline freezes
+# at its last good value with no symptom. The legitimate thin-data path must stay
+# quiet so the new logging does not cry wolf.
+# ---------------------------------------------------------------------------
+
+def test_post_commit_baseline_internal_error_is_visible_but_safe(db, monkeypatch, caplog):
+    import logging
+
+    from app.services.analysis import _orchestrator
+
+    captured: list[BaseException] = []
+    monkeypatch.setattr(
+        "app.core.observability.capture_exception",
+        lambda exc: captured.append(exc),
+    )
+
+    def _boom(_db, _user_id):
+        raise ValueError("malformed stored bucketed_trends")
+
+    monkeypatch.setattr(
+        "app.services.analysis.baseline.recompute_runner_baseline", _boom
+    )
+
+    user = _seed_user(db)
+
+    with caplog.at_level(logging.ERROR, logger=_orchestrator.__name__):
+        # Best-effort guard: must NOT raise even though the recompute blows up.
+        _orchestrator._post_commit_baseline(db, user.id)
+
+    # Visible: logged at ERROR and routed to Sentry capture.
+    assert any(r.levelno == logging.ERROR for r in caplog.records)
+    assert "runner baseline recompute failed" in caplog.text
+    assert len(captured) == 1
+    assert isinstance(captured[0], ValueError)
+
+
+def test_post_commit_baseline_thin_data_abstention_stays_quiet(db, monkeypatch, caplog):
+    import logging
+
+    from app.services.analysis import _orchestrator
+
+    captured: list[BaseException] = []
+    monkeypatch.setattr(
+        "app.core.observability.capture_exception",
+        lambda exc: captured.append(exc),
+    )
+
+    # No activities -> recompute_runner_baseline returns None cleanly (abstains).
+    user = _seed_user(db)
+
+    with caplog.at_level(logging.ERROR, logger=_orchestrator.__name__):
+        _orchestrator._post_commit_baseline(db, user.id)
+
+    # A normal abstention: no ERROR log, no Sentry capture.
+    assert not any(r.levelno == logging.ERROR for r in caplog.records)
+    assert captured == []

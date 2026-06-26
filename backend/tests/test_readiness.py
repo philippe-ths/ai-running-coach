@@ -338,3 +338,63 @@ def test_build_readiness_dst_transition_day_uses_local_wall_clock(db):
 def _d(n):
     """A throwaway as_of date n days into an arbitrary epoch (pure tests don't read it)."""
     return (datetime(2026, 1, 1) + timedelta(days=n)).date()
+
+
+# ---------------------------------------------------------------------------
+# build_readiness — failure VISIBILITY (#513)
+#
+# The broad guard must keep returning the safe None so it never breaks the caller,
+# but a GENUINE internal failure (a malformed stored value, a bad type) must be
+# logged at ERROR and routed to Sentry capture rather than swallowed silently --
+# otherwise corruption is indistinguishable from a normal "no history" abstention
+# and the signal freezes at its last good value with no symptom. The legitimate
+# thin-data path must stay quiet so the new logging does not cry wolf.
+# ---------------------------------------------------------------------------
+
+def test_build_readiness_internal_error_is_visible_but_safe(db, monkeypatch, caplog):
+    import logging
+
+    captured: list[BaseException] = []
+    monkeypatch.setattr(
+        "app.services.readiness.capture_exception",
+        lambda exc: captured.append(exc),
+    )
+    # Force a genuine internal fault deep in the compute, past the abstention
+    # early-returns, so the broad except is the only thing that catches it.
+    def _boom(*args, **kwargs):
+        raise ValueError("malformed stored load")
+
+    monkeypatch.setattr("app.services.readiness.compute_readiness", _boom)
+
+    user = _seed_user(db)
+    _seed_activity(db, user, _BASE, 50.0, idx=0)
+
+    with caplog.at_level(logging.ERROR, logger="app.services.readiness"):
+        model = build_readiness(db, user.id, _BASE + timedelta(hours=2))
+
+    # Contract preserved: caller still gets the safe None.
+    assert model is None
+    # Visible: logged at ERROR and routed to Sentry capture.
+    assert any(r.levelno == logging.ERROR for r in caplog.records)
+    assert "readiness computation failed" in caplog.text
+    assert len(captured) == 1
+    assert isinstance(captured[0], ValueError)
+
+
+def test_build_readiness_thin_data_abstention_stays_quiet(db, monkeypatch, caplog):
+    import logging
+
+    captured: list[BaseException] = []
+    monkeypatch.setattr(
+        "app.services.readiness.capture_exception",
+        lambda exc: captured.append(exc),
+    )
+    user = _seed_user(db)  # no activities -> legitimate abstention
+
+    with caplog.at_level(logging.ERROR, logger="app.services.readiness"):
+        model = build_readiness(db, user.id, _BASE)
+
+    # A normal "not enough data" abstention: safe None, but NOT logged or captured.
+    assert model is None
+    assert not any(r.levelno == logging.ERROR for r in caplog.records)
+    assert captured == []
