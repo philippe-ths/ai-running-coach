@@ -39,6 +39,13 @@
   .colhdr { font:700 11px/1 ui-sans-serif,system-ui; letter-spacing:1px; text-transform:uppercase; fill:#6b7280; }
   .colhdr.sub { font-weight:500; letter-spacing:.2px; text-transform:none; fill:#525a68; }
 
+  /* swimlane grid: bands are the kind-rows, phasesep the vertical phase dividers */
+  .laneband { fill:transparent; }
+  .laneband.alt { fill:rgba(255,255,255,.018); }
+  .lanesep  { stroke:var(--line); stroke-width:1; stroke-opacity:.65; }
+  .phasesep { stroke:var(--line); stroke-width:1; stroke-dasharray:3 5; stroke-opacity:.45; }
+  .lanelbl  { fill:#8b93a1; font:700 10px/1 ui-sans-serif,system-ui; letter-spacing:.5px; text-transform:uppercase; }
+
   .edge { fill:none; stroke:#8aa; stroke-opacity:.13; stroke-width:1.3; transition:stroke-opacity .15s, stroke .15s; }
   .edge.eup   { stroke:var(--up);   stroke-opacity:.85; stroke-width:1.8; }
   .edge.edown { stroke:var(--down); stroke-opacity:.8;  stroke-width:1.8; }
@@ -270,16 +277,19 @@
 const SVGNS='http://www.w3.org/2000/svg';
 const cam=document.getElementById('cam'), svg=document.getElementById('svg'), stage=document.getElementById('stage');
 
-/* ----- layout -----
-   Categories run left→right. Within each category, a node is placed in a SUB-column equal
-   to its longest dependency depth among *intra-category* edges, so an edge never stays inside
-   one column (no from-and-to within the same category). Extra gap separates the categories. */
+/* ----- layout (a grid: phase columns × kind swimlanes) -----
+   X axis — categories (pipeline phases) run left→right. Within each category, a node is placed
+   in a SUB-column equal to its longest dependency depth among *intra-category* edges, so an edge
+   never stays inside one column. Extra gap separates the categories.
+   Y axis — kind swimlanes (the colour legend as rows): every node sits in the band for what it
+   IS (raw input, runner input, deterministic fact, stored table, learned memory, the model).
+   A (column, lane) pair is a cell; nodes sharing a cell stack vertically within it. */
 const CATS = ['ingest','analysis','deriv','pack','model','output'];
 const CATHDR = { ingest:['1  Ingestion','Strava → rows'], analysis:['2  Analysis pipeline','fills DerivedMetric'],
   deriv:['3  Derivation','read-time builders'], pack:['4  Context pack','what the LLM sees'],
   model:['5  Model','the call'], output:['6  Output','the report'] };
 const catOf = n => n.id==='output' ? 'output' : n.layer;
-const NW=152, NH=36, VGAP=11, COLPITCH=170, CATGAP=44, LEFT=60, PADTOP=104;
+const NW=152, NH=36, VGAP=11, COLPITCH=170, CATGAP=44, LEFT=184, PADTOP=104;
 
 // sub-rank = longest path using only edges whose source is in the same category
 const subRank = {};
@@ -297,23 +307,69 @@ const totalCols = acc;
 const gcol = n => catStart[catOf(n)] + subRank[n.id];               // global column index
 const xOfCol = (gc,cat) => LEFT + gc*COLPITCH + catIndex[cat]*CATGAP;
 
-// group nodes by global column for vertical stacking (each column belongs to one category)
-const groups = {};
-NODES.forEach(n=>{ const gc=gcol(n); (groups[gc]=groups[gc]||[]).push(n); });
+// kind swimlanes (top→bottom), the colour legend as rows
+const LANES = [
+  { key:'source', label:'Raw input',          kinds:['source']     },
+  { key:'runner', label:'Runner input',        kinds:['runner']     },
+  { key:'code',   label:'Deterministic facts', kinds:['code']       },
+  { key:'store',  label:'Stored tables',       kinds:['store']      },
+  { key:'memory', label:'Learned memory',      kinds:['memory']     },
+  { key:'model',  label:'The model',           kinds:['llm','gate'] },
+];
+const laneKeyOf = n => (LANES.find(l=>l.kinds.includes(n.kind))||LANES[2]).key;  // unknown kinds → facts
 const stackH = arr => arr.length*NH + (arr.length-1)*VGAP;
-const maxStack = Math.max(...Object.values(groups).map(stackH));
+
+// a (column, lane) is a cell; nodes sharing one stack within it
+const cells = {};
+NODES.forEach(n=>{ const k=gcol(n)+'|'+laneKeyOf(n); (cells[k]=cells[k]||[]).push(n); });
+
+// each lane is tall enough for its busiest column; LANEPAD is the breathing room inside a band
+const LANEPAD = 20;
+const laneCount = {}; LANES.forEach(l=>laneCount[l.key]=1);
+Object.entries(cells).forEach(([k,arr])=>{ const lane=k.split('|')[1]; laneCount[lane]=Math.max(laneCount[lane], arr.length); });
+const laneH = {}, laneTop = {}; let laneAcc = PADTOP;
+LANES.forEach(l=>{ laneH[l.key]=stackH(new Array(laneCount[l.key]))+LANEPAD*2; laneTop[l.key]=laneAcc; laneAcc+=laneH[l.key]; });
+
 const pos = {};
-Object.entries(groups).forEach(([gc,arr])=>{
-  const cat = catOf(arr[0]);
-  const x = xOfCol(+gc, cat);
-  const y0 = PADTOP + (maxStack - stackH(arr))/2;
+Object.entries(cells).forEach(([k,arr])=>{
+  const [gcStr,lane]=k.split('|'); const gc=+gcStr; const cat=catOf(arr[0]);
+  const x = xOfCol(gc, cat);
+  const y0 = laneTop[lane] + (laneH[lane]-stackH(arr))/2;   // centre the cell's stack in its band
   arr.forEach((n,i)=>{ const y=y0+i*(NH+VGAP); pos[n.id]={ x, y, cx:x+NW/2, cy:y+NH/2, leftX:x, rightX:x+NW }; });
 });
 const worldW = LEFT + (totalCols-1)*COLPITCH + (CATS.length-1)*CATGAP + NW + 60;
-const worldH = PADTOP + maxStack + 60;
+const worldH = laneAcc + 40;
 
 const shortLabel = n => n.title.split('—')[0].split('(')[0].trim();
 const KCOL = { source:'#3b82f6', code:'#10b981', store:'#a78bfa', llm:'#f59e0b', gate:'#ef4444', runner:'#ec4899', memory:'#a78bfa' };
+
+/* ----- swimlane grid (drawn first, behind edges + nodes) ----- */
+const GUTTER = 16;   // left-margin x for lane labels
+LANES.forEach((l,i)=>{
+  const top=laneTop[l.key], h=laneH[l.key];
+  const band=document.createElementNS(SVGNS,'rect');
+  band.setAttribute('class','laneband'+(i%2?' alt':''));
+  band.setAttribute('x',0); band.setAttribute('y',top); band.setAttribute('width',worldW); band.setAttribute('height',h);
+  cam.appendChild(band);
+  const ly=top+18;   // lane label near the band's top-left, in the gutter
+  const dot=document.createElementNS(SVGNS,'rect');
+  dot.setAttribute('x',GUTTER); dot.setAttribute('y',ly-9); dot.setAttribute('width',9); dot.setAttribute('height',9); dot.setAttribute('rx',3);
+  dot.setAttribute('fill',KCOL[l.kinds[0]]||'#888'); cam.appendChild(dot);
+  const lt=document.createElementNS(SVGNS,'text'); lt.setAttribute('class','lanelbl');
+  lt.setAttribute('x',GUTTER+15); lt.setAttribute('y',ly); lt.textContent=l.label; cam.appendChild(lt);
+});
+LANES.slice(1).forEach(l=>{   // separators between lanes
+  const ln=document.createElementNS(SVGNS,'line'); ln.setAttribute('class','lanesep');
+  ln.setAttribute('x1',0); ln.setAttribute('y1',laneTop[l.key]); ln.setAttribute('x2',worldW); ln.setAttribute('y2',laneTop[l.key]);
+  cam.appendChild(ln);
+});
+CATS.slice(1).forEach(c=>{    // vertical dividers between phases, sitting in each CATGAP
+  const prev=CATS[catIndex[c]-1];
+  const xd=(xOfCol(catStart[c]-1,prev)+NW + xOfCol(catStart[c],c))/2;
+  const ln=document.createElementNS(SVGNS,'line'); ln.setAttribute('class','phasesep');
+  ln.setAttribute('x1',xd); ln.setAttribute('y1',PADTOP-32); ln.setAttribute('x2',xd); ln.setAttribute('y2',laneAcc);
+  cam.appendChild(ln);
+});
 
 /* ----- category headers (one per category, at its leftmost sub-column) ----- */
 CATS.forEach(cat=>{
@@ -446,8 +502,9 @@ let view={x:0,y:0,k:1};
 function apply(){ cam.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); }
 function fit(){
   const vw=svg.clientWidth, vh=svg.clientHeight;
-  const k=Math.min((vw-40)/worldW, (vh-PADTOP-30)/worldH, 1.1);
-  view.k=k; view.x=(vw-worldW*k)/2; view.y=PADTOP*0.2 + 8;
+  const headerH=86, availH=vh-headerH-20;
+  const k=Math.min((vw-40)/worldW, availH/worldH, 1.1);
+  view.k=k; view.x=(vw-worldW*k)/2; view.y=headerH + Math.max(0,(availH-worldH*k)/2);
   apply();
 }
 let drag=null;
