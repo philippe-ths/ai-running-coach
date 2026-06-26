@@ -25,7 +25,7 @@ per-activity store.
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Optional
 
 from rq import Retry
@@ -39,6 +39,7 @@ from app.models.coaching_relationship import CoachingRelationship
 from app.services.analysis import analyze_with_streams
 from app.services.analysis.classifier import Classification, compose_headline
 from app.services.blocks import activity_end, assign_activity_to_block
+from app.services.coach import exchange_lifecycle as lifecycle
 from app.services.coach.receipt import build_receipt
 from app.services.coach.service import (
     generate_fuller,
@@ -96,7 +97,7 @@ def _notify(
     Notification sent, or None.
     """
     sentinel_obj = sentinel_obj if sentinel_obj is not None else activity
-    if getattr(sentinel_obj, sentinel_attr) is not None:
+    if lifecycle.notification_already_sent(sentinel_obj, sentinel_attr):
         logger.info(
             "Skipping %s notification for activity %s: already sent at %s",
             stage, activity.strava_activity_id, getattr(sentinel_obj, sentinel_attr),
@@ -130,9 +131,7 @@ def _notify(
         )
         return None
 
-    setattr(sentinel_obj, sentinel_attr, datetime.now(timezone.utc))
-    db.add(sentinel_obj)
-    db.commit()
+    lifecycle.mark_notification_sent(db, sentinel_obj, sentinel_attr)
     return notification
 
 
@@ -254,10 +253,8 @@ async def _send_receipt(
     # Open the exchange on the first receipt, independent of delivery (A4 posture):
     # the reply window anchors here and must work even for a NoOp local notifier.
     exchange = db.query(Exchange).filter(Exchange.block_id == block.id).first()
-    if exchange is not None and exchange.opened_at is None:
-        exchange.opened_at = datetime.now(timezone.utc)
-        db.add(exchange)
-        db.commit()
+    if exchange is not None:
+        lifecycle.open_exchange(db, exchange)
 
     if notification is None:
         logger.info(
@@ -275,9 +272,7 @@ async def _send_receipt(
         )
         return None
 
-    activity.receipt_sent_at = datetime.now(timezone.utc)
-    db.add(activity)
-    db.commit()
+    lifecycle.record_receipt_sent(db, activity)
     return notification
 
 
@@ -376,7 +371,7 @@ async def _run_opener_stage(
     marks generation so a late arrival knows the exchange has spoken even if
     delivery failed or no channel is configured."""
     db.refresh(exchange)
-    if exchange.opener_sent_at is not None:
+    if lifecycle.notification_already_sent(exchange, "opener_sent_at"):
         logger.info(
             "Opener already sent for block %s; skipping", exchange.block_id
         )
@@ -387,10 +382,7 @@ async def _run_opener_stage(
         logger.info("No opener generated for activity %s", activity.strava_activity_id)
         return None
 
-    if exchange.opened_at is None:
-        exchange.opened_at = datetime.now(timezone.utc)
-        db.add(exchange)
-        db.commit()
+    lifecycle.open_exchange(db, exchange)
 
     # Schedule the conditional fuller turn FIRST, on the salience decision (the
     # opener LLM's judgment OR-ed with the deterministic safety override; a fallback
@@ -499,16 +491,11 @@ def _enqueue_reply_fuller(db: Session, activity_id) -> bool:
     exchange = db.query(Exchange).filter(Exchange.block_id == activity.block_id).first()
     if block is None or exchange is None:
         return False
-    if exchange.fuller_sent_at is not None:
-        return False  # closed: never re-fires
-    if exchange.opened_at is None:
-        return False  # not yet opened: a reply cannot spin up the exchange
-
-    opened = exchange.opened_at
-    opened_aware = opened if opened.tzinfo else opened.replace(tzinfo=timezone.utc)
-    age = (datetime.now(timezone.utc) - opened_aware).total_seconds()
-    if age > settings.EXCHANGE_REPLY_WINDOW_SECONDS:
-        return False  # opener too old: a reply on a stale exchange (AC4)
+    # Open (opener generated, not closed) and within the reply window: a closed or
+    # stale or never-opened exchange never re-fires / spins up (AC3/AC4). The state
+    # is owned by exchange_lifecycle, so the "never re-fire" guarantee lives once.
+    if not lifecycle.can_fire_reply_fuller(exchange):
+        return False
 
     primary_id = block.primary_activity_id
     try:
@@ -551,24 +538,16 @@ def _record_done_and_schedule(db: Session, activity_id) -> bool:
     exchange = db.query(Exchange).filter(Exchange.block_id == activity.block_id).first()
     if block is None or exchange is None:
         return False
-    if exchange.fuller_sent_at is not None:
+    if lifecycle.is_closed(exchange):
         return False  # closed: the full report already went
-
-    now = datetime.now(timezone.utc)
-    opened = exchange.opened_at
-    if opened is not None:
-        opened_aware = opened if opened.tzinfo else opened.replace(tzinfo=timezone.utc)
-        if (now - opened_aware).total_seconds() > settings.EXCHANGE_REPLY_WINDOW_SECONDS:
-            return False  # stale exchange: a "done" tap cannot resurrect it
+    # A "done" tap cannot resurrect a stale exchange (an unopened one is allowed —
+    # the receipt opens it on ingest, but a defensive mark_done opens it anyway).
+    if exchange.opened_at is not None and not lifecycle.within_reply_window(exchange):
+        return False
 
     # Record the explicit completion signal (idempotent), opening the exchange if
     # the receipt somehow had not (defensive — the receipt opens it on ingest).
-    if exchange.done_at is None:
-        exchange.done_at = now
-        if exchange.opened_at is None:
-            exchange.opened_at = now
-        db.add(exchange)
-        db.commit()
+    lifecycle.mark_done(db, exchange)
 
     last = max(
         db.query(Activity).filter(Activity.block_id == block.id).all(),
@@ -614,7 +593,7 @@ async def process_fuller_turn(
         )
         return None
     db.refresh(exchange)
-    if exchange.fuller_sent_at is not None:
+    if lifecycle.is_closed(exchange):
         logger.info(
             "Fuller turn already notified for block %s; no-op", exchange.block_id
         )
