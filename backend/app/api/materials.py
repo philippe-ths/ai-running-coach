@@ -7,9 +7,9 @@ guarantee lives downstream in the distiller (structured-output-only + strict
 coercion) and, in slice 2, in the pack/prompt/validator; this layer just bounds the
 shape and size of what enters.
 
-Every query is scoped to the current runner's `user_id` (the single-user MVP has one
-user, but per-user scoping is the exfiltration defence and is forward-compatible with
-ADR 0005 multi-user). The raw text is never echoed back — `UserMaterialRead` omits it.
+Every query is scoped to the current runner's `user_id` (resolved from the Clerk
+session by `require_current_user`, ADR 0022); per-user scoping is the exfiltration
+defence under multi-user. The raw text is never echoed back — `UserMaterialRead` omits it.
 """
 
 import hashlib

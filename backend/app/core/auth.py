@@ -1,10 +1,13 @@
-"""HTTP basic-auth middleware for Phase 1 deployment.
+"""HTTP basic-auth middleware.
 
 Gates everything except an explicit exempt list (currently `/api/health` and
-`/api/webhooks/*`). Designed to be removed wholesale in Phase 2 when the
-magic-link session auth from ADR 0005 lands.
+`/api/webhooks/*`). Phase 1 used this as the single-user gate. Under ADR 0022
+(Clerk social login, shipped Phase 2) it is REPURPOSED, not removed: it is now the
+frontend-to-backend service secret beneath the per-user Clerk session, defense in
+depth so the backend is not openly reachable.
 
-TODO(phase-2): remove when session auth lands.
+TODO(post-phase-2): retire once Clerk is hardened in prod and the service-to-service
+secret can be replaced by a rotated platform credential.
 """
 
 from __future__ import annotations
