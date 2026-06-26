@@ -170,6 +170,28 @@ class Settings(BaseSettings):
     COACH_PRIOR_REPORTS_ENABLED: bool = False
     COACH_ADHERENCE_ENABLED: bool = False
 
+    # Coach-input kill switches (#522). Eleven independent, reversible gates that
+    # REMOVE a named section / prompt part / input from what the coach receives,
+    # plus grey the matching UI input. Each defaults to True (current behaviour:
+    # the item is present), so the default code path is byte-identical and the test
+    # suite stays green; the "off" state is reached by setting the flag False in the
+    # environment. Orthogonal to COACH_PROMPT_ID, exactly like the kill switches
+    # above. The gated builders DROP their section/sub-field byte-stably when the
+    # flag is False (the PACK_SECTIONS drop registry), so a disabled item costs zero
+    # tokens and disappears from the data-flow graph rather than emitting an empty
+    # shell.
+    COACH_USER_MATERIALS_ENABLED: bool = True       # corpus.user_materials
+    COACH_RELATIONSHIP_ENABLED: bool = True          # read CoachingRelationship for voice + stance; off => defaults (receipt voicing falls to the house floor)
+    COACH_HOUSE_SCHOOLS_ENABLED: bool = True         # corpus.school (the five named SCHOOLS); HOUSE_CORE is retained
+    COACH_LONGITUDINAL_ENABLED: bool = True          # the whole pack.longitudinal section (both prior_reports and baseline_trend halves)
+    COACH_PLAYBOOK_ENABLED: bool = True              # the activity-type playbook appended to the system prompt
+    COACH_VOICE_BLOCK_ENABLED: bool = True           # the rendered per-runner voice block appended to the system prompt
+    COACH_STOPS_ANALYSIS_ENABLED: bool = True        # focus.metrics.stops_analysis (pipeline still computes + stores it for non-coach use)
+    COACH_SLEEP_QUALITY_ENABLED: bool = True         # the check-in sleep_quality input + its coach context (risk.py/flags.py keep their safe null-defaults)
+    COACH_SALIENCE_ENABLED: bool = True              # the pack.salience section (the deterministic fuller-turn scheduling logic is untouched)
+    COACH_CONTINUITY_ENABLED: bool = True            # the pack.continuity section
+    COACH_PREVIOUS_30D_ENABLED: bool = True          # the previous_30d window inside pack.recent_training (the vs-prev comparisons are unaffected)
+
     # Two-stage Exchange cadence (A4, ADR 0010). The opener fires immediately on a
     # finished activity; the conditional fuller turn fires on the runner's reply or
     # this timer, whichever is first. Only the two-stage prompt (coach_message_v2)
@@ -307,6 +329,22 @@ class Settings(BaseSettings):
         degrades to the single local user.
         """
         return bool(self.CLERK_JWKS_URL)
+
+    @property
+    def coach_ui_feature_flags(self) -> dict[str, bool]:
+        """The enabled-state of every coach input that has a UI surface (#522), so
+        the frontend can grey the matching panel/field. Each value is True when the
+        input is live and False when it is gated off. `voice` and `stance` are
+        DERIVED: the voice panel is inert unless both the relationship is read and
+        the rendered voice block is on; the stance panel is inert unless the
+        relationship is read and the house schools (the selectable school) are on."""
+        return {
+            "voice": self.COACH_RELATIONSHIP_ENABLED and self.COACH_VOICE_BLOCK_ENABLED,
+            "stance": self.COACH_RELATIONSHIP_ENABLED and self.COACH_HOUSE_SCHOOLS_ENABLED,
+            "user_materials": self.COACH_USER_MATERIALS_ENABLED,
+            "sleep_quality": self.COACH_SLEEP_QUALITY_ENABLED,
+            "stops_analysis": self.COACH_STOPS_ANALYSIS_ENABLED,
+        }
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.profile import get_current_user_profile
 from app.core.clerk_auth import require_current_user
+from app.core.config import settings
 from app.db.session import get_db
 from app.models import Activity, CoachingRelationship, User
 from app.models.coach_report import CoachReport
@@ -46,6 +47,18 @@ def _sse_data(text: str) -> str:
     sent unencoded and checked for before any JSON parse on the client.
     """
     return f"data: {json.dumps(text)}\n\n"
+
+
+@router.get("/coach/feature-flags")
+def get_coach_feature_flags(
+    user: User = Depends(require_current_user),
+) -> dict[str, bool]:
+    """The enabled-state of every coach input that has a UI surface (#522).
+
+    The frontend greys a panel/field when its key is False. Global server config
+    (not per-user), but kept behind the same auth as the rest of the coach routes.
+    Keys: voice, stance, user_materials, sleep_quality, stops_analysis."""
+    return settings.coach_ui_feature_flags
 
 
 def _require_owned_activity(db: Session, activity_id: UUID, user: User) -> Activity:

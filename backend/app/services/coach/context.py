@@ -233,7 +233,12 @@ def build_context_pack(
         preference_profile=b.preference_profile,
         narrative=b.narrative,
         salience=b.salience,
-        continuity=continuity or ContinuityContext(),
+        # #522: COACH_CONTINUITY_ENABLED drops the fuller-turn continuity section.
+        continuity=(
+            (continuity or ContinuityContext())
+            if settings.COACH_CONTINUITY_ENABLED
+            else None
+        ),
         block=_build_block_context(db, activity),
         # The runner's selected school takes effect ONLY under a stance-aware prompt
         # (v5). Under v4 the corpus keeps the hardcoded default school (P1.2 stays
@@ -294,7 +299,10 @@ def _build_corpus_context(
     """
     if not is_corpus_prompt(prompt_id):
         return None
-    materials_aware = is_user_materials_prompt(prompt_id)
+    # #522: COACH_USER_MATERIALS_ENABLED off => skip the materials read entirely
+    # (db=None keeps the seam a pure school lookup), so user_materials stays None and
+    # is dropped from the corpus section. HOUSE_CORE (house_principles) is retained.
+    materials_aware = is_user_materials_prompt(prompt_id) and settings.COACH_USER_MATERIALS_ENABLED
     # Read materials ONLY under a user-materials-aware prompt — a null db/user keeps
     # the seam a pure school lookup (and byte-stable) under v4/v5/v6.
     resolved = fetch_corpus(
@@ -302,7 +310,8 @@ def _build_corpus_context(
         activity.user_id if materials_aware else None,
         school_id or DEFAULT_SCHOOL_ID,
     )
-    school = resolved.school
+    # #522: COACH_HOUSE_SCHOOLS_ENABLED off => drop the named school; HOUSE_CORE stays.
+    school = resolved.school if settings.COACH_HOUSE_SCHOOLS_ENABLED else None
     return CorpusContext(
         house_principles=list(resolved.house_core.principles),
         school=(
@@ -432,7 +441,9 @@ def _build_recent_training_context(
     facts = _query_activity_facts(
         db, local_day - timedelta(days=210), local_day + timedelta(days=1), user_id=activity.user_id
     )
-    return build_recent_training(facts, local_day)
+    return build_recent_training(
+        facts, local_day, include_previous_30d=settings.COACH_PREVIOUS_30D_ENABLED
+    )
 
 
 def _build_block_context(db: Session, activity: Activity) -> Optional[BlockContext]:
@@ -670,8 +681,13 @@ def build_focus_payload(
                 if metrics
                 else None
             ),
+            # #522: COACH_STOPS_ANALYSIS_ENABLED off => None (the coach reads no stops,
+            # the same shape as a run with no stops). The pipeline still computes and
+            # stores stops_analysis on the DerivedMetric for non-coach use.
             stops_analysis=(
-                _strip_stops_for_coach(metrics.stops_analysis) if metrics else None
+                _strip_stops_for_coach(metrics.stops_analysis)
+                if (metrics and settings.COACH_STOPS_ANALYSIS_ENABLED)
+                else None
             ),
             interval_structure=metrics.interval_structure if metrics else None,
             workout_match=metrics.workout_match if metrics else None,
@@ -686,7 +702,14 @@ def build_focus_payload(
             rpe=check_in.rpe if check_in else None,
             pain_score=check_in.pain_score if check_in else None,
             pain_location=check_in.pain_location if check_in else None,
-            sleep_quality=check_in.sleep_quality if check_in else None,
+            # #522: COACH_SLEEP_QUALITY_ENABLED off => the coach never sees sleep
+            # (same shape as a check-in with no sleep). risk.py/flags.py still read
+            # the stored value with their safe null-defaults.
+            sleep_quality=(
+                check_in.sleep_quality
+                if (check_in and settings.COACH_SLEEP_QUALITY_ENABLED)
+                else None
+            ),
             notes=check_in.notes if check_in else None,
         ),
         stream_view=fetch_stream_view(db, subject.id) if deep else None,
@@ -756,7 +779,14 @@ def build_b_baseline(
             if settings.COACH_NARRATIVE_ENABLED
             else NarrativeContext()
         ),
-        salience=_build_salience_context(db, activity),
+        # #522: COACH_SALIENCE_ENABLED drops the pack section only. The deterministic
+        # fuller-turn scheduling (compute_safety_override in the opener path) reads its
+        # own salience compute, not this pack section, so it is untouched.
+        salience=(
+            _build_salience_context(db, activity)
+            if settings.COACH_SALIENCE_ENABLED
+            else None
+        ),
         safety_rules=SafetyRules(
             never_diagnose=True,
             pain_severe_threshold=7,
@@ -775,7 +805,7 @@ def _load_profile(db: Session, user_id) -> Optional[UserProfile]:
     )
 
 
-def _build_longitudinal_context(db: Session, activity: Activity) -> LongitudinalContext:
+def _build_longitudinal_context(db: Session, activity: Activity) -> Optional[LongitudinalContext]:
     """Assemble the M4 longitudinal contrast: a digest of the runner's last 1-2
     reports plus the M2 baseline trend matching this activity's context bucket.
 
@@ -784,6 +814,10 @@ def _build_longitudinal_context(db: Session, activity: Activity) -> Longitudinal
     for pre-A2a rows). Both halves degrade to empty/None (no prior reports, no
     comparable trend) without failing.
     """
+    # #522: the whole section can be killed (both halves). Off => None, dropped from
+    # serialization by PACK_SECTIONS so the coach receives no longitudinal section.
+    if not settings.COACH_LONGITUDINAL_ENABLED:
+        return None
     # The prior-report digest is gated off pending recalibration: it replayed a
     # stale rest-day theme forward each run. Off => empty digest, while the numeric
     # baseline trend (no report language to echo) is retained.

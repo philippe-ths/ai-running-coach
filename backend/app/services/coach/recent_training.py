@@ -202,12 +202,19 @@ def _window(
     )
 
 
-def build_recent_training(facts: List[Any], as_of: date) -> RecentTrainingContext:
+def build_recent_training(
+    facts: List[Any], as_of: date, *, include_previous_30d: bool = True
+) -> RecentTrainingContext:
     """Build the modality-aware recent-training picture as of `as_of` from facts
     spanning at least the trailing ~200 days (the 30d window plus its ~6-month
     vs-typical baseline). Facts are duck-typed `ActivityFact`s: each needs
     `local_date`, `activity_type`, `distance_m`, `moving_time_s`, `effort_score`,
-    and (for the per-activity list) `effort`."""
+    and (for the per-activity list) `effort`.
+
+    `include_previous_30d` is the pure seam for the #522 COACH_PREVIOUS_30D_ENABLED
+    kill switch: when False the previous_30d window is omitted (None, dropped from
+    serialization). The vs-prev comparisons on last_7d/last_30d are computed from the
+    facts directly and are unaffected."""
     # 7d: vs-prev only (no vs-typical — training_volume owns the weekly vs-norm, #451).
     last_7d = _window(
         "last_7d", 7, as_of - timedelta(days=6), as_of, facts,
@@ -218,9 +225,13 @@ def build_recent_training(facts: List[Any], as_of: date) -> RecentTrainingContex
         "last_30d", 30, as_of - timedelta(days=29), as_of, facts,
         as_of=as_of, with_comparisons=True, with_activities=False, with_typical=True,
     )
-    previous_30d = _window(
-        "previous_30d", 30, as_of - timedelta(days=59), as_of - timedelta(days=30), facts,
-        as_of=as_of, with_comparisons=False, with_activities=False,
+    previous_30d = (
+        _window(
+            "previous_30d", 30, as_of - timedelta(days=59), as_of - timedelta(days=30), facts,
+            as_of=as_of, with_comparisons=False, with_activities=False,
+        )
+        if include_previous_30d
+        else None
     )
 
     # has_baseline mirrors the vs-typical abstention: true when a 30d metric resolved a

@@ -667,7 +667,10 @@ class RecentTrainingContext(BaseModel):
 
     last_7d: RecentTrainingWindow
     last_30d: RecentTrainingWindow
-    previous_30d: RecentTrainingWindow
+    # Optional (#522) so COACH_PREVIOUS_30D_ENABLED can drop this one window; the
+    # vs-prev comparisons on last_7d/last_30d are computed independently and are
+    # unaffected. None is dropped from serialization by _drop_recent_training_dedup.
+    previous_30d: Optional[RecentTrainingWindow] = None
     has_baseline: bool
 
 
@@ -685,7 +688,11 @@ class CoachContextPack(BaseModel):
     # chat read path and eval harness both strict-parse historical packs — and dropped
     # from serialization when None so new packs never carry it.
     recent_training_summary: Optional[RecentTrainingSummary] = None
-    longitudinal: LongitudinalContext
+    # M4 longitudinal contrast. Normally always present; Optional so the #522
+    # COACH_LONGITUDINAL_ENABLED kill switch can drop the whole section (the builder
+    # returns None when disabled, the PACK_SECTIONS registry pops it). Every normal
+    # construction still passes the real object, so the default path is byte-stable.
+    longitudinal: Optional[LongitudinalContext] = None
     perceived_effort: PerceivedEffortContext
     adherence: AdherenceContext
     believed_facts: BelievedFactsContext
@@ -700,10 +707,15 @@ class CoachContextPack(BaseModel):
     # pre-A4 fixture and the legacy/single-shot paths stay valid; the opener and
     # fuller builders populate it. Adding it changes the pack fingerprint, so v2
     # reports regenerate — the same intentional shape-change A2c made for narrative.
-    salience: SalienceContext = Field(default_factory=SalienceContext)
+    # Optional (#522) so COACH_SALIENCE_ENABLED can drop the section; the
+    # default_factory keeps it an empty object (present, byte-stable) for every
+    # construction that does not explicitly pass None.
+    salience: Optional[SalienceContext] = Field(default_factory=SalienceContext)
     # A4 fuller-turn continuity (opener prose + any reply). Defaulted (empty) for
     # the opener stage and single-shot exchanges; only the fuller path populates it.
-    continuity: ContinuityContext = Field(default_factory=ContinuityContext)
+    # Optional (#522) so COACH_CONTINUITY_ENABLED can drop the section; the
+    # default_factory keeps it an empty object (present, byte-stable) otherwise.
+    continuity: Optional[ContinuityContext] = Field(default_factory=ContinuityContext)
     # A1 multi-member block aggregate. None for a block-of-one and OMITTED from
     # serialization entirely (AC8: the solo-run pack stays byte-stable pre/post A1).
     block: Optional[BlockContext] = None
@@ -856,6 +868,10 @@ def _drop_recent_training_dedup(rt: Dict[str, Any]) -> None:
     per-row basis (moved up a level), and the 7d vs_typical_direction are all None
     and dropped. Re-parse stays safe — every dropped field is Optional and defaults
     to None when absent."""
+    # #522: COACH_PREVIOUS_30D_ENABLED drops the whole previous_30d window (the
+    # builder sets it None); pop the null key so the section stays byte-stable.
+    if rt.get("previous_30d") is None:
+        rt.pop("previous_30d", None)
     for wkey in ("last_7d", "last_30d", "previous_30d"):
         win = rt.get(wkey)
         if not win:
@@ -892,6 +908,13 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
     # #451: the retired legacy summary — droppable but NOT prompt-gated (no longer
     # populated; a pre-#451 stored pack still round-trips its real object unchanged).
     PackSection("recent_training_summary"),
+    # #522 coach-input kill switches. Normally always-present sections that the
+    # COACH_*_ENABLED settings can drop (the context.py builder returns None when the
+    # flag is off). Not prompt-feature-gated — the gate is a runtime setting, applied
+    # in context.py; here they only DROP when None, like every other descriptor.
+    PackSection("longitudinal"),  # COACH_LONGITUDINAL_ENABLED
+    PackSection("salience"),      # COACH_SALIENCE_ENABLED
+    PackSection("continuity"),    # COACH_CONTINUITY_ENABLED
 )
 
 

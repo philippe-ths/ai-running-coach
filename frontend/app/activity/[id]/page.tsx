@@ -10,6 +10,7 @@ import StreamCharts from '@/components/StreamCharts';
 import { SplitsPanel } from '@/components/SplitsPanel';
 import { LapsPanel } from '@/components/LapsPanel';
 import StopsPanel from '@/components/StopsPanel';
+import FeatureDisabledGate from '@/components/FeatureDisabledGate';
 import EfficiencyPanel from '@/components/EfficiencyPanel';
 import CoachSection from '@/components/CoachSection';
 import TrainingLoadCard from '@/components/TrainingLoadCard';
@@ -25,8 +26,12 @@ const SHOW_DEBUG_PANEL =
 
 export default async function ActivityDetail({ params }: { params: { id: string } }) {
   const activity: Activity | null = await serverFetch(`/api/activities/${params.id}`);
-  
+
   if (!activity) return <div>Activity not found</div>;
+
+  // #522: coach input feature flags drive UI greying (fail open to enabled).
+  const coachFlags = (await serverFetch('/api/coach/feature-flags')) || {};
+  const stopsEnabled = coachFlags.stops_analysis !== false;
 
   return (
     <div className="space-y-6 relative">
@@ -110,7 +115,12 @@ export default async function ActivityDetail({ params }: { params: { id: string 
 
           {/* Stops Analysis */}
           {activity.metrics?.stops_analysis && (
-              <StopsPanel stopsData={activity.metrics.stops_analysis} />
+              <FeatureDisabledGate
+                disabled={!stopsEnabled}
+                note="Stop / idle analysis is turned off in the coach configuration; the coach does not read it."
+              >
+                <StopsPanel stopsData={activity.metrics.stops_analysis} />
+              </FeatureDisabledGate>
           )}
 
         </div>

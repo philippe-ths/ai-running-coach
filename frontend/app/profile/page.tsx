@@ -9,10 +9,13 @@ import ThemeToggle from '@/components/ThemeToggle';
 import VoiceDialsPanel from '@/components/VoiceDialsPanel';
 import StanceDialsPanel from '@/components/StanceDialsPanel';
 import UserMaterialsPanel from '@/components/UserMaterialsPanel';
+import FeatureDisabledGate from '@/components/FeatureDisabledGate';
+import { useCoachFeatureFlags } from '@/lib/useCoachFeatureFlags';
 import { fetchFromAPI } from '@/lib/api';
 
 export default function ProfilePage() {
   const router = useRouter();
+  const coachFlags = useCoachFeatureFlags();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   
@@ -188,15 +191,30 @@ export default function ProfilePage() {
       </form>
 
       <div className="mt-6">
-        <VoiceDialsPanel />
+        <FeatureDisabledGate
+          disabled={!coachFlags.voice}
+          note="Voice is turned off in the coach configuration, so these settings have no effect right now."
+        >
+          <VoiceDialsPanel />
+        </FeatureDisabledGate>
       </div>
 
       <div className="mt-6">
-        <StanceDialsPanel />
+        <FeatureDisabledGate
+          disabled={!coachFlags.stance}
+          note="Stance is turned off in the coach configuration, so these settings have no effect right now."
+        >
+          <StanceDialsPanel />
+        </FeatureDisabledGate>
       </div>
 
       <div className="mt-6">
-        <UserMaterialsPanel />
+        <FeatureDisabledGate
+          disabled={!coachFlags.user_materials}
+          note="Coaching materials are turned off in the coach configuration, so uploads have no effect right now."
+        >
+          <UserMaterialsPanel />
+        </FeatureDisabledGate>
       </div>
     </div>
   );
