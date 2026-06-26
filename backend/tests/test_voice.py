@@ -1,6 +1,6 @@
 """P1.1 Voice dials — resolution, prompt composition, floor invariance, security.
 
-Structure mirrors the milestone deliverables and ACs (docs/coach-p1-voice-dials-brief.md):
+Structure mirrors the milestone deliverables and ACs (docs/adr/0013-voice-flexes-delivery-only-floor-guarded-by-invariance-test.md):
 
 - TestVoiceResolution: voice.py maps a CoachingRelationship row -> VoiceProfile
   (null -> moderate default; preset -> DNA; nudge overrides one dial; dial-only ->
