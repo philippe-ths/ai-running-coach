@@ -33,6 +33,7 @@ from typing import List, Optional
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.observability import capture_exception
 from app.models import Activity, DerivedMetric
 
 logger = logging.getLogger(__name__)
@@ -276,6 +277,14 @@ def build_readiness(db: Session, user_id, as_of) -> Optional[ReadinessModel]:
             history_span_days=history_span_days,
             sample_count=sample_count,
         )
-    except Exception:  # pragma: no cover - defensive guard
+    except Exception as exc:
+        # Best-effort guard: a failure must never break the caller (the coach
+        # pack / activity-detail read), so we still return the safe None. But a
+        # genuine internal failure (a malformed stored value, a bad type) must
+        # NOT be indistinguishable from a legitimate "no history" abstention,
+        # which returns None cleanly above without ever reaching here. Surface it
+        # at ERROR with context and route it to Sentry (a no-op when unconfigured)
+        # so corruption is visible instead of silently freezing the signal (#513).
         logger.exception("readiness computation failed for user %s", user_id)
+        capture_exception(exc)
         return None

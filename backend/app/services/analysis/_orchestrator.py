@@ -134,8 +134,17 @@ def _post_commit_baseline(db: Session, user_id) -> None:
     try:
         from app.services.analysis.baseline import recompute_runner_baseline
         recompute_runner_baseline(db, user_id)
-    except Exception:  # noqa: BLE001 baseline is best-effort, must not break analyze
+    except Exception as exc:  # noqa: BLE001 baseline is best-effort, must not break analyze
+        # Keep the guard (a failure here never breaks analyze), but make a genuine
+        # failure VISIBLE: a legitimate "not enough data" abstention returns cleanly
+        # from recompute_runner_baseline (None) without raising, so reaching here is
+        # always a real fault (a malformed stored bucketed_trends, a bad value type).
+        # Log at ERROR with context and route it to Sentry (a no-op when
+        # unconfigured) so corruption surfaces instead of silently freezing the
+        # baseline at its last good value (#513).
+        from app.core.observability import capture_exception
         logger.exception("runner baseline recompute failed for user %s", user_id)
+        capture_exception(exc)
 
 
 def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optional[DerivedMetric]:

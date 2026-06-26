@@ -179,3 +179,129 @@ class TestRejectsForgedEvents:
 
         db.refresh(activity)
         assert activity.is_deleted is False
+
+
+# A second connected athlete, distinct from CONNECTED_ATHLETE_ID, used to model
+# the multi-user cross-owner attack: athlete B is fully connected (passes the
+# owner and subscription checks) but references athlete A's activity.
+ATHLETE_B_ID = 888
+
+
+def _seed_user_with_account(db, *, strava_athlete_id: int):
+    user = User(email=f"u-{uuid4()}@example.com")
+    db.add(user)
+    db.commit()
+    account = StravaAccount(
+        user_id=user.id,
+        strava_athlete_id=strava_athlete_id,
+        access_token="test-token-do-not-use-in-prod",
+        refresh_token="test-refresh-do-not-use-in-prod",
+        expires_at=9999999999,
+        scope="read",
+    )
+    db.add(account)
+    db.commit()
+    return user
+
+
+def _seed_activity(db, *, user, strava_activity_id: int):
+    from datetime import datetime
+
+    activity = Activity(
+        user_id=user.id,
+        strava_activity_id=strava_activity_id,
+        start_date=datetime(2026, 5, 27, 10, 0, 0),
+        type="Run",
+        name="Victim run",
+        distance_m=5000,
+        moving_time_s=1500,
+        elapsed_time_s=1500,
+    )
+    db.add(activity)
+    db.commit()
+    return activity
+
+
+class TestRejectsCrossOwnerEvents:
+    """Threat model (#512, multi-user): athlete B is a CONNECTED runner, so a
+    forged event from B passes the owner-is-connected and subscription checks.
+    Because strava_activity_id is globally unique, B must still not be able to
+    reference athlete A's activity and trigger a side effect on it (soft-delete
+    or reprocess). The object-to-owner bind in _event_is_authentic enforces this;
+    removing that bind makes every assertion here fail (non-vacuous)."""
+
+    def test_connected_other_owner_delete_does_not_soft_delete(
+        self, client, db, fake_queue
+    ):
+        athlete_a = _seed_user_with_account(db, strava_athlete_id=CONNECTED_ATHLETE_ID)
+        _seed_user_with_account(db, strava_athlete_id=ATHLETE_B_ID)
+        activity = _seed_activity(db, user=athlete_a, strava_activity_id=4242)
+
+        # Athlete B (connected) forges a delete for athlete A's activity.
+        response = _post(
+            client, aspect_type="delete", object_id=4242, owner_id=ATHLETE_B_ID
+        )
+        assert response.status_code == 403
+
+        db.refresh(activity)
+        assert activity.is_deleted is False
+
+    def test_connected_other_owner_update_does_not_enqueue(
+        self, client, db, fake_queue
+    ):
+        athlete_a = _seed_user_with_account(db, strava_athlete_id=CONNECTED_ATHLETE_ID)
+        _seed_user_with_account(db, strava_athlete_id=ATHLETE_B_ID)
+        _seed_activity(db, user=athlete_a, strava_activity_id=4343)
+
+        # Athlete B (connected) forges an update for athlete A's activity: must
+        # not enqueue a re-ingest (sync_activity_job) on A's data.
+        response = _post(
+            client, aspect_type="update", object_id=4343, owner_id=ATHLETE_B_ID
+        )
+        assert response.status_code == 403
+        fake_queue.enqueue.assert_not_called()
+
+    def test_connected_other_owner_create_when_already_exists_does_not_enqueue(
+        self, client, db, fake_queue
+    ):
+        athlete_a = _seed_user_with_account(db, strava_athlete_id=CONNECTED_ATHLETE_ID)
+        _seed_user_with_account(db, strava_athlete_id=ATHLETE_B_ID)
+        _seed_activity(db, user=athlete_a, strava_activity_id=4444)
+
+        # A create referencing an already-stored activity owned by A must not
+        # reprocess it under B's credentials.
+        response = _post(
+            client, aspect_type="create", object_id=4444, owner_id=ATHLETE_B_ID
+        )
+        assert response.status_code == 403
+        fake_queue.enqueue.assert_not_called()
+
+    def test_same_owner_delete_still_soft_deletes(self, client, db, fake_queue):
+        # Non-vacuous guard: the legitimate owner deleting their own activity
+        # must still succeed through the same code path.
+        athlete_a = _seed_user_with_account(db, strava_athlete_id=CONNECTED_ATHLETE_ID)
+        activity = _seed_activity(db, user=athlete_a, strava_activity_id=4545)
+
+        response = _post(
+            client,
+            aspect_type="delete",
+            object_id=4545,
+            owner_id=CONNECTED_ATHLETE_ID,
+        )
+        assert response.status_code == 200
+
+        db.refresh(activity)
+        assert activity.is_deleted is True
+
+    def test_same_owner_update_still_enqueues(self, client, db, fake_queue):
+        athlete_a = _seed_user_with_account(db, strava_athlete_id=CONNECTED_ATHLETE_ID)
+        _seed_activity(db, user=athlete_a, strava_activity_id=4646)
+
+        response = _post(
+            client,
+            aspect_type="update",
+            object_id=4646,
+            owner_id=CONNECTED_ATHLETE_ID,
+        )
+        assert response.status_code == 200
+        fake_queue.enqueue.assert_called_once()
