@@ -315,15 +315,68 @@ def _assign_block(db: Session, activity) -> None:
     """A1: every newly-ingested activity is grouped into its Block here, so all
     ingest paths (webhook, polling, manual sync, backfill) converge on the same
     grouping. A re-synced activity keeps its block. Guarded: a grouping failure
-    must never break ingestion (the baseline-recompute pattern)."""
+    must never break ingestion (the baseline-recompute pattern).
+
+    Before assigning the current activity, sweep the runner's other block-less
+    activities and re-attempt assignment for them (#515). The activity row is
+    committed before this assignment runs, and on a guarded failure the row is
+    left committed with `block_id IS NULL`; nothing else ever retried it
+    (self-heal treats the row as already known, and no sweep existed), so it was
+    permanently stranded. Reconciling here makes every routine ingest a cheap
+    self-healing sweep with no new job: a previously-stranded activity is
+    re-grouped on the next ingest for that user.
+    """
+    _reconcile_unassigned_activities(db, activity.user_id, exclude_id=activity.id)
     if activity.block_id is not None:
         return
+    # Capture the id before the attempt: on failure the guard rolls back, which
+    # expires the instance, so reading it inside the except could itself raise.
+    strava_id = activity.strava_activity_id
     try:
         from app.services.blocks import assign_activity_to_block
 
         assign_activity_to_block(db, activity)
     except Exception:
         db.rollback()
-        logger.exception(
-            "block assignment failed for activity %s", activity.strava_activity_id
+        logger.exception("block assignment failed for activity %s", strava_id)
+
+
+def _reconcile_unassigned_activities(db: Session, user_id, *, exclude_id=None) -> None:
+    """Re-attempt block assignment for a user's stranded (block_id NULL) live
+    activities (#515).
+
+    A previous ingest can leave an activity committed with `block_id IS NULL`
+    when its guarded `assign_activity_to_block` raised (the row is committed
+    first, assignment runs after). Nothing retried it. This sweep, run on every
+    ingest, closes that gap. Each activity is reconciled under its own guard so
+    one failure neither breaks ingestion nor blocks the rest of the sweep;
+    soft-deleted activities are skipped (they belong in no block). The current
+    activity is excluded so the caller assigns it through the normal path.
+    """
+    from app.services.blocks import assign_activity_to_block
+
+    query = (
+        select(Activity)
+        .where(
+            Activity.user_id == user_id,
+            Activity.block_id.is_(None),
+            Activity.is_deleted.is_(False),
         )
+        .order_by(Activity.start_date)
+    )
+    if exclude_id is not None:
+        query = query.where(Activity.id != exclude_id)
+
+    stranded = db.execute(query).scalars().all()
+    for orphan in stranded:
+        # Capture the id before the attempt: a guarded failure rolls back and
+        # expires the instance, so reading it in the except could itself raise.
+        orphan_strava_id = orphan.strava_activity_id
+        try:
+            assign_activity_to_block(db, orphan)
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "block reconcile failed for stranded activity %s",
+                orphan_strava_id,
+            )
