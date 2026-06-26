@@ -80,6 +80,13 @@ def _event_is_authentic(event: "StravaEvent", db: Session) -> bool:
     2. The event owner must be a connected athlete. Athlete ids are public, so
        this check is weaker on its own, but it is always available from the DB
        and never drifts, so it stays on even when (1) is unconfigured.
+    3. The referenced activity (when one is already stored) must belong to the
+       owner resolved from (2). strava_activity_id is globally unique, so without
+       this bind a connected athlete B passing (1)+(2) could reference athlete
+       A's activity and trigger a side effect (soft-delete, reprocess) on it
+       (#512). A create for a brand-new activity has no stored row to bind, so
+       this check only constrains update/delete and create-when-already-exists;
+       it never blocks the legitimate first sight of a new activity.
     """
     expected_subscription_id = settings.STRAVA_WEBHOOK_SUBSCRIPTION_ID
     if expected_subscription_id and event.subscription_id != expected_subscription_id:
@@ -100,6 +107,22 @@ def _event_is_authentic(event: "StravaEvent", db: Session) -> bool:
     if account is None:
         logger.warning(
             "strava_webhook_rejected_unknown_owner",
+            extra={"owner_id": event.owner_id, "object_id": event.object_id},
+        )
+        return False
+
+    existing_activity = db.execute(
+        select(Activity.user_id).where(
+            Activity.strava_activity_id == event.object_id
+        )
+    ).scalars().first()
+    if existing_activity is not None and existing_activity != account.user_id:
+        # The event references an activity we already store, but it belongs to a
+        # different runner than the event's owner. strava_activity_id is global,
+        # so this is a connected athlete reaching for another athlete's activity
+        # (#512). Reject before the delete/sync/create branches act on it.
+        logger.warning(
+            "strava_webhook_rejected_object_owner_mismatch",
             extra={"owner_id": event.owner_id, "object_id": event.object_id},
         )
         return False
