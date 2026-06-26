@@ -7,6 +7,7 @@ The active prompt_id is set in config (COACH_PROMPT_ID).
 
 from typing import Optional
 
+from app.core.config import settings
 from app.services.coach.prompt_features import PromptFeature, has_feature, ids_with
 
 SYSTEM_PROMPT_V1 = """You are a running coach assistant. Your job is to translate factual training data into concise, actionable coaching language.
@@ -1178,11 +1179,20 @@ def build_system_prompt(
     keeps every addendum, so the registered strings and their pins stay byte-stable;
     a fully-populated runner's prompt is also unchanged.
     """
+    # #522 kill switches, applied centrally so every call site (service, chat, the
+    # diagram generator) honours them. Defaults keep both on => byte-stable.
+    #   - COACH_VOICE_BLOCK_ENABLED off => never append the rendered per-runner voice
+    #     block (render_voice_block(None) would still render the default persona, so
+    #     the gate must skip the append, not pass voice=None).
+    #   - COACH_PLAYBOOK_ENABLED off => never append the activity-type playbook.
+    def _voice_suffix() -> str:
+        return render_voice_block(base_prompt_id, voice) if settings.COACH_VOICE_BLOCK_ENABLED else ""
+
     if mode == "opener" and base_prompt_id in _OPENER_PROMPTS:
         base = _gate_optional_addenda(_OPENER_PROMPTS[base_prompt_id], base_prompt_id, pack)
-        return base + render_voice_block(base_prompt_id, voice)
+        return base + _voice_suffix()
     base = PROMPT_VERSIONS[base_prompt_id]
-    if playbook_key and playbook_key in ACTIVITY_PLAYBOOKS:
+    if settings.COACH_PLAYBOOK_ENABLED and playbook_key and playbook_key in ACTIVITY_PLAYBOOKS:
         base = base + "\n\n" + ACTIVITY_PLAYBOOKS[playbook_key]
     base = _gate_optional_addenda(base, base_prompt_id, pack)
-    return base + render_voice_block(base_prompt_id, voice)
+    return base + _voice_suffix()

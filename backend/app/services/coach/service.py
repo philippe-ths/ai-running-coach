@@ -164,6 +164,10 @@ def _resolve_voice_for_activity(db: Session, activity: Activity):
     row or an undeclared voice resolves to the moderate default. This only affects
     voice-aware prompts (coach_message_v3) — render_voice_block is a no-op for every
     other prompt id, so the resolved voice is harmless under any other prompt."""
+    # #522: COACH_RELATIONSHIP_ENABLED off => never read the relationship; resolve to
+    # the moderate default voice (the runner's declared voice has no effect).
+    if not settings.COACH_RELATIONSHIP_ENABLED:
+        return resolve_voice(None)
     relationship = (
         db.query(CoachingRelationship)
         .filter(CoachingRelationship.user_id == activity.user_id)
@@ -211,6 +215,10 @@ def _resolve_stance_for_activity(db: Session, activity: Activity):
     build_context_pack threads the school into the corpus section and the emphasis
     into the stance section only under v5, so the resolved stance is harmless under
     any other prompt id (the P1.2/voice precedent)."""
+    # #522: COACH_RELATIONSHIP_ENABLED off => never read the relationship; resolve to
+    # the default school + balanced emphasis (the runner's declared stance has no effect).
+    if not settings.COACH_RELATIONSHIP_ENABLED:
+        return resolve_stance(None)
     relationship = (
         db.query(CoachingRelationship)
         .filter(CoachingRelationship.user_id == activity.user_id)
