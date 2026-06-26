@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Dict, List, Optional, Union
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.material import DistilledMaterial
+from app.services.coach.prompt_features import PromptFeature
 
 
 class ActivityContext(BaseModel):
@@ -743,60 +745,20 @@ class CoachContextPack(BaseModel):
     def to_serializable_dict(self) -> Dict[str, Any]:
         """Serialise to the JSON-primitive dict shape the LLM input and DB column expect."""
         data = self.model_dump(mode="python")
-        if data.get("block") is None:
-            # AC8: a block-of-one emits nothing new — not even a null key.
-            data.pop("block", None)
-        if data.get("corpus") is None:
-            # AC1: a non-corpus prompt emits nothing — not even a null key.
-            data.pop("corpus", None)
-        else:
-            # P4 (#286): user_materials rides INSIDE the corpus section, but only
-            # under a user-materials-aware prompt. When None (every non-v7 corpus
-            # prompt) drop the nested key entirely, so the corpus section is
-            # byte-identical to its P1.2/P1.3 shape under v4/v5/v6 (the activation
-            # boundary), exactly as the top-level Optional-and-drop idiom does.
-            if data["corpus"].get("user_materials") is None:
-                data["corpus"].pop("user_materials", None)
-        if data.get("stance") is None:
-            # AC1: a non-stance prompt emits nothing — not even a null key.
-            data.pop("stance", None)
-        if data.get("training_load") is None:
-            # AC1: a non-training-load prompt emits nothing — not even a null key.
-            data.pop("training_load", None)
-        if data.get("training_volume") is None:
-            # #400: a non-volume prompt emits nothing — not even a null key.
-            data.pop("training_volume", None)
-        if data.get("stream_view") is None:
-            # #443: a non-stream-view prompt emits nothing — not even a null key, so
-            # the pack stays byte-stable under v9 and below.
-            data.pop("stream_view", None)
-        if data.get("recent_training") is None:
-            # #444: a non-recent-training prompt emits nothing — not even a null key.
-            data.pop("recent_training", None)
-        else:
-            # Pack trim: drop the deduplicated/empty fields from the recent-training
-            # section so they cost no tokens. Per window: the basis strings now live once
-            # on the window (None on previous_30d). Per comparison: current_all/
-            # current_runs (already in the window totals/by_type and in training_volume),
-            # the per-row basis (moved up a level), and the 7d vs_typical_direction are
-            # all None and dropped. Re-parse stays safe — every dropped field is Optional
-            # and defaults to None when absent.
-            rt = data["recent_training"]
-            for wkey in ("last_7d", "last_30d", "previous_30d"):
-                win = rt.get(wkey)
-                if not win:
-                    continue
-                for k in ("prev_basis", "typical_basis"):
-                    if win.get(k) is None:
-                        win.pop(k, None)
-                for comp in win.get("comparisons", []):
-                    for k in [k for k, v in comp.items() if v is None]:
-                        comp.pop(k, None)
-        if data.get("recent_training_summary") is None:
-            # #451: the legacy summary is retired and no longer populated; drop the
-            # null key so new packs omit it. A pre-#451 stored pack still carries the
-            # real object (non-None), so it round-trips unchanged.
-            data.pop("recent_training_summary", None)
+        # The byte-stable-drop invariant lives in ONE place: every gated/optional
+        # pack section that must vanish (not appear as a null key) when absent is a
+        # PACK_SECTIONS descriptor, and this loop applies the drop uniformly. A
+        # descriptor's optional `nested_drop` post-processor handles the two sections
+        # whose byte-stable trim is NOT a simple top-level pop (corpus's nested
+        # `user_materials`, recent_training's deduplicated window/comparison fields).
+        # Adding a new gated section is ONE descriptor here + the declared Optional
+        # field above; no new branch in this method.
+        for section in PACK_SECTIONS:
+            value = data.get(section.field)
+            if value is None:
+                data.pop(section.field, None)
+            elif section.nested_drop is not None:
+                section.nested_drop(value)
         metrics = data.get("metrics")
         if isinstance(metrics, dict):
             # Collapse the gated interval/workout group to ONE signal when no session was
@@ -823,3 +785,140 @@ class CoachContextPack(BaseModel):
         """Deterministic SHA-256 cache key. Byte-identical to the legacy hash_context_pack output."""
         serialised = json.dumps(self.to_serializable_dict(), sort_keys=True, default=str)
         return hashlib.sha256(serialised.encode()).hexdigest()
+
+
+# --- The gated-pack-section registry (#493) ---------------------------------
+# Adding a context-pack section that is GATED by prompt version and DROPPED from
+# serialization to stay byte-stable used to require hand-edited branches kept in
+# sync by discipline across context.py (build + call) and this file (the field +
+# its drop branch). The byte-stable-drop rule — a null field changes the cache
+# hash, so an absent section must NOT appear at all — was enforced in seven
+# separate spots; a skewed branch broke the cache silently.
+#
+# `PackSection` makes the DROP wiring DATA: one descriptor per Optional section,
+# and `to_serializable_dict` ITERATES them, so the byte-stable-drop invariant
+# lives in ONE place. The drop fires whenever the field is None — the SAME
+# behaviour for every existing section, unchanged.
+#
+# What stays declared, by necessity: Pydantic needs the Optional field declared
+# STATICALLY on `CoachContextPack` (above), so the field itself is not generated.
+# The descriptor's `field` names it, and `_assert_descriptors_match_fields` checks
+# AT IMPORT that every descriptor names a real declared field — turning silent
+# skew into a STARTUP failure.
+#
+# Reconciliation with the #492 `ReadTimeSignal` seam (the two compose, not fight):
+# that seam owns "compute the section from a bounded history scan + abstain" and
+# applies the PROMPT-FEATURE GATE at build time in `context.py`'s `gather`. This
+# registry owns the orthogonal "DROP from serialization when absent (None), to
+# stay byte-stable". A section can be both: its builder is a read-time signal
+# (gated + built in context.py via `gather`) AND it is a `PackSection` here (so
+# its None result is dropped). `gate_feature` below is the documentary cross-link
+# to the prompt feature that the build-side gate keys on (None for an
+# always-present-but-still-droppable field such as the retired
+# `recent_training_summary`); the registry never re-applies the gate, it only
+# drops, so the two seams stay independent and minimal.
+
+
+@dataclass(frozen=True)
+class PackSection:
+    """One Optional pack section dropped from serialization when absent (None).
+
+    ``field`` is the declared field name on ``CoachContextPack`` (checked to exist
+    at import). ``gate_feature`` is the documentary cross-reference to the
+    ``PromptFeature`` whose build-time gate (#492's ``gather`` / a ``context.py``
+    build helper) decides whether the section is populated — ``None`` for a field
+    that is droppable but not prompt-gated (the retired ``recent_training_summary``).
+    ``nested_drop``, when set, is a post-processor applied to the NON-None value to
+    perform a byte-stable trim that is not a simple top-level pop (corpus's nested
+    ``user_materials`` key, recent_training's deduplicated window/comparison fields).
+    """
+
+    field: str
+    gate_feature: Optional[PromptFeature] = None
+    nested_drop: Optional[Callable[[Any], None]] = None
+
+
+def _drop_corpus_user_materials(corpus: Dict[str, Any]) -> None:
+    """P4 (#286): ``user_materials`` rides INSIDE the corpus section, but only under
+    a user-materials-aware prompt. When None (every non-v7 corpus prompt) drop the
+    nested key entirely, so the corpus section is byte-identical to its P1.2/P1.3
+    shape under v4/v5/v6 (the activation boundary), exactly as the top-level
+    Optional-and-drop idiom does for the section itself."""
+    if corpus.get("user_materials") is None:
+        corpus.pop("user_materials", None)
+
+
+def _drop_recent_training_dedup(rt: Dict[str, Any]) -> None:
+    """#444/#451 pack trim: drop the deduplicated/empty fields from the
+    recent-training section so they cost no tokens. Per window: the basis strings
+    live once on the window (None on previous_30d). Per comparison: current_all/
+    current_runs (already in the window totals/by_type and in training_volume), the
+    per-row basis (moved up a level), and the 7d vs_typical_direction are all None
+    and dropped. Re-parse stays safe — every dropped field is Optional and defaults
+    to None when absent."""
+    for wkey in ("last_7d", "last_30d", "previous_30d"):
+        win = rt.get(wkey)
+        if not win:
+            continue
+        for k in ("prev_basis", "typical_basis"):
+            if win.get(k) is None:
+                win.pop(k, None)
+        for comp in win.get("comparisons", []):
+            for k in [k for k, v in comp.items() if v is None]:
+                comp.pop(k, None)
+
+
+# One descriptor per droppable Optional section. Order matches the historical
+# branch order in to_serializable_dict so the serialized dict's key order — and
+# therefore (post sort_keys, but kept tidy for diffs) the output — is unchanged.
+PACK_SECTIONS: tuple[PackSection, ...] = (
+    # The seven prompt-version-gated sections (#493 scope). Each is built + gated in
+    # context.py (block/corpus/stance via build helpers, training_load/training_volume/
+    # recent_training via the #492 ReadTimeSignal seam, stream_view via the deep flag),
+    # and dropped here when None to stay byte-stable.
+    PackSection("block"),  # A1 (AC8): block-of-one emits nothing.
+    PackSection(
+        "corpus", PromptFeature.CORPUS, nested_drop=_drop_corpus_user_materials
+    ),  # AC1
+    PackSection("stance", PromptFeature.STANCE),  # AC1
+    PackSection("training_load", PromptFeature.TRAINING_LOAD),  # AC1
+    PackSection("training_volume", PromptFeature.VOLUME),  # #400
+    PackSection("stream_view", PromptFeature.STREAM_VIEW),  # #443
+    PackSection(
+        "recent_training",
+        PromptFeature.RECENT_TRAINING,
+        nested_drop=_drop_recent_training_dedup,
+    ),  # #444
+    # #451: the retired legacy summary — droppable but NOT prompt-gated (no longer
+    # populated; a pre-#451 stored pack still round-trips its real object unchanged).
+    PackSection("recent_training_summary"),
+)
+
+
+def _assert_descriptors_match_fields() -> None:
+    """Fail loudly AT IMPORT on a descriptor/field mismatch.
+
+    Every ``PackSection.field`` MUST name a declared Optional field on
+    ``CoachContextPack`` whose default is ``None`` (so the drop-when-None contract
+    holds). A typo or a renamed field turns from a silent byte-stability break into
+    a startup ``RuntimeError``. This is the import-time guard the #493 constraint
+    requires, pairing with the #328 prompt-feature manifest: the field stays
+    statically declared, the registry asserts it exists."""
+    model_fields = CoachContextPack.model_fields
+    seen: set[str] = set()
+    for section in PACK_SECTIONS:
+        if section.field in seen:
+            raise RuntimeError(
+                f"PackSection registry: duplicate descriptor for field "
+                f"{section.field!r}."
+            )
+        seen.add(section.field)
+        if section.field not in model_fields:
+            raise RuntimeError(
+                f"PackSection registry: descriptor names field {section.field!r}, "
+                f"which is not declared on CoachContextPack. Declare the Optional "
+                f"field on the model or fix the descriptor."
+            )
+
+
+_assert_descriptors_match_fields()

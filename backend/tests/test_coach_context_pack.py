@@ -440,3 +440,64 @@ def test_real_fixture_pack_roundtrips_through_typed_schema(db):
     assert CoachContextPack.model_validate(pack_dict).to_serializable_dict() == pack_dict
     # The typed fingerprint matches the legacy dict-based hash byte-for-byte.
     assert pack.fingerprint() == hash_context_pack(pack_dict)
+
+
+# --- The #493 gated-pack-section registry --------------------------------------
+
+
+def test_pack_section_registry_covers_every_droppable_field():
+    """Every Optional-and-dropped section is a PACK_SECTIONS descriptor, and every
+    descriptor names a real declared field. This is the structural invariant the
+    registry replaces seven hand-copied drop branches with."""
+    from app.schemas.coach_context import CoachContextPack, PACK_SECTIONS
+
+    model_fields = CoachContextPack.model_fields
+    for section in PACK_SECTIONS:
+        assert section.field in model_fields, section.field
+    # The seven prompt-gated sections named by #493 are all present.
+    fields = {s.field for s in PACK_SECTIONS}
+    assert {
+        "block",
+        "corpus",
+        "stance",
+        "training_load",
+        "training_volume",
+        "stream_view",
+        "recent_training",
+    }.issubset(fields)
+
+
+def test_pack_section_descriptor_naming_unknown_field_fails_at_import_check():
+    """The import-time guard turns a descriptor that names a non-existent schema
+    field into a loud RuntimeError instead of a silent byte-stability break."""
+    import pytest
+
+    import app.schemas.coach_context as m
+    from app.schemas.coach_context import PackSection
+
+    original = m.PACK_SECTIONS
+    try:
+        m.PACK_SECTIONS = original + (PackSection("this_field_does_not_exist"),)
+        with pytest.raises(RuntimeError, match="not declared on CoachContextPack"):
+            m._assert_descriptors_match_fields()
+    finally:
+        m.PACK_SECTIONS = original
+    # Sanity: the real registry still passes once restored.
+    m._assert_descriptors_match_fields()
+
+
+def test_pack_section_duplicate_descriptor_fails_at_import_check():
+    """A duplicate descriptor for the same field is also caught at the import guard."""
+    import pytest
+
+    import app.schemas.coach_context as m
+    from app.schemas.coach_context import PackSection
+
+    original = m.PACK_SECTIONS
+    try:
+        m.PACK_SECTIONS = original + (PackSection("block"),)
+        with pytest.raises(RuntimeError, match="duplicate descriptor"):
+            m._assert_descriptors_match_fields()
+    finally:
+        m.PACK_SECTIONS = original
+    m._assert_descriptors_match_fields()
