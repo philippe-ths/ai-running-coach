@@ -84,6 +84,7 @@ def _notify(
     sentinel_attr: str,
     notifier: NotifierPort,
     sentinel_obj=None,
+    presend_claimed: bool = False,
 ) -> Optional[Notification]:
     """Send one stage's notification, deduped by its own stage sentinel.
 
@@ -95,9 +96,16 @@ def _notify(
     sentinel. On a send failure the sentinel is left null so the stage stays
     re-sendable, mirroring the prior single-shot behaviour (#114). Returns the
     Notification sent, or None.
+
+    `presend_claimed` (#506, fuller turn only): the caller already atomically
+    claimed the sentinel pre-send via `lifecycle.claim_fuller`, so the sentinel
+    IS the at-most-once claim — skip the already-sent guard (we own it) and do
+    NOT re-mark on success (the claim already set it). On a no-channel or
+    send failure the caller releases the claim, so this path leaves it set; it
+    is the caller's job to release.
     """
     sentinel_obj = sentinel_obj if sentinel_obj is not None else activity
-    if lifecycle.notification_already_sent(sentinel_obj, sentinel_attr):
+    if not presend_claimed and lifecycle.notification_already_sent(sentinel_obj, sentinel_attr):
         logger.info(
             "Skipping %s notification for activity %s: already sent at %s",
             stage, activity.strava_activity_id, getattr(sentinel_obj, sentinel_attr),
@@ -120,6 +128,8 @@ def _notify(
             "Skipping %s notification for activity %s: no channel configured",
             stage, activity.strava_activity_id,
         )
+        if presend_claimed:
+            lifecycle.release_fuller_claim(db, sentinel_obj)
         return None
 
     try:
@@ -129,9 +139,14 @@ def _notify(
             "%s notification send failed for activity %s; sentinel left unset",
             stage, activity.strava_activity_id,
         )
+        if presend_claimed:
+            lifecycle.release_fuller_claim(db, sentinel_obj)
         return None
 
-    lifecycle.mark_notification_sent(db, sentinel_obj, sentinel_attr)
+    # Under the #506 pre-send claim the sentinel was already set atomically by the
+    # caller; do not re-mark (it would just rewrite the same value).
+    if not presend_claimed:
+        lifecycle.mark_notification_sent(db, sentinel_obj, sentinel_attr)
     return notification
 
 
@@ -547,7 +562,16 @@ def _record_done_and_schedule(db: Session, activity_id) -> bool:
 
     # Record the explicit completion signal (idempotent), opening the exchange if
     # the receipt somehow had not (defensive — the receipt opens it on ingest).
-    lifecycle.mark_done(db, exchange)
+    # #505: mark_done returns False when the exchange was ALREADY done, so a second/
+    # rapid "done" tap must NOT schedule another full-report generation — the first
+    # tap already scheduled it. Bail before re-scheduling so repeated taps queue exactly
+    # one generation (the fire-time dedup was the only prior backstop, by which point
+    # concurrent LLM generations could already be running).
+    if not lifecycle.mark_done(db, exchange):
+        logger.info(
+            "Ignoring duplicate done tap for block %s: already done", block.id
+        )
+        return False
 
     last = max(
         db.query(Activity).filter(Activity.block_id == block.id).all(),
@@ -568,12 +592,19 @@ async def process_fuller_turn(
 ) -> Optional[Notification]:
     """A4 stage two: generate (or finalize) the fuller turn and notify it.
 
-    Idempotent on the fuller sentinel (`coach_notification_sent_at`): a reply-fired
-    run and the timer-fired run cannot double-send — the second no-ops. generate_fuller
-    fills the opener's evolving row in place and fires the learning loop on
-    completion; a notify-retry re-sends the cached fuller without re-generating.
-    A fallback fuller is not notified (and leaves the sentinel null), consistent
-    with the single-shot fallback rule."""
+    At-most-once on the fuller sentinel (`fuller_sent_at`): a reply-fired run and the
+    timer-fired run cannot double-send — the loser no-ops. The guard is an ATOMIC claim
+    (#506): the old `is_closed` read was a non-atomic check-then-act with the slow
+    `generate_fuller` sitting between it and the notification sentinel, so under multiple
+    workers both triggers could pass the read, both generate, and both notify. We now
+    claim `fuller_sent_at` via a conditional UPDATE BEFORE generating, so the database
+    serializes the two triggers and only the winner proceeds. generate_fuller fills the
+    opener's evolving row in place and fires the learning loop on completion. A fallback
+    fuller / missing report / no-channel / send failure / RAISED exception RELEASES the
+    claim (sentinel back to null) so the stage stays re-sendable, consistent with the
+    single-shot fallback rule (#114) — the claim..send window is a try/finally that
+    releases on any non-send exit, so a crash mid-generation cannot strand the turn
+    CLOSED-but-unsent."""
     # #216 / AC6 rollback inertness: a fuller scheduled via enqueue_in before a
     # rollback to a single-shot prompt can still fire up to the stage-two delay
     # after the flip. Gate it like every other two-stage trigger so the stale
@@ -593,30 +624,54 @@ async def process_fuller_turn(
         )
         return None
     db.refresh(exchange)
-    if lifecycle.is_closed(exchange):
+
+    # #506: atomically claim the turn. A non-winning concurrent trigger (or a late
+    # timer after an early reply already closed the exchange) gets rowcount 0 here and
+    # bails BEFORE generating — exactly one generation + one notification per exchange.
+    if not lifecycle.claim_fuller(db, exchange):
         logger.info(
-            "Fuller turn already notified for block %s; no-op", exchange.block_id
+            "Fuller turn already claimed/notified for block %s; no-op", exchange.block_id
         )
         return None
 
-    read = await generate_fuller(db, str(activity.id))
-    if read is None:
-        logger.info("No fuller report for activity %s", activity.strava_activity_id)
-        return None
+    # The claim set `fuller_sent_at` (it doubles as the CLOSED / at-most-once sentinel),
+    # so EVERY path between here and a genuinely-successful send must release it — not
+    # only the clean early returns but also a RAISED exception (an RQ JobTimeoutException
+    # over the ~120-360s generation window, a context-build/network error). Otherwise the
+    # exchange exits CLOSED with no notification and RQ retry's claim finds the sentinel
+    # set and bails, stranding the turn — strictly worse than the pre-claim null-on-crash
+    # posture (#114). `release_fuller_claim` is an unconditional set-to-null, so a release
+    # in `finally` after a clean early-return release (or a successful `_notify`) is a
+    # harmless no-op; we only skip it once a send has genuinely succeeded.
+    sent = False
+    try:
+        read = await generate_fuller(db, str(activity.id))
+        if read is None:
+            logger.info("No fuller report for activity %s", activity.strava_activity_id)
+            return None
 
-    db.refresh(activity)
-    coach_row = get_active_report_row(db, activity.id)
-    if coach_row is None or coach_row.is_fallback:
-        logger.info(
-            "Skipping fuller notification for activity %s: report is fallback or missing",
-            activity.strava_activity_id,
+        db.refresh(activity)
+        coach_row = get_active_report_row(db, activity.id)
+        if coach_row is None or coach_row.is_fallback:
+            logger.info(
+                "Skipping fuller notification for activity %s: report is fallback or missing",
+                activity.strava_activity_id,
+            )
+            return None
+
+        notification = _notify(
+            db, activity, report=read, stage="fuller",
+            sentinel_attr="fuller_sent_at", notifier=notifier, sentinel_obj=exchange,
+            presend_claimed=True,
         )
-        return None
-
-    return _notify(
-        db, activity, report=read, stage="fuller",
-        sentinel_attr="fuller_sent_at", notifier=notifier, sentinel_obj=exchange,
-    )
+        sent = notification is not None
+        return notification
+    finally:
+        # Released on EVERY non-send exit: a None read, a fallback/missing report, a
+        # no-channel/send-failure `_notify` return, OR a raised exception. Left SET only
+        # after a real successful send, so the happy path stays CLOSED and never re-sends.
+        if not sent:
+            lifecycle.release_fuller_claim(db, exchange)
 
 
 def process_new_activity_job(

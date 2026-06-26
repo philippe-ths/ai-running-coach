@@ -223,6 +223,26 @@ async def test_done_tap_records_and_schedules(db, configured, notifier):
     assert ex.done_at is not None
 
 
+async def test_repeated_done_taps_schedule_exactly_one_full_report(db, configured, notifier):
+    # #505: a second "done" tap on an already-done exchange must NOT schedule another
+    # full-report generation. mark_done is idempotent (done_at set once), but the caller
+    # previously discarded its return and scheduled unconditionally, so rapid/repeat taps
+    # queued redundant generations (deduped only at fire time, after spend may be live).
+    activity = _seed(db)
+    block = _block_of(db, activity)
+    await _send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+    with patch.object(pna, "_schedule_block_complete") as sched:
+        first = mark_done_and_schedule(db, activity.id)
+        second = mark_done_and_schedule(db, activity.id)
+        third = mark_done_and_schedule(db, activity.id)
+    assert first is True               # the first tap schedules
+    assert second is False             # the duplicate taps are scheduling no-ops
+    assert third is False
+    sched.assert_called_once()         # exactly ONE full-report job from repeated taps
+    ex = _exchange_of(db, activity)
+    assert ex.done_at is not None
+
+
 async def test_done_tap_noops_when_exchange_closed(db, configured, notifier):
     activity = _seed(db)
     ex = _exchange_of(db, activity)
