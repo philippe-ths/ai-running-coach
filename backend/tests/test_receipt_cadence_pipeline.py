@@ -243,6 +243,50 @@ async def test_repeated_done_taps_schedule_exactly_one_full_report(db, configure
     assert ex.done_at is not None
 
 
+async def test_concurrent_done_taps_schedule_exactly_one_full_report(db, configured, notifier):
+    # #514: the web service is multi-process and the Telegram "done" callback hits it, so
+    # two SIMULTANEOUS taps land in two PROCESSES that each loaded the exchange with
+    # `done_at` still null before either committed. The old done guard was a non-atomic
+    # check-then-act (`done_at` read on the in-memory instance, then write), so both taps
+    # passed the null check and both scheduled the full report. We model the two processes
+    # as two independent Sessions on the same connection (genuinely separate identity
+    # maps), and INTERLEAVE them: the second tap is fired from inside the first's
+    # mark_done, after BOTH processes have already loaded the still-null exchange but
+    # before either claim has committed. The atomic claim (a conditional UPDATE on
+    # done_at-IS-NULL) must let exactly ONE schedule.
+    from sqlalchemy.orm import Session as _Session
+
+    activity = _seed(db)
+    block = _block_of(db, activity)
+    await _send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+    db.commit()
+
+    second_db = _Session(bind=db.connection())  # the second process's view of the same row
+    racing = {"second": None, "ran": False}
+
+    def race_then_mark(db_, exchange, **kwargs):
+        # The first process has loaded the exchange (done_at null) and is about to claim.
+        # The second process, which ALSO loaded the still-null exchange, now claims first.
+        # Old check-then-act: both pass the null read and both schedule. Atomic UPDATE:
+        # only one rowcount-1 winner schedules.
+        if not racing["ran"]:
+            racing["ran"] = True
+            racing["second"] = mark_done_and_schedule(second_db, activity.id)
+        return real_mark_done(db_, exchange, **kwargs)
+
+    real_mark_done = pna.lifecycle.mark_done
+    with patch.object(pna, "_schedule_block_complete") as sched, \
+         patch.object(pna.lifecycle, "mark_done", side_effect=race_then_mark):
+        first = mark_done_and_schedule(db, activity.id)
+    second_db.close()
+
+    # Exactly one of the two concurrent taps wins the claim and schedules; the other bails.
+    assert {first, racing["second"]} == {True, False}
+    sched.assert_called_once()         # exactly ONE full-report job from concurrent taps
+    ex = _exchange_of(db, activity)
+    assert ex.done_at is not None
+
+
 async def test_done_tap_noops_when_exchange_closed(db, configured, notifier):
     activity = _seed(db)
     ex = _exchange_of(db, activity)
