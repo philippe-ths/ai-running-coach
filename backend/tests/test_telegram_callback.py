@@ -257,7 +257,12 @@ class TestInboundAuth:
         assert resp.status_code == 403
         assert db.query(CheckIn).filter(CheckIn.activity_id == a.id).first() is None
 
-    def test_wrong_chat_id_is_rejected(self, client, db, configured, isolate_side_effects):
+    def test_unknown_chat_is_rejected_without_writing(
+        self, client, db, configured, isolate_side_effects
+    ):
+        # An unbound chat that is not the global owner chat is rejected, but with
+        # a silent 200 + ack (not 403) so Telegram does not retry-amplify -- the
+        # secret already proved the request is from Telegram (#477).
         a = _seed_activity(db)
         token = encode(kind="rpe", activity_id=str(a.id), value=7)
         resp = client.post(
@@ -265,8 +270,10 @@ class TestInboundAuth:
             json=_update(token, chat_id=999),
             headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200
+        assert resp.json()["reason"] == "unauthorized_chat"
         assert db.query(CheckIn).filter(CheckIn.activity_id == a.id).first() is None
+        isolate_side_effects["answer"].assert_called_once()
 
     def test_empty_secret_in_production_fails_closed(
         self, client, db, monkeypatch, isolate_side_effects
@@ -538,3 +545,155 @@ class TestDoneTap:
             resp = client.post("/api/webhooks/telegram", json=_update(token))
         assert resp.status_code == 403
         done.assert_not_called()  # rejected before any side effect
+
+
+# --- #477: multi-user inbound auth + chat-link binding -----------------------
+
+
+def _seed_user_with_chat(db, chat_id: str) -> User:
+    uid = uuid4()
+    user = User(id=uid, email=f"u-{uid}@example.com", telegram_chat_id=chat_id)
+    db.add(user)
+    db.commit()
+    return user
+
+
+def _seed_activity_for(db, user: User) -> Activity:
+    a = Activity(
+        id=uuid4(),
+        user_id=user.id,
+        strava_activity_id=abs(hash(str(uuid4()))) % 10**9,
+        start_date=datetime(2026, 5, 27, 10, 0, 0),
+        type="Run",
+        name="Run",
+        distance_m=5000,
+        moving_time_s=1500,
+        elapsed_time_s=1500,
+        elev_gain_m=10.0,
+        avg_hr=140,
+        raw_summary={},
+    )
+    db.add(a)
+    db.commit()
+    return a
+
+
+def _start_update(text: str, *, chat_id: int) -> dict:
+    return {"update_id": 1, "message": {"chat": {"id": chat_id}, "text": text}}
+
+
+class TestMultiUserInboundAuth:
+    def test_bound_user_can_tap_their_own_activity(
+        self, client, db, configured, isolate_side_effects
+    ):
+        user = _seed_user_with_chat(db, "555")
+        a = _seed_activity_for(db, user)
+        token = encode(kind="rpe", activity_id=str(a.id), value=6)
+        resp = client.post(
+            "/api/webhooks/telegram",
+            json=_update(token, chat_id=555),
+            headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["action"] == "checkin_written"
+        assert db.query(CheckIn).filter(CheckIn.activity_id == a.id).first() is not None
+
+    def test_bound_user_cannot_tap_another_users_activity(
+        self, client, db, configured, isolate_side_effects
+    ):
+        attacker = _seed_user_with_chat(db, "555")
+        victim = _seed_user_with_chat(db, "666")
+        victim_activity = _seed_activity_for(db, victim)
+        token = encode(kind="rpe", activity_id=str(victim_activity.id), value=6)
+        resp = client.post(
+            "/api/webhooks/telegram",
+            json=_update(token, chat_id=555),  # attacker's chat, victim's activity
+            headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["reason"] == "not_owner"
+        assert (
+            db.query(CheckIn).filter(CheckIn.activity_id == victim_activity.id).first()
+            is None
+        )
+
+    def test_global_owner_chat_still_writes_for_unbound_owner(
+        self, client, db, configured, isolate_side_effects
+    ):
+        # Back-compat: today's owner has a null telegram_chat_id and taps on the
+        # global chat (42). That path must keep working.
+        a = _seed_activity(db)  # owner has no bound chat
+        token = encode(kind="rpe", activity_id=str(a.id), value=5)
+        resp = client.post(
+            "/api/webhooks/telegram",
+            json=_update(token, chat_id=42),
+            headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+        )
+        assert resp.status_code == 200
+        assert db.query(CheckIn).filter(CheckIn.activity_id == a.id).first() is not None
+
+
+class TestStartLink:
+    def test_start_binds_chat_to_token_user(
+        self, client, db, configured, isolate_side_effects
+    ):
+        user = _seed_user_with_chat(db, None)  # not yet linked
+        with patch(
+            "app.api.webhooks.telegram_link_token.consume", return_value=user.id
+        ):
+            resp = client.post(
+                "/api/webhooks/telegram",
+                json=_start_update("/start abc123", chat_id=777),
+                headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["action"] == "chat_linked"
+        db.refresh(user)
+        assert user.telegram_chat_id == "777"
+
+    def test_start_with_bad_token_is_noop(
+        self, client, db, configured, isolate_side_effects
+    ):
+        user = _seed_user_with_chat(db, None)
+        with patch("app.api.webhooks.telegram_link_token.consume", return_value=None):
+            resp = client.post(
+                "/api/webhooks/telegram",
+                json=_start_update("/start nope", chat_id=777),
+                headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["reason"] == "bad_link_token"
+        db.refresh(user)
+        assert user.telegram_chat_id is None
+
+    def test_start_rebind_steals_chat_from_prior_owner(
+        self, client, db, configured, isolate_side_effects
+    ):
+        prior = _seed_user_with_chat(db, "777")  # already holds chat 777
+        claimant = _seed_user_with_chat(db, None)
+        with patch(
+            "app.api.webhooks.telegram_link_token.consume", return_value=claimant.id
+        ):
+            resp = client.post(
+                "/api/webhooks/telegram",
+                json=_start_update("/start tok", chat_id=777),
+                headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+            )
+        assert resp.status_code == 200
+        db.refresh(prior)
+        db.refresh(claimant)
+        # chat->user stays a function: the prior owner's claim is cleared.
+        assert prior.telegram_chat_id is None
+        assert claimant.telegram_chat_id == "777"
+
+    def test_start_rejected_without_secret(self, client, db, configured):
+        user = _seed_user_with_chat(db, None)
+        with patch(
+            "app.api.webhooks.telegram_link_token.consume", return_value=user.id
+        ) as consume:
+            resp = client.post(
+                "/api/webhooks/telegram",
+                json=_start_update("/start abc", chat_id=777),
+            )
+        assert resp.status_code == 403
+        consume.assert_not_called()  # secret gate runs before binding
