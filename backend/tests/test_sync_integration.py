@@ -115,7 +115,10 @@ async def test_sync_upserts_activity_and_streams_and_runs_analysis(
         },
     )
 
-    result = await sync_activities(strava_athlete_id=99999, db=db)
+    # Phase 2 (#473) made sync user-scoped (require_current_user) instead of
+    # athlete-id-keyed: the endpoint resolves the account from the authenticated
+    # user. since_days defaults to the routine 30-day stream-fetch window.
+    result = await sync_activities(db=db, user=user)
 
     assert isinstance(result, SyncResponse)
     assert result.fetched == 1

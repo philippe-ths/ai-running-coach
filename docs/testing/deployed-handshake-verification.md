@@ -28,7 +28,8 @@ Telegram link endpoints in `app/api/coach.py`, or the Vercel proxy.
 
 ## Who can run this
 
-The owner of the deployed stack (`philippe@twohourssleep.com`). It needs a real
+The owner of the deployed stack (the `OWNER_EMAIL` identity,
+`philippe.marr@gmail.com`). It needs a real
 Strava account and the live bot, and it WRITES to production (preview deploys
 point at the same backend/Postgres/Redis, so there is no isolated environment;
 see `docs/testing/local-seed.md`). Treat it as a production smoke, not a CI gate.
