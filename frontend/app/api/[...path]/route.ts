@@ -1,13 +1,15 @@
 import { NextRequest } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
+import { clerkEnabled } from '@/lib/authMode';
 
 const BACKEND_URL = process.env.BACKEND_URL;
 const BASIC_USER = process.env.BACKEND_BASIC_AUTH_USER;
 const BASIC_PASS = process.env.BACKEND_BASIC_AUTH_PASSWORD;
-// NEXT_PUBLIC_* is inlined at build; with no Clerk key the proxy forwards only
-// the basic service secret (CI/smoke). The session token rides a dedicated
-// header so it never collides with the basic Authorization credential.
-const CLERK_ENABLED = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+// With Clerk off the proxy forwards only the basic service secret (CI/smoke, or
+// the #488 dev ungate), so the backend degrades to the single seeded user. The
+// session token rides a dedicated header so it never collides with the basic
+// Authorization credential. See lib/authMode.ts for the single source of truth.
+const CLERK_ENABLED = clerkEnabled;
 const SESSION_TOKEN_HEADER = 'x-clerk-session-token';
 
 const HOP_BY_HOP = new Set([

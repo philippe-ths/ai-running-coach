@@ -451,6 +451,39 @@ class TestProductionFailClosed:
         assert resp.status_code == 503
 
 
+# --- #488: dev-only LOCAL_NO_AUTH ungated mode -----------------------------
+
+class TestLocalNoAuth:
+    def test_local_no_auth_degrades_to_single_user_outside_production(
+        self, client, clerk_env, db, monkeypatch
+    ):
+        # Clerk is configured (clerk_env sets the JWKS URL) but LOCAL_NO_AUTH
+        # forces the degrade path outside production, so a no-token request
+        # resolves the single local user instead of 401 (#488).
+        monkeypatch.setattr(settings, "APP_ENV", "local")
+        monkeypatch.setattr(settings, "LOCAL_NO_AUTH", True)
+        assert client.get("/api/profile").status_code == 200
+
+    def test_local_no_auth_is_ignored_in_production(self, client, monkeypatch):
+        # The switch is refused in production: with Clerk configured the gate
+        # still enforces (401 without a token), so it is no prod bypass (#488).
+        monkeypatch.setattr(settings, "APP_ENV", "production")
+        monkeypatch.setattr(settings, "LOCAL_NO_AUTH", True)
+        monkeypatch.setattr(settings, "CLERK_JWKS_URL", TEST_JWKS_URL)
+        assert settings.clerk_enabled is True
+
+    def test_local_no_auth_does_not_open_production_when_clerk_unset(
+        self, monkeypatch
+    ):
+        # Even with Clerk unconfigured, LOCAL_NO_AUTH must not turn auth "off" in
+        # production: clerk_enabled stays False so the dependency fails closed
+        # (503), never degrading to a single user (#488).
+        monkeypatch.setattr(settings, "APP_ENV", "production")
+        monkeypatch.setattr(settings, "LOCAL_NO_AUTH", True)
+        monkeypatch.setattr(settings, "CLERK_JWKS_URL", "")
+        assert settings.clerk_enabled is False
+
+
 # --- real ASGI transport (httpx), not just TestClient ----------------------
 
 class TestRealAsgiTransport:

@@ -1,4 +1,4 @@
-.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest diagram-check
+.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest diagram-check verify-local
 
 # Prefer the project venv interpreter when it exists, fall back to bare python.
 # Path is relative to backend/ since the targets cd there first. CI has no
@@ -32,6 +32,20 @@ seed-local:
 	TOK="$$(tr -d '[:space:]' < $$HOME/.railway_token)" && \
 	SRC="$$(RAILWAY_TOKEN="$$TOK" railway variables --service Postgres --kv | grep '^DATABASE_PUBLIC_URL=' | cut -d= -f2-)" && \
 	SEED_SOURCE_URL="$$SRC" $(BACKEND_PY) scripts/seed_from_prod.py $(SEED_ARGS)
+
+# Bring up the seeded local stack UNGATED for browser verification (#488), so an
+# agent or a quick local check can drive real read paths without a Clerk sign-in.
+# Backend runs with LOCAL_NO_AUTH=true (degrades to the single seeded user) and
+# the frontend with NEXT_PUBLIC_LOCAL_NO_AUTH=true (Clerk gate off); both are
+# refused in production, so this is no prod bypass. Seed first: `make seed-local`,
+# and have docker-compose Postgres/Redis up. Ctrl-C stops both. The rq worker is
+# NOT started (read-path/UI verification); run it separately to exercise jobs.
+verify-local:
+	@echo "Seeded ungated stack (#488) -> backend :8000, frontend :3000. Ctrl-C stops both."
+	( cd backend && LOCAL_NO_AUTH=true APP_ENV=local $(BACKEND_PY) -m uvicorn app.main:app --port 8000 ) & \
+	BACK_PID=$$!; \
+	trap "kill $$BACK_PID 2>/dev/null" EXIT INT TERM; \
+	( cd frontend && NEXT_PUBLIC_LOCAL_NO_AUTH=true npm run dev )
 
 # Drift guard for the ai-flow-graph data-flow diagram: fails if a CoachContextPack
 # section or a DerivedMetric column has no representation in flow-nodes.js. Also runs

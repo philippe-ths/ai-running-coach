@@ -274,6 +274,16 @@ class Settings(BaseSettings):
     # reconciliation (every verified email gets/creates its own user).
     OWNER_EMAIL: str = ""
 
+    # Dev-only ungated mode for local browser verification (#488). Setting this
+    # True forces the Clerk degrade path (the single seeded local user) so the
+    # seeded stack can be driven in a browser without a Clerk sign-in, WITHOUT
+    # hand-editing CLERK_JWKS_URL out of .env (env_ignore_empty makes an empty
+    # override impossible, but a non-empty `LOCAL_NO_AUTH=true` env var DOES
+    # override .env). It is refused in production by `clerk_enabled`, so it can
+    # never be a prod auth bypass: there the backend stays the enforcer and an
+    # unconfigured Clerk fails closed.
+    LOCAL_NO_AUTH: bool = False
+
     # Phase 1 deployment: HTTP basic auth in front of /api/*. Under Phase 2
     # (ADR 0022) this is REPURPOSED as the frontend-to-backend service secret
     # (defense in depth: "proves it is our frontend"), no longer as identity --
@@ -341,7 +351,13 @@ class Settings(BaseSettings):
         Auth turns on as soon as a JWKS URL is configured. With no JWKS URL,
         production fails closed (handled in the dependency) while non-production
         degrades to the single local user.
+
+        The dev-only `LOCAL_NO_AUTH` switch (#488) forces the degrade path for
+        local browser verification, but ONLY outside production: in production
+        the flag is ignored, so it can never bypass the prod auth gate.
         """
+        if self.LOCAL_NO_AUTH and self.APP_ENV != "production":
+            return False
         return bool(self.CLERK_JWKS_URL)
 
     @property

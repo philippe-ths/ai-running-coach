@@ -1,9 +1,10 @@
 import { SignUp } from '@clerk/nextjs';
+import { clerkEnabled } from '@/lib/authMode';
 
 export const dynamic = 'force-dynamic';
 
 export default function SignUpPage() {
-  if (!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
+  if (!clerkEnabled) {
     return (
       <div className="flex justify-center py-16 text-gray-500">
         Authentication is not configured.

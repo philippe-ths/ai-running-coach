@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { User } from 'lucide-react';
 import AuthControls from '@/components/AuthControls';
+import { clerkEnabled } from '@/lib/authMode';
 
 const LINKS = [
   { href: '/activities', label: 'Activities' },
@@ -11,10 +12,6 @@ const LINKS = [
   { href: '/trends', label: 'Trends' },
   { href: '/profile', label: 'Profile' },
 ];
-
-// Inlined at build time; with no Clerk key the auth menu is omitted entirely
-// (CI build + smoke run against a mock backend with no auth).
-const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
 export default function NavBar() {
   const pathname = usePathname();

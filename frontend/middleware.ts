@@ -1,12 +1,11 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
+import { clerkEnabled } from '@/lib/authMode';
 
-// Clerk activates only when a publishable key is present (Vercel prod + local
-// dev with .env.local). With no key -- CI's lint/build and the smoke harness,
-// which run against a mock backend with no auth -- the middleware is a
-// pass-through, so routes load without a sign-in. NEXT_PUBLIC_* vars are inlined
-// at build time, so this is fixed per build environment.
-const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+// Clerk activates only when `clerkEnabled` (a publishable key present and not
+// under the #488 dev ungate). Otherwise -- CI lint/build, the smoke harness, or
+// `make verify-local` -- the middleware is a pass-through, so routes load
+// without a sign-in. See lib/authMode.ts for the single source of truth.
 
 // Public routes never require a session: the auth pages themselves, and /api/*
 // (the proxy forwards the Clerk token and the FastAPI backend is the real
