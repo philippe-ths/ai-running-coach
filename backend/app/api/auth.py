@@ -50,17 +50,25 @@ def strava_login(user: User = Depends(require_current_user)):
 
 
 @router.get("/auth/strava/status", response_model=StravaConnectionStatus)
-def strava_status(db: Session = Depends(get_db)) -> StravaConnectionStatus:
-    """Reports whether a Strava account is linked, and surfaces the athlete id and token scope.
+def strava_status(
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+) -> StravaConnectionStatus:
+    """Reports whether the signed-in user's Strava account is linked, and surfaces its athlete id and token scope.
 
-    NOTE: login + callback now thread the signed-in user through a signed OAuth
-    `state` so a new account links to the right user (#469), but this status
-    READ stays single-user (the first linked account) -- it is session-exempt
-    (ADR 0022 exempts /api/auth/*) and returns no training data, only the
-    connection's athlete id and scope. A per-user status read is part of the
-    remaining Strava-linking follow-up.
+    Scoped to the authenticated user (#532): the read returns the runner's OWN
+    connection (or "not connected"), never the first account globally, so no
+    cross-tenant athlete id / scope leaks under multi-user. Gated by
+    `require_current_user` like `strava_login`; the route stays session-exempt
+    from BasicAuthMiddleware (ADR 0022 exempts /api/auth/*) but still resolves
+    the Clerk session, degrading to the single local user outside production so
+    the single-owner local/dev path is unchanged.
     """
-    account = db.execute(select(StravaAccount)).scalars().first()
+    account = (
+        db.execute(select(StravaAccount).where(StravaAccount.user_id == user.id))
+        .scalars()
+        .first()
+    )
     if account is None:
         return StravaConnectionStatus(connected=False)
     return StravaConnectionStatus(

@@ -651,6 +651,44 @@ class TestStartLink:
         db.refresh(user)
         assert user.telegram_chat_id == "777"
 
+    def test_start_sends_in_chat_confirmation(
+        self, client, db, configured, isolate_side_effects
+    ):
+        # A successful bind replies once in the chat so the runner sees it worked
+        # (#533): a Notification addressed to the just-bound chat id.
+        user = _seed_user_with_chat(db, None)
+        with patch(
+            "app.api.webhooks.telegram_link_token.consume", return_value=user.id
+        ):
+            client.post(
+                "/api/webhooks/telegram",
+                json=_start_update("/start abc123", chat_id=777),
+                headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+            )
+        send = isolate_side_effects["notifier"].send
+        send.assert_called_once()
+        assert send.call_args.args[0].to == "777"
+
+    def test_start_confirmation_failure_does_not_break_bind(
+        self, client, db, configured, isolate_side_effects
+    ):
+        # The confirmation send is best-effort: a transport failure must leave the
+        # committed bind intact and the webhook still 200 (#533).
+        user = _seed_user_with_chat(db, None)
+        isolate_side_effects["notifier"].send.side_effect = RuntimeError("telegram down")
+        with patch(
+            "app.api.webhooks.telegram_link_token.consume", return_value=user.id
+        ):
+            resp = client.post(
+                "/api/webhooks/telegram",
+                json=_start_update("/start abc123", chat_id=777),
+                headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["action"] == "chat_linked"
+        db.refresh(user)
+        assert user.telegram_chat_id == "777"
+
     def test_start_with_bad_token_is_noop(
         self, client, db, configured, isolate_side_effects
     ):
@@ -665,6 +703,9 @@ class TestStartLink:
         assert resp.json()["reason"] == "bad_link_token"
         db.refresh(user)
         assert user.telegram_chat_id is None
+        # No bind happened, so no confirmation is sent (#533: no spam on a
+        # repeat/expired /start).
+        isolate_side_effects["notifier"].send.assert_not_called()
 
     def test_start_rebind_steals_chat_from_prior_owner(
         self, client, db, configured, isolate_side_effects

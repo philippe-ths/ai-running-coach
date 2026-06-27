@@ -145,21 +145,33 @@ class TestProductionFailsClosed:
         response = client.get("/api/health")
         assert response.status_code == 200
 
-    def test_production_with_credentials_set_authenticates_normally(self, client, monkeypatch):
-        # Targets /api/auth/strava/status: gated by the basic-auth service-secret
-        # middleware but NOT by the Phase 2 Clerk session dependency (the auth
-        # router is the OAuth handshake surface, ADR-exempt from per-user
-        # sessions). An application route like /api/profile would now also fail
-        # closed (503) under Clerk-unconfigured-in-production, which is the Clerk
-        # layer's job, not the basic middleware's; this test isolates the latter.
-        monkeypatch.setattr(settings, "APP_ENV", "production")
-        monkeypatch.setattr(settings, "BASIC_AUTH_USER", _AUTH_USER)
-        monkeypatch.setattr(settings, "BASIC_AUTH_PASSWORD", _AUTH_PASSWORD)
-        response = client.get(
-            "/api/auth/strava/status",
-            headers={"Authorization": _basic(_AUTH_USER, _AUTH_PASSWORD)},
-        )
-        assert response.status_code == 200
+    def test_production_with_credentials_set_authenticates_normally(self, client, db, monkeypatch):
+        # The basic-auth service-secret middleware authenticates normally in
+        # production with valid creds. /api/auth/strava/status is now a per-user
+        # read (#532), so it also resolves a Clerk session; that layer is the
+        # Clerk dependency's job, not the basic middleware's, so we stub it to
+        # pass. Any non-200 here is then the basic middleware's doing -- the
+        # isolation this test exists for. (No basic-auth-gated, Clerk-free route
+        # remains to target instead.)
+        from app.core.clerk_auth import verify_clerk_session
+        from app.main import app
+        from app.models import User
+
+        user = User(email="basic_auth_probe@example.com")
+        db.add(user)
+        db.commit()
+        app.dependency_overrides[verify_clerk_session] = lambda: user
+        try:
+            monkeypatch.setattr(settings, "APP_ENV", "production")
+            monkeypatch.setattr(settings, "BASIC_AUTH_USER", _AUTH_USER)
+            monkeypatch.setattr(settings, "BASIC_AUTH_PASSWORD", _AUTH_PASSWORD)
+            response = client.get(
+                "/api/auth/strava/status",
+                headers={"Authorization": _basic(_AUTH_USER, _AUTH_PASSWORD)},
+            )
+            assert response.status_code == 200
+        finally:
+            app.dependency_overrides.pop(verify_clerk_session, None)
 
     def test_production_with_credentials_set_rejects_wrong_creds(self, client, monkeypatch):
         monkeypatch.setattr(settings, "APP_ENV", "production")
