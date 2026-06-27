@@ -85,7 +85,7 @@ async def _send_with_retry(
 class HTTPStravaAdapter:
     """Production Strava adapter. Pure HTTP, no DB access."""
 
-    def get_auth_url(self) -> str:
+    def get_auth_url(self, state: str | None = None) -> str:
         params = {
             "client_id": settings.STRAVA_CLIENT_ID,
             "response_type": "code",
@@ -93,6 +93,11 @@ class HTTPStravaAdapter:
             "approval_prompt": "force",
             "scope": "read,activity:read_all,profile:read_all",
         }
+        # The signed-in user's OAuth state (#469); Strava echoes it back on the
+        # callback so the new StravaAccount links to that user. The token is
+        # base64url + dotted, so it is URL-safe for this un-encoded builder.
+        if state:
+            params["state"] = state
         query = "&".join(f"{k}={v}" for k, v in params.items())
         return f"https://www.strava.com/oauth/authorize?{query}"
 
