@@ -92,6 +92,75 @@ def test_strava_status_returns_connected_when_account_linked(client: TestClient,
     }
 
 
+def test_strava_status_is_scoped_to_the_signed_in_user(
+    client: TestClient, db, _as_user
+):
+    # Two runners each have their own Strava account. The status read must
+    # surface the signed-in user's OWN connection, never the first row globally
+    # (#532): no cross-tenant athlete id / scope leak.
+    runner_a = _new_user(db, "runner_a@example.com")
+    runner_b = _new_user(db, "runner_b@example.com")
+    db.add(
+        StravaAccount(
+            user_id=runner_a.id,
+            strava_athlete_id=111,
+            access_token="a",
+            refresh_token="a",
+            expires_at=int(time.time()) + 3600,
+            scope="read,activity:read_all",
+        )
+    )
+    db.add(
+        StravaAccount(
+            user_id=runner_b.id,
+            strava_athlete_id=222,
+            access_token="b",
+            refresh_token="b",
+            expires_at=int(time.time()) + 3600,
+            scope="read",
+        )
+    )
+    db.commit()
+
+    _as_user(runner_b)
+    response = client.get("/api/auth/strava/status")
+
+    assert response.status_code == 200
+    assert response.json()["athlete_id"] == 222
+    assert response.json()["scope"] == "read"
+
+
+def test_strava_status_disconnected_for_user_without_account(
+    client: TestClient, db, _as_user
+):
+    # A signed-in runner with no linked account reads "not connected" even
+    # though another runner's account exists in the table (#532).
+    other = _new_user(db, "linked_other@example.com")
+    db.add(
+        StravaAccount(
+            user_id=other.id,
+            strava_athlete_id=333,
+            access_token="x",
+            refresh_token="x",
+            expires_at=int(time.time()) + 3600,
+            scope="read",
+        )
+    )
+    db.commit()
+    no_account_user = _new_user(db, "no_account@example.com")
+
+    _as_user(no_account_user)
+    response = client.get("/api/auth/strava/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "connected": False,
+        "athlete_id": None,
+        "scope": None,
+        "expires_at": None,
+    }
+
+
 # --- #469: signed-state multi-user OAuth linking ---------------------------
 
 
