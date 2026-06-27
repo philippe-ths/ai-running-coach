@@ -14,11 +14,13 @@ just-finished run is always processed; only history backfill and the app-open sa
 net yield when the shared budget is tight ("webhooks always win").
 
 Windows are clock-aligned to Strava's accounting: a 15-minute bucket (Strava's short
-window resets on the quarter-hour) and a UTC day. Ceilings are configurable; 0 = that
-window disabled, so this is INERT until the owner arms it with the deployed app's
-CONFIRMED limits (set them BELOW the real ceiling to leave headroom for the ungated
-webhook/live path). Backend: Redis when reachable (cross-process — the worker makes
-the calls), else an in-process dict (local dev + the test suite). The gate degrades
+window resets on the quarter-hour) and a UTC day. An explicit ceiling always wins, but
+in PRODUCTION an unset window falls back to a safety backstop (mirroring the LLM
+budget's #549 pattern), so prod is protected BY DEFAULT without the owner arming it —
+set below Strava's real ceiling to leave headroom for the ungated webhook/live path.
+Outside production an unset window is disabled (0), so local dev and the test suite
+never throttle. Backend: Redis when reachable (cross-process — the worker makes the
+calls), else an in-process dict (local dev + the test suite). The gate degrades
 to permissive (not over budget) on any backend error: a throttle must never become an
 availability risk, and the adapter's 429 backoff remains the hard floor underneath.
 
@@ -63,6 +65,32 @@ def _day_key(d: date) -> str:
     return d.isoformat()
 
 
+def production_default_per_15min() -> int:
+    """The 15-min ceiling the production safety backstop applies, else 0.
+
+    In production, when no explicit 15-min ceiling is set and the budget is not
+    disabled, prod must not run silently unthrottled (the #544 onboarding hazard);
+    the gate falls back to a default below Strava's real limit so prod is protected
+    without an owner action. Returns 0 (backstop inactive) outside production or when
+    the budget is deliberately disabled.
+    """
+    if settings.APP_ENV != "production":
+        return 0
+    if settings.STRAVA_BUDGET_DISABLED:
+        return 0
+    return settings.STRAVA_BUDGET_PROD_DEFAULT_PER_15MIN
+
+
+def production_default_per_day() -> int:
+    """The daily ceiling the production safety backstop applies, else 0. Mirrors
+    ``production_default_per_15min`` for the daily window."""
+    if settings.APP_ENV != "production":
+        return 0
+    if settings.STRAVA_BUDGET_DISABLED:
+        return 0
+    return settings.STRAVA_BUDGET_PROD_DEFAULT_PER_DAY
+
+
 @dataclass
 class _InMemoryBackend:
     """A process-local call accumulator (tests + local dev without Redis)."""
@@ -102,14 +130,17 @@ class StravaBudgetGate:
     def __init__(self, backend) -> None:
         self._backend = backend
 
-    # --- ceilings (read live from settings; 0 = window disabled) ---
+    # --- ceilings (read live from settings) ---
+    # An explicit ceiling always wins; otherwise the production safety backstop may
+    # supply a default so prod is never silently unthrottled. 0 (window off) when
+    # neither applies (outside production, or deliberately disabled).
     @property
     def _per_15min(self) -> int:
-        return settings.STRAVA_BUDGET_GLOBAL_PER_15MIN
+        return settings.STRAVA_BUDGET_GLOBAL_PER_15MIN or production_default_per_15min()
 
     @property
     def _per_day(self) -> int:
-        return settings.STRAVA_BUDGET_GLOBAL_PER_DAY
+        return settings.STRAVA_BUDGET_GLOBAL_PER_DAY or production_default_per_day()
 
     def _key(self, window: str) -> str:
         return f"{self._PREFIX}:global:{window}"
