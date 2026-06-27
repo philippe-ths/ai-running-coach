@@ -164,16 +164,33 @@ class Settings(BaseSettings):
     # Strava's own 15-min + daily reset windows) is recorded on every metered Strava
     # call and CHECKED only by the background jobs (import / stream backfill /
     # self-heal); live webhook ingestion never consults it, so a just-finished run is
-    # always processed ("webhooks always win"). 0 = that window disabled, so the
-    # defaults are a NO-OP until the owner arms it with the deployed Strava app's
-    # CONFIRMED limits, leaving headroom below the real ceiling for the ungated
-    # webhook/live path. See app/services/strava_ingestion/strava_budget.py.
+    # always processed ("webhooks always win"). 0 here = no EXPLICIT ceiling for that
+    # window; in production the safety backstop below still arms a default, so prod is
+    # protected without the owner having to set these. Set either to the deployed
+    # Strava app's CONFIRMED limit (below the real ceiling, to keep live headroom) to
+    # override the backstop. See app/services/strava_ingestion/strava_budget.py.
     STRAVA_BUDGET_GLOBAL_PER_15MIN: int = 0
     STRAVA_BUDGET_GLOBAL_PER_DAY: int = 0
     # How long a background job waits before retrying when the global Strava budget
     # is exhausted: it re-enqueues itself after this delay instead of calling Strava,
     # yielding the shared ceiling to live webhook traffic.
     STRAVA_BUDGET_BACKOFF_SECONDS: int = 60
+    # Production safety backstop (mirrors the LLM budget's #549 pattern). When
+    # APP_ENV=production and the matching explicit ceiling above is 0 (unset) and the
+    # budget is not disabled, the gate falls back to these values, so prod is
+    # protected by DEFAULT without the owner having to arm it. Set BELOW Strava's
+    # standard application limits (~100 req/15min, ~1000/day) so the gap between this
+    # ceiling and Strava's real limit stays reserved for the ungated live webhook
+    # path: once total recorded calls hit this ceiling only the background jobs pause,
+    # leaving the remainder for live ingest. A single backfill paces under this
+    # already (BACKFILL_BATCH_SIZE = ~60/15min), so the default only bites when
+    # MULTIPLE background chains pile up (concurrent onboarding) — exactly the #544
+    # case. Override a window with the confirmed limit, or set STRAVA_BUDGET_DISABLED
+    # to run prod deliberately unthrottled. 0 turns a backstop window off. Outside
+    # production these are inert (local/test never throttle).
+    STRAVA_BUDGET_DISABLED: bool = False
+    STRAVA_BUDGET_PROD_DEFAULT_PER_15MIN: int = 75
+    STRAVA_BUDGET_PROD_DEFAULT_PER_DAY: int = 800
 
     # Receipt cadence (#296, ADR 0010/0011 delta). Orthogonal to COACH_PROMPT_ID:
     # when True AND the active prompt is a two-stage message prompt, the post-activity

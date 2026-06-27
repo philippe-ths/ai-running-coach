@@ -110,6 +110,51 @@ def test_module_wrappers_use_injected_singleton(monkeypatch):
         strava_budget.set_gate(None)
 
 
+# --- production safety backstop ------------------------------------------------
+
+def test_backstop_arms_a_default_in_production_when_unset(gate, monkeypatch):
+    # No explicit ceiling, but APP_ENV=production and not disabled -> the backstop
+    # arms a default below Strava's real limit, so prod is protected with no owner
+    # action. This is what makes #544 deliver without manual arming.
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "STRAVA_BUDGET_GLOBAL_PER_15MIN", 0)
+    monkeypatch.setattr(settings, "STRAVA_BUDGET_DISABLED", False)
+    monkeypatch.setattr(settings, "STRAVA_BUDGET_PROD_DEFAULT_PER_15MIN", 75)
+
+    assert gate._per_15min == 75
+    gate.record(calls=74)
+    assert gate.over_budget() is False
+    gate.record()
+    assert gate.over_budget() is True
+
+
+def test_backstop_inert_outside_production(gate, monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENV", "local")
+    monkeypatch.setattr(settings, "STRAVA_BUDGET_GLOBAL_PER_15MIN", 0)
+    monkeypatch.setattr(settings, "STRAVA_BUDGET_GLOBAL_PER_DAY", 0)
+    gate.record(calls=10_000)
+    assert gate.over_budget() is False  # local/test never throttle
+
+
+def test_explicit_ceiling_overrides_backstop_in_production(gate, monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "STRAVA_BUDGET_GLOBAL_PER_15MIN", 10)
+    monkeypatch.setattr(settings, "STRAVA_BUDGET_PROD_DEFAULT_PER_15MIN", 75)
+    assert gate._per_15min == 10  # the explicit value wins, not the backstop
+
+
+def test_disabled_suppresses_backstop_in_production(gate, monkeypatch):
+    # The deliberate-unthrottled escape hatch: prod runs with no Strava throttle.
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "STRAVA_BUDGET_GLOBAL_PER_15MIN", 0)
+    monkeypatch.setattr(settings, "STRAVA_BUDGET_GLOBAL_PER_DAY", 0)
+    monkeypatch.setattr(settings, "STRAVA_BUDGET_DISABLED", True)
+    assert gate._per_15min == 0
+    assert gate._per_day == 0
+    gate.record(calls=10_000)
+    assert gate.over_budget() is False
+
+
 # --- recording flows through the HTTP adapter ----------------------------------
 
 def _install_seq_transport(monkeypatch, responses):
