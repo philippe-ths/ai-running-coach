@@ -19,8 +19,10 @@ worker free between batches and the combined Strava call rate under the
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -36,34 +38,38 @@ logger = logging.getLogger(__name__)
 _BACKFILL_JOB_ID = "backfill_streams"
 
 
-def _eligible_stmt():
+def _eligible_stmt(*, user_id: Optional[str] = None):
     """Activities lacking stream-derived analysis and not yet attempted.
 
     Excludes activities that already have streams (the normal new-activity
     pipeline fetched them) and activities already attempted by an earlier
     backfill run, so genuinely streamless activities are attempted once and the
     job converges. Newest first, since recent runs are the most likely to be
-    opened.
+    opened. When `user_id` is given the set is scoped to that runner (#470), so a
+    user's trigger only backfills their own history; omit it for a global pass.
     """
     has_streams = (
         select(ActivityStream.id)
         .where(ActivityStream.activity_id == Activity.id)
         .exists()
     )
-    return (
-        select(Activity)
-        .where(
-            Activity.is_deleted.is_(False),
-            Activity.streams_backfilled_at.is_(None),
-            ~has_streams,
-        )
-        .order_by(Activity.start_date.desc())
+    stmt = select(Activity).where(
+        Activity.is_deleted.is_(False),
+        Activity.streams_backfilled_at.is_(None),
+        ~has_streams,
     )
+    if user_id is not None:
+        # user_id rides through RQ as a string; coerce so the Uuid column
+        # comparison works on both Postgres and the SQLite test backend.
+        if isinstance(user_id, str):
+            user_id = uuid.UUID(user_id)
+        stmt = stmt.where(Activity.user_id == user_id)
+    return stmt.order_by(Activity.start_date.desc())
 
 
-def count_eligible(db: Session) -> int:
-    """How many activities still need stream-derived analysis."""
-    return len(db.execute(_eligible_stmt()).scalars().all())
+def count_eligible(db: Session, *, user_id: Optional[str] = None) -> int:
+    """How many activities still need stream-derived analysis (optionally scoped)."""
+    return len(db.execute(_eligible_stmt(user_id=user_id)).scalars().all())
 
 
 @dataclass
@@ -72,15 +78,18 @@ class BackfillBatchResult:
     remaining: int = 0
 
 
-async def backfill_streams_batch(db: Session, *, limit: int) -> BackfillBatchResult:
+async def backfill_streams_batch(
+    db: Session, *, limit: int, user_id: Optional[str] = None
+) -> BackfillBatchResult:
     """Process up to `limit` eligible activities: fetch streams + re-analyze.
 
     Marks each attempted activity via `streams_backfilled_at` in a `finally`, so
     even a hard failure counts as attempted and the job converges (transient
     Strava errors are already retried inside the HTTP adapter). Commits per
-    activity so progress survives an interruption. Never notifies.
+    activity so progress survives an interruption. Scoped to `user_id` when given
+    (#470). Never notifies.
     """
-    batch = db.execute(_eligible_stmt().limit(limit)).scalars().all()
+    batch = db.execute(_eligible_stmt(user_id=user_id).limit(limit)).scalars().all()
     result = BackfillBatchResult()
 
     for activity in batch:
@@ -100,7 +109,7 @@ async def backfill_streams_batch(db: Session, *, limit: int) -> BackfillBatchRes
             db.commit()
             result.processed.append(strava_id)
 
-    result.remaining = count_eligible(db)
+    result.remaining = count_eligible(db, user_id=user_id)
     logger.info(
         "Backfill batch processed %d activities, %d remaining",
         len(result.processed),
@@ -109,9 +118,10 @@ async def backfill_streams_batch(db: Session, *, limit: int) -> BackfillBatchRes
     return result
 
 
-def _schedule_next_batch() -> None:
+def _schedule_next_batch(user_id: Optional[str] = None) -> None:
     """Schedule the next batch after the configured pause, so the single worker
-    stays free to process webhooks between batches.
+    stays free to process webhooks between batches. Carries `user_id` so the
+    self-paced chain stays scoped to the triggering runner (#470).
 
     Uses RQ-native deferred scheduling (drained by the worker's `with_scheduler`),
     so no separate rq-scheduler process is needed (#123/ADR 0006)."""
@@ -120,21 +130,26 @@ def _schedule_next_batch() -> None:
     queue.enqueue_in(
         timedelta(seconds=settings.BACKFILL_BATCH_PAUSE_SECONDS),
         backfill_streams_job,
+        user_id,
     )
 
 
-def backfill_streams_job() -> None:
-    """RQ entrypoint. Runs one batch; if work remains, schedules the next."""
+def backfill_streams_job(user_id: Optional[str] = None) -> None:
+    """RQ entrypoint. Runs one batch; if work remains, schedules the next.
+
+    `user_id` scopes the eligible set to one runner (#470); the user-triggered
+    path always supplies it, while an unscoped call still backfills globally.
+    """
     db = SessionLocal()
     try:
         result = asyncio.run(
-            backfill_streams_batch(db, limit=settings.BACKFILL_BATCH_SIZE)
+            backfill_streams_batch(db, limit=settings.BACKFILL_BATCH_SIZE, user_id=user_id)
         )
     finally:
         db.close()
 
     if result.remaining > 0:
-        _schedule_next_batch()
+        _schedule_next_batch(user_id)
         logger.info(
             "Backfill scheduled next batch in %ds (%d remaining)",
             settings.BACKFILL_BATCH_PAUSE_SECONDS,
@@ -144,18 +159,21 @@ def backfill_streams_job() -> None:
         logger.info("Backfill complete: no eligible activities remain")
 
 
-def enqueue_backfill(db: Session) -> int:
-    """Count eligible activities and enqueue the first backfill batch.
+def enqueue_backfill(db: Session, user_id) -> int:
+    """Count the runner's eligible activities and enqueue their first backfill batch.
 
-    Returns the eligible count. A fixed job id keeps a re-trigger from starting a
-    second chain while one is in flight; the `streams_backfilled_at` marker makes
-    any overlap idempotent regardless.
+    Returns the eligible count, scoped to `user_id` (#470). A per-user job id
+    keeps a re-trigger from starting a second chain for the same runner while one
+    is in flight, without colliding with another runner's chain; the
+    `streams_backfilled_at` marker makes any overlap idempotent regardless.
     """
-    eligible = count_eligible(db)
+    user_id = str(user_id)
+    eligible = count_eligible(db, user_id=user_id)
     if eligible:
         queue.enqueue(
             backfill_streams_job,
-            job_id=_BACKFILL_JOB_ID,
+            user_id,
+            job_id=f"{_BACKFILL_JOB_ID}_{user_id}",
             result_ttl=3600,
         )
     return eligible

@@ -53,39 +53,44 @@ async def process_activity_deep(
     return read
 
 @router.post("/activities/backfill-streams")
-def backfill_streams(db: Session = Depends(get_db)):
-    # Auth-gated by the router-level session dependency (P2.0). Per-user scoping
-    # of this owner-maintenance job (it currently processes all users' eligible
-    # activities) is a tracked follow-up; it returns no cross-tenant data.
+def backfill_streams(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Kick off a paced backfill of stream-derived analysis for historical
     summary-only activities (#110).
 
     Enqueues a self-pacing job that fetches streams and re-runs analysis a small
     batch at a time, staying within Strava's rate limits and never notifying.
-    Returns how many activities are currently eligible.
+    Scoped to the authenticated runner's own history (#470). Returns how many of
+    their activities are currently eligible.
     """
     from app.jobs.backfill_streams import enqueue_backfill
 
-    eligible = enqueue_backfill(db)
+    eligible = enqueue_backfill(db, user.id)
     return {
         "eligible": eligible,
         "status": "scheduled" if eligible else "nothing_to_do",
     }
 
 @router.post("/activities/reanalyze")
-def reanalyze_history(db: Session = Depends(get_db)):
+def reanalyze_history(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
     """Kick off a paced bulk re-analysis of already-analyzed history (#300).
 
     After a change to how analysis derives a stored signal (e.g. #297's Strava
     zone binning), only newly-synced activities pick it up. This enqueues a
     self-pacing job that re-runs analysis from the streams already stored in the
     database — no Strava calls — a batch at a time, so the change propagates to
-    historical DerivedMetric rows. It is resumable and never notifies. Returns
-    how many activities are currently eligible.
+    historical DerivedMetric rows. It is resumable and never notifies. Scoped to
+    the authenticated runner's own history (#470). Returns how many of their
+    activities are currently eligible.
     """
     from app.jobs.reanalyze_history import enqueue_reanalyze
 
-    eligible = enqueue_reanalyze(db)
+    eligible = enqueue_reanalyze(db, user.id)
     return {
         "eligible": eligible,
         "status": "scheduled" if eligible else "nothing_to_do",
