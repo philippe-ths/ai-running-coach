@@ -1,4 +1,4 @@
-.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest diagram-check verify-local deployed-handshake-smoke
+.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest diagram-check verify-local deployed-handshake-smoke post-deploy-verify
 
 # Prefer the project venv interpreter when it exists, fall back to bare python.
 # Path is relative to backend/ since the targets cd there first. CI has no
@@ -77,3 +77,12 @@ eval-selftest:
 #   make deployed-handshake-smoke SMOKE_BASE_URL=... SMOKE_TELEGRAM_WEBHOOK_SECRET=<secret>
 deployed-handshake-smoke:
 	cd backend && $(BACKEND_PY) -m scripts.deployed_handshake_smoke
+
+# Post-deploy verification (#550): poll the deployed /api/health until it is
+# healthy, then run the deployed handshake smoke as a release smoke. The release
+# gate that catches a crashed/regressed deploy (the #546 outage) automatically
+# instead of waiting for someone to notice the platform's crash email. Run after
+# a deploy (the CI post-deploy-verify job on push to main does this) or by hand.
+#   make post-deploy-verify SMOKE_BASE_URL=https://<deployed-backend>
+post-deploy-verify:
+	cd backend && $(BACKEND_PY) -m scripts.post_deploy_verify
