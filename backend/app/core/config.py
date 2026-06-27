@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     # matching this id (when set) and the connected athlete. 0 = unenforced
     # (local dev); set this to the live subscription id in production. See #100.
     STRAVA_WEBHOOK_SUBSCRIPTION_ID: int = 0
+    # Secret for signing the Strava OAuth `state` token that carries the
+    # signed-in user through the callback (#469). The callback is a direct
+    # browser redirect from Strava with no Clerk session, so identity rides in a
+    # server-verifiable HMAC state. Empty falls back to BASIC_AUTH_PASSWORD (set
+    # in prod, #480) then CLERK_SECRET_KEY, so it is secure-by-default in prod
+    # with no new env var; with no server secret at all (pure local dev) signing
+    # is unauthenticated, which is fine since that path is single-owner and has
+    # no adversary. Set this explicitly to rotate the OAuth state secret alone.
+    STRAVA_OAUTH_STATE_SECRET: str = ""
 
     # Coach AI
     ANTHROPIC_API_KEY: str = ""
