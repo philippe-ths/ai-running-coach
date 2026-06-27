@@ -68,7 +68,8 @@ var is unset, *before* the process boots. The required list is the canonical one
 `BASIC_AUTH_PASSWORD` the boot guard `assert_production_config` enforces, plus
 `DATABASE_URL` — so a release missing one fails the deploy instead of crash-looping
 on boot (the #546 failure mode). It is a no-op outside production unless
-`PREFLIGHT_FORCE=1`.
+`--require-production` is passed (the release-command form, below) or
+`PREFLIGHT_FORCE=1` is set.
 
 ### Why it is not a CI gate
 
@@ -80,30 +81,48 @@ anyway. The preflight only has authority where the env actually lives: as the
 gate itself can't silently rot; the post-deploy verification job (#550) remains the
 automated after-the-fact catch.
 
+### Platform assumption — VERIFIED (2026-06-27)
+
+The #546 caveat is resolved. On a throwaway `preflight-test` service (mirroring web:
+same repo, Root Directory `/backend`, Dockerfile builder, Pre-Deploy Command set,
+`APP_ENV=production` + `DATABASE_URL` set but `CLERK_JWKS_URL` left unset), a failing
+Pre-Deploy Command behaved exactly as needed: the deployment was marked **FAILED**
+(during deploy, before traffic), while the previously-successful deployment stayed
+**ACTIVE** and the service stayed **Online**. So unlike a *boot crash* (#546, which
+removed the old deploy and took prod down), a failing **Pre-Deploy Command** does NOT
+disturb the already-serving version — the gate is safe to rely on for blocking.
+
 ### Owner actions to activate (Railway dashboard config, not in-repo)
 
 The script ships inside the runtime image (the Dockerfile copies `scripts/`), so it
-runs as each service's **Pre-Deploy Command** — Railway runs that after the build and
-before the new version takes traffic, and a non-zero exit fails the deploy. Env is
-per-service on Railway, so each service passes its own scope (`web` checks the
-fail-closed HTTP gates + the DB; `worker` checks only `DATABASE_URL`).
+runs as each service's **Pre-Deploy Command** (Railway → service → Settings → Deploy →
+Pre-Deploy Command). Env is per-service on Railway, so each service passes its own
+scope (`web` checks the fail-closed HTTP gates + the DB; `worker` checks only
+`DATABASE_URL`), and `--require-production` keeps the gate armed:
 
-1. **Verify the platform assumption first** (the #546 caveat). On a throwaway/staging
-   service, set the Pre-Deploy Command and deliberately unset one required var, then
-   confirm Railway **fails the deploy and keeps the previous version serving** when
-   the command exits non-zero — rather than removing the old one the way a *boot
-   crash* did in #546. A Pre-Deploy Command failure is documented to halt promotion,
-   but it is the same "platform keeps the old deploy" assumption, so prove it before
-   relying on it.
-2. **Set the Pre-Deploy Command** per service (Railway → service → Settings → Deploy
-   → Pre-Deploy Command):
-   - `web` service:    `python -m scripts.preflight_env_check --scope web`
-   - `worker` service: `python -m scripts.preflight_env_check --scope worker`
+- `web` service:    `python -m scripts.preflight_env_check --scope web --require-production`
+- `worker` service: `python -m scripts.preflight_env_check --scope worker --require-production`
 
-   Put it ahead of (or alongside) `alembic upgrade head` if that also runs as a
-   pre-deploy step; order it first so a missing env fails before any migration runs.
-3. Sanity-check locally any time with `PREFLIGHT_FORCE=1 make preflight-env-check`
-   (forces the check outside production against the current shell env).
+Order it ahead of `alembic upgrade head` if that also runs pre-deploy, so a missing
+env fails before any migration runs:
+`python -m scripts.preflight_env_check --scope web --require-production && alembic upgrade head`.
+
+Sanity-check locally any time with `PREFLIGHT_FORCE=1 make preflight-env-check`.
+
+### Two gotchas found while wiring it (2026-06-27)
+
+- **`--require-production` is not optional, it is the point.** Without it, the gate
+  only enforces when `APP_ENV=production`; an empty/missing `APP_ENV` makes it
+  silently **skip** (exit 0) and provide no protection. That is not hypothetical:
+  Railway's *inline* variable editor was observed saving `APP_ENV` with an **empty
+  value**, which silently disarmed the gate (and would equally disarm the boot guard
+  and the production auth path). `--require-production` turns a non-`production`
+  `APP_ENV` into a hard failure, and being a CLI flag baked into the command string it
+  cannot be dropped the way a separate env var can. Set env values via Railway's
+  **Raw Editor** and re-check them.
+- **A new service defaults to Railpack and scans the repo root.** Stand up any service
+  (including the throwaway test one) with **Root Directory `/backend`** so the
+  Dockerfile is found, matching how `web`/`worker` are configured.
 
 ## Deferred / open
 
