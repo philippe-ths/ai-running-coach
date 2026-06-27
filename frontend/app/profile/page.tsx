@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import ConnectStravaButton from '@/components/ConnectStravaButton';
+import LinkTelegramButton from '@/components/LinkTelegramButton';
 import ImportStravaHistory from '@/components/ImportStravaHistory';
 import ThemeToggle from '@/components/ThemeToggle';
 import VoiceDialsPanel from '@/components/VoiceDialsPanel';
@@ -89,6 +90,7 @@ export default function ProfilePage() {
         <div className="flex items-center gap-4 flex-wrap">
             <ThemeToggle />
             <ConnectStravaButton />
+            <LinkTelegramButton />
             <Link href="/" className="text-blue-600 dark:text-blue-400 hover:underline">Cancel</Link>
         </div>
       </header>
