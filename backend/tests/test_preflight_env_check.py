@@ -8,7 +8,7 @@ production (or when forced) and fail on any missing var, stay a no-op otherwise.
 """
 
 from app.core.required_env import REQUIRED_FOR_PRODUCTION_DEPLOY, missing_env
-from scripts.preflight_env_check import check
+from scripts.preflight_env_check import _parse_scope, check
 
 # Clearly-fake values; never real secrets (aiw-security-testing rule 6).
 _COMPLETE_PROD_ENV = {
@@ -77,3 +77,35 @@ def test_whitespace_only_value_counts_as_missing():
 def test_missing_env_helper_treats_blank_and_absent_alike():
     env = {"A": "x", "B": "", "C": "   "}
     assert missing_env(["A", "B", "C", "D"], env) == ["B", "C", "D"]
+
+
+# --- per-service scope (env is per-service on Railway) -------------------------
+
+def test_worker_scope_requires_only_database_url():
+    # The worker serves no HTTP, so the fail-closed web gates are irrelevant there:
+    # with only DATABASE_URL set, the worker scope passes while the web scope fails.
+    env = {"APP_ENV": "production", "DATABASE_URL": "postgresql://test/preflight"}
+    worker_code, _ = check(env, scope="worker")
+    web_code, web_msg = check(env, scope="web")
+    assert worker_code == 0
+    assert web_code == 1
+    assert "CLERK_JWKS_URL" in web_msg
+
+
+def test_worker_scope_still_fails_without_database_url():
+    code, message = check({"APP_ENV": "production"}, scope="worker")
+    assert code == 1
+    assert "DATABASE_URL" in message
+
+
+def test_unknown_scope_falls_back_to_strict_web_set():
+    # A mistyped scope must over-check (fail safe), never under-check.
+    env = {"APP_ENV": "production", "DATABASE_URL": "postgresql://test/preflight"}
+    code, _ = check(env, scope="wrkr")
+    assert code == 1  # treated as web -> the web gates are required
+
+
+def test_parse_scope_reads_both_flag_forms():
+    assert _parse_scope(["--scope", "worker"]) == "worker"
+    assert _parse_scope(["--scope=web"]) == "web"
+    assert _parse_scope([]) == "web"  # default

@@ -80,16 +80,30 @@ anyway. The preflight only has authority where the env actually lives: as the
 gate itself can't silently rot; the post-deploy verification job (#550) remains the
 automated after-the-fact catch.
 
-### Owner actions to activate (platform config, not in-repo)
+### Owner actions to activate (Railway dashboard config, not in-repo)
 
-1. **Verify the platform assumption first.** Wire `make preflight-env-check` (or
-   `python -m scripts.preflight_env_check`) as the Railway release command on the
-   `web` and `worker` services, then deliberately unset one required var on a
-   throwaway test service and confirm Railway **keeps the previous deploy serving**
-   when the release command exits non-zero — rather than removing it the way it did
-   for the boot crash in #546. Only rely on this gate once that holds.
-2. Once verified, leave it as the release command ahead of `alembic upgrade head`
-   and the app start, so a misconfigured release is blocked at deploy time.
+The script ships inside the runtime image (the Dockerfile copies `scripts/`), so it
+runs as each service's **Pre-Deploy Command** — Railway runs that after the build and
+before the new version takes traffic, and a non-zero exit fails the deploy. Env is
+per-service on Railway, so each service passes its own scope (`web` checks the
+fail-closed HTTP gates + the DB; `worker` checks only `DATABASE_URL`).
+
+1. **Verify the platform assumption first** (the #546 caveat). On a throwaway/staging
+   service, set the Pre-Deploy Command and deliberately unset one required var, then
+   confirm Railway **fails the deploy and keeps the previous version serving** when
+   the command exits non-zero — rather than removing the old one the way a *boot
+   crash* did in #546. A Pre-Deploy Command failure is documented to halt promotion,
+   but it is the same "platform keeps the old deploy" assumption, so prove it before
+   relying on it.
+2. **Set the Pre-Deploy Command** per service (Railway → service → Settings → Deploy
+   → Pre-Deploy Command):
+   - `web` service:    `python -m scripts.preflight_env_check --scope web`
+   - `worker` service: `python -m scripts.preflight_env_check --scope worker`
+
+   Put it ahead of (or alongside) `alembic upgrade head` if that also runs as a
+   pre-deploy step; order it first so a missing env fails before any migration runs.
+3. Sanity-check locally any time with `PREFLIGHT_FORCE=1 make preflight-env-check`
+   (forces the check outside production against the current shell env).
 
 ## Deferred / open
 

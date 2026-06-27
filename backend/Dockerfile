@@ -43,6 +43,11 @@ COPY --chown=app:app app ./app
 COPY --chown=app:app alembic ./alembic
 COPY --chown=app:app alembic.ini ./alembic.ini
 COPY --chown=app:app pyproject.toml ./pyproject.toml
+# Ops scripts run inside the image as Railway commands: the #551 pre-deploy
+# env preflight (python -m scripts.preflight_env_check) is wired as the service
+# Pre-Deploy Command, so the deploy fails before cutover when a required env is
+# unset. See docs/deployment/deploy-checklist.md.
+COPY --chown=app:app scripts ./scripts
 
 USER app
 
