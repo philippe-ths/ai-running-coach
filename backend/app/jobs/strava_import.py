@@ -176,8 +176,37 @@ def _schedule_next_batch(import_id: str) -> None:
     )
 
 
+def _reschedule_after_budget(import_id: str) -> None:
+    """Re-enqueue this import batch after the Strava-budget backoff (#544), when
+    the shared budget is exhausted, so the walk resumes once capacity frees."""
+    from app.core.queue import queue
+
+    queue.enqueue_in(
+        timedelta(seconds=settings.STRAVA_BUDGET_BACKOFF_SECONDS),
+        strava_import_job,
+        import_id,
+    )
+
+
 def strava_import_job(import_id: str) -> None:
-    """RQ entrypoint. Runs one batch; if work remains, schedules the next."""
+    """RQ entrypoint. Runs one batch; if work remains, schedules the next.
+
+    Yields to the shared Strava budget (#544): a runner's full-history walk is the
+    onboarding pressure this protects against, so when the global budget is
+    exhausted the batch defers (re-enqueues after the backoff, status left
+    ``running``) instead of calling Strava and starving live webhook traffic.
+    """
+    from app.services.strava_ingestion.strava_budget import over_budget
+
+    if over_budget():
+        _reschedule_after_budget(str(import_id))
+        logger.info(
+            "Historical import %s deferred: Strava budget exhausted; retrying in %ds",
+            import_id,
+            settings.STRAVA_BUDGET_BACKOFF_SECONDS,
+        )
+        return
+
     db = SessionLocal()
     try:
         import_obj = db.get(StravaImport, UUID(str(import_id)))

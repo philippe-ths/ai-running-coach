@@ -134,12 +134,40 @@ def _schedule_next_batch(user_id: Optional[str] = None) -> None:
     )
 
 
+def _reschedule_after_budget(user_id: Optional[str] = None) -> None:
+    """Re-enqueue this batch after the Strava-budget backoff (#544), when the
+    shared budget is exhausted, so the chain resumes once capacity frees rather
+    than dropping the runner's backfill."""
+    from app.core.queue import queue
+
+    queue.enqueue_in(
+        timedelta(seconds=settings.STRAVA_BUDGET_BACKOFF_SECONDS),
+        backfill_streams_job,
+        user_id,
+    )
+
+
 def backfill_streams_job(user_id: Optional[str] = None) -> None:
     """RQ entrypoint. Runs one batch; if work remains, schedules the next.
 
     `user_id` scopes the eligible set to one runner (#470); the user-triggered
     path always supplies it, while an unscoped call still backfills globally.
+
+    Yields to the shared Strava budget (#544): each batch makes one streams call
+    per activity, the heaviest onboarding cost, so when the global budget is
+    exhausted this defers the whole batch (re-enqueues after the backoff) instead
+    of calling Strava, leaving the shared ceiling for live webhook traffic.
     """
+    from app.services.strava_ingestion.strava_budget import over_budget
+
+    if over_budget():
+        _reschedule_after_budget(user_id)
+        logger.info(
+            "Backfill deferred: Strava budget exhausted; retrying in %ds",
+            settings.STRAVA_BUDGET_BACKOFF_SECONDS,
+        )
+        return
+
     db = SessionLocal()
     try:
         result = asyncio.run(

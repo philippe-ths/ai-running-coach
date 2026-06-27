@@ -135,6 +135,26 @@ async def test_self_heal_degrades_when_strava_unreachable(db):
     fake_queue.enqueue.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_self_heal_skips_when_strava_budget_exhausted(db, monkeypatch):
+    """When the shared Strava budget is exhausted (#544), the self-heal yields:
+    it spends no Strava call and enqueues nothing, leaving the scarce shared
+    capacity for the live webhook path. The next app-open re-triggers it."""
+    from app.services.strava_ingestion import strava_budget
+
+    user = _seed_account(db, email="a@heal.dev", athlete_id=1)
+    monkeypatch.setattr(strava_budget, "over_budget", lambda: True)
+    port = _fake_port([900])
+    with patch.object(self_heal, "get_strava_port", return_value=port), \
+         patch.object(self_heal, "ensure_valid_access_token", new=AsyncMock(return_value="tok")), \
+         patch.object(self_heal, "queue", MagicMock()) as fake_queue:
+        new_ids = await _run_self_heal(db=db, user_id=user.id)
+
+    assert new_ids == []
+    port.list_recent_activities.assert_not_called()  # no Strava call spent
+    fake_queue.enqueue.assert_not_called()
+
+
 # --- the endpoint --------------------------------------------------------------
 
 def test_refresh_endpoint_triggers_bounded_check(client, db):

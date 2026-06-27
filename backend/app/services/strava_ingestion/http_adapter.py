@@ -7,6 +7,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.strava_ingestion.port import Tokens
+from app.services.strava_ingestion.strava_budget import record as _record_strava_call
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,11 @@ async def _send_with_retry(
     response: httpx.Response | None = None
     for attempt in range(_MAX_RETRIES + 1):
         response = await request_fn()
+        # Every actual request — including a retry — counts against Strava's shared
+        # per-application rate limit, so record each one against the global budget
+        # (#544). This makes the counter honest about ALL metered traffic (webhook
+        # ingest included); only the background jobs gate on it, never the live path.
+        _record_strava_call()
         if response.status_code == 429 and attempt < _MAX_RETRIES:
             wait = _parse_retry_after(response, _BASE_BACKOFF_S * (2 ** attempt))
             logger.warning(

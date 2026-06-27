@@ -155,6 +155,26 @@ class Settings(BaseSettings):
     IMPORT_PAGE_SIZE: int = 50
     IMPORT_BATCH_PAUSE_SECONDS: int = 5
 
+    # Global Strava API call budget (#544). Strava rate-limits per APPLICATION
+    # (~100 req/15min, ~1000/day), shared across every connected athlete — not per
+    # user. The per-call 429 backoff in the HTTP adapter defers a single call but
+    # creates no capacity, so several runners onboarding at once (history backfill
+    # costs one streams call PER ACTIVITY) can exhaust the shared ceiling and starve
+    # everyone's webhook traffic. This Redis-backed global counter (clock-aligned to
+    # Strava's own 15-min + daily reset windows) is recorded on every metered Strava
+    # call and CHECKED only by the background jobs (import / stream backfill /
+    # self-heal); live webhook ingestion never consults it, so a just-finished run is
+    # always processed ("webhooks always win"). 0 = that window disabled, so the
+    # defaults are a NO-OP until the owner arms it with the deployed Strava app's
+    # CONFIRMED limits, leaving headroom below the real ceiling for the ungated
+    # webhook/live path. See app/services/strava_ingestion/strava_budget.py.
+    STRAVA_BUDGET_GLOBAL_PER_15MIN: int = 0
+    STRAVA_BUDGET_GLOBAL_PER_DAY: int = 0
+    # How long a background job waits before retrying when the global Strava budget
+    # is exhausted: it re-enqueues itself after this delay instead of calling Strava,
+    # yielding the shared ceiling to live webhook traffic.
+    STRAVA_BUDGET_BACKOFF_SECONDS: int = 60
+
     # Receipt cadence (#296, ADR 0010/0011 delta). Orthogonal to COACH_PROMPT_ID:
     # when True AND the active prompt is a two-stage message prompt, the post-activity
     # touchpoint becomes an INSTANT deterministic per-activity receipt (RPE/pain +
