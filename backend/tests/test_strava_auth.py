@@ -1,13 +1,19 @@
 import time
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.clerk_auth import verify_clerk_session
+from app.core.config import settings
+from app.core.oauth_state import decode_state, encode_state
+from app.main import app
 from app.models import StravaAccount, User
 from app.services.strava_ingestion import (
     InMemoryStravaAdapter,
     Tokens,
     ensure_valid_access_token,
+    set_strava_port,
 )
 
 
@@ -84,3 +90,136 @@ def test_strava_status_returns_connected_when_account_linked(client: TestClient,
         "scope": "read,activity:read_all",
         "expires_at": expires_at,
     }
+
+
+# --- #469: signed-state multi-user OAuth linking ---------------------------
+
+
+@pytest.fixture
+def _as_user(db):
+    """Inject a specific authenticated user into the session-gated routes."""
+
+    def _install(user: User):
+        app.dependency_overrides[verify_clerk_session] = lambda: user
+
+    yield _install
+    app.dependency_overrides.pop(verify_clerk_session, None)
+
+
+@pytest.fixture
+def _inmemory_strava():
+    adapter = InMemoryStravaAdapter()
+    set_strava_port(adapter)
+    yield adapter
+    set_strava_port(None)
+
+
+def _new_user(db, email: str) -> User:
+    user = User(email=email)
+    db.add(user)
+    db.commit()
+    return user
+
+
+def test_login_requires_session_when_clerk_enabled(client: TestClient, monkeypatch):
+    # Clerk on + no session token -> the login route is now gated (401).
+    monkeypatch.setattr(settings, "CLERK_JWKS_URL", "https://clerk.test/.well-known/jwks.json")
+
+    response = client.get("/api/auth/strava/login", follow_redirects=False)
+
+    assert response.status_code == 401
+
+
+def test_login_mints_state_for_the_signed_in_user(client: TestClient, db, _as_user):
+    user = _new_user(db, "login_state@example.com")
+    _as_user(user)
+
+    response = client.get("/api/auth/strava/login", follow_redirects=False)
+
+    assert response.status_code in (302, 307)
+    location = response.headers["location"]
+    state = parse_qs(urlparse(location).query)["state"][0]
+    assert decode_state(state) == user.id
+
+
+def test_callback_links_new_account_to_state_user(
+    client: TestClient, db, _inmemory_strava
+):
+    # Two users exist, so the legacy single-owner heuristic cannot pick one;
+    # the signed state must steer the link to the right user.
+    _new_user(db, "other@example.com")
+    target = _new_user(db, "target@example.com")
+    _inmemory_strava.seed_exchange_response(
+        Tokens(
+            access_token="acc",
+            refresh_token="ref",
+            expires_at=int(time.time()) + 3600,
+            athlete={"id": 9001},
+        )
+    )
+
+    response = client.get(
+        "/api/auth/strava/callback",
+        params={"code": "x", "state": encode_state(target.id)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 307)
+    account = (
+        db.query(StravaAccount).filter(StravaAccount.strava_athlete_id == 9001).one()
+    )
+    assert account.user_id == target.id
+
+
+def test_callback_without_state_preserves_single_owner(
+    client: TestClient, db, _inmemory_strava
+):
+    owner = _new_user(db, "solo@example.com")
+    _inmemory_strava.seed_exchange_response(
+        Tokens(
+            access_token="acc",
+            refresh_token="ref",
+            expires_at=int(time.time()) + 3600,
+            athlete={"id": 9002},
+        )
+    )
+
+    response = client.get(
+        "/api/auth/strava/callback",
+        params={"code": "x"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 307)
+    account = (
+        db.query(StravaAccount).filter(StravaAccount.strava_athlete_id == 9002).one()
+    )
+    assert account.user_id == owner.id
+
+
+def test_callback_with_invalid_state_falls_back_to_single_owner(
+    client: TestClient, db, _inmemory_strava
+):
+    # A tampered/expired state must not crash; it falls through to the legacy
+    # single-owner rule rather than mis-linking.
+    owner = _new_user(db, "fallback@example.com")
+    _inmemory_strava.seed_exchange_response(
+        Tokens(
+            access_token="acc",
+            refresh_token="ref",
+            expires_at=int(time.time()) + 3600,
+            athlete={"id": 9003},
+        )
+    )
+
+    response = client.get(
+        "/api/auth/strava/callback",
+        params={"code": "x", "state": "garbage.notavalidtoken"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 307)
+    account = (
+        db.query(StravaAccount).filter(StravaAccount.strava_athlete_id == 9003).one()
+    )
+    assert account.user_id == owner.id
