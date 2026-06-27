@@ -8,8 +8,19 @@ How to confirm the two external handshakes that cannot be bootstrapped locally:
 Neither has a dev/local Strava OAuth app or a local bot, so unit and integration
 tests only ever cover the codec + authorization logic, never the real round-trip.
 This runbook is the manual checklist that exercises the live flow so a regression
-in the deployed handshake is caught rather than only the offline logic. An
-automated deployed smoke is a deferred stretch (see "Deferred" at the end).
+in the deployed handshake is caught rather than only the offline logic.
+
+The auth GATES (not the full round-trip) now also have an automated deployed
+smoke -- `make deployed-handshake-smoke SMOKE_BASE_URL=https://<deployed-backend>`
+(`backend/scripts/deployed_handshake_smoke.py`, #540). It is non-mutating: it
+asserts only that the live gates reject unauthentic input (a wrong Strava verify
+token, an event from an unconnected owner, a wrong Telegram secret, and -- with
+`SMOKE_TELEGRAM_WEBHOOK_SECRET` set -- that an authentic-secret unbound-chat tap
+is a silent no-op). It never completes a real OAuth callback or sends a real
+`/start`/tap, so the POSITIVE round-trip below (real connect, real bind, real
+owned/cross-user tap) stays MANUAL -- those need a live Clerk session and a real
+Strava account/bot that cannot be driven non-interactively (the #488 blocker).
+Run the automated gate smoke first; if it is green, work the manual steps below.
 
 Run it after any change to `app/api/auth.py`, `app/core/oauth_state.py`,
 `app/api/webhooks.py`, `app/services/notifications/telegram_link_token.py`, the
@@ -137,11 +148,15 @@ Record, per run: the deployment commit/date, which config vars were present, and
 the pass/fail of each numbered step. A regression in the live flow is only caught
 if this is run after the relevant changes and the result is written down.
 
-## Deferred
+## Automated coverage and what stays manual
 
-An automated deployed smoke (a script that mints a state, drives a scripted
-Strava callback, and replays a `/start` + tap against the live stack) is the
-stretch goal in #534. It needs a dedicated test Strava app and a test bot so it
-does not mutate the owner's real account; until those exist this manual checklist
-is the verification path. Related: #488 (local browser-verification blocker keeps
-the frontend affordances from being checked locally).
+The auth-gate half is automated (`make deployed-handshake-smoke`, #540): it
+confirms the live gates fail closed without touching the owner's real account or
+chat. What it deliberately does NOT do is the full mutating round-trip -- minting
+a state and driving a scripted Strava callback to completion, or replaying a real
+`/start` bind + owned/cross-user tap. That remains manual because it needs a
+dedicated test Strava app + test bot to avoid mutating the owner's real account
+(preview deploys share the prod backend/Postgres/Redis, so there is no isolated
+environment), plus a live Clerk session that cannot be minted non-interactively
+(#488). Until a test app/bot exists, the steps above are the verification path
+for the positive round-trip. Related: #488 (local browser-verification blocker).

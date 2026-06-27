@@ -202,6 +202,39 @@ def assert_production_config() -> None:
     )
 
 
+def assert_budget_cap_armed() -> None:
+    """Refuse to boot when production runs the LLM cost cap silently disabled (#543).
+
+    The four ``LLM_BUDGET_*_USD`` ceilings default to 0 (= cap off), which is fine
+    for local dev but in production lets one user drain the shared Anthropic budget
+    -- the exact failure the budget gate (``budget.py``) exists to prevent. This
+    makes "no cap in prod" a CONSCIOUS choice: it raises unless at least one window
+    is armed OR the cap is explicitly waived via ``LLM_BUDGET_DISABLED=true``.
+
+    No-op unless ``APP_ENV == "production"`` (dev/tests run uncapped and must not
+    raise). Same safe failure direction as ``assert_production_config`` -- a boot
+    crash only blocks a new deploy, never the running one. Unlike that preflight
+    (which guards web-only HTTP settings), spend is incurred on whichever process
+    calls the model, so BOTH the web process (chat) and the worker (reports) call
+    this.
+    """
+    if settings.APP_ENV != "production":
+        return
+    from app.services.coach.budget import cap_is_armed
+
+    if settings.LLM_BUDGET_DISABLED or cap_is_armed():
+        return
+    logging.getLogger(__name__).critical("llm_budget_cap_unarmed_in_production")
+    raise ProductionConfigError(
+        "Refusing to boot: the LLM cost cap is disabled in production (no "
+        "LLM_BUDGET_*_USD window is set). An uncapped deployment lets one user "
+        "drain the shared Anthropic budget. Set at least one of "
+        "LLM_BUDGET_USER_DAILY_USD / LLM_BUDGET_USER_MONTHLY_USD / "
+        "LLM_BUDGET_GLOBAL_DAILY_USD / LLM_BUDGET_GLOBAL_MONTHLY_USD to a dollar "
+        "amount, or set LLM_BUDGET_DISABLED=true to waive the cap deliberately."
+    )
+
+
 def sentry_capture_active() -> bool:
     """True only when Sentry error capture is actually live.
 
