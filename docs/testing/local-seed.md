@@ -58,3 +58,30 @@ docker compose up -d postgres redis        # if not already up
 cd backend && .venv/bin/python -m uvicorn app.main:app --port 8000
 # then: curl http://localhost:8000/api/activities, or run `next dev` and browse.
 ```
+
+### Browser verification without a Clerk sign-in (#488)
+
+Phase-2 Clerk auth (ADR 0022) means the backend requires a verified session and
+the frontend gates on a sign-in, which an automated agent (or a quick local
+check) cannot complete without the owner's social login. To drive the seeded
+stack in a browser ungated, use the supported dev-only mode:
+
+```sh
+make seed-local SEED_ARGS="--activities 20"
+docker compose up -d postgres redis        # if not already up
+make verify-local                          # backend :8000 + frontend :3000, ungated
+```
+
+`make verify-local` runs the backend with `LOCAL_NO_AUTH=true` (degrades to the
+single seeded user, no `X-Clerk-Session-Token` needed) and the frontend with
+`NEXT_PUBLIC_LOCAL_NO_AUTH=true` (Clerk gate off), then browse
+http://localhost:3000. Ctrl-C stops both.
+
+This is **dev-only and fails closed in production**: `LOCAL_NO_AUTH` is ignored
+when `APP_ENV=production` (the backend stays the enforcer and unconfigured Clerk
+still 503s), and `NEXT_PUBLIC_LOCAL_NO_AUTH` is honoured only in a non-production
+(`next dev`) build, so it can never disable auth in a Vercel build. The normal
+Clerk-on local flow (publishable key + `CLERK_JWKS_URL` set, no `*_NO_AUTH`) is
+unchanged. The rq worker is not started by this target, so background jobs (sync,
+coach generation) do not run; seeded data already carries their output. Start a
+worker separately if you need to trigger jobs.

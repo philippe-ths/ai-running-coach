@@ -5,12 +5,13 @@ import { ClerkProvider } from '@clerk/nextjs';
 import NavBar from '@/components/NavBar';
 import BottomNav from '@/components/BottomNav';
 import ThemeProvider from '@/components/ThemeProvider';
+import { clerkEnabled } from '@/lib/authMode';
 
-// Clerk wraps the app only when a publishable key is configured (Vercel prod +
-// local dev). Without it -- CI build, the smoke harness -- the app renders
-// exactly as before, with no auth surface. See middleware.ts for the matching
-// pass-through gate.
-const clerkEnabled = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
+// Clerk wraps the app only when `clerkEnabled` (a publishable key configured and
+// not under the #488 dev ungate). Without it -- CI build, the smoke harness, or
+// `make verify-local` -- the app renders with no auth surface. See
+// lib/authMode.ts for the single source of truth and middleware.ts for the
+// matching pass-through gate.
 
 // Three deliberate type roles: Fraunces (serif) is the coach's voice + display
 // headings, Hanken Grotesk (sans) is body + UI, IBM Plex Mono is numbers/data.
