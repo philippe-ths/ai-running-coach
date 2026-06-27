@@ -27,6 +27,7 @@ except ImportError:
     _SENTRY_AVAILABLE = False
 
 from app.core.config import settings
+from app.core.required_env import REQUIRED_PRODUCTION_ENV
 
 
 _STANDARD_LOG_RECORD_FIELDS = frozenset(
@@ -161,11 +162,9 @@ class ProductionConfigError(RuntimeError):
 # healthy deploy live instead of cutting over to one that 503s. These are the
 # WEB process's HTTP gate settings only (web-only per docs/deployment/topology.md);
 # the worker serves no HTTP and is intentionally not gated by this (see worker.py).
-_REQUIRED_IN_PRODUCTION = (
-    "CLERK_JWKS_URL",
-    "BASIC_AUTH_USER",
-    "BASIC_AUTH_PASSWORD",
-)
+# The list itself lives in ``app.core.required_env`` so the pre-deploy preflight
+# (scripts.preflight_env_check, #551) shares one source of truth with this guard.
+_REQUIRED_IN_PRODUCTION = REQUIRED_PRODUCTION_ENV
 
 
 def assert_production_config() -> None:
