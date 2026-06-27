@@ -1,4 +1,4 @@
-.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest diagram-check verify-local deployed-handshake-smoke post-deploy-verify
+.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest diagram-check verify-local deployed-handshake-smoke post-deploy-verify preflight-env-check
 
 # Prefer the project venv interpreter when it exists, fall back to bare python.
 # Path is relative to backend/ since the targets cd there first. CI has no
@@ -86,3 +86,14 @@ deployed-handshake-smoke:
 #   make post-deploy-verify SMOKE_BASE_URL=https://<deployed-backend>
 post-deploy-verify:
 	cd backend && $(BACKEND_PY) -m scripts.post_deploy_verify
+
+# Pre-deploy required-env preflight (#551): exit non-zero when a production deploy
+# is missing a required env var, BEFORE the process boots. Meant to run as the
+# Railway release command (in the deploy environment, where the vars live) so a
+# misconfigured release fails the deploy instead of crash-looping on boot and
+# taking prod down (the #546 failure mode). A no-op outside production unless
+# PREFLIGHT_FORCE=1. See docs/deployment/deploy-checklist.md for the wiring.
+#   APP_ENV=production make preflight-env-check          # the release-command form
+#   PREFLIGHT_FORCE=1 make preflight-env-check           # dry run against this env
+preflight-env-check:
+	cd backend && $(BACKEND_PY) -m scripts.preflight_env_check
