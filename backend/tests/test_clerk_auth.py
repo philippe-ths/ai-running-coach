@@ -220,9 +220,11 @@ class TestSessionEnforcement:
     def test_health_exempt_without_token(self, client, clerk_env):
         assert client.get("/api/health").status_code == 200
 
-    def test_strava_status_exempt_without_token(self, client, clerk_env):
-        # Auth router is the OAuth handshake surface, exempt from per-user sessions.
-        assert client.get("/api/auth/strava/status").status_code == 200
+    def test_strava_status_requires_session(self, client, clerk_env):
+        # The status read is a per-user read (#532): scoped to the signed-in
+        # runner like strava_login, so it requires the session (401 without a
+        # token). The bare OAuth callback stays the only session-exempt handshake.
+        assert client.get("/api/auth/strava/status").status_code == 401
 
 
 # --- email resolution (claim + Clerk API fallback) -------------------------
