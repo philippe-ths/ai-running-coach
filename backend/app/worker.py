@@ -10,9 +10,9 @@ import logging
 from rq import Queue, Worker
 
 from app.core.observability import (
-    assert_budget_cap_armed,
     init_logging,
     init_sentry,
+    log_budget_cap_status,
     warn_if_coach_prompt_inert,
 )
 from app.core.queue import redis_conn
@@ -32,9 +32,11 @@ def main() -> None:
     # would crash a correctly-configured worker. Its hard deps (DATABASE_URL) are
     # already required by Settings and crash the boot on their own.
     # The budget cap IS a worker concern, though: reports generate here, so an
-    # uncapped prod worker is exactly the spend risk #543 guards. Same safe
-    # failure direction (blocks a new deploy, never the running one).
-    assert_budget_cap_armed()
+    # uncapped prod worker is exactly the spend risk #543/#549 address. Enforcement
+    # is a non-fatal safe default in production (budget.production_default_ceiling),
+    # not a boot crash -- the #543 guard took prod down on Railway (#549). This
+    # only logs the resulting posture.
+    log_budget_cap_status()
     logger.info("Worker booting; listening on %s", ",".join(LISTEN))
     queues = [Queue(name, connection=redis_conn) for name in LISTEN]
     worker = Worker(queues, connection=redis_conn)
