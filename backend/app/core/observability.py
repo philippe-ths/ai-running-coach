@@ -180,6 +180,17 @@ def assert_production_config() -> None:
     direction is safe -- a false positive can only block a new deploy, never
     take down the running one. Called once per process group right after
     ``init_logging``.
+
+    SCOPE NOTE (#549): the "platform keeps the last healthy deploy serving on a
+    boot crash" assumption above proved FALSE on Railway -- prior deploys were
+    ``REMOVED``, so a crashed boot took prod fully down. The budget guard that
+    shared this pattern was made non-fatal for that reason (see
+    ``log_budget_cap_status``). This guard is left crashing-on-boot deliberately:
+    the settings it guards (Clerk + basic-auth) make EVERY route 503 when unset,
+    so booting anyway just trades a boot crash for a fully-broken-but-"up" deploy
+    -- the tradeoff is defensible here in a way it was not for a cost cap prod
+    runs fine without. Revisiting it (a non-fatal/preflight form) is tracked
+    separately rather than duplicating #549's fix.
     """
     if settings.APP_ENV != "production":
         return
@@ -202,36 +213,61 @@ def assert_production_config() -> None:
     )
 
 
-def assert_budget_cap_armed() -> None:
-    """Refuse to boot when production runs the LLM cost cap silently disabled (#543).
+def log_budget_cap_status() -> None:
+    """Log the effective LLM cost-cap posture at boot. NON-FATAL (#549).
 
-    The four ``LLM_BUDGET_*_USD`` ceilings default to 0 (= cap off), which is fine
-    for local dev but in production lets one user drain the shared Anthropic budget
-    -- the exact failure the budget gate (``budget.py``) exists to prevent. This
-    makes "no cap in prod" a CONSCIOUS choice: it raises unless at least one window
-    is armed OR the cap is explicitly waived via ``LLM_BUDGET_DISABLED=true``.
+    Replaces the #543 crash-on-boot guard (``assert_budget_cap_armed``). That
+    guard refused to boot when production ran with no ``LLM_BUDGET_*_USD`` window
+    set, on the assumption that a boot crash only blocks a NEW deploy while the
+    platform keeps the last healthy one serving. On Railway that did not hold: the
+    prior deploys were ``REMOVED``, so the crashed boot left nothing serving and
+    prod went fully DOWN -- turning a missing cost cap (a setting prod runs FINE
+    without; uncapped means uncapped spend, not a broken app) into a production
+    outage, a strictly worse failure than the thing it guarded.
 
-    No-op unless ``APP_ENV == "production"`` (dev/tests run uncapped and must not
-    raise). Same safe failure direction as ``assert_production_config`` -- a boot
-    crash only blocks a new deploy, never the running one. Unlike that preflight
-    (which guards web-only HTTP settings), spend is incurred on whichever process
-    calls the model, so BOTH the web process (chat) and the worker (reports) call
-    this.
+    Enforcement moved to a non-fatal safe default instead: in production an
+    unconfigured, non-disabled cap falls back to a generous global-daily ceiling
+    (``budget.production_default_ceiling`` / ``LLM_BUDGET_PROD_DEFAULT_GLOBAL_DAILY_USD``),
+    so prod is never silently uncapped AND never crashes on this. This function
+    only makes the resulting posture visible in the logs; it never raises. Called
+    once per process group (web + worker) right after ``init_logging`` -- spend is
+    incurred on whichever process calls the model.
     """
     if settings.APP_ENV != "production":
         return
-    from app.services.coach.budget import cap_is_armed
+    from app.services.coach.budget import (
+        cap_is_armed,
+        production_default_ceiling,
+    )
 
-    if settings.LLM_BUDGET_DISABLED or cap_is_armed():
+    log = logging.getLogger(__name__)
+    if settings.LLM_BUDGET_DISABLED:
+        log.warning(
+            "llm_budget_cap_disabled: LLM_BUDGET_DISABLED=true in production -- "
+            "coach generation runs UNCAPPED. One user can drain the shared "
+            "Anthropic budget. This is a deliberate waiver; set an "
+            "LLM_BUDGET_*_USD window to arm the cap."
+        )
         return
-    logging.getLogger(__name__).critical("llm_budget_cap_unarmed_in_production")
-    raise ProductionConfigError(
-        "Refusing to boot: the LLM cost cap is disabled in production (no "
-        "LLM_BUDGET_*_USD window is set). An uncapped deployment lets one user "
-        "drain the shared Anthropic budget. Set at least one of "
-        "LLM_BUDGET_USER_DAILY_USD / LLM_BUDGET_USER_MONTHLY_USD / "
-        "LLM_BUDGET_GLOBAL_DAILY_USD / LLM_BUDGET_GLOBAL_MONTHLY_USD to a dollar "
-        "amount, or set LLM_BUDGET_DISABLED=true to waive the cap deliberately."
+    backstop = production_default_ceiling()
+    if backstop > 0:
+        log.warning(
+            "llm_budget_cap_default_backstop: no LLM_BUDGET_*_USD window set in "
+            "production; applying the safety backstop of $%.2f global/day "
+            "(LLM_BUDGET_PROD_DEFAULT_GLOBAL_DAILY_USD). Set an explicit window "
+            "for a tuned cap.",
+            backstop,
+        )
+        return
+    if cap_is_armed():
+        log.info("llm_budget_cap_armed: an explicit LLM_BUDGET_*_USD window is set.")
+        return
+    # Reachable only if the backstop default itself is set to 0 in production --
+    # a deliberate "off" with no explicit window. Surface it loudly but never crash.
+    log.warning(
+        "llm_budget_cap_unarmed: production is running UNCAPPED (no window set and "
+        "the safety backstop is 0). Set an LLM_BUDGET_*_USD window or a positive "
+        "LLM_BUDGET_PROD_DEFAULT_GLOBAL_DAILY_USD."
     )
 
 
