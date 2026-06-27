@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.coaching_relationship import CoachingRelationship
+from app.services.coach.budget import record as budget_record
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.receipt import (
     ALLOWED_SLOTS,
@@ -222,14 +223,16 @@ def voice_fingerprint(voice: VoiceProfile) -> str:
 
 
 async def generate_receipt_templates(
-    voice: VoiceProfile, *, client: Optional[AnthropicClient] = None
+    voice: VoiceProfile, *, client: Optional[AnthropicClient] = None, user_id=None
 ) -> Optional[dict]:
     """Generate + validate the voiced receipt set for one voice, or None on failure.
 
     Structured-output-only (containment): a forced tool call with no free-form
     channel, coerced through the strict schema, then per-variant validated. Returns
     the stored-shape `{situation: [variants]}` map (possibly empty -> house floor), or
-    None when generation could not run / failed (the caller keeps the floor)."""
+    None when generation could not run / failed (the caller keeps the floor). The
+    Haiku spend is recorded on the per-user budget counter when `user_id` is given
+    (#472)."""
     if client is None:
         if not settings.ANTHROPIC_API_KEY:
             return None
@@ -237,12 +240,14 @@ async def generate_receipt_templates(
             api_key=settings.ANTHROPIC_API_KEY, model=RECEIPT_VOICE_MODEL_ID
         )
     try:
-        raw = await client.generate_structured(
+        raw, usage = await client.generate_structured_with_usage(
             system=_SYSTEM_PROMPT,
             user=_render_voice_data(voice),
             tool=RECORD_RECEIPT_TEMPLATES_TOOL,
             max_tokens=_MAX_TOKENS,
         )
+        if user_id is not None:
+            budget_record(user_id, client.model, usage.input_tokens, usage.output_tokens)
         record = GeneratedReceiptTemplates.model_validate(raw)
     except Exception:  # noqa: BLE001 — fail-visible to logs, never crash; floor stands
         logger.exception("receipt-voice generation failed; house-default floor stands")
@@ -283,7 +288,7 @@ async def refresh_receipt_templates(
         db.commit()
         return rel
 
-    templates = await generate_receipt_templates(voice, client=client)
+    templates = await generate_receipt_templates(voice, client=client, user_id=user_id)
     if templates is None:
         return rel  # generation failed; keep whatever was there (or the floor)
 
