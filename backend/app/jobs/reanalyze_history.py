@@ -26,6 +26,7 @@ the single worker to webhooks/polling between batches.
 """
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Optional
@@ -45,13 +46,15 @@ logger = logging.getLogger(__name__)
 _REANALYZE_JOB_ID = "reanalyze_history"
 
 
-def _eligible_stmt(*, cursor: Optional[int] = None):
+def _eligible_stmt(*, cursor: Optional[int] = None, user_id: Optional[str] = None):
     """Non-deleted activities that have stored streams, newest first.
 
     Only activities with stored streams can be re-derived offline (no Strava
     call). When `cursor` is given, restrict to activities strictly older than it
     by `strava_activity_id`, so a batch chain walks the whole set exactly once
-    without gaps or repeats (the column is unique).
+    without gaps or repeats (the column is unique). When `user_id` is given the
+    set is scoped to that runner (#470), so a user's trigger only re-analyzes
+    their own history; omit it for a global pass (the offline eval rebuild).
     """
     has_streams = (
         select(ActivityStream.id)
@@ -64,12 +67,20 @@ def _eligible_stmt(*, cursor: Optional[int] = None):
     )
     if cursor is not None:
         stmt = stmt.where(Activity.strava_activity_id < cursor)
+    if user_id is not None:
+        # user_id rides through RQ as a string; coerce so the Uuid column
+        # comparison works on both Postgres and the SQLite test backend.
+        if isinstance(user_id, str):
+            user_id = uuid.UUID(user_id)
+        stmt = stmt.where(Activity.user_id == user_id)
     return stmt.order_by(Activity.strava_activity_id.desc())
 
 
-def count_eligible(db: Session, *, cursor: Optional[int] = None) -> int:
-    """How many activities are still eligible (optionally past the cursor)."""
-    return len(db.execute(_eligible_stmt(cursor=cursor)).scalars().all())
+def count_eligible(
+    db: Session, *, cursor: Optional[int] = None, user_id: Optional[str] = None
+) -> int:
+    """How many activities are still eligible (optionally past the cursor / scoped)."""
+    return len(db.execute(_eligible_stmt(cursor=cursor, user_id=user_id)).scalars().all())
 
 
 @dataclass
@@ -80,16 +91,19 @@ class ReanalyzeBatchResult:
 
 
 def reanalyze_history_batch(
-    db: Session, *, limit: int, cursor: Optional[int] = None
+    db: Session, *, limit: int, cursor: Optional[int] = None, user_id: Optional[str] = None
 ) -> ReanalyzeBatchResult:
     """Re-analyze up to `limit` eligible activities older than `cursor`.
 
     `analyze` re-derives each `DerivedMetric` from the stored streams and commits
     per activity, so progress survives an interruption. A failure on one activity
     is logged and skipped (convergence over completeness); the session is rolled
-    back so the next activity starts clean. Never notifies.
+    back so the next activity starts clean. Scoped to `user_id` when given (#470).
+    Never notifies.
     """
-    batch = db.execute(_eligible_stmt(cursor=cursor).limit(limit)).scalars().all()
+    batch = db.execute(
+        _eligible_stmt(cursor=cursor, user_id=user_id).limit(limit)
+    ).scalars().all()
     # Snapshot identity up front: a per-activity failure rolls the session back,
     # which expires the ORM instances in `batch`, so re-reading their attributes
     # afterwards would re-query (or raise on a now-absent row). The id, strava
@@ -138,7 +152,7 @@ def reanalyze_history_batch(
     # strictly past it.
     if len(items) == limit and items:
         result.next_cursor = items[-1][1]
-        result.remaining = count_eligible(db, cursor=result.next_cursor)
+        result.remaining = count_eligible(db, cursor=result.next_cursor, user_id=user_id)
 
     logger.info(
         "Re-analysis batch processed %d activities, %d remaining",
@@ -148,9 +162,10 @@ def reanalyze_history_batch(
     return result
 
 
-def _schedule_next_batch(cursor: int) -> None:
+def _schedule_next_batch(cursor: int, user_id: Optional[str] = None) -> None:
     """Schedule the next batch after the configured pause, so the single worker
-    stays free to process webhooks between batches.
+    stays free to process webhooks between batches. Carries `user_id` so the
+    self-paced chain stays scoped to the triggering runner (#470).
 
     Uses RQ-native deferred scheduling (drained by the worker's `with_scheduler`),
     so no separate rq-scheduler process is needed (#123/ADR 0006)."""
@@ -160,21 +175,28 @@ def _schedule_next_batch(cursor: int) -> None:
         timedelta(seconds=settings.REANALYZE_BATCH_PAUSE_SECONDS),
         reanalyze_history_job,
         cursor,
+        user_id,
     )
 
 
-def reanalyze_history_job(cursor: Optional[int] = None) -> None:
-    """RQ entrypoint. Runs one batch; if work remains, schedules the next."""
+def reanalyze_history_job(
+    cursor: Optional[int] = None, user_id: Optional[str] = None
+) -> None:
+    """RQ entrypoint. Runs one batch; if work remains, schedules the next.
+
+    `user_id` scopes the eligible set to one runner (#470); the user-triggered
+    path always supplies it, while an unscoped call still re-analyzes globally.
+    """
     db = SessionLocal()
     try:
         result = reanalyze_history_batch(
-            db, limit=settings.REANALYZE_BATCH_SIZE, cursor=cursor
+            db, limit=settings.REANALYZE_BATCH_SIZE, cursor=cursor, user_id=user_id
         )
     finally:
         db.close()
 
     if result.next_cursor is not None:
-        _schedule_next_batch(result.next_cursor)
+        _schedule_next_batch(result.next_cursor, user_id)
         logger.info(
             "Re-analysis scheduled next batch in %ds (%d remaining)",
             settings.REANALYZE_BATCH_PAUSE_SECONDS,
@@ -184,17 +206,22 @@ def reanalyze_history_job(cursor: Optional[int] = None) -> None:
         logger.info("Re-analysis complete: no eligible activities remain")
 
 
-def enqueue_reanalyze(db: Session) -> int:
-    """Count eligible activities and enqueue the first re-analysis batch.
+def enqueue_reanalyze(db: Session, user_id) -> int:
+    """Count the runner's eligible activities and enqueue their first re-analysis batch.
 
-    Returns the eligible count. A fixed job id keeps a re-trigger from starting a
-    second chain while one is in flight; re-analysis is idempotent regardless.
+    Returns the eligible count, scoped to `user_id` (#470). A per-user job id
+    keeps a re-trigger from starting a second chain for the same runner while one
+    is in flight, without colliding with another runner's chain; re-analysis is
+    idempotent regardless.
     """
-    eligible = count_eligible(db)
+    user_id = str(user_id)
+    eligible = count_eligible(db, user_id=user_id)
     if eligible:
         queue.enqueue(
             reanalyze_history_job,
-            job_id=_REANALYZE_JOB_ID,
+            None,  # cursor: start from the newest activity
+            user_id,
+            job_id=f"{_REANALYZE_JOB_ID}_{user_id}",
             result_ttl=3600,
         )
     return eligible

@@ -11,7 +11,9 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.clerk_auth import verify_clerk_session
 from app.core.config import settings
+from app.main import app
 from app.models import Activity, ActivityStream, StravaAccount, User
 from app.services.strava_ingestion import InMemoryStravaAdapter, set_strava_port
 
@@ -214,25 +216,55 @@ def test_enqueue_backfill_counts_and_enqueues_first_batch(db):
 
     fake_queue = MagicMock()
     with patch.object(mod, "queue", fake_queue):
-        eligible = mod.enqueue_backfill(db)
+        eligible = mod.enqueue_backfill(db, user.id)
 
     assert eligible == 1
     fake_queue.enqueue.assert_called_once()
-    _args, kwargs = fake_queue.enqueue.call_args
-    assert kwargs["job_id"] == "backfill_streams"
+    args, kwargs = fake_queue.enqueue.call_args
+    # The runner's id rides as the job arg, and the job id is per-user so two
+    # runners' chains never collide.
+    assert args[1] == str(user.id)
+    assert kwargs["job_id"] == f"backfill_streams_{user.id}"
 
 
 def test_enqueue_backfill_is_noop_when_nothing_eligible(db):
     from app.jobs import backfill_streams as mod
 
-    _seed_user_and_account(db)
+    user, _account = _seed_user_and_account(db)
 
     fake_queue = MagicMock()
     with patch.object(mod, "queue", fake_queue):
-        eligible = mod.enqueue_backfill(db)
+        eligible = mod.enqueue_backfill(db, user.id)
 
     assert eligible == 0
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backfill_is_scoped_to_the_triggering_user(db, strava_adapter):
+    """A user's backfill only touches their own eligible activities (#470)."""
+    from app.jobs.backfill_streams import backfill_streams_batch, count_eligible
+
+    user_a, _ = _seed_user_and_account(db, athlete_id=111)
+    user_b, _ = _seed_user_and_account(db, athlete_id=222)
+    a_activity = _seed_summary_activity(db, user_a, 1001)
+    b_activity = _seed_summary_activity(db, user_b, 2001)
+    _seed_streams(strava_adapter, 1001)
+    _seed_streams(strava_adapter, 2001)
+
+    result = await backfill_streams_batch(
+        db, limit=settings.BACKFILL_BATCH_SIZE, user_id=str(user_a.id)
+    )
+
+    # Only user A's activity was processed and marked.
+    assert result.processed == [1001]
+    db.refresh(a_activity)
+    db.refresh(b_activity)
+    assert a_activity.streams_backfilled_at is not None
+    assert b_activity.streams_backfilled_at is None
+    # User B still has their activity eligible; user A is drained.
+    assert count_eligible(db, user_id=str(user_b.id)) == 1
+    assert count_eligible(db, user_id=str(user_a.id)) == 0
 
 
 def test_endpoint_triggers_backfill_and_reports_eligible(client, db):
@@ -241,10 +273,15 @@ def test_endpoint_triggers_backfill_and_reports_eligible(client, db):
     user, _account = _seed_user_and_account(db)
     _seed_summary_activity(db, user, 3001)
     _seed_summary_activity(db, user, 3002)
-
-    fake_queue = MagicMock()
-    with patch.object(mod, "queue", fake_queue):
-        resp = client.post("/api/activities/backfill-streams")
+    # The endpoint scopes to the authenticated user (#470), so it must be the
+    # owner of the seeded activities.
+    app.dependency_overrides[verify_clerk_session] = lambda: user
+    try:
+        fake_queue = MagicMock()
+        with patch.object(mod, "queue", fake_queue):
+            resp = client.post("/api/activities/backfill-streams")
+    finally:
+        app.dependency_overrides.pop(verify_clerk_session, None)
 
     assert resp.status_code == 200
     assert resp.json()["eligible"] == 2
