@@ -68,6 +68,17 @@ async def _run_self_heal(*, db, user_id) -> list[int]:
     if account is None:
         return []  # no linked Strava account — nothing to heal
 
+    # Yield to the shared Strava budget (#544): the self-heal is a best-effort
+    # safety net, so when the global budget is exhausted skip this check rather than
+    # spend a scarce call — the next app-open re-triggers it, and the live webhook
+    # path (which never gates) still ingests the run. Don't re-enqueue: the
+    # per-user throttle owns re-firing.
+    from app.services.strava_ingestion.strava_budget import over_budget
+
+    if over_budget():
+        logger.info("self_heal skipped for user %s: Strava budget exhausted", user_id)
+        return []
+
     strava_port = get_strava_port()
     since = datetime.now(timezone.utc) - _LOOKBACK
     try:
