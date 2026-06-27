@@ -13,13 +13,14 @@ in the deploy environment, where the vars live, and Railway fails the deploy and
 keeps the previous one serving when it exits non-zero). Env is per-service on
 Railway, so pass the service scope:
 
-    web service Pre-Deploy Command:    python -m scripts.preflight_env_check --scope web
-    worker service Pre-Deploy Command: python -m scripts.preflight_env_check --scope worker
+    web Pre-Deploy Command:    python -m scripts.preflight_env_check --scope web --require-production
+    worker Pre-Deploy Command: python -m scripts.preflight_env_check --scope worker --require-production
 
 The ``web`` scope checks the fail-closed HTTP gate vars + the DB; the ``worker``
 scope checks only ``DATABASE_URL`` (it serves no HTTP). See
-``docs/deployment/deploy-checklist.md`` for the full wiring and the platform-
-behaviour caveat that must be verified before relying on it.
+``docs/deployment/deploy-checklist.md`` for the full wiring (verified on Railway:
+a failing Pre-Deploy Command marks the deploy FAILED and leaves the previously
+ACTIVE deployment serving).
 
 Checks the canonical per-scope list in ``app.core.required_env`` (the web set is
 the same one the boot guard ``observability.assert_production_config`` enforces),
@@ -27,17 +28,26 @@ reading the RAW deploy environment via ``os.environ`` so it needs no ``Settings`
 instantiation (and thus no live ``DATABASE_URL``) just to report what is missing.
 
 Enforcement:
-  - Enforces when ``APP_ENV=production`` (the real release-command case) OR when
-    ``PREFLIGHT_FORCE`` is truthy (a dry run, or the self-test).
+  - Enforces when ``APP_ENV=production``, when ``PREFLIGHT_FORCE`` is truthy, or
+    when ``--require-production`` is passed.
   - Otherwise it is a no-op that exits 0, mirroring the boot guard: local dev and
     the test suite run with these unset and must not fail.
 
-Exit code: 0 = all required vars present (or not enforcing); 1 = a required var is
-missing.
+``--require-production`` is the hardened release-command form: it ALWAYS enforces
+AND additionally FAILS when ``APP_ENV`` is not exactly ``production``. Without it,
+an empty/dropped ``APP_ENV`` would make the gate silently skip (observed: Railway's
+inline variable editor can save an empty value), which disarms not just this gate
+but the boot guard and the production auth path too. Because it is a CLI flag baked
+into the Pre-Deploy Command string, it cannot be dropped the way a separate env var
+can, so the release command stays armed.
+
+Exit code: 0 = all checks pass (or not enforcing); 1 = a required var is missing
+(or, under ``--require-production``, ``APP_ENV`` is not production).
 
 Usage:
     APP_ENV=production python -m scripts.preflight_env_check --scope web
-    PREFLIGHT_FORCE=1 python -m scripts.preflight_env_check   # dry run / self-test
+    python -m scripts.preflight_env_check --scope web --require-production  # release cmd
+    PREFLIGHT_FORCE=1 python -m scripts.preflight_env_check                 # dry run
 """
 
 from __future__ import annotations
@@ -55,17 +65,27 @@ def _is_truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in _TRUTHY
 
 
-def _parse_scope(argv: Sequence[str]) -> str:
-    """Read ``--scope <value>`` / ``--scope=<value>`` from argv; default ``web``."""
+def _parse_args(argv: Sequence[str]) -> Tuple[str, bool]:
+    """Read ``--scope <value>``/``--scope=<value>`` (default ``web``) and the
+    ``--require-production`` flag from argv."""
+    scope = "web"
+    require_production = False
     for i, arg in enumerate(argv):
         if arg == "--scope" and i + 1 < len(argv):
-            return argv[i + 1].strip().lower()
-        if arg.startswith("--scope="):
-            return arg.split("=", 1)[1].strip().lower()
-    return "web"
+            scope = argv[i + 1].strip().lower()
+        elif arg.startswith("--scope="):
+            scope = arg.split("=", 1)[1].strip().lower()
+        elif arg == "--require-production":
+            require_production = True
+    return scope, require_production
 
 
-def check(env: Mapping[str, str], *, scope: str = "web") -> Tuple[int, str]:
+def check(
+    env: Mapping[str, str],
+    *,
+    scope: str = "web",
+    require_production: bool = False,
+) -> Tuple[int, str]:
     """Pure check: return ``(exit_code, message)`` for the given environment + scope.
 
     Separated from ``main`` so it can be unit-tested against a synthetic env with
@@ -73,22 +93,36 @@ def check(env: Mapping[str, str], *, scope: str = "web") -> Tuple[int, str]:
     """
     app_env = str(env.get("APP_ENV", "") or "").strip().lower()
     force = _is_truthy(env.get("PREFLIGHT_FORCE"))
-    enforcing = force or app_env == "production"
+    enforcing = force or require_production or app_env == "production"
     required = required_for_scope(scope)
 
     if not enforcing:
         return 0, (
             f"preflight[{scope}]: skipped (APP_ENV={app_env or 'unset'!r}, not "
-            "production; set PREFLIGHT_FORCE=1 to check anyway)."
+            "production; pass --require-production or set PREFLIGHT_FORCE=1 to check "
+            "anyway)."
         )
 
+    problems = []
+    # --require-production catches the silent-disarm footgun: an APP_ENV that is not
+    # exactly "production" means this gate (and the boot guard, and the prod auth
+    # path) would otherwise be off. Treat it as a hard failure, not a skip.
+    if require_production and app_env != "production":
+        problems.append(
+            f"APP_ENV is not 'production' (got {app_env or 'unset'!r}) -- production "
+            "hardening (this gate, the boot guard, and the auth path) would be "
+            "disarmed; set APP_ENV=production"
+        )
     missing = missing_env(required, env)
     if missing:
+        problems.append("required env var(s) unset: " + ", ".join(missing))
+
+    if problems:
         return 1, (
-            f"preflight[{scope}] FAILED: required production env var(s) unset: "
-            + ", ".join(missing)
-            + ". A deploy missing these would fail closed (503 every route) or "
-            "crash on boot. Set them on the affected service, then redeploy. "
+            f"preflight[{scope}] FAILED: "
+            + "; ".join(problems)
+            + ". A deploy in this state would fail closed (503 every route) or run "
+            "unhardened. Fix on the affected service, then redeploy. "
             "See docs/deployment/deploy-checklist.md."
         )
     return 0, (
@@ -99,8 +133,10 @@ def check(env: Mapping[str, str], *, scope: str = "web") -> Tuple[int, str]:
 
 
 def main() -> int:
-    scope = _parse_scope(sys.argv[1:])
-    exit_code, message = check(os.environ, scope=scope)
+    scope, require_production = _parse_args(sys.argv[1:])
+    exit_code, message = check(
+        os.environ, scope=scope, require_production=require_production
+    )
     stream = sys.stderr if exit_code != 0 else sys.stdout
     print(message, file=stream)
     return exit_code

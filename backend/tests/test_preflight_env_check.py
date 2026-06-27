@@ -8,7 +8,7 @@ production (or when forced) and fail on any missing var, stay a no-op otherwise.
 """
 
 from app.core.required_env import REQUIRED_FOR_PRODUCTION_DEPLOY, missing_env
-from scripts.preflight_env_check import _parse_scope, check
+from scripts.preflight_env_check import _parse_args, check
 
 # Clearly-fake values; never real secrets (aiw-security-testing rule 6).
 _COMPLETE_PROD_ENV = {
@@ -105,7 +105,48 @@ def test_unknown_scope_falls_back_to_strict_web_set():
     assert code == 1  # treated as web -> the web gates are required
 
 
-def test_parse_scope_reads_both_flag_forms():
-    assert _parse_scope(["--scope", "worker"]) == "worker"
-    assert _parse_scope(["--scope=web"]) == "web"
-    assert _parse_scope([]) == "web"  # default
+def test_parse_args_reads_scope_and_require_production():
+    assert _parse_args(["--scope", "worker"]) == ("worker", False)
+    assert _parse_args(["--scope=web"]) == ("web", False)
+    assert _parse_args([]) == ("web", False)  # defaults
+    assert _parse_args(["--scope", "worker", "--require-production"]) == ("worker", True)
+
+
+# --- --require-production: the hardened release-command form -------------------
+
+def test_require_production_fails_when_app_env_not_production():
+    # The silent-disarm footgun: an empty/dropped APP_ENV would normally make the
+    # gate SKIP. --require-production turns that into a hard failure instead, even
+    # though every required var is present.
+    env = {
+        "DATABASE_URL": "postgresql://test/preflight",
+        "CLERK_JWKS_URL": "https://example-test.clerk.accounts.dev/.well-known/jwks.json",
+        "BASIC_AUTH_USER": "svc-test-do-not-use",
+        "BASIC_AUTH_PASSWORD": "test-secret-do-not-use-in-prod",
+    }  # note: APP_ENV unset
+    code, message = check(env, scope="web", require_production=True)
+    assert code == 1
+    assert "APP_ENV" in message
+
+
+def test_require_production_passes_when_fully_configured():
+    code, message = check(_COMPLETE_PROD_ENV, scope="web", require_production=True)
+    assert code == 0
+    assert "OK" in message
+
+
+def test_require_production_reports_app_env_and_missing_vars_together():
+    code, message = check({}, scope="web", require_production=True)
+    assert code == 1
+    assert "APP_ENV" in message
+    assert "DATABASE_URL" in message  # both problems surfaced in one message
+
+
+def test_require_production_enforces_even_without_app_env_or_force():
+    # Without the flag and with APP_ENV unset, the same env would SKIP (exit 0);
+    # the flag is what makes the release command stay armed.
+    env = {"DATABASE_URL": "postgresql://test/preflight"}  # web gates missing
+    skipped_code, skipped_msg = check(env, scope="web")
+    assert skipped_code == 0 and "skipped" in skipped_msg
+    forced_code, _ = check(env, scope="web", require_production=True)
+    assert forced_code == 1
