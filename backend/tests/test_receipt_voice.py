@@ -15,12 +15,17 @@ import pytest
 from app.models import User
 from app.models.coaching_relationship import CoachingRelationship
 from app.services.coach import receipt_voice as RV
+from app.services.coach.llm import Usage
 from app.services.coach.voice import resolve_voice
 
 
 def _client(payload):
     c = AsyncMock()
+    c.model = "claude-haiku-4-5"
     c.generate_structured = AsyncMock(return_value=payload)
+    c.generate_structured_with_usage = AsyncMock(
+        return_value=(payload, Usage(input_tokens=100, output_tokens=50))
+    )
     return c
 
 
@@ -137,7 +142,24 @@ async def test_refresh_stores_and_is_idempotent(db):
     # Idempotent: same voice -> no regeneration (client untouched).
     c2 = _client(payload)
     await RV.refresh_receipt_templates(db, rel.user_id, client=c2)
-    c2.generate_structured.assert_not_called()
+    c2.generate_structured_with_usage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_refresh_records_haiku_spend_for_the_user(db):
+    """#472: the receipt-voice generation's Haiku spend is recorded for the user."""
+    from unittest.mock import MagicMock, patch
+
+    rel = _seed_relationship(db, preset="roast", freetext="be cheeky")
+    payload = {
+        "first": ["Boom {type}! How'd it feel?"],
+        "second": ["{prev_type} then {type} — how was it?"],
+        "multi": ["{count} today: {sequence}. How'd the {type} feel?"],
+    }
+    with patch.object(RV, "budget_record", MagicMock()) as rec:
+        await RV.refresh_receipt_templates(db, rel.user_id, client=_client(payload))
+
+    rec.assert_called_once_with(rel.user_id, "claude-haiku-4-5", 100, 50)
 
 
 @pytest.mark.asyncio
@@ -149,7 +171,7 @@ async def test_refresh_default_voice_clears_to_floor(db):
     assert rel.receipt_templates is None  # floor stands
     assert rel.receipt_templates_voice_key == "default"
     assert rel.receipt_templates_generated_at is not None
-    c.generate_structured.assert_not_called()  # no LLM spent on the default voice
+    c.generate_structured_with_usage.assert_not_called()  # no LLM spent on the default voice
 
 
 def test_lazy_refresh_skips_default_and_already_generated(db, monkeypatch):

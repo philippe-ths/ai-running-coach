@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models import UserMaterial
 from app.schemas.material import DistilledMaterial
+from app.services.coach.budget import record as budget_record
 from app.services.coach.llm import AnthropicClient
 
 logger = logging.getLogger(__name__)
@@ -155,19 +156,24 @@ def _corrective_suffix(missing: list[str]) -> str:
 
 
 async def _distill_with_one_retry(
-    client: AnthropicClient, system: str, user: str, material_id
+    client: AnthropicClient, system: str, user: str, material_id, user_id=None
 ) -> DistilledMaterial:
     """Run the structured call and coerce it; on a benign missing-required-field
     omission (#291), retry ONCE with a corrective nudge. A non-`missing` coercion
     failure (oversize / rogue key / wrong type) propagates immediately so hostile or
     off-shape input still fails closed. A second failure also propagates — both land
-    in `distill_material`'s fail-visible handler."""
-    raw = await client.generate_structured(
+    in `distill_material`'s fail-visible handler.
+
+    Each Haiku call's spend is recorded on the per-user budget counter (#472),
+    including the corrective retry (so the retry fan-out is counted)."""
+    raw, usage = await client.generate_structured_with_usage(
         system=system,
         user=user,
         tool=RECORD_DISTILLED_MATERIAL_TOOL,
         max_tokens=_MAX_TOKENS,
     )
+    if user_id is not None:
+        budget_record(user_id, client.model, usage.input_tokens, usage.output_tokens)
     try:
         return DistilledMaterial.model_validate(raw)
     except ValidationError as exc:
@@ -180,12 +186,14 @@ async def _distill_with_one_retry(
         material_id,
         ", ".join(missing),
     )
-    raw = await client.generate_structured(
+    raw, usage = await client.generate_structured_with_usage(
         system=system,
         user=user + _corrective_suffix(missing),
         tool=RECORD_DISTILLED_MATERIAL_TOOL,
         max_tokens=_MAX_TOKENS,
     )
+    if user_id is not None:
+        budget_record(user_id, client.model, usage.input_tokens, usage.output_tokens)
     return DistilledMaterial.model_validate(raw)
 
 
@@ -246,7 +254,9 @@ async def distill_material(
         # Strict coercion (containment point 2): extra keys forbidden, fields bounded.
         # A benign missing-required-field omission gets ONE corrective retry (#291);
         # any other coercion failure fails closed without retry.
-        record = await _distill_with_one_retry(client, system, user, material_id)
+        record = await _distill_with_one_retry(
+            client, system, user, material_id, material.user_id
+        )
     except (ValidationError, ValueError, TypeError) as exc:
         logger.warning(
             "distillation produced an unusable record for %s: %s", material_id, exc

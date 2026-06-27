@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import RunnerBaseline
+from app.services.coach.budget import record as budget_record
 from app.services.coach.belief_store import retrieve_beliefs
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.narrative_store import upsert_narrative
@@ -184,12 +185,17 @@ async def consolidate_narrative(
 
     system, user = render_consolidation_messages(inputs)
     try:
-        narrative = (await client.generate_text(
+        text, usage = await client.generate_text_with_usage(
             system=system, user=user, max_tokens=_MAX_NARRATIVE_TOKENS
-        )).strip()
+        )
+        narrative = text.strip()
     except Exception:  # noqa: BLE001 — decoupled background work, never raises out
         logger.exception("narrative generation failed for user %s", user_id)
         return None
+
+    # Record the Haiku spend on the per-user budget counter (#472). Best-effort;
+    # record() is a no-op when budgets are unconfigured.
+    budget_record(user_id, client.model, usage.input_tokens, usage.output_tokens)
 
     if not narrative:
         return None

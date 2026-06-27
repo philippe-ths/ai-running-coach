@@ -26,6 +26,7 @@ from app.models.coaching_context import CoachingContext
 from app.schemas.coach import CoachReportContent
 from app.schemas.coach_context import NarrativeContext
 from app.services.coach import consolidation as consol
+from app.services.coach.llm import Usage
 from app.services.coach.consolidation import (
     CONSOLIDATION_MODEL_ID,
     assemble_consolidation_inputs,
@@ -57,12 +58,17 @@ class _FakeTextClient:
         self._text = text
         self._raises = raises
         self.calls = []
+        self.model = "claude-haiku-4-5"
 
     async def generate_text(self, system, user, max_tokens=512):
         self.calls.append({"system": system, "user": user, "max_tokens": max_tokens})
         if self._raises is not None:
             raise self._raises
         return self._text
+
+    async def generate_text_with_usage(self, *, system, user, max_tokens=512):
+        text = await self.generate_text(system, user, max_tokens=max_tokens)
+        return text, Usage(input_tokens=100, output_tokens=50)
 
 
 def _seed_user(db) -> User:
@@ -247,6 +253,20 @@ async def test_consolidate_writes_narrative_from_fake_client(db):
     assert row.model_id == CONSOLIDATION_MODEL_ID
     assert row.source_report_count == 1
     assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_consolidate_records_haiku_spend_for_the_user(db):
+    """#472: the consolidation job's Haiku spend is recorded on the budget counter."""
+    from unittest.mock import MagicMock, patch
+
+    user = _seed_user(db)
+    _seed_activity_with_report(db, user, 10)
+    client = _FakeTextClient(text="A steady aerobic-base runner.")
+    with patch.object(consol, "budget_record", MagicMock()) as rec:
+        await consolidate_narrative(db, user.id, client=client)
+
+    rec.assert_called_once_with(user.id, "claude-haiku-4-5", 100, 50)
 
 
 @pytest.mark.asyncio

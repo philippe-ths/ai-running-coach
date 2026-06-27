@@ -16,6 +16,7 @@ import pytest
 
 from app.models import User, UserMaterial
 from app.services.coach import material_distiller as md
+from app.services.coach.llm import Usage
 
 
 class FakeClient:
@@ -34,6 +35,7 @@ class FakeClient:
         else:
             self._queue = [result]
         self.calls = []
+        self.model = "claude-haiku-4-5"
 
     async def generate_structured(self, *, system, user, tool, max_tokens=1024):
         self.calls.append(
@@ -43,6 +45,12 @@ class FakeClient:
         if isinstance(item, Exception):
             raise item
         return item
+
+    async def generate_structured_with_usage(self, *, system, user, tool, max_tokens=1024):
+        result = await self.generate_structured(
+            system=system, user=user, tool=tool, max_tokens=max_tokens
+        )
+        return result, Usage(input_tokens=100, output_tokens=50)
 
 
 def _make_material(db, **overrides):
@@ -87,6 +95,19 @@ async def test_distill_happy_path_marks_active_with_record(db):
     assert material.distill_model == md.DISTILLER_MODEL_ID
     assert material.distilled_at is not None
     assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_distill_records_haiku_spend_for_the_user(db):
+    """#472: the distiller's Haiku spend is recorded on the per-user budget counter."""
+    from unittest.mock import MagicMock, patch
+
+    material = _make_material(db)
+    client = FakeClient(result=dict(_VALID))
+    with patch.object(md, "budget_record", MagicMock()) as rec:
+        await md.distill_material(db, material.id, client=client)
+
+    rec.assert_called_once_with(material.user_id, "claude-haiku-4-5", 100, 50)
 
 
 @pytest.mark.asyncio

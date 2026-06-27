@@ -54,11 +54,18 @@ EXFILTRATION = (
 class _FakeClient:
     """Injected stand-in for the distiller's LLM call (test setup)."""
 
+    model = "claude-haiku-4-5"
+
     def __init__(self, result):
         self._result = result
 
     async def generate_structured(self, *, system, user, tool, max_tokens=1024):
         return self._result
+
+    async def generate_structured_with_usage(self, *, system, user, tool, max_tokens=1024):
+        from app.services.coach.llm import Usage
+
+        return self._result, Usage(input_tokens=100, output_tokens=50)
 
 
 def _upload(client, content: bytes, *, kind="plan", title="t"):

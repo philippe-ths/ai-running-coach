@@ -32,6 +32,22 @@ _RETRY_BACKOFF_SECONDS = 1.0
 
 
 @dataclass
+class Usage:
+    """Token usage for the per-user budget gate (#472). 0 when none was returned."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+def _usage_from_response(response: Any) -> Usage:
+    """Extract token usage from an Anthropic response, defaulting to 0/0."""
+    usage = getattr(response, "usage", None)
+    return Usage(
+        input_tokens=getattr(usage, "input_tokens", 0) or 0,
+        output_tokens=getattr(usage, "output_tokens", 0) or 0,
+    )
+
+
+@dataclass
 class MessageResult:
     """The raw output of the A3 prose-message call: the response content blocks
     (text + the single tool_use tail, in token order) and the stop_reason. The
@@ -64,6 +80,15 @@ class AnthropicClient:
     async def generate_json(
         self, system: str, user: str, max_tokens: int = 1024
     ) -> str:
+        text, _usage = await self.generate_json_with_usage(
+            system=system, user=user, max_tokens=max_tokens
+        )
+        return text
+
+    async def generate_json_with_usage(
+        self, *, system: str, user: str, max_tokens: int = 1024
+    ) -> tuple[str, Usage]:
+        """`generate_json` that also returns token usage for the budget gate (#472)."""
         import anthropic
 
         max_attempts = 2  # initial + one retry
@@ -78,7 +103,7 @@ class AnthropicClient:
                     messages=[{"role": "user", "content": user}],
                     timeout=_TIMEOUT_SECONDS,
                 )
-                return response.content[0].text
+                return response.content[0].text, _usage_from_response(response)
             except (anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
                 last_exc = exc
                 logger.warning(
@@ -117,6 +142,14 @@ class AnthropicClient:
         """
         return await self.generate_json(system=system, user=user, max_tokens=max_tokens)
 
+    async def generate_text_with_usage(
+        self, *, system: str, user: str, max_tokens: int = 512
+    ) -> tuple[str, Usage]:
+        """`generate_text` that also returns token usage for the budget gate (#472)."""
+        return await self.generate_json_with_usage(
+            system=system, user=user, max_tokens=max_tokens
+        )
+
     async def generate_structured(
         self,
         *,
@@ -126,7 +159,21 @@ class AnthropicClient:
         max_tokens: int = 1024,
     ) -> Dict[str, Any]:
         """A structured-output-only call: force the model to emit exactly the given
-        tool's input and return it as a dict.
+        tool's input and return it as a dict. See `generate_structured_with_usage`."""
+        result, _usage = await self.generate_structured_with_usage(
+            system=system, user=user, tool=tool, max_tokens=max_tokens
+        )
+        return result
+
+    async def generate_structured_with_usage(
+        self,
+        *,
+        system: str,
+        user: str,
+        tool: Dict[str, Any],
+        max_tokens: int = 1024,
+    ) -> tuple[Dict[str, Any], Usage]:
+        """A structured-output-only call that also returns token usage (#472).
 
         The containment lever for untrusted input (P4, #285): `tool_choice` is FORCED
         to the named tool and there is NO extended thinking, so the model has no
@@ -153,6 +200,7 @@ class AnthropicClient:
                     tool_choice={"type": "tool", "name": tool_name},
                     timeout=_TIMEOUT_SECONDS,
                 )
+                usage = _usage_from_response(response)
                 for block in response.content:
                     btype = (
                         block.get("type") if isinstance(block, dict)
@@ -167,7 +215,8 @@ class AnthropicClient:
                             block.get("input") if isinstance(block, dict)
                             else getattr(block, "input", None)
                         )
-                        return dict(tool_input) if isinstance(tool_input, dict) else {}
+                        result = dict(tool_input) if isinstance(tool_input, dict) else {}
+                        return result, usage
                 raise ValueError(f"no {tool_name} tool_use block in response")
             except (anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
                 last_exc = exc
