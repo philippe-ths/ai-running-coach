@@ -35,8 +35,28 @@ REQUIRED_PRODUCTION_ENV = (
 # missing it is blocked before cutover rather than crash-looping on boot.
 REQUIRED_BASE_ENV = ("DATABASE_URL",)
 
-# The full set the pre-deploy preflight validates for a production release.
+# The full set the pre-deploy preflight validates for a production WEB release.
 REQUIRED_FOR_PRODUCTION_DEPLOY = REQUIRED_BASE_ENV + REQUIRED_PRODUCTION_ENV
+
+# Per-service required sets for the pre-deploy preflight, since env is per-service
+# on Railway. The ``web`` process needs the full set (the fail-closed HTTP gates +
+# the DB); the ``worker`` serves no HTTP, so it needs only the base (``DATABASE_URL``).
+# Running the web set on the worker would wrongly require the Clerk/basic-auth gates
+# there. ``web`` is the strict default for any unknown scope, so a typo never
+# under-checks.
+REQUIRED_BY_SCOPE = {
+    "web": REQUIRED_FOR_PRODUCTION_DEPLOY,
+    "worker": REQUIRED_BASE_ENV,
+}
+
+
+def required_for_scope(scope: str) -> tuple[str, ...]:
+    """The required env names for a service ``scope`` (web | worker).
+
+    An unknown scope falls back to the strict ``web`` set, so a mistyped flag fails
+    safe (over-checks) rather than silently passing an under-checked deploy.
+    """
+    return REQUIRED_BY_SCOPE.get(scope, REQUIRED_FOR_PRODUCTION_DEPLOY)
 
 
 def missing_env(names: Iterable[str], env: Mapping[str, str]) -> List[str]:
