@@ -46,8 +46,9 @@ class InMemoryStravaAdapter:
 
     # Port surface -----------------------------------------------------------
 
-    def get_auth_url(self) -> str:
-        return "https://example.test/strava/authorize"
+    def get_auth_url(self, state: str | None = None) -> str:
+        base = "https://example.test/strava/authorize"
+        return f"{base}?state={state}" if state else base
 
     async def exchange_code(self, code: str) -> Tokens:
         self.exchange_calls.append(code)
