@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # instead. Both must be set for the channel to activate.
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+    # The bot's public @username (without the leading @), used to build the
+    # `https://t.me/<username>?start=<token>` deep link a runner taps to bind
+    # their chat to their account (#477). Empty disables the link affordance (the
+    # endpoint reports unconfigured); it is the bot's username, not a secret.
+    TELEGRAM_BOT_USERNAME: str = ""
     # Secret for authenticating inbound Telegram callback_query webhooks (I1b,
     # #220). Set as Telegram's per-webhook `secret_token` at registration and
     # echoed back in the `X-Telegram-Bot-Api-Secret-Token` header on every

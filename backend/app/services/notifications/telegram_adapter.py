@@ -147,15 +147,17 @@ class TelegramNotifier:
             )
 
     def edit_message_reply_markup(
-        self, *, message_id: int, reply_markup: dict
+        self, *, message_id: int, reply_markup: dict, chat_id: str | int | None = None
     ) -> None:
         """Replace an existing message's inline keyboard (the #230 tap mark).
 
-        Same error contract as answer_callback: best-effort by the caller, but
-        raises on transport/API errors so failures land in logs."""
+        `chat_id` targets the chat the tap came from (#477, multi-user); it
+        defaults to the globally-configured chat for the single-owner back-compat
+        path. Same error contract as answer_callback: best-effort by the caller,
+        but raises on transport/API errors so failures land in logs."""
         url = f"{self.api_base}/bot{self.bot_token}/editMessageReplyMarkup"
         body = {
-            "chat_id": self.chat_id,
+            "chat_id": chat_id if chat_id is not None else self.chat_id,
             "message_id": message_id,
             "reply_markup": reply_markup,
         }

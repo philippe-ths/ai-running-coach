@@ -61,6 +61,51 @@ def get_coach_feature_flags(
     return settings.coach_ui_feature_flags
 
 
+@router.get("/coach/telegram/link-status")
+def get_telegram_link_status(
+    user: User = Depends(require_current_user),
+) -> dict:
+    """Whether the runner has bound a Telegram chat for notifications (#477).
+
+    `configured` reflects whether the deep-link affordance can be offered at all
+    (the bot username must be set); `linked` is this runner's bind state.
+    """
+    return {
+        "configured": bool(settings.TELEGRAM_BOT_USERNAME),
+        "linked": user.telegram_chat_id is not None,
+    }
+
+
+@router.post("/coach/telegram/link-token")
+def create_telegram_link(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+) -> dict:
+    """Mint a one-time deep link the runner taps to bind their Telegram chat (#477).
+
+    The token carries this signed-in user through the bot's `/start`, which has no
+    session. 503 when the bot username is unconfigured (mirrors the fail-closed
+    notification posture)."""
+    from app.services.notifications import telegram_link_token
+
+    if not settings.TELEGRAM_BOT_USERNAME:
+        raise HTTPException(status_code=503, detail="Telegram bot is not configured")
+    token = telegram_link_token.mint(user.id)
+    deep_link = f"https://t.me/{settings.TELEGRAM_BOT_USERNAME}?start={token}"
+    return {"deep_link": deep_link, "linked": user.telegram_chat_id is not None}
+
+
+@router.delete("/coach/telegram/link")
+def delete_telegram_link(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+) -> dict:
+    """Unbind the runner's Telegram chat (#477). Idempotent."""
+    user.telegram_chat_id = None
+    db.commit()
+    return {"linked": False}
+
+
 def _require_owned_activity(db: Session, activity_id: UUID, user: User) -> Activity:
     """404 unless the activity belongs to the authenticated user (P2.1)."""
     activity = activity_queries.get_owned_activity(db, activity_id, user.id)
