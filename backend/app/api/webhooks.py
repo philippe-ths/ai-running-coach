@@ -21,6 +21,7 @@ from app.services.blocks import remove_activity_from_block
 from app.services.checkins import write_checkin
 from app.services.notifications import get_notifier
 from app.services.notifications import telegram_link_token
+from app.services.notifications.port import Notification
 from app.services.notifications.callback_token import decode as decode_callback_token
 
 logger = logging.getLogger(__name__)
@@ -311,7 +312,41 @@ def _handle_start_link(db: Session, message: _TgMessage) -> dict:
     user.telegram_chat_id = chat_id
     db.commit()
     logger.info("telegram_chat_linked", extra={"user_id": str(user.id)})
+    # Confirm the link in-chat so the runner sees the deep link worked (#533).
+    # Fires only here, on a genuinely successful bind: a one-time token is
+    # consumed above, so a repeat/expired `/start` never reaches this point and
+    # cannot spam. Best-effort and AFTER the commit, so a send failure leaves the
+    # bind intact and the webhook still returns 200.
+    _send_link_confirmation(chat_id)
     return {"status": "processed", "action": "chat_linked"}
+
+
+_LINK_CONFIRMATION_TEXT = (
+    "I'll send your coach messages and check-in prompts here from now on."
+)
+
+
+def _send_link_confirmation(chat_id: str) -> None:
+    """Reply once in the just-bound chat that the link succeeded (#533).
+
+    Best-effort: only the Telegram notifier can send to a chat; any other active
+    channel (email, no-op, in-memory) is skipped. Never raises into the webhook
+    path, so a transport failure never turns the committed bind into a non-200."""
+    notifier = get_notifier()
+    send = getattr(notifier, "send", None)
+    if send is None:
+        return
+    try:
+        send(
+            Notification(
+                to=chat_id,
+                subject="Linked to Running Coach",
+                html="",
+                text=_LINK_CONFIRMATION_TEXT,
+            )
+        )
+    except Exception:
+        logger.exception("failed to send telegram link confirmation to %s", chat_id)
 
 
 def _answer_callback(callback_query_id: str, *, text: str = "") -> None:
