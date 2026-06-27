@@ -10,7 +10,9 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+from app.core.clerk_auth import verify_clerk_session
 from app.core.config import settings
+from app.main import app
 from app.models import Activity, ActivityStream, DerivedMetric, StravaAccount, User
 
 
@@ -224,7 +226,8 @@ def test_job_schedules_next_batch_when_cursor_remains():
     ), patch.object(mod, "_schedule_next_batch") as sched:
         mod.reanalyze_history_job()
 
-    sched.assert_called_once_with(1)
+    # cursor advances to 1; user_id is None here (the unscoped global call).
+    sched.assert_called_once_with(1, None)
 
 
 def test_job_does_not_reschedule_when_drained():
@@ -247,25 +250,53 @@ def test_enqueue_reanalyze_counts_and_enqueues_first_batch(db):
 
     fake_queue = MagicMock()
     with patch.object(mod, "queue", fake_queue):
-        eligible = mod.enqueue_reanalyze(db)
+        eligible = mod.enqueue_reanalyze(db, user.id)
 
     assert eligible == 1
     fake_queue.enqueue.assert_called_once()
-    _args, kwargs = fake_queue.enqueue.call_args
-    assert kwargs["job_id"] == "reanalyze_history"
+    args, kwargs = fake_queue.enqueue.call_args
+    # Args are (cursor=None, user_id); the job id is per-user.
+    assert args[1] is None
+    assert args[2] == str(user.id)
+    assert kwargs["job_id"] == f"reanalyze_history_{user.id}"
 
 
 def test_enqueue_reanalyze_is_noop_when_nothing_eligible(db):
     from app.jobs import reanalyze_history as mod
 
-    _seed_user(db)  # no activities with streams
+    user = _seed_user(db)  # no activities with streams
 
     fake_queue = MagicMock()
     with patch.object(mod, "queue", fake_queue):
-        eligible = mod.enqueue_reanalyze(db)
+        eligible = mod.enqueue_reanalyze(db, user.id)
 
     assert eligible == 0
     fake_queue.enqueue.assert_not_called()
+
+
+def test_reanalyze_is_scoped_to_the_triggering_user(db):
+    """A user's re-analysis only touches their own activities (#470)."""
+    from app.jobs.reanalyze_history import count_eligible, reanalyze_history_batch
+
+    user_a = _seed_user(db)
+    user_b = User(email=f"u-{uuid4()}@example.com")
+    db.add(user_b)
+    db.commit()
+    a_activity = _seed_activity(db, user_a, 1001)
+    b_activity = _seed_activity(db, user_b, 2001)
+
+    result = reanalyze_history_batch(
+        db, limit=settings.REANALYZE_BATCH_SIZE, user_id=str(user_a.id)
+    )
+
+    # Only user A's activity was re-analyzed; B's never gained a DerivedMetric.
+    assert result.processed == [1001]
+    assert _has_metric(db, a_activity)
+    assert not _has_metric(db, b_activity)
+    # Each user's eligible count sees only their own activity (re-analysis is
+    # idempotent, so eligibility -- has-streams -- is unchanged by the run).
+    assert count_eligible(db, user_id=str(user_a.id)) == 1
+    assert count_eligible(db, user_id=str(user_b.id)) == 1
 
 
 def test_endpoint_triggers_reanalyze_and_reports_eligible(client, db):
@@ -274,10 +305,14 @@ def test_endpoint_triggers_reanalyze_and_reports_eligible(client, db):
     user = _seed_user(db)
     _seed_activity(db, user, 3001)
     _seed_activity(db, user, 3002)
-
-    fake_queue = MagicMock()
-    with patch.object(mod, "queue", fake_queue):
-        resp = client.post("/api/activities/reanalyze")
+    # The endpoint scopes to the authenticated user (#470).
+    app.dependency_overrides[verify_clerk_session] = lambda: user
+    try:
+        fake_queue = MagicMock()
+        with patch.object(mod, "queue", fake_queue):
+            resp = client.post("/api/activities/reanalyze")
+    finally:
+        app.dependency_overrides.pop(verify_clerk_session, None)
 
     assert resp.status_code == 200
     assert resp.json()["eligible"] == 2
