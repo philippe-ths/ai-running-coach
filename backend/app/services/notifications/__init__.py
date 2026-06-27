@@ -40,25 +40,64 @@ def _recipient_for_channel(channel: str) -> str:
     return settings.NOTIFY_TO
 
 
+def _resolve_to(channel: Optional[str], recipient: Optional[str]) -> Optional[str]:
+    """The address to deliver to, or None to SUPPRESS the notification (#542).
+
+    A per-user `recipient` (from `resolve_recipient`) always wins. With no
+    recipient and the Telegram channel: in MULTI-USER mode (`OWNER_EMAIL` set) this
+    is a non-owner unbound runner that `resolve_recipient` deliberately suppressed,
+    so we return None and never fall back to the global owner chat — defense in
+    depth, so the builder refuses to leak to the owner's chat even if a caller
+    bypassed `resolve_recipient`. In SINGLE-USER mode (`OWNER_EMAIL` unset) there is
+    no owner concept, so the original global fallback is preserved. Email has no
+    per-user routing yet (ADR 0023), so it keeps the global NOTIFY_TO.
+    """
+    if recipient:
+        return recipient
+    if channel == "telegram":
+        from app.core.config import settings
+
+        if (settings.OWNER_EMAIL or "").strip():
+            return None  # multi-user: suppress, never the global owner chat
+        return _recipient_for_channel(channel)  # single-user back-compat
+    return _recipient_for_channel(channel)  # email: global NOTIFY_TO
+
+
 def resolve_recipient(user) -> Optional[str]:
-    """The per-user recipient address for the active channel (P2.4, #120).
+    """The per-user recipient address for the active channel (P2.4, #120, #542).
 
     Telegram routes to the user's bound chat (`telegram_chat_id`) — the decided
-    per-user channel (ADR 0023). Returns None when the user has no bound chat,
-    which the composer turns into the configured global recipient (single-user
-    back-compat) and, if that is also unset, into no notification. Tolerant of a
-    None/partial user so a missing relationship never breaks the pipeline.
+    per-user channel (ADR 0023). When the user has NOT bound a chat, the global
+    `TELEGRAM_CHAT_ID` is used ONLY for the deployment owner (`OWNER_EMAIL`); for a
+    non-owner the resolver returns None, which the composer turns into NO
+    notification rather than delivering to the owner's chat. This closes the
+    multi-user leak where any unbound runner's coach messages were routed to the
+    owner's Telegram (#542). When `OWNER_EMAIL` is unset the deployment is
+    single-user (no multi-user owner concept), so the original global fallback is
+    preserved for everyone. Tolerant of a None/partial user so a missing
+    relationship never breaks the pipeline.
 
     Email is intentionally NOT per-user-routed here: ADR 0023 defers the per-user
     email-API channel, so the email path stays on the global NOTIFY_TO (its
     existing behavior). Routing it to `user.email` would silently change where the
     single-user deployment's email lands.
     """
-    if user is None:
+    if _active_channel() != "telegram":
         return None
-    if _active_channel() == "telegram":
-        return getattr(user, "telegram_chat_id", None)
-    return None
+    from app.core.config import settings
+
+    bound = getattr(user, "telegram_chat_id", None) if user is not None else None
+    if bound:
+        return bound
+    # Unbound: fall back to the global owner chat only for the owner, so a
+    # non-owner who hasn't linked Telegram is never delivered to the owner's chat.
+    owner_email = (settings.OWNER_EMAIL or "").strip().lower()
+    if not owner_email:
+        return str(settings.TELEGRAM_CHAT_ID)  # single-user back-compat
+    user_email = (getattr(user, "email", "") or "").strip().lower()
+    if user_email and user_email == owner_email:
+        return str(settings.TELEGRAM_CHAT_ID)
+    return None  # non-owner, unbound -> suppress (no leak to the owner chat)
 
 
 def _active_channel() -> Optional[str]:
@@ -140,12 +179,19 @@ def build_coach_notification(
     cannot be sniffed from the report shape — it is passed explicitly by the job.
 
     `recipient` (P2.4, #120) is the activity owner's per-user address on the
-    active channel (from `resolve_recipient`). When None it falls back to the
-    configured global recipient, so the single-user path is byte-identical.
+    active channel (from `resolve_recipient`). Returns None (no notification) when
+    `_resolve_to` suppresses — a non-owner unbound Telegram runner in multi-user
+    mode, never delivered to the owner's chat (#542). See `_resolve_to` for the
+    single-user / email fallbacks.
     """
     channel = _active_channel()
     renderer = _renderer_for_channel(channel)
     if renderer is None:
+        return None
+    to = _resolve_to(channel, recipient)
+    if to is None:
+        # Telegram, non-owner runner with no linked chat: suppress rather than
+        # deliver to the global owner chat (#542).
         return None
     return renderer.render_coach_report(
         report=report,
@@ -153,7 +199,7 @@ def build_coach_notification(
         distance_m=distance_m,
         app_base_url=app_base_url,
         stage=stage,
-        to=recipient or _recipient_for_channel(channel),
+        to=to,
     )
 
 
@@ -176,11 +222,18 @@ def build_receipt_notification(
     tap). A thin dispatcher (#333): channel selection here, rendering in the
     adapter.
 
-    `recipient` (P2.4, #120) is the activity owner's per-user address; when None it
-    falls back to the configured global recipient (single-user back-compat)."""
+    `recipient` (P2.4, #120) is the activity owner's per-user address. Returns None
+    (no notification) when `_resolve_to` suppresses — a non-owner unbound Telegram
+    runner in multi-user mode, never delivered to the owner's chat (#542). See
+    `_resolve_to` for the single-user / email fallbacks."""
     channel = _active_channel()
     renderer = _renderer_for_channel(channel)
     if renderer is None:
+        return None
+    to = _resolve_to(channel, recipient)
+    if to is None:
+        # Telegram, non-owner runner with no linked chat: suppress rather than
+        # deliver to the global owner chat (#542).
         return None
     return renderer.render_receipt(
         receipt_text=receipt_text,
@@ -188,7 +241,7 @@ def build_receipt_notification(
         activity_id=activity_id,
         distance_m=distance_m,
         app_base_url=app_base_url,
-        to=recipient or _recipient_for_channel(channel),
+        to=to,
     )
 
 
