@@ -273,7 +273,9 @@ def assert_discounted_inflated_hr(content: CoachReportContent, pack: CoachContex
     # written before the source gate) has nothing to discount, so the coach must
     # not be penalised for declining to. The source stage now abstains in this
     # case, so this mainly guards historical packs and keeps eval and stage aligned.
-    drift_pct = signal.get("hr_drift_pct") if isinstance(signal, dict) else None
+    # Read the drift from its sole home (`metrics.hr_drift`): the one-fact-one-place
+    # fold drops the duplicate `discount_signals.hr_drift_pct` from the serialized pack.
+    drift_pct = pack.metrics.hr_drift
     if drift_pct is not None and drift_pct <= ELEVATED_DRIFT_THRESHOLD_PCT:
         return AssertionResult(
             "discounted_inflated_hr", AssertionStatus.NOT_APPLICABLE,
