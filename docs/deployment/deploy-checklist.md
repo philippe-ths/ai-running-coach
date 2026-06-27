@@ -59,15 +59,39 @@ config:
   that on Railway it means an outage, not a blocked promotion. See
   `assert_production_config`'s scope note.
 
+## Build-time required-env preflight (#551)
+
+`scripts/preflight_env_check.py` (`make preflight-env-check`) is the release-command
+gate: run in the deploy environment it exits non-zero when a required production env
+var is unset, *before* the process boots. The required list is the canonical one in
+`app/core/required_env.py` — the same `CLERK_JWKS_URL` / `BASIC_AUTH_USER` /
+`BASIC_AUTH_PASSWORD` the boot guard `assert_production_config` enforces, plus
+`DATABASE_URL` — so a release missing one fails the deploy instead of crash-looping
+on boot (the #546 failure mode). It is a no-op outside production unless
+`PREFLIGHT_FORCE=1`.
+
+### Why it is not a CI gate
+
+CI in GitHub cannot block the Railway deploy (Railway auto-deploys on the merge
+commit, independent of GitHub Actions) and cannot see Railway's per-service env
+anyway. The preflight only has authority where the env actually lives: as the
+**Railway release command**. The script's logic is covered by
+`backend/tests/test_preflight_env_check.py` in the normal `backend-test` run, so the
+gate itself can't silently rot; the post-deploy verification job (#550) remains the
+automated after-the-fact catch.
+
+### Owner actions to activate (platform config, not in-repo)
+
+1. **Verify the platform assumption first.** Wire `make preflight-env-check` (or
+   `python -m scripts.preflight_env_check`) as the Railway release command on the
+   `web` and `worker` services, then deliberately unset one required var on a
+   throwaway test service and confirm Railway **keeps the previous deploy serving**
+   when the release command exits non-zero — rather than removing it the way it did
+   for the boot crash in #546. Only rely on this gate once that holds.
+2. Once verified, leave it as the release command ahead of `alembic upgrade head`
+   and the app start, so a misconfigured release is blocked at deploy time.
+
 ## Deferred / open
 
-- **A build-time required-env preflight** (a release command that fails the
-  *deploy* before cutover, so the old deploy keeps serving) is the stronger
-  enforcement #551 floats, but it is deferred: it depends on Railway actually
-  preserving the previous deploy when a *release command* fails (distinct from a
-  boot crash), which is the same "platform keeps the old deploy" assumption #546
-  proved false for boot crashes and must be verified on the platform before we
-  rely on it. Wiring it (and the Railway release-command config) is tracked on
-  #551.
 - **A real staging environment** (its own backend + DB, not sharing prod) is the
   longer-term fix for the no-isolation gap and is out of scope here.
