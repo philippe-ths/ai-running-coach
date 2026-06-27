@@ -6,6 +6,7 @@ from app.core.auth import BasicAuthMiddleware
 from app.core.clerk_auth import verify_clerk_session
 from app.core.config import settings
 from app.core.observability import (
+    assert_budget_cap_armed,
     assert_production_config,
     init_logging,
     init_sentry,
@@ -19,6 +20,9 @@ warn_if_coach_prompt_inert()
 # keeps the last healthy deploy serving instead of promoting one that 503s every
 # route (the Phase 2 deploy-outran-config outage). No-op outside production.
 assert_production_config()
+# Crash the boot if the LLM cost cap is silently disabled in production (#543):
+# the web process makes chat LLM calls, so it must not run uncapped either.
+assert_budget_cap_armed()
 
 app = FastAPI(
     title="Running Coach",

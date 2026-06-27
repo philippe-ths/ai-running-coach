@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     LLM_BUDGET_USER_MONTHLY_USD: float = 0.0
     LLM_BUDGET_GLOBAL_DAILY_USD: float = 0.0
     LLM_BUDGET_GLOBAL_MONTHLY_USD: float = 0.0
+    # The all-zero defaults mean NO cost cap. That is fine for local dev, but in
+    # production a silently-uncapped deployment lets one user drain the shared
+    # Anthropic budget (#543). `assert_budget_cap_armed` refuses to boot in
+    # production unless at least one window above is set OR this opt-out is true,
+    # so "no cap in prod" is a conscious, auditable choice rather than a default.
+    LLM_BUDGET_DISABLED: bool = False
     # Minimum seconds between on-demand coach-report regenerations for one
     # activity (#122 / going-live landmine 1). The regenerate endpoint is the
     # single most exposed cost lever (it enqueues a full two-stage generation);

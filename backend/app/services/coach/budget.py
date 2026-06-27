@@ -210,6 +210,26 @@ def new_in_memory_gate() -> BudgetGate:
     return BudgetGate(_InMemoryBackend())
 
 
+def cap_is_armed() -> bool:
+    """True when at least one budget window has a positive ceiling.
+
+    A window is enabled when its ceiling is > 0 (mirrors `over_budget`'s
+    per-window check). All-zero ceilings mean the cost cap is OFF -- no window
+    can ever trip, so generation is never degraded to the fallback on spend. The
+    production boot guard (`assert_budget_cap_armed`) uses this to refuse a
+    silently-uncapped prod deployment (#543).
+    """
+    return any(
+        ceiling > 0
+        for ceiling in (
+            settings.LLM_BUDGET_USER_DAILY_USD,
+            settings.LLM_BUDGET_USER_MONTHLY_USD,
+            settings.LLM_BUDGET_GLOBAL_DAILY_USD,
+            settings.LLM_BUDGET_GLOBAL_MONTHLY_USD,
+        )
+    )
+
+
 def over_budget(user_id) -> bool:
     return get_gate().over_budget(user_id)
 
