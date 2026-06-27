@@ -248,8 +248,16 @@ async function main() {
   // an empty publishable key makes the middleware/layout pass-through (CI has no
   // .env.local, but a dev machine does, and Next would otherwise inline its key
   // into the build and gate every route behind a sign-in redirect).
+  //
+  // BACKEND_URL must point at the mock too: server components resolve their base
+  // URL as BACKEND_URL || NEXT_PUBLIC_API_BASE_URL || 127.0.0.1:8000 (lib/api.ts),
+  // and a dev machine's .env.local sets BACKEND_URL=http://localhost:8000. Without
+  // overriding it, server-side fetches escape to the real, Clerk-gated backend
+  // (401) instead of the mock, 500-ing /activity/42 (#538). CI has no .env.local
+  // so this is invisible there, but it breaks local `make smoke`.
   const smokeEnv = {
     ...process.env,
+    BACKEND_URL: MOCK_API_BASE_URL,
     NEXT_PUBLIC_API_BASE_URL: MOCK_API_BASE_URL,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "",
     CLERK_SECRET_KEY: "",
