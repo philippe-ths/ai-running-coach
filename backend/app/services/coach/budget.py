@@ -100,6 +100,43 @@ _DAILY_TTL = 60 * 60 * 36          # 36h
 _MONTHLY_TTL = 60 * 60 * 24 * 40   # 40d
 
 
+def _any_window_explicitly_armed() -> bool:
+    """True when at least one budget window has an explicit positive ceiling.
+
+    A window is enabled when its ceiling is > 0 (mirrors `over_budget`'s
+    per-window check). "Explicit" excludes the production safety backstop below;
+    `cap_is_armed` adds that.
+    """
+    return any(
+        ceiling > 0
+        for ceiling in (
+            settings.LLM_BUDGET_USER_DAILY_USD,
+            settings.LLM_BUDGET_USER_MONTHLY_USD,
+            settings.LLM_BUDGET_GLOBAL_DAILY_USD,
+            settings.LLM_BUDGET_GLOBAL_MONTHLY_USD,
+        )
+    )
+
+
+def production_default_ceiling() -> float:
+    """The global-daily ceiling the production safety backstop applies, else 0 (#549).
+
+    In production, when no window is explicitly armed and the cap is not explicitly
+    disabled, prod must not run silently uncapped — but crashing the boot to enforce
+    that took prod fully down on Railway (#549, the #543 guard). Instead the gate
+    falls back to a generous global-daily ceiling here, so an unconfigured prod is
+    capped, not crashed. Returns 0 (backstop inactive) outside production, when an
+    explicit window is set, or when the cap is deliberately disabled.
+    """
+    if settings.APP_ENV != "production":
+        return 0.0
+    if settings.LLM_BUDGET_DISABLED:
+        return 0.0
+    if _any_window_explicitly_armed():
+        return 0.0
+    return settings.LLM_BUDGET_PROD_DEFAULT_GLOBAL_DAILY_USD
+
+
 class BudgetGate:
     """The spend gate. Reads ceilings from settings at call time so a config flip
     (or a test monkeypatch) takes effect without rebuilding the gate."""
@@ -120,7 +157,10 @@ class BudgetGate:
 
     @property
     def _global_daily(self) -> float:
-        return settings.LLM_BUDGET_GLOBAL_DAILY_USD
+        # An explicit ceiling always wins; otherwise the production safety
+        # backstop (#549) may supply a generous default so prod is never silently
+        # uncapped. Returns 0 (window off) when neither applies.
+        return settings.LLM_BUDGET_GLOBAL_DAILY_USD or production_default_ceiling()
 
     @property
     def _global_monthly(self) -> float:
@@ -211,23 +251,17 @@ def new_in_memory_gate() -> BudgetGate:
 
 
 def cap_is_armed() -> bool:
-    """True when at least one budget window has a positive ceiling.
+    """True when some budget window has an effective positive ceiling.
 
     A window is enabled when its ceiling is > 0 (mirrors `over_budget`'s
-    per-window check). All-zero ceilings mean the cost cap is OFF -- no window
-    can ever trip, so generation is never degraded to the fallback on spend. The
-    production boot guard (`assert_budget_cap_armed`) uses this to refuse a
-    silently-uncapped prod deployment (#543).
+    per-window check). This counts both an explicitly-set window AND the #549
+    production safety backstop, so in production an otherwise-unconfigured,
+    non-disabled deployment still reads as armed (the backstop supplies a
+    global-daily ceiling). All-zero ceilings with no backstop mean the cost cap
+    is OFF -- no window can ever trip, so generation is never degraded to the
+    fallback on spend. `log_budget_cap_status` reports this posture at boot.
     """
-    return any(
-        ceiling > 0
-        for ceiling in (
-            settings.LLM_BUDGET_USER_DAILY_USD,
-            settings.LLM_BUDGET_USER_MONTHLY_USD,
-            settings.LLM_BUDGET_GLOBAL_DAILY_USD,
-            settings.LLM_BUDGET_GLOBAL_MONTHLY_USD,
-        )
-    )
+    return _any_window_explicitly_armed() or production_default_ceiling() > 0
 
 
 def over_budget(user_id) -> bool:

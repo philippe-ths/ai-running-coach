@@ -54,10 +54,21 @@ class Settings(BaseSettings):
     LLM_BUDGET_GLOBAL_MONTHLY_USD: float = 0.0
     # The all-zero defaults mean NO cost cap. That is fine for local dev, but in
     # production a silently-uncapped deployment lets one user drain the shared
-    # Anthropic budget (#543). `assert_budget_cap_armed` refuses to boot in
-    # production unless at least one window above is set OR this opt-out is true,
-    # so "no cap in prod" is a conscious, auditable choice rather than a default.
+    # Anthropic budget (#543). Rather than crash the boot when prod is unconfigured
+    # (#549: the #543 boot guard took prod fully DOWN on Railway, since the prior
+    # deploy was REMOVED so a crashed boot left nothing serving — a strictly worse
+    # failure than a missing cost cap), production falls back to the generous
+    # safety ceiling below. Set this opt-out to run prod deliberately uncapped, so
+    # "no cap in prod" stays a conscious, auditable choice.
     LLM_BUDGET_DISABLED: bool = False
+    # The production safety backstop (#549). When APP_ENV=production and no
+    # LLM_BUDGET_*_USD window above is explicitly set and the cap is not disabled,
+    # the budget gate applies this global-daily ceiling so prod is NEVER silently
+    # uncapped — without crashing the boot. Generous by design: it is a catastrophe
+    # backstop, not a tuned cap (set an explicit window for that). 0 turns the
+    # backstop off (prod would then run uncapped when otherwise unconfigured).
+    # See app/services/coach/budget.py.
+    LLM_BUDGET_PROD_DEFAULT_GLOBAL_DAILY_USD: float = 50.0
     # Minimum seconds between on-demand coach-report regenerations for one
     # activity (#122 / going-live landmine 1). The regenerate endpoint is the
     # single most exposed cost lever (it enqueues a full two-stage generation);

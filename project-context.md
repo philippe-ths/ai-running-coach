@@ -155,7 +155,7 @@ Data flow: Strava API → strava_ingestion → Activity/ActivityStream rows → 
 `frontend/lib/types/` holds domain types (`activity`, `chat`, `coach`, `metrics`, `profile`, `trends`, `voice` the P1.1 voice config + catalog types, `stance` the P1.3 stance config + catalog types, `material` the P4 user-materials read shape + kind/status types, `volume` the #400 volume-vs-norm read shape); `frontend/lib/types.ts` is the barrel.
 `frontend/scripts/smoke.mjs` is the readiness smoke harness that boots a mock API and Next dev server.
 `docker-compose.yml` defines Postgres 16 and Redis 7 services for local development.
-`Makefile` exposes `smoke`, `backend-smoke`, `frontend-smoke`, `test`, `backend-test`, `frontend-test`, `seed-local`, `eval` (run the M5 coach-report eval harness over the local DB, args via `EVAL_ARGS`), and `eval-selftest` (validate the harness against its synthetic fixtures, no DB/key needed).
+`Makefile` exposes `smoke`, `backend-smoke`, `frontend-smoke`, `test`, `backend-test`, `frontend-test`, `seed-local`, `eval` (run the M5 coach-report eval harness over the local DB, args via `EVAL_ARGS`), `eval-selftest` (validate the harness against its synthetic fixtures, no DB/key needed), `deployed-handshake-smoke` (the #540 deployed-only auth-gate smoke, `SMOKE_BASE_URL=...`), and `post-deploy-verify` (the #550 release gate: poll the deployed `/api/health` until healthy via `backend/scripts/post_deploy_verify.py`, then run the handshake smoke; `SMOKE_BASE_URL=...`).
 
 ## Testing Overview
 
@@ -165,7 +165,7 @@ Backend unit and policy coverage exists for analysis, coach context, coach schem
 Integration-tagged tests are excluded from the default regression run because they depend on local services or deeper cross-layer setup.
 Frontend regression runs via `npm run test`, which invokes `next lint` then `next build`; there is no Jest or component test runner configured.
 Frontend smoke runs via `npm run smoke` (`scripts/smoke.mjs`), which boots a mock API on `3001` and a Next dev server on `3100` and verifies core routes load.
-CI runs via `.github/workflows/deploy.yml` (workflow name `ci`) on push and pull requests to `main`, with a `backend-test` job (`make backend-test` on Python 3.12) and a `frontend-test` job (`npm run test` on Node 20); `.github/` also contains `copilot-instructions.md` and a `hooks/` directory.
+CI runs via `.github/workflows/deploy.yml` (workflow name `ci`) on push and pull requests to `main` (plus `workflow_dispatch`), with a `backend-test` job (`make backend-test` on Python 3.12), a `frontend-test` job (`npm run test` on Node 20), and a `post-deploy-verify` job (#550: runs only off PRs — on push to `main` and manual dispatch — after the test jobs; `make post-deploy-verify` against the `PROD_BACKEND_URL` secret to catch a crashed/regressed deploy, skipped cleanly when the secret is unset); `.github/` also contains `copilot-instructions.md` and a `hooks/` directory.
 Major gap: no automated frontend unit or component tests beyond the build-time lint and smoke route checks.
 Major gap: no end-to-end test that exercises a real Strava-to-coach-report flow.
 

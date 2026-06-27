@@ -54,7 +54,6 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 import httpx
 
@@ -242,6 +241,47 @@ def check_telegram_unbound_chat_noop(
     )
 
 
+def run_handshake_checks(
+    client: httpx.Client, base: str, tg_secret: str = ""
+) -> list[CheckResult]:
+    """Run the deployed handshake auth-gate checks and return their results.
+
+    The reusable seam: `main` calls it for the standalone run, and the post-deploy
+    verifier (`scripts.post_deploy_verify`, #550) calls it as the release smoke
+    after the health poll. The optional-secret Telegram no-op check is SKIPped
+    (never FAILed) when `tg_secret` is empty.
+    """
+    results: list[CheckResult] = [
+        check_strava_verify_gate(client, base),
+        check_strava_event_authenticity(client, base),
+        check_telegram_secret_gate(client, base),
+    ]
+    if tg_secret:
+        results.append(check_telegram_unbound_chat_noop(client, base, tg_secret))
+    else:
+        results.append(
+            _skipped(
+                "telegram_unbound_chat_is_noop",
+                "set SMOKE_TELEGRAM_WEBHOOK_SECRET to exercise this",
+            )
+        )
+    return results
+
+
+def report_results(results: list[CheckResult], header: str = "Results") -> int:
+    """Print a results block and return an exit code (0 only when no check FAILed)."""
+    print(f"{header}:")
+    for r in results:
+        print(f"  [{r.status:4}] {r.name}: {r.detail}")
+    failures = [r for r in results if r.status == "FAIL"]
+    skipped = [r for r in results if r.status == "SKIP"]
+    print(
+        f"\n{len(results) - len(failures) - len(skipped)} passed, "
+        f"{len(failures)} failed, {len(skipped)} skipped."
+    )
+    return 1 if failures else 0
+
+
 def main() -> int:
     base = (os.environ.get("SMOKE_BASE_URL") or "").rstrip("/")
     if not base:
@@ -258,45 +298,17 @@ def main() -> int:
 
     print(f"Deployed handshake smoke against: {base}\n")
 
-    results: list[CheckResult] = []
     # `follow_redirects=False`: a 302 to Strava must be observed as a redirect,
     # not silently followed off-host.
     with httpx.Client(timeout=timeout, follow_redirects=False) as client:
-        required: list[Callable[[], CheckResult]] = [
-            lambda: check_strava_verify_gate(client, base),
-            lambda: check_strava_event_authenticity(client, base),
-            lambda: check_telegram_secret_gate(client, base),
-        ]
-        for run in required:
-            results.append(run())
+        results = run_handshake_checks(client, base, tg_secret)
 
-        if tg_secret:
-            results.append(
-                check_telegram_unbound_chat_noop(client, base, tg_secret)
-            )
-        else:
-            results.append(
-                _skipped(
-                    "telegram_unbound_chat_is_noop",
-                    "set SMOKE_TELEGRAM_WEBHOOK_SECRET to exercise this",
-                )
-            )
-
-    print("Results:")
-    for r in results:
-        print(f"  [{r.status:4}] {r.name}: {r.detail}")
-
-    failures = [r for r in results if r.status == "FAIL"]
-    skipped = [r for r in results if r.status == "SKIP"]
-    print(
-        f"\n{len(results) - len(failures) - len(skipped)} passed, "
-        f"{len(failures)} failed, {len(skipped)} skipped."
-    )
-    if failures:
+    code = report_results(results)
+    if code != 0:
         print("\nDEPLOYED HANDSHAKE SMOKE FAILED.", file=sys.stderr)
-        return 1
-    print("\nDeployed handshake smoke passed.")
-    return 0
+    else:
+        print("\nDeployed handshake smoke passed.")
+    return code
 
 
 if __name__ == "__main__":
