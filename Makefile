@@ -1,4 +1,4 @@
-.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest diagram-check verify-local
+.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest diagram-check verify-local deployed-handshake-smoke
 
 # Prefer the project venv interpreter when it exists, fall back to bare python.
 # Path is relative to backend/ since the targets cd there first. CI has no
@@ -67,3 +67,13 @@ eval:
 # no API key required, so this is safe to run in CI.
 eval-selftest:
 	cd backend && $(BACKEND_PY) -m scripts.eval_coach_reports --self-test
+
+# Deployed-only smoke for the Strava + Telegram handshake auth gates (#540).
+# NOT a CI gate: needs a live deployment (real APP_ENV/secrets). Non-mutating —
+# it only asserts the live gates reject unauthentic input; it never completes a
+# real OAuth callback or sends a real /start/tap. The session-gated positive
+# checks stay in the manual runbook (docs/testing/deployed-handshake-verification.md).
+#   make deployed-handshake-smoke SMOKE_BASE_URL=https://<deployed-backend>
+#   make deployed-handshake-smoke SMOKE_BASE_URL=... SMOKE_TELEGRAM_WEBHOOK_SECRET=<secret>
+deployed-handshake-smoke:
+	cd backend && $(BACKEND_PY) -m scripts.deployed_handshake_smoke

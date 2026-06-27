@@ -24,11 +24,11 @@ def write_checkin(db: Session, activity_id: UUID, checkin_data: CheckInCreate) -
     (only the fields the caller set, leaving the rest intact). Returns the row."""
     existing = db.query(CheckIn).filter(CheckIn.activity_id == activity_id).first()
     if existing:
-        for k, v in checkin_data.dict(exclude_unset=True).items():
+        for k, v in checkin_data.model_dump(exclude_unset=True).items():
             setattr(existing, k, v)
         db_obj = existing
     else:
-        db_obj = CheckIn(activity_id=activity_id, **checkin_data.dict())
+        db_obj = CheckIn(activity_id=activity_id, **checkin_data.model_dump())
         db.add(db_obj)
 
     db.commit()

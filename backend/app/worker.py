@@ -9,7 +9,12 @@ import logging
 
 from rq import Queue, Worker
 
-from app.core.observability import init_logging, init_sentry, warn_if_coach_prompt_inert
+from app.core.observability import (
+    assert_budget_cap_armed,
+    init_logging,
+    init_sentry,
+    warn_if_coach_prompt_inert,
+)
 from app.core.queue import redis_conn
 
 LISTEN = ("default",)
@@ -26,6 +31,10 @@ def main() -> None:
     # (docs/deployment/topology.md). The worker serves no HTTP, so requiring them
     # would crash a correctly-configured worker. Its hard deps (DATABASE_URL) are
     # already required by Settings and crash the boot on their own.
+    # The budget cap IS a worker concern, though: reports generate here, so an
+    # uncapped prod worker is exactly the spend risk #543 guards. Same safe
+    # failure direction (blocks a new deploy, never the running one).
+    assert_budget_cap_armed()
     logger.info("Worker booting; listening on %s", ",".join(LISTEN))
     queues = [Queue(name, connection=redis_conn) for name in LISTEN]
     worker = Worker(queues, connection=redis_conn)
