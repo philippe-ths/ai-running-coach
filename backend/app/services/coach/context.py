@@ -50,6 +50,7 @@ from app.services.coach.read_time_signals import ReadTimeSignal, gather
 from app.services.coach.stance import StanceProfile, resolve_stance
 from app.services.coach.volume import build_training_volume
 from app.services.coach.recent_training import build_recent_training
+from app.services.coach.training_history import build_training_history
 from app.services.readiness import build_readiness
 from app.services.coach.retrieval import (
     fetch_corpus,
@@ -76,6 +77,7 @@ from app.schemas.coach_context import (
     TrainingLoadContext,
     TrainingVolumeContext,
     RecentTrainingContext,
+    TrainingHistoryContext,
     LongitudinalContext,
     MetricsContext,
     NarrativeContext,
@@ -266,6 +268,8 @@ def build_context_pack(
         # history-scan signal — it rides the focus payload via the deep flag above.)
         stream_view=f.stream_view,
         recent_training=gather(_RECENT_TRAINING_SIGNAL, db, activity, prompt_id, as_of),
+        # #561 multi-year training-history picture (LOD volume ladder + durability traits).
+        training_history=gather(_TRAINING_HISTORY_SIGNAL, db, activity, prompt_id, as_of),
         safety_rules=b.safety_rules,
     )
 
@@ -444,6 +448,43 @@ def _build_recent_training_context(
     return build_recent_training(
         facts, local_day, include_previous_30d=settings.COACH_PREVIOUS_30D_ENABLED
     )
+
+
+# The wide fetch span for the multi-year history scan: ~10 years, so the deep ladder
+# buckets and the durability traits see the runner's full available history. The
+# fetch is summary-only (no streams), so even a deep history is cheap; the builder
+# self-limits to whatever is present.
+_TRAINING_HISTORY_FETCH_DAYS = 3660
+
+
+def _build_training_history_context(
+    db: Session, activity: Activity, as_of: datetime
+) -> Optional[TrainingHistoryContext]:
+    """The #561 multi-year training-history pack section, or None.
+
+    A read-time history-scan signal behind the shared `ReadTimeSignal` seam (#492):
+    the `TRAINING_HISTORY` gating is applied once in `gather`, so this `compute` is
+    reached ONLY under a training-history-aware prompt — the pack stays byte-stable
+    otherwise (the Optional-and-drop idiom). Computed read-time as of this activity's
+    LOCAL day over the runner's full available history (a ~10-year summary-only fetch).
+    A deterministic FACT the coach may cite, but it never overrides the run's
+    re-derived DerivedMetric or the safety floor (the training-history addendum).
+    Degrades gracefully: the builder returns None when there is too little history
+    beyond the recent window to describe, and abstains per-trait when a comparison
+    cannot resolve.
+
+    `COACH_TRAINING_HISTORY_ENABLED` (#561) is an independent operator off-switch:
+    when False the section is dropped without a full prompt rollback."""
+    if not settings.COACH_TRAINING_HISTORY_ENABLED:
+        return None
+    local_day = activity.local_start.date()
+    facts = _query_activity_facts(
+        db,
+        local_day - timedelta(days=_TRAINING_HISTORY_FETCH_DAYS),
+        local_day + timedelta(days=1),
+        user_id=activity.user_id,
+    )
+    return build_training_history(facts, local_day)
 
 
 def _build_block_context(db: Session, activity: Activity) -> Optional[BlockContext]:
@@ -1197,6 +1238,9 @@ _TRAINING_VOLUME_SIGNAL = ReadTimeSignal(
 _RECENT_TRAINING_SIGNAL = ReadTimeSignal(
     "recent_training", _build_recent_training_context, PromptFeature.RECENT_TRAINING
 )
+_TRAINING_HISTORY_SIGNAL = ReadTimeSignal(
+    "training_history", _build_training_history_context, PromptFeature.TRAINING_HISTORY
+)
 
 # All five signals, keyed by name — the registry a stored-artifact adapter (#203)
 # would look up and swap an entry in without touching the call sites above.
@@ -1208,6 +1252,7 @@ READ_TIME_SIGNALS: Dict[str, ReadTimeSignal] = {
         _TRAINING_LOAD_SIGNAL,
         _TRAINING_VOLUME_SIGNAL,
         _RECENT_TRAINING_SIGNAL,
+        _TRAINING_HISTORY_SIGNAL,
     )
 }
 

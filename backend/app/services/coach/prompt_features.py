@@ -43,6 +43,7 @@ class PromptFeature(Enum):
     VOLUME = "volume"                  # #400 frequency-/volume-vs-norm section
     STREAM_VIEW = "stream_view"        # #443 consolidated stream-view timeline in the default pack
     RECENT_TRAINING = "recent_training"  # #444 modality-aware recent-training picture
+    TRAINING_HISTORY = "training_history"  # #561 multi-year LOD volume ladder + durability traits
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -128,6 +129,24 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.VOLUME,
             _F.STREAM_VIEW,
             _F.RECENT_TRAINING,
+        }
+    ),
+    # #561 — v12 = v11 + the TRAINING_HISTORY capability (the multi-year LOD volume
+    # ladder + durability traits section, plus its reading addendum). Same retuned
+    # base prose; adds one capability (an additive superset of v11). Ships INERT (the
+    # config default stays v8); the owner flips COACH_PROMPT_ID to activate.
+    "coach_message_v12": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.TRAINING_LOAD,
+            _F.USER_MATERIALS,
+            _F.VOLUME,
+            _F.STREAM_VIEW,
+            _F.RECENT_TRAINING,
+            _F.TRAINING_HISTORY,
         }
     ),
 }

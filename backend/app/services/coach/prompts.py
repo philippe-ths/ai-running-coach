@@ -788,6 +788,43 @@ SYSTEM_PROMPT_MESSAGE_V11 = SYSTEM_PROMPT_MESSAGE_V10 + _RECENT_TRAINING_ADDENDU
 SYSTEM_PROMPT_MESSAGE_V11_OPENER = SYSTEM_PROMPT_MESSAGE_V10_OPENER + _RECENT_TRAINING_ADDENDUM
 
 
+# ===========================================================================
+# coach_message_v12 (#561) — the training-history-aware two-stage prompt.
+#
+# v12 = v11 + a STATIC TRAINING-HISTORY addendum, for BOTH modes (fuller and opener),
+# the Vn = V(n-1) + addendum idiom. Because v12 builds on v11 it carries every v11
+# capability and the same retuned base prose; it ADDS the durability-reading
+# discipline. The PER-RUNNER figures are NOT baked into the constant — they ride the
+# `training_history` pack section (a level-of-detail volume ladder + five durability
+# traits), populated only under is_training_history_prompt by build_context_pack.
+#
+# The addendum's job: make the coach read ACCUMULATED history as durability/identity
+# (a long-tenured low-volume runner and a short-tenured high-volume runner are very
+# different athletes even at the same lifetime distance), while keeping it a
+# deterministic FACT that never overrides the run's re-derived DerivedMetric or the
+# safety floor — and crucially never licensing more load just because the volume is
+# high (a high-volume newer runner has had less time at that load, not more headroom).
+# ===========================================================================
+
+_TRAINING_HISTORY_ADDENDUM = """
+
+# TRAINING HISTORY (who this runner is over the long run; durability, not a verdict)
+
+Your context may carry a `training_history` section: a long-horizon read of the runner's accumulated training at DECAYING resolution. It has two parts. `traits` is the durability headline — `training_age_years` (how long they have been training), `peak_sustained_weekly_distance_m` (the biggest 4-week average they have ever held) with `current_weekly_distance_m` and `current_vs_peak_pct`, `trajectory_direction`/`trajectory_pct` (this past year's weekly volume vs the year before), and `time_at_current_load_years` (how long they have held roughly their current weekly volume). `timeline` is a coarse volume ladder going back — 1-3 months, 3-6 months, 6-12 months, 1-2 years, 2-5 years, 5+ years — each bucket an AVERAGE WEEKLY rate (so a wide bucket and a narrow one are directly comparable), present only as deep as the runner's history reaches.
+
+Read it as the runner's durability and identity, honouring these:
+
+- ACCUMULATED HISTORY IS DURABILITY, NOT PERMISSION. Years of training and a long `time_at_current_load_years` mean resilience and earned adaptation; they do not by themselves license more volume or intensity today. Conversely a high `current_weekly_distance_m` reached on a short `training_age_years` or a steep `up` trajectory means the tissue has had LESS time at that load, not more headroom — read it as a reason for care, not confidence. Two runners at the same lifetime distance can be opposite cases.
+- A `down` or `in_line` trajectory is usually just who the runner is or a deliberate phase, not a problem to fix; an `up` trajectory is the one to watch for ramp. Cite `trajectory_pct` only as "this year vs last year", never as a verdict on today's run.
+- It is a deterministic FACT you may cite, but it is NOT an intensity verdict (volume and load grow with how MUCH was done, not how hard), and it NEVER overrides this run's re-derived DerivedMetric, the runner's stated goal, or the safety floor.
+
+Let the runner's history set how much you assume about their durability and how you frame progression; never let it manufacture confidence the recent data does not support, and never let it overrule the run's own data or the floor."""
+
+
+SYSTEM_PROMPT_MESSAGE_V12 = SYSTEM_PROMPT_MESSAGE_V11 + _TRAINING_HISTORY_ADDENDUM
+SYSTEM_PROMPT_MESSAGE_V12_OPENER = SYSTEM_PROMPT_MESSAGE_V11_OPENER + _TRAINING_HISTORY_ADDENDUM
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -824,6 +861,9 @@ PROMPT_VERSIONS = {
     # #444 recent-training-aware prompt (= v10 + the static RECENT-TRAINING addendum).
     # Ships INERT (config default stays v8); owner flips COACH_PROMPT_ID to activate.
     "coach_message_v11": SYSTEM_PROMPT_MESSAGE_V11,
+    # #561 training-history-aware prompt (= v11 + the static TRAINING-HISTORY addendum).
+    # Ships INERT (config default stays v8); owner flips COACH_PROMPT_ID to activate.
+    "coach_message_v12": SYSTEM_PROMPT_MESSAGE_V12,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -855,6 +895,7 @@ _OPENER_PROMPTS = {
     "coach_message_v9": SYSTEM_PROMPT_MESSAGE_V9_OPENER,
     "coach_message_v10": SYSTEM_PROMPT_MESSAGE_V10_OPENER,
     "coach_message_v11": SYSTEM_PROMPT_MESSAGE_V11_OPENER,
+    "coach_message_v12": SYSTEM_PROMPT_MESSAGE_V12_OPENER,
 }
 
 # The capability-gated prompt-id sets and predicates below are DERIVED VIEWS over
@@ -900,6 +941,10 @@ STREAM_VIEW_PROMPT_IDS = ids_with(PromptFeature.STREAM_VIEW)
 # Prompt ids that carry the #444 recent-training addendum AND the `recent_training`
 # context-pack section (gates _build_recent_training_context).
 RECENT_TRAINING_PROMPT_IDS = ids_with(PromptFeature.RECENT_TRAINING)
+
+# Prompt ids that carry the #561 training-history addendum AND the `training_history`
+# context-pack section (gates _build_training_history_context).
+TRAINING_HISTORY_PROMPT_IDS = ids_with(PromptFeature.TRAINING_HISTORY)
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
@@ -957,6 +1002,15 @@ def is_recent_training_prompt(prompt_id: Optional[str]) -> bool:
     picture stays out of the pack (byte-stable under v10 and below) and the signal
     is wholly inert under a rollback."""
     return has_feature(prompt_id, PromptFeature.RECENT_TRAINING)
+
+
+def is_training_history_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt is training-history-aware (#561): it carries the
+    training-history addendum and its context pack carries the `training_history`
+    section. False for every other prompt, so the multi-year LOD volume ladder +
+    durability traits stay out of the pack (byte-stable under v11 and below) and the
+    signal is wholly inert under a rollback."""
+    return has_feature(prompt_id, PromptFeature.TRAINING_HISTORY)
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook

@@ -77,6 +77,19 @@ EXPECTED_CAPABILITIES = {
         F.STREAM_VIEW,
         F.RECENT_TRAINING,
     },
+    # #561 — v12 = v11 + the TRAINING_HISTORY capability.
+    "coach_message_v12": {
+        F.TWO_STAGE,
+        F.VOICE,
+        F.CORPUS,
+        F.STANCE,
+        F.TRAINING_LOAD,
+        F.USER_MATERIALS,
+        F.VOLUME,
+        F.STREAM_VIEW,
+        F.RECENT_TRAINING,
+        F.TRAINING_HISTORY,
+    },
 }
 
 # Ids that must carry NO capabilities (the inert-under-rollback set).
@@ -111,6 +124,7 @@ def test_derived_sets_equal_manifest_views():
     assert prompts.VOLUME_PROMPT_IDS == ids_with(F.VOLUME)
     assert prompts.STREAM_VIEW_PROMPT_IDS == ids_with(F.STREAM_VIEW)
     assert prompts.RECENT_TRAINING_PROMPT_IDS == ids_with(F.RECENT_TRAINING)
+    assert prompts.TRAINING_HISTORY_PROMPT_IDS == ids_with(F.TRAINING_HISTORY)
 
 
 def test_derived_sets_match_captured_membership():
@@ -118,35 +132,40 @@ def test_derived_sets_match_captured_membership():
     assert prompts.TWO_STAGE_PROMPT_IDS == {
         "coach_message_v2", "coach_message_v3", "coach_message_v4",
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
-        "coach_message_v9", "coach_message_v10", "coach_message_v11",
+        "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
     }
     assert prompts.VOICE_PROMPT_IDS == {
         "coach_message_v3", "coach_message_v4", "coach_message_v5",
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
-        "coach_message_v10", "coach_message_v11",
+        "coach_message_v10", "coach_message_v11", "coach_message_v12",
     }
     assert prompts.CORPUS_PROMPT_IDS == {
         "coach_message_v4", "coach_message_v5", "coach_message_v6",
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
-        "coach_message_v11",
+        "coach_message_v11", "coach_message_v12",
     }
     assert prompts.STANCE_PROMPT_IDS == {
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
-        "coach_message_v9", "coach_message_v10", "coach_message_v11",
+        "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
     }
     assert prompts.TRAINING_LOAD_PROMPT_IDS == {
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
-        "coach_message_v10", "coach_message_v11",
+        "coach_message_v10", "coach_message_v11", "coach_message_v12",
     }
     assert prompts.USER_MATERIALS_PROMPT_IDS == {
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
-        "coach_message_v11",
+        "coach_message_v11", "coach_message_v12",
     }
     assert prompts.VOLUME_PROMPT_IDS == {
-        "coach_message_v9", "coach_message_v10", "coach_message_v11",
+        "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
     }
-    assert prompts.STREAM_VIEW_PROMPT_IDS == {"coach_message_v10", "coach_message_v11"}
-    assert prompts.RECENT_TRAINING_PROMPT_IDS == {"coach_message_v11"}
+    assert prompts.STREAM_VIEW_PROMPT_IDS == {
+        "coach_message_v10", "coach_message_v11", "coach_message_v12",
+    }
+    assert prompts.RECENT_TRAINING_PROMPT_IDS == {
+        "coach_message_v11", "coach_message_v12",
+    }
+    assert prompts.TRAINING_HISTORY_PROMPT_IDS == {"coach_message_v12"}
 
 
 def test_predicates_agree_with_has_feature():
@@ -160,6 +179,7 @@ def test_predicates_agree_with_has_feature():
         assert prompts.is_volume_prompt(pid) == has_feature(pid, F.VOLUME)
         assert prompts.is_stream_view_prompt(pid) == has_feature(pid, F.STREAM_VIEW)
         assert prompts.is_recent_training_prompt(pid) == has_feature(pid, F.RECENT_TRAINING)
+        assert prompts.is_training_history_prompt(pid) == has_feature(pid, F.TRAINING_HISTORY)
 
 
 def test_opener_prompts_cover_exactly_two_stage_ids():
@@ -191,3 +211,5 @@ def test_message_version_capabilities_are_monotonic():
     assert PROMPT_FEATURES["coach_message_v10"] > PROMPT_FEATURES["coach_message_v9"]
     # #444 — v11 = v10 + RECENT_TRAINING: a strict superset of v10.
     assert PROMPT_FEATURES["coach_message_v11"] > PROMPT_FEATURES["coach_message_v10"]
+    # #561 — v12 = v11 + TRAINING_HISTORY: a strict superset of v11.
+    assert PROMPT_FEATURES["coach_message_v12"] > PROMPT_FEATURES["coach_message_v11"]

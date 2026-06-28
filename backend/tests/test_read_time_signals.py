@@ -1,6 +1,6 @@
 """The shared read-time history-scan signal seam (#492).
 
-Pins the deepening's load-bearing contract: the five read-time signals are reached
+Pins the deepening's load-bearing contract: the read-time signals are reached
 through ONE interface, and the two cross-cutting concerns — prompt gating and
 dispatch — are handled ONCE in `gather`, not re-implemented per signal.
 
@@ -26,6 +26,7 @@ from app.services.coach.context import (
     _ADHERENCE_SIGNAL,
     _CALIBRATION_SIGNAL,
     _RECENT_TRAINING_SIGNAL,
+    _TRAINING_HISTORY_SIGNAL,
     _TRAINING_LOAD_SIGNAL,
     _TRAINING_VOLUME_SIGNAL,
 )
@@ -38,13 +39,14 @@ _AS_OF = datetime(2026, 3, 20, 8, 0, tzinfo=timezone.utc)
 # --- registry shape ----------------------------------------------------------
 
 
-def test_all_five_signals_registered_under_one_interface():
+def test_all_signals_registered_under_one_interface():
     assert set(READ_TIME_SIGNALS) == {
         "calibration",
         "adherence",
         "training_load",
         "training_volume",
         "recent_training",
+        "training_history",
     }
     assert all(isinstance(s, ReadTimeSignal) for s in READ_TIME_SIGNALS.values())
 
@@ -57,6 +59,7 @@ def test_always_emitted_vs_gated_split_is_explicit():
     assert _TRAINING_LOAD_SIGNAL.gate_feature is PromptFeature.TRAINING_LOAD
     assert _TRAINING_VOLUME_SIGNAL.gate_feature is PromptFeature.VOLUME
     assert _RECENT_TRAINING_SIGNAL.gate_feature is PromptFeature.RECENT_TRAINING
+    assert _TRAINING_HISTORY_SIGNAL.gate_feature is PromptFeature.TRAINING_HISTORY
 
 
 # --- gather: dispatch + gating handled once ----------------------------------
