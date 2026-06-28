@@ -12,8 +12,8 @@ actually receives at the chosen prompt version. The hand-authored NODES / fate m
 helpers below the data in flow-nodes.js are left untouched.
 
 Usage:
-    python docs/diagrams/generate_flow_nodes_data.py                  # newest good activity, v11 (prod)
-    PROMPT_ID=coach_message_v11 ACTIVITY_ID=<uuid> python ...         # pin both
+    python docs/diagrams/generate_flow_nodes_data.py                  # newest good activity, v12 (branch head)
+    PROMPT_ID=coach_message_v11 ACTIVITY_ID=<uuid> python ...         # pin both (e.g. to the live prod prompt)
 
 Read-only against the DB; rewrites only the two generated lines of flow-nodes.js.
 Local DB only.
@@ -46,12 +46,13 @@ from app.services.coach.service import (  # noqa: E402
     _resolve_voice_for_activity,
 )
 
-# Default to the LIVE prod prompt so the diagram is a one-to-one picture of what the
-# coach actually receives in production. v11 is stream-view-aware (#443) and
-# recent-training-aware (#444), so pack.stream_view and pack.recent_training are
-# populated; under v9 (the prior default) both were absent and stream_view dead-ended
-# at DerivedMetric. Override with PROMPT_ID=... to inspect another version.
-PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_v11")
+# Default to this branch's HEAD prompt so the diagram is a one-to-one picture of the
+# fullest pack the code can build. v12 (#561) adds pack.training_history (the
+# multi-year LOD volume ladder + durability traits) on top of v11's stream_view (#443)
+# and recent_training (#444). NOTE: prod runs v11 and v12 ships INERT until the owner
+# flips COACH_PROMPT_ID, so this capture is one prompt AHEAD of prod; pin
+# PROMPT_ID=coach_message_v11 to render the exact live-prod pack instead.
+PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_v12")
 TARGET = Path(__file__).parent / "flow-nodes.js"
 
 # DerivedMetric columns the diagram shows (order = render order; excludes id / fks /
