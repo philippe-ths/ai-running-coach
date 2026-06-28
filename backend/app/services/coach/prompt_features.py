@@ -43,6 +43,7 @@ class PromptFeature(Enum):
     VOLUME = "volume"                  # #400 frequency-/volume-vs-norm section
     STREAM_VIEW = "stream_view"        # #443 consolidated stream-view timeline in the default pack
     RECENT_TRAINING = "recent_training"  # #444 modality-aware recent-training picture
+    TRAINING_HISTORY = "training_history"  # #561 multi-year LOD volume ladder + durability traits
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -130,6 +131,24 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.RECENT_TRAINING,
         }
     ),
+    # #561 — v12 = v11 + the TRAINING_HISTORY capability (the multi-year LOD volume
+    # ladder + durability traits section, plus its reading addendum). Same retuned
+    # base prose; adds one capability (an additive superset of v11). Ships INERT (the
+    # config default stays v8); the owner flips COACH_PROMPT_ID to activate.
+    "coach_message_v12": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.TRAINING_LOAD,
+            _F.USER_MATERIALS,
+            _F.VOLUME,
+            _F.STREAM_VIEW,
+            _F.RECENT_TRAINING,
+            _F.TRAINING_HISTORY,
+        }
+    ),
 }
 
 
@@ -174,3 +193,24 @@ def ids_with(feature: PromptFeature) -> frozenset[str]:
     """The frozenset of prompt ids carrying ``feature`` (derives the ``*_PROMPT_IDS``
     sets in ``prompts.py``)."""
     return frozenset(pid for pid, feats in PROMPT_FEATURES.items() if feature in feats)
+
+
+def fullest_message_prompt_id() -> str:
+    """The ``coach_message`` prompt id carrying the MOST capabilities — the prompt
+    that turns on every gated pack section, so its serialized pack is the FULLEST and
+    its duplication/byte-stability surface the LARGEST.
+
+    Derived from the manifest so structural pack guards (the no-duplicate-content and
+    single-home-facts tests) auto-track the newest gated section instead of pinning a
+    hardcoded version that silently goes stale the next time a section is added — the
+    exact gap that let a new section's overlap ship unseen. Ties resolve to the
+    newest (last-declared) id: each ``coach_message`` version is a superset of the
+    prior, so the last one reaching the max is the newest fullest prompt.
+    """
+    best: Optional[str] = None
+    best_n = -1
+    for pid, feats in PROMPT_FEATURES.items():
+        if pid.startswith("coach_message") and len(feats) >= best_n:
+            best, best_n = pid, len(feats)
+    assert best is not None  # PROMPT_FEATURES is never empty
+    return best

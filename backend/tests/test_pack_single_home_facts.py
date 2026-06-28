@@ -3,8 +3,9 @@
 `SINGLE_HOME_FACTS` is the authoritative registry of facts that used to appear in
 two sections of the context pack. The one-fact-one-place folds dropped the redundant
 COPY at serialization and left the fact in exactly one HOME. This test builds a real,
-fully-populated v11 pack (history + check-in + discount signals, so every folded
-fact's copy WOULD be present) and asserts, for each entry, that the copy is ABSENT
+fully-populated pack under the FULLEST prompt (history + check-in + discount signals,
+so every folded fact's copy WOULD be present) and asserts, for each entry, that the
+copy is ABSENT
 from the serialized pack while the home is PRESENT — so a future change that
 re-introduces a copy (a new builder field, a reverted drop) fails HERE.
 
@@ -28,8 +29,12 @@ from app.models import Activity, DerivedMetric
 from app.models.checkin import CheckIn
 from app.models.user import User
 from app.services.coach.context import build_context_pack
+from app.services.coach.prompt_features import fullest_message_prompt_id
 
-V11 = "coach_message_v11"
+# The FULLEST prompt (derived from the manifest, not pinned to a version) so the
+# single-home registry is checked against every gated section the code can emit,
+# auto-tracking a newly-added section instead of going stale at a hardcoded version.
+FULL_PROMPT_ID = fullest_message_prompt_id()
 
 # (label, copy_path, home_path). copy_path -> must be ABSENT from the serialized pack;
 # home_path -> must be PRESENT. "[]" in a path iterates a list.
@@ -73,8 +78,8 @@ def _iter_targets(root, path):
             yield n, leaf
 
 
-def _build_fully_populated_v11_pack(db):
-    """A real v11 pack where every folded fact's COPY is populated: 12 prior weeks of
+def _build_fully_populated_pack(db):
+    """A real pack (the fullest prompt) where every folded fact's COPY is populated: 12 prior weeks of
     history (so training_volume has a baseline and recent_training fills), plus a
     subject run carrying a check-in (rpe), a stored discount_signals (hr_drift_pct) and
     a non-null hr_drift (calibration's observed_drift_pct) and effort_score."""
@@ -121,11 +126,11 @@ def _build_fully_populated_v11_pack(db):
     add(anchor - timedelta(days=2))
     subject = add(anchor, subject=True)
     db.refresh(subject)
-    return build_context_pack(db, subject, prompt_id=V11)
+    return build_context_pack(db, subject, prompt_id=FULL_PROMPT_ID)
 
 
 def test_folded_facts_each_have_exactly_one_home(db):
-    pack = _build_fully_populated_v11_pack(db)
+    pack = _build_fully_populated_pack(db)
 
     # Precondition: the un-dropped MODEL dump still carries every copy (the fold is
     # serialization-only; the derived reads compute from them). Guards a vacuous pass.

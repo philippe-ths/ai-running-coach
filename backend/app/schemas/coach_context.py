@@ -706,6 +706,65 @@ class RecentTrainingContext(BaseModel):
     has_baseline: bool
 
 
+class TrainingHistoryBucket(BaseModel):
+    """#561: one coarse, far-horizon volume bucket in the level-of-detail ladder.
+
+    The deep history reaches the coach at DECAYING resolution: `recent_training`
+    owns the detailed last ~60 days in full (its last_7d/last_30d/previous_30d
+    windows all live within 0-60d), so this ladder starts AFTER that and widens as it
+    goes back (2-6 months, 6-12 months, 1-2 years, 2-5 years, 5+ years), each bucket
+    reporting an AVERAGE WEEKLY rate so buckets of unequal width stay directly
+    comparable (the runner's own "20 km/week" read). The weekly average divides by
+    the weeks the bucket actually spans WITHIN the runner's history (so a
+    partially-covered bucket is not deflated), mirroring the volume.py clamp. A
+    bucket is emitted only when it holds real data, so the ladder self-sizes to how
+    far the history reaches."""
+    model_config = ConfigDict(extra="forbid")
+
+    label: str            # human horizon, e.g. "2-6 months ago"
+    start_days_ago: int   # inclusive age lower bound
+    end_days_ago: int     # exclusive age upper bound (== start of the open tail's coverage end)
+    weeks: float          # weeks spanned within history (the averaging denominator)
+    avg_weekly_distance_m: int
+    avg_weekly_sessions: float
+    run_share_pct: float  # share of this bucket's sessions that are runs (modality mix)
+
+
+class TrainingHistoryTraits(BaseModel):
+    """#561: the durability traits a coach reads from accumulated history — the
+    eval-able headline that tells a long-tenured low-volume runner apart from a
+    short-tenured high-volume one (near-identical lifetime totals, very different
+    athletes). Every trait is a deterministic FACT the coach may cite; none is an
+    intensity verdict and none overrides this run's re-derived DerivedMetric or the
+    safety floor. Comparisons abstain (`no_norm` / null) when history is too thin to
+    resolve them."""
+    model_config = ConfigDict(extra="forbid")
+
+    training_age_years: float                        # first activity to as_of
+    peak_sustained_weekly_distance_m: int            # highest rolling 4-week avg weekly distance, all history
+    # The runner's current weekly volume is NOT restated here — it lives once in
+    # `recent_training.last_30d` (#451 one-lane). This carries only the RELATIONSHIP
+    # to the peak (the new durability signal), which the coach reads as "near / below
+    # your historical ceiling" without a second copy of the recent-volume number.
+    current_vs_peak_pct: Optional[float] = None      # last-4wk rate / peak * 100; None when peak is 0
+    trajectory_direction: str                        # up | in_line | down | no_norm (recent 12mo vs prior 12mo)
+    trajectory_pct: Optional[float] = None           # recent-12mo vs prior-12mo weekly rate
+    time_at_current_load_years: Optional[float] = None  # span the trailing-4wk rate stayed within a band of current
+
+
+class TrainingHistoryContext(BaseModel):
+    """#561: the multi-year training-history picture — a richness-decaying volume
+    ladder (`timeline`) plus the durability `traits`. Emitted ONLY under a
+    training-history-aware prompt id, and ONLY when the runner has enough history
+    beyond the recent window to describe (else the builder returns None and the
+    section is dropped from serialization, byte-stable elsewhere). The timeline is
+    newest-bucket-first."""
+    model_config = ConfigDict(extra="forbid")
+
+    traits: TrainingHistoryTraits
+    timeline: List[TrainingHistoryBucket]
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -784,6 +843,12 @@ class CoachContextPack(BaseModel):
     # sections, so the pack stays byte-stable pre/post #444; populated only under a
     # recent-training-aware prompt id.
     recent_training: Optional["RecentTrainingContext"] = None
+    # #561 multi-year training-history picture (the LOD volume ladder + durability
+    # traits). None under every non-training-history prompt and OMITTED from
+    # serialization entirely, exactly like the other gated sections, so the pack
+    # stays byte-stable pre/post #561; populated only under a training-history-aware
+    # prompt id, and only when history beyond the recent window exists to describe.
+    training_history: Optional["TrainingHistoryContext"] = None
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
@@ -996,6 +1061,7 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
         PromptFeature.RECENT_TRAINING,
         nested_drop=_drop_recent_training_dedup,
     ),  # #444
+    PackSection("training_history", PromptFeature.TRAINING_HISTORY),  # #561
     # #451: the retired legacy summary — droppable but NOT prompt-gated (no longer
     # populated; a pre-#451 stored pack still round-trips its real object unchanged).
     PackSection("recent_training_summary"),

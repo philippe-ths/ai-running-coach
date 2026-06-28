@@ -259,6 +259,13 @@ class Settings(BaseSettings):
     COACH_SALIENCE_ENABLED: bool = True              # the pack.salience section (the deterministic fuller-turn scheduling logic is untouched)
     COACH_CONTINUITY_ENABLED: bool = True            # the pack.continuity section
     COACH_PREVIOUS_30D_ENABLED: bool = True          # the previous_30d window inside pack.recent_training (the vs-prev comparisons are unaffected)
+    # #561: an independent off-switch for the multi-year training-history section
+    # (the LOD volume ladder + durability traits). Unlike the #522 switches above it
+    # gates a PROMPT-version section and has no UI input, so it is NOT part of the
+    # /api/coach/feature-flags surface; it only lets an operator drop just this
+    # section without a full COACH_PROMPT_ID rollback. Off => the builder returns
+    # None and PACK_SECTIONS drops it byte-stably.
+    COACH_TRAINING_HISTORY_ENABLED: bool = True
 
     # Two-stage Exchange cadence (A4, ADR 0010). The opener fires immediately on a
     # finished activity; the conditional fuller turn fires on the runner's reply or
