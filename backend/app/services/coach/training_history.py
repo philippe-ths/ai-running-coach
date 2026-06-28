@@ -7,22 +7,24 @@ know which one it is talking to. The thing that tells them apart is not any sing
 total but the SHAPE of volume over time and the durability it implies.
 
 This section carries that shape at a deliberately DECAYING resolution (a
-level-of-detail ladder): the detailed last ~30 days are already owned by
-`recent_training`/`training_volume`, so this picture starts AFTER that window and
-WIDENS as it goes back — 1-3 months, 3-6 months, 6-12 months, 1-2 years, 2-5 years,
-then an open 5+ years tail. Each bucket reports an AVERAGE WEEKLY rate (not a raw
-total), so buckets of unequal width stay directly comparable, and the average
-divides by the weeks the bucket actually spans within the runner's history (the
-volume.py clamp idiom) so a partially-covered bucket is not deflated. A bucket is
-emitted only when it holds real data, so the ladder self-sizes to how deep the
-history reaches.
+level-of-detail ladder): the detailed last ~60 days are already owned IN FULL by
+`recent_training` (its last_7d/last_30d/previous_30d windows all live within 0-60d),
+so this picture begins exactly where that section ends and WIDENS as it goes back —
+2-6 months, 6-12 months, 1-2 years, 2-5 years, then an open 5+ years tail. Each
+bucket reports an AVERAGE WEEKLY rate (not a raw total), so buckets of unequal width
+stay directly comparable, and the average divides by the weeks the bucket actually
+spans within the runner's history (the volume.py clamp idiom) so a partially-covered
+bucket is not deflated. A bucket is emitted only when it holds real data, so the
+ladder self-sizes to how deep the history reaches.
 
-On top of the ladder sit five durability TRAITS (the eval-able headline): training
-age, peak sustained weekly volume, current weekly volume, current-vs-peak,
-multi-year trajectory direction, and time held at the current load. Each is a
-deterministic FACT the coach may cite; none is an intensity verdict and none
-overrides this run's re-derived DerivedMetric or the safety floor. Comparisons
-abstain (`no_norm`/null) when history is too thin to resolve them.
+On top of the ladder sit the durability TRAITS (the eval-able headline): training
+age, peak sustained weekly volume, current-vs-peak (the relationship only — the raw
+current weekly volume is NOT restated here, it lives once in
+`recent_training.last_30d`, #451 one-lane), multi-year trajectory direction, and
+time held at the current load. Each is a deterministic FACT the coach may cite; none
+is an intensity verdict and none overrides this run's re-derived DerivedMetric or the
+safety floor. Comparisons abstain (`no_norm`/null) when history is too thin to
+resolve them.
 
 Pure functions over already-fetched `ActivityFact`s (no DB, no LLM); the DB read
 and pack wiring live in `context.py`.
@@ -39,12 +41,13 @@ from app.schemas.coach_context import (
     TrainingHistoryTraits,
 )
 
-# The richness-decaying ladder: (start_days_ago, end_days_ago, label). The 0-30d
-# window is intentionally absent — `recent_training` owns it, so this section never
-# duplicates it. `end=None` is the open tail (everything older than the prior bound).
+# The richness-decaying ladder: (start_days_ago, end_days_ago, label). The 0-60d
+# window is intentionally absent — `recent_training` owns it in FULL (its last_7d,
+# last_30d and previous_30d windows all live within 0-60d), so this ladder begins
+# exactly where that section ends and never double-covers it (#451 one-lane).
+# `end=None` is the open tail (everything older than the prior bound).
 _BUCKETS: Tuple[Tuple[int, Optional[int], str], ...] = (
-    (30, 90, "1-3 months ago"),
-    (90, 180, "3-6 months ago"),
+    (60, 180, "2-6 months ago"),
     (180, 365, "6-12 months ago"),
     (365, 730, "1-2 years ago"),
     (730, 1825, "2-5 years ago"),
@@ -223,7 +226,8 @@ def build_training_history(facts: List[Any], as_of: date) -> Optional[TrainingHi
     traits = TrainingHistoryTraits(
         training_age_years=round(first_age / 365.25, 1),
         peak_sustained_weekly_distance_m=int(peak),
-        current_weekly_distance_m=int(current),
+        # current weekly volume is NOT restated here (it lives in recent_training.last_30d,
+        # #451 one-lane); only its RELATIONSHIP to the peak rides this section.
         current_vs_peak_pct=round(current / peak * 100.0, 1) if peak > 0 else None,
         trajectory_direction=trajectory_dir,
         trajectory_pct=trajectory_pct,

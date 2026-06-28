@@ -710,17 +710,18 @@ class TrainingHistoryBucket(BaseModel):
     """#561: one coarse, far-horizon volume bucket in the level-of-detail ladder.
 
     The deep history reaches the coach at DECAYING resolution: `recent_training`
-    owns the detailed last ~30 days, so this ladder starts AFTER it and widens as it
-    goes back (1-3 months, 3-6 months, 6-12 months, 1-2 years, 2-5 years, 5+ years),
-    each bucket reporting an AVERAGE WEEKLY rate so buckets of unequal width stay
-    directly comparable (the runner's own "20 km/week" read). The weekly average
-    divides by the weeks the bucket actually spans WITHIN the runner's history (so a
+    owns the detailed last ~60 days in full (its last_7d/last_30d/previous_30d
+    windows all live within 0-60d), so this ladder starts AFTER that and widens as it
+    goes back (2-6 months, 6-12 months, 1-2 years, 2-5 years, 5+ years), each bucket
+    reporting an AVERAGE WEEKLY rate so buckets of unequal width stay directly
+    comparable (the runner's own "20 km/week" read). The weekly average divides by
+    the weeks the bucket actually spans WITHIN the runner's history (so a
     partially-covered bucket is not deflated), mirroring the volume.py clamp. A
     bucket is emitted only when it holds real data, so the ladder self-sizes to how
     far the history reaches."""
     model_config = ConfigDict(extra="forbid")
 
-    label: str            # human horizon, e.g. "1-3 months ago"
+    label: str            # human horizon, e.g. "2-6 months ago"
     start_days_ago: int   # inclusive age lower bound
     end_days_ago: int     # exclusive age upper bound (== start of the open tail's coverage end)
     weeks: float          # weeks spanned within history (the averaging denominator)
@@ -741,8 +742,11 @@ class TrainingHistoryTraits(BaseModel):
 
     training_age_years: float                        # first activity to as_of
     peak_sustained_weekly_distance_m: int            # highest rolling 4-week avg weekly distance, all history
-    current_weekly_distance_m: int                   # last 4-week avg weekly distance
-    current_vs_peak_pct: Optional[float] = None      # current / peak * 100; None when peak is 0
+    # The runner's current weekly volume is NOT restated here — it lives once in
+    # `recent_training.last_30d` (#451 one-lane). This carries only the RELATIONSHIP
+    # to the peak (the new durability signal), which the coach reads as "near / below
+    # your historical ceiling" without a second copy of the recent-volume number.
+    current_vs_peak_pct: Optional[float] = None      # last-4wk rate / peak * 100; None when peak is 0
     trajectory_direction: str                        # up | in_line | down | no_norm (recent 12mo vs prior 12mo)
     trajectory_pct: Optional[float] = None           # recent-12mo vs prior-12mo weekly rate
     time_at_current_load_years: Optional[float] = None  # span the trailing-4wk rate stayed within a band of current

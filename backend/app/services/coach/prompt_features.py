@@ -193,3 +193,24 @@ def ids_with(feature: PromptFeature) -> frozenset[str]:
     """The frozenset of prompt ids carrying ``feature`` (derives the ``*_PROMPT_IDS``
     sets in ``prompts.py``)."""
     return frozenset(pid for pid, feats in PROMPT_FEATURES.items() if feature in feats)
+
+
+def fullest_message_prompt_id() -> str:
+    """The ``coach_message`` prompt id carrying the MOST capabilities — the prompt
+    that turns on every gated pack section, so its serialized pack is the FULLEST and
+    its duplication/byte-stability surface the LARGEST.
+
+    Derived from the manifest so structural pack guards (the no-duplicate-content and
+    single-home-facts tests) auto-track the newest gated section instead of pinning a
+    hardcoded version that silently goes stale the next time a section is added — the
+    exact gap that let a new section's overlap ship unseen. Ties resolve to the
+    newest (last-declared) id: each ``coach_message`` version is a superset of the
+    prior, so the last one reaching the max is the newest fullest prompt.
+    """
+    best: Optional[str] = None
+    best_n = -1
+    for pid, feats in PROMPT_FEATURES.items():
+        if pid.startswith("coach_message") and len(feats) >= best_n:
+            best, best_n = pid, len(feats)
+    assert best is not None  # PROMPT_FEATURES is never empty
+    return best

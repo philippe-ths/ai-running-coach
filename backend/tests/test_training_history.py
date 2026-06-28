@@ -65,8 +65,8 @@ def test_veteran_low_volume_traits():
     # At peak (steady), and the current load has been held for most of the decade.
     assert t.current_vs_peak_pct == 100.0
     assert t.time_at_current_load_years >= 8.0
-    # Low volume throughout.
-    assert 18_000 <= t.current_weekly_distance_m <= 22_000
+    # Low volume throughout (current is not restated; peak is the volume anchor).
+    assert 18_000 <= t.peak_sustained_weekly_distance_m <= 22_000
 
 
 def test_newer_high_volume_traits():
@@ -77,8 +77,8 @@ def test_newer_high_volume_traits():
     # Ramped: recent year well above the prior year.
     assert t.trajectory_direction == "up"
     assert t.trajectory_pct is not None and t.trajectory_pct > 50.0
-    # High current load, but held for only about a year.
-    assert t.current_weekly_distance_m >= 80_000
+    # High peak load, but held for only about a year.
+    assert t.peak_sustained_weekly_distance_m >= 80_000
     assert 0.7 <= t.time_at_current_load_years <= 1.5
 
 
@@ -88,7 +88,7 @@ def test_archetypes_are_distinguished():
     new = build_training_history(_newer_high_volume(), AS_OF).traits
     assert vet.training_age_years > new.training_age_years
     assert vet.time_at_current_load_years > new.time_at_current_load_years
-    assert vet.current_weekly_distance_m < new.current_weekly_distance_m
+    assert vet.peak_sustained_weekly_distance_m < new.peak_sustained_weekly_distance_m
     assert vet.trajectory_direction == "in_line" and new.trajectory_direction == "up"
 
 
@@ -103,7 +103,7 @@ def test_ladder_depth_self_sizes_to_history():
     assert "5+ years ago" not in new_labels
     assert "2-5 years ago" not in new_labels
     # Both still describe the near-but-not-recent horizon.
-    assert "1-3 months ago" in vet_labels and "1-3 months ago" in new_labels
+    assert "2-6 months ago" in vet_labels and "2-6 months ago" in new_labels
 
 
 def test_ladder_buckets_are_weekly_rates_not_raw_totals():
@@ -114,7 +114,7 @@ def test_ladder_buckets_are_weekly_rates_not_raw_totals():
         assert 17_000 <= b.avg_weekly_distance_m <= 23_000, b.label
         assert b.run_share_pct == 100.0
     new = build_training_history(_newer_high_volume(), AS_OF)
-    near = next(b for b in new.timeline if b.label == "1-3 months ago")
+    near = next(b for b in new.timeline if b.label == "2-6 months ago")
     assert near.avg_weekly_distance_m >= 80_000
 
 
@@ -125,7 +125,7 @@ def test_modality_mix_is_carried():
         facts.append(_Fact(AS_OF - timedelta(days=7 * w), activity_type="Run", distance_m=10_000))
         facts.append(_Fact(AS_OF - timedelta(days=7 * w + 2), activity_type="Walk", distance_m=4_000))
     ctx = build_training_history(facts, AS_OF)
-    near = next(b for b in ctx.timeline if b.label == "1-3 months ago")
+    near = next(b for b in ctx.timeline if b.label == "2-6 months ago")
     assert 40.0 <= near.run_share_pct <= 60.0
 
 
@@ -161,7 +161,7 @@ def test_thin_history_abstains_on_trajectory_but_still_emits():
     assert ctx.traits.trajectory_direction == "no_norm"
     assert ctx.traits.trajectory_pct is None
     labels = {b.label for b in ctx.timeline}
-    assert "1-3 months ago" in labels
+    assert "2-6 months ago" in labels
     # No bucket beyond the available ~4 months.
     assert "6-12 months ago" not in labels
     assert "1-2 years ago" not in labels

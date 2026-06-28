@@ -38,11 +38,14 @@ from app.models import (
     UserProfile,
 )
 from app.services.coach.context import build_context_pack
+from app.services.coach.prompt_features import fullest_message_prompt_id
 
-# The live production prompt: it turns on every gated section
-# (recent_training, training_volume, training_load, corpus, stance, stream_view),
-# so the pack is at its fullest and the duplication surface is largest.
-FULL_PROMPT_ID = "coach_message_v11"
+# The FULLEST prompt: it turns on every gated section, so the pack is at its fullest
+# and the duplication surface is largest. Derived from the manifest (not pinned to a
+# version) so this guard AUTO-TRACKS the newest gated section — a new section added
+# under a new prompt id is exercised here the moment it lands, instead of slipping
+# through until someone remembers to bump the constant.
+FULL_PROMPT_ID = fullest_message_prompt_id()
 
 # A subtree must clear BOTH thresholds to count: enough leaf content that an
 # identical copy is meaningful waste, and enough serialized bytes that it is not a
@@ -298,7 +301,7 @@ def test_serialized_pack_has_no_duplicate_subtrees(db, enable_durable_memory):
     must_be_present = {
         "metrics", "longitudinal", "perceived_effort", "adherence", "block",
         "corpus", "stance", "training_load", "training_volume", "stream_view",
-        "recent_training",
+        "recent_training", "training_history",
     }
     missing = must_be_present - serialized.keys()
     assert not missing, f"fixture did not populate expected sections: {sorted(missing)}"

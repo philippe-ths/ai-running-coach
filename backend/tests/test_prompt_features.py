@@ -12,6 +12,7 @@ from app.services.coach import prompts
 from app.services.coach.prompt_features import (
     PROMPT_FEATURES,
     PromptFeature,
+    fullest_message_prompt_id,
     has_feature,
     ids_with,
 )
@@ -185,6 +186,20 @@ def test_predicates_agree_with_has_feature():
 def test_opener_prompts_cover_exactly_two_stage_ids():
     """Every two-stage prompt has a distinct opener form, and nothing else does."""
     assert set(prompts._OPENER_PROMPTS.keys()) == set(prompts.TWO_STAGE_PROMPT_IDS)
+
+
+def test_fullest_message_prompt_is_the_max_capability_id():
+    """The structural pack guards derive their prompt from this, so it must be the
+    coach_message id with the most capabilities (every gated section on) and must
+    advance automatically as new versions are added — never a stale hardcode."""
+    fullest = fullest_message_prompt_id()
+    max_n = max(len(f) for f in PROMPT_FEATURES.values())
+    assert len(PROMPT_FEATURES[fullest]) == max_n
+    assert fullest.startswith("coach_message")
+    # It carries EVERY feature any prompt carries (the union), so no gated section is
+    # missed by a guard built under it.
+    every_feature = set().union(*PROMPT_FEATURES.values())
+    assert set(PROMPT_FEATURES[fullest]) == every_feature
 
 
 def test_manifest_ids_are_registered_prompts():
