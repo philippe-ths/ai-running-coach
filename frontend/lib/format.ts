@@ -67,6 +67,19 @@ export function formatDistanceKm(metres: number): string {
 }
 
 /**
+ * Whether distance and pace are meaningful stats for this activity (#564).
+ *
+ * Indoor modalities (indoor ride, rowing erg, weight training) report a 0
+ * distance, where "0.00 km" / a blank pace reads as missing or broken data
+ * rather than "distance doesn't apply to this activity". Gating the
+ * distance- and pace-derived stats on this keeps each modality's stat set
+ * appropriate without enumerating every activity type.
+ */
+export function hasMeaningfulDistance(metres: number | null | undefined): boolean {
+  return !!metres && metres > 0;
+}
+
+/**
  * Format an ISO date string ("2026-02-08") to "Feb 8" without
  * timezone conversion.  parseISO creates midnight-UTC which shifts
  * the displayed date when the browser is behind UTC.
