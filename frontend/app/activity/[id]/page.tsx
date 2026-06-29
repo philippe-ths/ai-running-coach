@@ -9,6 +9,7 @@ import RoutePath from '@/components/RoutePath';
 import StreamCharts from '@/components/StreamCharts';
 import { SplitsPanel } from '@/components/SplitsPanel';
 import { LapsPanel } from '@/components/LapsPanel';
+import { lapsAreAutoDistance } from '@/lib/laps';
 import StopsPanel from '@/components/StopsPanel';
 import FeatureDisabledGate from '@/components/FeatureDisabledGate';
 import EfficiencyPanel from '@/components/EfficiencyPanel';
@@ -32,6 +33,15 @@ export default async function ActivityDetail({ params }: { params: { id: string 
   // #522: coach input feature flags drive UI greying (fail open to enabled).
   const coachFlags = (await serverFetch('/api/coach/feature-flags')) || {};
   const stopsEnabled = coachFlags.stops_analysis !== false;
+
+  // #562: when the recorded laps are just per-km auto-distance laps, they
+  // duplicate the per-km splits, so render one unified Laps view (enriched
+  // with the splits' richer columns) instead of two near-identical cards.
+  // Device-meaningful laps (manual button / structured workout) keep both.
+  const hasLaps = !!activity.laps && activity.laps.length > 0;
+  const autoDistanceLaps = lapsAreAutoDistance(activity.laps, activity.splits);
+  const showSplitsPanel =
+    !!activity.splits && activity.splits.length > 0 && !(hasLaps && autoDistanceLaps);
 
   return (
     <div className="space-y-6 relative">
@@ -93,13 +103,18 @@ export default async function ActivityDetail({ params }: { params: { id: string 
              <StreamCharts streams={activity.streams} />
           )}
 
-          {/* Laps Panel: only when the runner recorded laps (#208) */}
-          {activity.laps && activity.laps.length > 0 && (
-              <LapsPanel laps={activity.laps} />
+          {/* Laps Panel: only when the runner recorded laps (#208). When the
+              laps are just per-km auto-distance laps, the aligned splits are
+              passed so this single view carries their richer columns (#562). */}
+          {hasLaps && (
+              <LapsPanel
+                laps={activity.laps}
+                splits={autoDistanceLaps ? activity.splits : undefined}
+              />
           )}
 
-          {/* Splits Panel */}
-          {activity.splits && activity.splits.length > 0 && (
+          {/* Splits Panel: hidden when it would duplicate auto-distance laps (#562) */}
+          {showSplitsPanel && (
               <SplitsPanel splits={activity.splits} />
           )}
 
