@@ -765,6 +765,27 @@ class TrainingHistoryContext(BaseModel):
     timeline: List[TrainingHistoryBucket]
 
 
+class MemoryContext(BaseModel):
+    """ADR 0025: the runner memory profile surfaced WHOLE — the five capped sections
+    of the runner's STATED facts + soft character, plus provenance so the coach can
+    hedge a thin/stale profile. Emitted ONLY under a memory-aware prompt id, and
+    ONLY when a profile row exists (else the builder returns None and the section is
+    dropped from serialization, byte-stable elsewhere). It is the citable stated tier
+    (the memory addendum): the coach may reference it, but it yields to this run's
+    re-derived DerivedMetric on a factual conflict and never lowers the safety floor;
+    it carries no behavioral verdict (those are re-derived live, never stored)."""
+    model_config = ConfigDict(extra="forbid")
+
+    who_you_are: List[str] = []
+    limits_and_constraints: List[str] = []
+    goals_and_plans: List[str] = []
+    what_works_for_you: List[str] = []
+    lately: List[str] = []
+    # Provenance, for hedging a thin/stale profile (mirrors NarrativeContext).
+    last_updated_days_ago: Optional[int] = None
+    source_report_count: Optional[int] = None
+
+
 class CoachContextPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -849,6 +870,11 @@ class CoachContextPack(BaseModel):
     # stays byte-stable pre/post #561; populated only under a training-history-aware
     # prompt id, and only when history beyond the recent window exists to describe.
     training_history: Optional["TrainingHistoryContext"] = None
+    # ADR 0025 runner memory profile, surfaced whole. None under every non-memory
+    # prompt and OMITTED from serialization (the gated-section idiom), so the pack
+    # stays byte-stable pre/post v13; populated only under a memory-aware prompt id,
+    # and only when a profile row exists for the runner.
+    memory: Optional["MemoryContext"] = None
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
@@ -1062,6 +1088,7 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
         nested_drop=_drop_recent_training_dedup,
     ),  # #444
     PackSection("training_history", PromptFeature.TRAINING_HISTORY),  # #561
+    PackSection("memory", PromptFeature.MEMORY),  # ADR 0025 runner memory profile
     # #451: the retired legacy summary — droppable but NOT prompt-gated (no longer
     # populated; a pre-#451 stored pack still round-trips its real object unchanged).
     PackSection("recent_training_summary"),

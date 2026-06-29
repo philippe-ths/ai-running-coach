@@ -57,7 +57,7 @@ def get_coach_feature_flags(
 
     The frontend greys a panel/field when its key is False. Global server config
     (not per-user), but kept behind the same auth as the rest of the coach routes.
-    Keys: voice, stance, user_materials, sleep_quality, stops_analysis."""
+    Keys: voice, stance, user_materials, sleep_quality, stops_analysis, memory."""
     return settings.coach_ui_feature_flags
 
 

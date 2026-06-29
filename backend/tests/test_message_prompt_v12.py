@@ -33,7 +33,7 @@ def test_v12_registered_carries_every_v11_capability_plus_training_history():
     assert V12.startswith(MESSAGE_PROMPT_PREFIX)  # -> schema 2.0 by prefix
     assert V12 in RECENT_TRAINING_PROMPT_IDS  # inherits v11's capabilities
     assert V12 in TRAINING_HISTORY_PROMPT_IDS  # ...plus the new TRAINING_HISTORY capability
-    assert TRAINING_HISTORY_PROMPT_IDS == {V12}
+    assert TRAINING_HISTORY_PROMPT_IDS == {V12, "coach_message_v13"}
     assert V12 in _OPENER_PROMPTS  # has a distinct opener form (two-stage)
     # same schema family as v11 (so v12 reports regenerate, prior history retained).
     assert active_schema_version(V12) == active_schema_version(V11)

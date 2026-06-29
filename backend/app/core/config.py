@@ -444,6 +444,7 @@ class Settings(BaseSettings):
             "user_materials": self.COACH_USER_MATERIALS_ENABLED,
             "sleep_quality": self.COACH_SLEEP_QUALITY_ENABLED,
             "stops_analysis": self.COACH_STOPS_ANALYSIS_ENABLED,
+            "memory": self.COACH_MEMORY_ENABLED,
         }
 
     model_config = SettingsConfigDict(

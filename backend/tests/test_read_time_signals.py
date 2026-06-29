@@ -25,6 +25,7 @@ from app.services.coach.context import (
     READ_TIME_SIGNALS,
     _ADHERENCE_SIGNAL,
     _CALIBRATION_SIGNAL,
+    _MEMORY_SIGNAL,
     _RECENT_TRAINING_SIGNAL,
     _TRAINING_HISTORY_SIGNAL,
     _TRAINING_LOAD_SIGNAL,
@@ -47,6 +48,7 @@ def test_all_signals_registered_under_one_interface():
         "training_volume",
         "recent_training",
         "training_history",
+        "memory",
     }
     assert all(isinstance(s, ReadTimeSignal) for s in READ_TIME_SIGNALS.values())
 
@@ -60,6 +62,7 @@ def test_always_emitted_vs_gated_split_is_explicit():
     assert _TRAINING_VOLUME_SIGNAL.gate_feature is PromptFeature.VOLUME
     assert _RECENT_TRAINING_SIGNAL.gate_feature is PromptFeature.RECENT_TRAINING
     assert _TRAINING_HISTORY_SIGNAL.gate_feature is PromptFeature.TRAINING_HISTORY
+    assert _MEMORY_SIGNAL.gate_feature is PromptFeature.MEMORY
 
 
 # --- gather: dispatch + gating handled once ----------------------------------
