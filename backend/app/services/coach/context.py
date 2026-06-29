@@ -16,8 +16,9 @@ default pack.
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from sqlalchemy import func
@@ -34,6 +35,7 @@ from app.services.coach.adherence import CandidateActivity, build_adherence
 from app.services.coach.belief_store import build_believed_facts, retrieve_beliefs
 from app.services.coach.calibration import assess_referral, calibrate_drift
 from app.services.coach.narrative_store import build_narrative_context
+from app.services.coach.memory_store import get_memory
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.preference import build_preference_profile
 from app.services.coach.salience import compute_safety_override
@@ -79,6 +81,7 @@ from app.schemas.coach_context import (
     RecentTrainingContext,
     TrainingHistoryContext,
     LongitudinalContext,
+    MemoryContext,
     MetricsContext,
     NarrativeContext,
     NoveltyContext,
@@ -89,8 +92,11 @@ from app.schemas.coach_context import (
     SafetyRules,
     SalienceContext,
 )
+from app.schemas.coach_memory import RunnerMemoryProfile
 from app.services.trends import _query_activity_facts
 from app.services.units.cadence import normalize_cadence_spm
+
+logger = logging.getLogger(__name__)
 
 # Defensive cap on prior check-ins scanned for the pain trend. Pain check-ins are
 # sparse, so this comfortably covers the recent history the trend needs.
@@ -270,6 +276,8 @@ def build_context_pack(
         recent_training=gather(_RECENT_TRAINING_SIGNAL, db, activity, prompt_id, as_of),
         # #561 multi-year training-history picture (LOD volume ladder + durability traits).
         training_history=gather(_TRAINING_HISTORY_SIGNAL, db, activity, prompt_id, as_of),
+        # ADR 0025 runner memory profile (stored-artifact read, memory-aware prompt only).
+        memory=gather(_MEMORY_SIGNAL, db, activity, prompt_id, as_of),
         safety_rules=b.safety_rules,
     )
 
@@ -485,6 +493,71 @@ def _build_training_history_context(
         user_id=activity.user_id,
     )
     return build_training_history(facts, local_day)
+
+
+def _build_memory_context(
+    db: Session, activity: Activity, as_of: datetime
+) -> Optional[MemoryContext]:
+    """The ADR 0025 runner memory profile pack section, or None.
+
+    A stored-artifact read behind the shared `ReadTimeSignal` seam (#492): the
+    MEMORY gating is applied once in `gather`, so this `compute` is reached ONLY
+    under a memory-aware prompt — the pack stays byte-stable otherwise (the
+    Optional-and-drop idiom). Reads the runner's single stored profile row and
+    surfaces it WHOLE (no retrieval/ranking) — the citable stated tier that yields
+    to this run's re-derived `DerivedMetric` and never lowers the safety floor (the
+    memory addendum); it carries no behavioral verdict.
+
+    Degrades to None (section dropped, byte-stable) when the `COACH_MEMORY_ENABLED`
+    operator switch is off, no profile row exists yet (cold start), or the profile
+    has no lines in any section. A stored row that fails to parse drops too, never
+    breaking the pack."""
+    if not settings.COACH_MEMORY_ENABLED:
+        return None
+    row = get_memory(db, activity.user_id)
+    if row is None or not row.profile:
+        return None
+    try:
+        profile = RunnerMemoryProfile.model_validate(row.profile)
+    except Exception:  # noqa: BLE001 — an off-shape stored profile drops, never crashes the pack
+        logger.exception(
+            "memory pack: stored profile failed to parse for user %s", activity.user_id
+        )
+        return None
+
+    sections = (
+        profile.who_you_are,
+        profile.limits_and_constraints,
+        profile.goals_and_plans,
+        profile.what_works_for_you,
+        profile.lately,
+    )
+    if not any(sections):
+        return None  # a row exists but graduated nothing yet — drop, byte-stable
+
+    last_updated_days_ago: Optional[int] = None
+    grounded = _to_aware(row.grounded_through)
+    ref = _to_aware(activity.start_date)
+    if grounded is not None and ref is not None:
+        last_updated_days_ago = max(0, (ref - grounded).days)
+
+    return MemoryContext(
+        who_you_are=profile.who_you_are,
+        limits_and_constraints=profile.limits_and_constraints,
+        goals_and_plans=profile.goals_and_plans,
+        what_works_for_you=profile.what_works_for_you,
+        lately=profile.lately,
+        last_updated_days_ago=last_updated_days_ago,
+        source_report_count=row.source_report_count,
+    )
+
+
+def _to_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """Coerce a naive datetime (SQLite drops tzinfo) to UTC-aware so recency
+    arithmetic never mixes naive and aware. No-op on Postgres."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _build_block_context(db: Session, activity: Activity) -> Optional[BlockContext]:
@@ -1241,9 +1314,12 @@ _RECENT_TRAINING_SIGNAL = ReadTimeSignal(
 _TRAINING_HISTORY_SIGNAL = ReadTimeSignal(
     "training_history", _build_training_history_context, PromptFeature.TRAINING_HISTORY
 )
+_MEMORY_SIGNAL = ReadTimeSignal("memory", _build_memory_context, PromptFeature.MEMORY)
 
-# All five signals, keyed by name — the registry a stored-artifact adapter (#203)
-# would look up and swap an entry in without touching the call sites above.
+# All read-time signals, keyed by name — the registry a stored-artifact adapter
+# (#203) would look up and swap an entry in without touching the call sites above.
+# `memory` (ADR 0025) is itself the stored-artifact adapter the seam was designed
+# for: it reads a written profile rather than scanning history.
 READ_TIME_SIGNALS: Dict[str, ReadTimeSignal] = {
     s.name: s
     for s in (
@@ -1253,6 +1329,7 @@ READ_TIME_SIGNALS: Dict[str, ReadTimeSignal] = {
         _TRAINING_VOLUME_SIGNAL,
         _RECENT_TRAINING_SIGNAL,
         _TRAINING_HISTORY_SIGNAL,
+        _MEMORY_SIGNAL,
     )
 }
 

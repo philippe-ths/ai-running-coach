@@ -91,6 +91,20 @@ EXPECTED_CAPABILITIES = {
         F.RECENT_TRAINING,
         F.TRAINING_HISTORY,
     },
+    # ADR 0025 — v13 = v12 + the MEMORY capability.
+    "coach_message_v13": {
+        F.TWO_STAGE,
+        F.VOICE,
+        F.CORPUS,
+        F.STANCE,
+        F.TRAINING_LOAD,
+        F.USER_MATERIALS,
+        F.VOLUME,
+        F.STREAM_VIEW,
+        F.RECENT_TRAINING,
+        F.TRAINING_HISTORY,
+        F.MEMORY,
+    },
 }
 
 # Ids that must carry NO capabilities (the inert-under-rollback set).
@@ -129,11 +143,13 @@ def test_derived_sets_equal_manifest_views():
     assert prompts.MEMORY_PROMPT_IDS == ids_with(F.MEMORY)
 
 
-def test_memory_feature_is_inert_until_v13_is_registered():
-    """ADR 0025: M2 adds PromptFeature.MEMORY + is_memory_prompt but attaches the
-    feature to no prompt, so memory is wholly inert under the live prompt until M3
-    registers coach_message_v13. M3 flips this assertion."""
-    assert prompts.MEMORY_PROMPT_IDS == frozenset()
+def test_memory_feature_is_active_on_v13():
+    """ADR 0025: M3 registers coach_message_v13 carrying the MEMORY capability, so the
+    `memory` pack section + addendum + the background writer activate together on the
+    v13 flip. (M2 shipped the feature inert; this assertion was flipped here.) v12 and
+    below stay memory-free, so the rollback is a pure config flip."""
+    assert prompts.MEMORY_PROMPT_IDS == {"coach_message_v13"}
+    assert prompts.is_memory_prompt("coach_message_v13") is True
     assert prompts.is_memory_prompt("coach_message_v12") is False
 
 
@@ -143,39 +159,43 @@ def test_derived_sets_match_captured_membership():
         "coach_message_v2", "coach_message_v3", "coach_message_v4",
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
+        "coach_message_v13",
     }
     assert prompts.VOICE_PROMPT_IDS == {
         "coach_message_v3", "coach_message_v4", "coach_message_v5",
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
-        "coach_message_v10", "coach_message_v11", "coach_message_v12",
+        "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
     }
     assert prompts.CORPUS_PROMPT_IDS == {
         "coach_message_v4", "coach_message_v5", "coach_message_v6",
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
-        "coach_message_v11", "coach_message_v12",
+        "coach_message_v11", "coach_message_v12", "coach_message_v13",
     }
     assert prompts.STANCE_PROMPT_IDS == {
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
+        "coach_message_v13",
     }
     assert prompts.TRAINING_LOAD_PROMPT_IDS == {
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
-        "coach_message_v10", "coach_message_v11", "coach_message_v12",
+        "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
     }
     assert prompts.USER_MATERIALS_PROMPT_IDS == {
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
-        "coach_message_v11", "coach_message_v12",
+        "coach_message_v11", "coach_message_v12", "coach_message_v13",
     }
     assert prompts.VOLUME_PROMPT_IDS == {
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
+        "coach_message_v13",
     }
     assert prompts.STREAM_VIEW_PROMPT_IDS == {
-        "coach_message_v10", "coach_message_v11", "coach_message_v12",
+        "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
     }
     assert prompts.RECENT_TRAINING_PROMPT_IDS == {
-        "coach_message_v11", "coach_message_v12",
+        "coach_message_v11", "coach_message_v12", "coach_message_v13",
     }
-    assert prompts.TRAINING_HISTORY_PROMPT_IDS == {"coach_message_v12"}
+    assert prompts.TRAINING_HISTORY_PROMPT_IDS == {"coach_message_v12", "coach_message_v13"}
+    assert prompts.MEMORY_PROMPT_IDS == {"coach_message_v13"}
 
 
 def test_predicates_agree_with_has_feature():
@@ -238,3 +258,5 @@ def test_message_version_capabilities_are_monotonic():
     assert PROMPT_FEATURES["coach_message_v11"] > PROMPT_FEATURES["coach_message_v10"]
     # #561 — v12 = v11 + TRAINING_HISTORY: a strict superset of v11.
     assert PROMPT_FEATURES["coach_message_v12"] > PROMPT_FEATURES["coach_message_v11"]
+    # ADR 0025 — v13 = v12 + MEMORY: a strict superset of v12.
+    assert PROMPT_FEATURES["coach_message_v13"] > PROMPT_FEATURES["coach_message_v12"]

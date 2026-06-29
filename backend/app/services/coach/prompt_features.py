@@ -150,6 +150,23 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.TRAINING_HISTORY,
         }
     ),
+    # ADR 0025 — v13 = v12 + the MEMORY capability (the runner memory profile
+    # addendum + the `memory` pack section + the background update-pass enqueue).
+    "coach_message_v13": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.TRAINING_LOAD,
+            _F.USER_MATERIALS,
+            _F.VOLUME,
+            _F.STREAM_VIEW,
+            _F.RECENT_TRAINING,
+            _F.TRAINING_HISTORY,
+            _F.MEMORY,
+        }
+    ),
 }
 
 

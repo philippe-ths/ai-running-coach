@@ -143,6 +143,9 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
                 text="An effort score of 265.6 confirms this stayed in true recovery "
                 "territory, well below moderate intensity thresholds.",
             ),
+            # (11) a binary non-compliance verdict / nag about the runner's behaviour —
+            # the retired belief loop's symptom (ADR 0025, G2/G3).
+            CoachTakeaway(text="And you keep ignoring my easy-day guidance, as I keep telling you."),
         ],
         next_steps=[CoachNextStep(
             action="Add a long run",
@@ -226,7 +229,8 @@ def deliberately_bad_message_report() -> Tuple[CoachMessageReport, CoachContextP
             "fitness has clearly been trending upward over the past few weeks. I "
             "would diagnose this as chronic fatigue. An effort score of 265.6 "
             "confirms this stayed in true recovery territory, well below moderate "
-            "intensity thresholds."
+            "intensity thresholds. And you keep ignoring my easy-day guidance, as "
+            "I keep telling you."
         ),
         headline=None,  # (1) no lead verdict label, tail not degraded
         next_steps=[CoachNextStep(

@@ -47,12 +47,13 @@ from app.services.coach.service import (  # noqa: E402
 )
 
 # Default to this branch's HEAD prompt so the diagram is a one-to-one picture of the
-# fullest pack the code can build. v12 (#561) adds pack.training_history (the
-# multi-year LOD volume ladder + durability traits) on top of v11's stream_view (#443)
-# and recent_training (#444). NOTE: prod runs v11 and v12 ships INERT until the owner
-# flips COACH_PROMPT_ID, so this capture is one prompt AHEAD of prod; pin
-# PROMPT_ID=coach_message_v11 to render the exact live-prod pack instead.
-PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_v12")
+# fullest pack the code can build. v13 (ADR 0025) adds pack.memory (the rewritten-from-
+# source runner memory profile) on top of v12's training_history (#561). NOTE: prod runs
+# v12 and v13 ships INERT until the owner flips COACH_PROMPT_ID + COACH_MEMORY_ENABLED,
+# so this capture is one prompt AHEAD of prod; pin PROMPT_ID=coach_message_v12 to render
+# the exact live-prod pack instead. pack.memory is absent here unless the runner has a
+# graduated runner_memory profile (cold start drops the section).
+PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_v13")
 TARGET = Path(__file__).parent / "flow-nodes.js"
 
 # DerivedMetric columns the diagram shows (order = render order; excludes id / fks /
