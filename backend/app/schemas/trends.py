@@ -13,12 +13,19 @@ class WeeklyDistancePoint(BaseModel):
     week_start: date
     total_distance_m: int
     activity_count: int
+    # Edge-bucket coverage (#566): how much of the week falls inside the
+    # selected period, so the chart can fade partial edge weeks. Optional for
+    # back-compat; out_of_period_days == 0 means a full (non-partial) bucket.
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
 
 
 class WeeklyTimePoint(BaseModel):
     week_start: date
     total_moving_time_s: int
     activity_count: int
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
 
 
 class DailyDistancePoint(BaseModel):
@@ -58,6 +65,9 @@ class PeriodDistancePoint(BaseModel):
     period_start: date
     total_distance_m: int
     activity_count: int
+    # Edge-bucket coverage (#566); see WeeklyDistancePoint.
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
 
 
 class PeriodTimePoint(BaseModel):
@@ -65,6 +75,8 @@ class PeriodTimePoint(BaseModel):
     period_start: date
     total_moving_time_s: int
     activity_count: int
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
 
 
 class PeriodSufferScorePoint(BaseModel):

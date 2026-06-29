@@ -2,12 +2,18 @@ export interface WeeklyDistancePoint {
   week_start: string;
   total_distance_m: number;
   activity_count: number;
+  // #566: edge-bucket coverage. out_of_period_days > 0 marks a partial week
+  // that straddles the selected period boundary (drawn faded).
+  in_period_days?: number | null;
+  out_of_period_days?: number;
 }
 
 export interface WeeklyTimePoint {
   week_start: string;
   total_moving_time_s: number;
   activity_count: number;
+  in_period_days?: number | null;
+  out_of_period_days?: number;
 }
 
 export interface DailyDistancePoint {
@@ -64,12 +70,17 @@ export interface PeriodDistancePoint {
   period_start: string;
   total_distance_m: number;
   activity_count: number;
+  // #566: edge-bucket coverage; see WeeklyDistancePoint.
+  in_period_days?: number | null;
+  out_of_period_days?: number;
 }
 
 export interface PeriodTimePoint {
   period_start: string;
   total_moving_time_s: number;
   activity_count: number;
+  in_period_days?: number | null;
+  out_of_period_days?: number;
 }
 
 export interface PeriodSufferScorePoint {
