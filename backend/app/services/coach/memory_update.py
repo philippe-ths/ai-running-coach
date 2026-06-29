@@ -495,8 +495,7 @@ def enqueue_memory_update(user_id) -> None:
 
     Best-effort: a Redis hiccup or missing queue must never break report storage
     (the report is the record; the memory profile is a derived convenience the next
-    exchange can rebuild). Mirrors `enqueue_consolidation`; mocked in tests to
-    assert the enqueue without a live Redis.
+    exchange can rebuild). Mocked in tests to assert the enqueue without a live Redis.
     """
     try:
         from app.core.queue import queue

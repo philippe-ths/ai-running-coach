@@ -113,9 +113,7 @@ def _stored(db, activity) -> CoachReport:
 async def test_opener_writes_light_state_no_learning_loop(db, _v2):
     activity = _seed(db)
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_opener_blocks(schedule=True)))), \
-         patch("app.services.coach.service.write_back_beliefs") as wb, \
-         patch("app.services.coach.service.enqueue_consolidation") as ec:
+               return_value=_client(_result(_opener_blocks(schedule=True)))):
         result = await generate_opener(db, str(activity.id))
 
     assert result is not None
@@ -125,9 +123,6 @@ async def test_opener_writes_light_state_no_learning_loop(db, _v2):
     assert row.report["opener_message"].startswith("Nice work")
     assert row.report["message"] == ""
     assert row.digest is None  # opener carries no digest
-    # the opener writes NOTHING to durable memory
-    wb.assert_not_called()
-    ec.assert_not_called()
 
 
 async def test_opener_schedule_or_safety_override(db, _v2):
@@ -169,9 +164,7 @@ async def test_fuller_updates_opener_row_in_place_preserving_opener(db, _v2):
     opener_row_id = _stored(db, activity).id
 
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs") as wb, \
-         patch("app.services.coach.service.enqueue_consolidation") as ec:
+               return_value=_client(_result(_fuller_blocks()))):
         read = await generate_fuller(db, str(activity.id))
 
     assert read is not None
@@ -183,9 +176,6 @@ async def test_fuller_updates_opener_row_in_place_preserving_opener(db, _v2):
     assert row.report["message"].startswith("Aerobically")  # fuller prose
     assert len(row.report["next_steps"]) == 1
     assert row.digest is not None  # the fuller stores the exchange digest
-    # the fuller fires the learning loop exactly once
-    wb.assert_called_once()
-    ec.assert_called_once()
 
 
 async def test_fuller_inserts_when_no_opener(db, _v2):
@@ -267,9 +257,7 @@ async def test_opener_medical_overreach_stays_opener_only_and_recovers(db, _v2):
     # The safety-forced fuller turn must now regenerate a real (non-fallback) turn,
     # not cache-hit the stuck fallback.
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks()))):
         await generate_fuller(db, str(activity.id))
     row2 = _stored(db, activity)
     assert row2.is_fallback is False
@@ -284,16 +272,12 @@ async def test_fuller_force_preserves_opener_prose(db, _v2):
                return_value=_client(_result(_opener_blocks(schedule=True)))):
         await generate_opener(db, str(activity.id))
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks()))):
         await generate_fuller(db, str(activity.id))
     opener_prose = _stored(db, activity).report["opener_message"]
 
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks("Second take, drift held.")))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks("Second take, drift held.")))):
         await generate_fuller(db, str(activity.id), force=True)
     row = _stored(db, activity)
     assert row.report["opener_message"] == opener_prose  # preserved across force
@@ -330,9 +314,7 @@ async def test_fuller_retries_once_on_transient_empty_prose(db, _v2):
     # into a real turn instead of a silently-dropped fallback.
     activity = _seed(db)
     fake = _client(_result(_empty_prose_blocks()), _result(_fuller_blocks()))
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
         read = await generate_fuller(db, str(activity.id))
     assert read is not None
     assert fake.generate_coach_message.call_count == 2  # retried once
@@ -355,9 +337,7 @@ async def test_fuller_persistent_fallback_stays_opener_only_and_recovers(db, _v2
 
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_empty_prose_blocks()),
-                                     _result(_empty_prose_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs") as wb, \
-         patch("app.services.coach.service.enqueue_consolidation") as ec:
+                                     _result(_empty_prose_blocks()))):
         read = await generate_fuller(db, str(activity.id))
 
     assert read is not None
@@ -368,15 +348,11 @@ async def test_fuller_persistent_fallback_stays_opener_only_and_recovers(db, _v2
     assert row.report["message"] == ""
     assert row.report["opener_message"].startswith("Nice work")  # preserved
     assert row.digest is None                  # opener-only carries no digest
-    wb.assert_not_called()                     # learning loop never fires on fallback
-    ec.assert_not_called()
 
     # The exchange is still open: a subsequent fuller turn regenerates a real report
     # (it does NOT cache-hit the stuck fallback) and preserves the opener half.
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks()))):
         await generate_fuller(db, str(activity.id))
     row2 = _stored(db, activity)
     assert row2.is_fallback is False
@@ -396,9 +372,7 @@ async def test_force_regen_worker_death_preserves_prior_report(db, _v2):
     # regeneration leaves the prior report fully intact.
     activity = _seed(db)
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks("Original report.")))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks("Original report.")))):
         await generate_fuller(db, str(activity.id))
     original = _stored(db, activity)
     assert original.report["message"] == "Original report."
@@ -429,9 +403,7 @@ async def test_force_regen_fallback_preserves_prior_good_report(db, _v2):
     # rather than overwrite it with "analysis unavailable".
     activity = _seed(db)
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks("Good report.")))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks("Good report.")))):
         await generate_fuller(db, str(activity.id))
     good = _stored(db, activity)
     assert good.report["message"] == "Good report." and good.is_fallback is False
@@ -440,9 +412,7 @@ async def test_force_regen_fallback_preserves_prior_good_report(db, _v2):
     # Force-regenerate, but BOTH fuller attempts return no prose -> a fallback.
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_empty_prose_blocks()),
-                                     _result(_empty_prose_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs") as wb, \
-         patch("app.services.coach.service.enqueue_consolidation") as ec:
+                                     _result(_empty_prose_blocks()))):
         read = await generate_fuller(db, str(activity.id), force=True)
 
     row = _stored(db, activity)
@@ -450,9 +420,6 @@ async def test_force_regen_fallback_preserves_prior_good_report(db, _v2):
     assert row.is_fallback is False                # NOT downgraded to a fallback
     assert row.report["message"] == "Good report."  # prior good prose preserved
     assert read is not None                        # returns the preserved good report
-    # nothing new was stored, so the learning loop never fires
-    wb.assert_not_called()
-    ec.assert_not_called()
 
 
 async def test_generate_fuller_noops_under_single_shot_prompt(db, _v2, monkeypatch):
@@ -503,9 +470,7 @@ async def test_truncated_retry_does_not_clobber_complete_first_attempt(db, _v2):
         # #282 re-attempt of the truncated retry — also truncates here
         _result([_text("At a sustained hard")], stop_reason="max_tokens"),
     )
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     # first attempt + policy retry + the #282 re-attempt of the truncated retry
@@ -528,9 +493,7 @@ async def test_adopted_retry_keeps_raw_response_in_sync(db, _v2):
         # the retry is complete AND fixes rule 1 (carries a question)
         _result(_fuller_blocks(fixed), stop_reason="end_turn"),
     )
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     row = _stored(db, activity)
@@ -561,9 +524,7 @@ async def test_truncated_policy_retry_is_reattempted_once_then_adopted(db, _v2):
         # #282 re-attempt of the truncated retry: complete AND fixes rule 1
         _result(_fuller_blocks(fixed), stop_reason="end_turn"),
     )
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     # first attempt + truncated policy retry + the single #282 re-attempt
@@ -588,9 +549,7 @@ async def test_complete_policy_retry_is_not_reattempted(db, _v2):
         # the policy retry completes cleanly (end_turn) and carries a question
         _result(_fuller_blocks(fixed), stop_reason="end_turn"),
     )
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     # first attempt + policy retry only — the completed retry is not re-attempted
@@ -607,9 +566,7 @@ async def test_no_policy_retry_means_no_reattempt(db, _v2):
     activity = _seed(db)
     fake = _client(_result(_fuller_blocks("Clean complete first attempt."),
                            stop_reason="end_turn"))
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     assert fake.generate_coach_message.call_count == 1

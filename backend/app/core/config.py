@@ -203,25 +203,11 @@ class Settings(BaseSettings):
     # code change. Inert under a single-shot prompt (there is no fuller mode to fire).
     COACH_RECEIPT_CADENCE: bool = False
 
-    # Durable-memory kill switches. Both halves of durable memory were found to
-    # misbehave in prod (the M8 belief loop misclassified "take a rest day" advice
-    # as easy-discipline and reinforced a poisoned "ignores easy guidance" belief;
-    # the A2c narrative replayed that fixation back into every report), so they are
-    # disabled pending a recalibration of what each is meant to do.
-    #
-    # COACH_BELIEFS_ENABLED gates the entire M8 belief machinery: the believed_facts
-    # pack section, the M10 preference_profile section (a pure downstream consumer of
-    # the same belief store), and the post-report write-back. Off => both sections
-    # emit their new-runner empty form and no belief is ever written.
-    #
-    # COACH_NARRATIVE_ENABLED gates A2c: the narrative pack section and the
-    # background Consolidation job enqueue. Off => the section is empty and the job
-    # never runs. Re-enabling either is a pure config flip (the stored rows are left
-    # untouched, so a recalibrated re-enable resumes from existing history).
-    COACH_BELIEFS_ENABLED: bool = False
-    COACH_NARRATIVE_ENABLED: bool = False
+    # (The M8 belief loop + A2c narrative durable-memory system and their kill
+    # switches were retired in M4, ADR 0025, replaced by the runner memory profile
+    # gated by COACH_MEMORY_ENABLED.)
 
-    # Prior-report feedback kill switches. Like the belief/narrative loop above,
+    # Prior-report feedback kill switches. Like the retired belief/narrative loop,
     # the two prior-report-driven context sections were found to replay a stale
     # theme (the coach kept re-litigating "you ignored the rest-day advice" run
     # after run, because each new report read the previous report's rest-day

@@ -158,8 +158,6 @@ async def test_block_complete_fires_full_report_not_opener(db, configured, notif
 
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"), \
          patch.object(pna, "_run_opener_stage") as opener:
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=notifier

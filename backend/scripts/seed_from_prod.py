@@ -53,9 +53,7 @@ from app.models import (  # noqa: E402
     Block,
     CheckIn,
     CoachChatMessage,
-    CoachNarrative,
     CoachReport,
-    CoachingContext,
     CoachingRelationship,
     DerivedMetric,
     Exchange,
@@ -72,8 +70,6 @@ USER_MODELS = [
     StravaAccount,
     RunnerBaseline,
     CoachingRelationship,
-    CoachingContext,
-    CoachNarrative,
 ]
 # activities.block_id <-> blocks.primary_activity_id is circular (A1), so
 # activities are inserted with block_id nulled, blocks/exchanges follow, and

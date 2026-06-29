@@ -32,12 +32,9 @@ from app.services.analysis.baseline import bucket_key
 from app.services.analysis.classifier import Classification, compose_headline  # noqa: F401
 from app.services.analysis.novelty import AxisSnapshot, compute_novelty
 from app.services.coach.adherence import CandidateActivity, build_adherence
-from app.services.coach.belief_store import build_believed_facts, retrieve_beliefs
 from app.services.coach.calibration import assess_referral, calibrate_drift
-from app.services.coach.narrative_store import build_narrative_context
 from app.services.coach.memory_store import get_memory
 from app.services.coach.perceived_effort import build_perceived_effort
-from app.services.coach.preference import build_preference_profile
 from app.services.coach.salience import compute_safety_override
 from app.services.coach.corpus import DEFAULT_SCHOOL_ID
 from app.services.coach.prompt_features import PromptFeature
@@ -65,7 +62,6 @@ from app.schemas.coach_context import (
     ActivityContext,
     AdherenceContext,
     BaselineTrendDelta,
-    BelievedFactsContext,
     BlockContext,
     BlockMember,
     CalibrationContext,
@@ -83,10 +79,8 @@ from app.schemas.coach_context import (
     LongitudinalContext,
     MemoryContext,
     MetricsContext,
-    NarrativeContext,
     NoveltyContext,
     PerceivedEffortContext,
-    PreferenceProfile,
     ProfileContext,
     SafetyOverride,
     SafetyRules,
@@ -154,19 +148,16 @@ _PUSHBACK_PHRASES = (
 @dataclass(frozen=True)
 class BBaseline:
     """The always-present relationship slice for one exchange: the runner's
-    profile and recent-load rollups, the durable-memory narrative (voice), the
-    last exchange's digest + matching baseline trend, this run's subjective
-    signals, the deterministic durable facts (adherence, beliefs, calibration,
-    preference), and the safety rules."""
+    profile and recent-load rollups, the last exchange's digest + matching
+    baseline trend, this run's subjective signals, the deterministic durable
+    facts (adherence, calibration), and the safety rules. (The belief /
+    preference / narrative durable-memory facts were retired in M4, ADR 0025.)"""
 
     profile: ProfileContext
     longitudinal: LongitudinalContext
     perceived_effort: PerceivedEffortContext
     adherence: AdherenceContext
-    believed_facts: BelievedFactsContext
     calibration: CalibrationContext
-    preference_profile: PreferenceProfile
-    narrative: NarrativeContext
     salience: SalienceContext
     safety_rules: SafetyRules
 
@@ -236,10 +227,7 @@ def build_context_pack(
         longitudinal=b.longitudinal,
         perceived_effort=b.perceived_effort,
         adherence=b.adherence,
-        believed_facts=b.believed_facts,
         calibration=b.calibration,
-        preference_profile=b.preference_profile,
-        narrative=b.narrative,
         salience=b.salience,
         # #522: COACH_CONTINUITY_ENABLED drops the fuller-turn continuity section.
         continuity=(
@@ -871,28 +859,14 @@ def build_b_baseline(
             if settings.COACH_ADHERENCE_ENABLED
             else AdherenceContext(prior_report_date=None, outcomes=[])
         ),
-        # M8 belief machinery (believed_facts + the M10 preference_profile that
-        # reads the same store) is gated off pending recalibration; off => the
-        # new-runner empty form, so the poisoned belief never reaches the prompt.
-        believed_facts=(
-            build_believed_facts(db, activity)
-            if settings.COACH_BELIEFS_ENABLED
-            else BelievedFactsContext(facts=[])
-        ),
+        # (believed_facts / preference_profile / narrative were retired in M4,
+        # ADR 0025, replaced by the runner memory profile. The fields remain as
+        # never-populated Optional stubs so historical stored packs still
+        # strict-parse; left unset here, they default None and drop from
+        # serialization via the PACK_SECTIONS registry.)
         # M9 calibration: an always-emitted read-time signal through the shared seam
         # (#492; no PromptFeature gate, so `gather` runs its compute on every prompt).
         calibration=gather(_CALIBRATION_SIGNAL, db, activity, None, activity.start_date),
-        preference_profile=(
-            _build_preference_profile(db, activity)
-            if settings.COACH_BELIEFS_ENABLED
-            else build_preference_profile([])
-        ),
-        # A2c narrative is gated off pending recalibration; off => empty story.
-        narrative=(
-            build_narrative_context(db, activity)
-            if settings.COACH_NARRATIVE_ENABLED
-            else NarrativeContext()
-        ),
         # #522: COACH_SALIENCE_ENABLED drops the pack section only. The deterministic
         # fuller-turn scheduling (compute_safety_override in the opener path) reads its
         # own salience compute, not this pack section, so it is untouched.
@@ -1273,18 +1247,6 @@ def _novelty_axis_history(db: Session, activity: Activity) -> list[AxisSnapshot]
         AxisSnapshot(structure=s, duration_class=d, is_race=r, is_hilly=h)
         for s, d, r, h in rows
     ]
-
-
-def _build_preference_profile(db: Session, activity: Activity):
-    """Assemble the M10 preference profile from the runner's accumulated
-    adherence_pattern beliefs (M8). Reuses the belief retrieval (active,
-    non-decayed, quality-cleared), so a stale or thin adherence record yields an
-    empty profile and the coach simply has no preference to lean on."""
-    beliefs = [
-        b for b in retrieve_beliefs(db, activity.user_id)
-        if b.kind == "adherence_pattern"
-    ]
-    return build_preference_profile(beliefs)
 
 
 # --- The read-time history-scan signal registry (#492) ----------------------

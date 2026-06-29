@@ -133,15 +133,13 @@ _NEGATION_PATTERN = re.compile(
 )
 
 
-# --- Rule 6: narrative-is-not-evidence boundary (A2c) ----------------------
-# The durable-memory narrative is voice only (ADR 0008): it can never be the
-# cited source of a factual claim. The pack carries it under the `narrative`
-# section, so any evidence ref whose field path points there is the LLM grounding
-# a claim on the story. Deliberately narrow — it matches ONLY the narrative path,
-# never legitimate evidence — so it cannot cause the false-positive fallbacks a
-# broad rule would. This is the code half of the authority boundary that rule 24
-# states in the prompt.
-_NARRATIVE_FIELD_PATTERN = re.compile(r"^\s*narrative(?:\.|\[|\s*$)", re.IGNORECASE)
+# --- (Rule 6: narrative-is-not-evidence) RETIRED in M4 (ADR 0025) ----------
+# The A2c durable-memory narrative section is gone, so its evidence-path guard has
+# nothing to police. The runner MEMORY profile that replaced it is deliberately the
+# CITABLE stated tier (G5: "you mentioned your knee" is legitimate grounding), so it
+# gets NO memory-is-not-evidence rule — that would forbid exactly the citation the
+# design allows. Memory's authority is held by the v13 prompt addendum + the
+# medical-scope floor (rule 5, below) + the M3 eval sensors, not by a path ban.
 
 
 # --- Rule 7: corpus-is-not-evidence boundary (P1.2, ADR 0014) --------------
@@ -315,30 +313,6 @@ def check_medical_overreach(full_text: str) -> List[PolicyViolation]:
     return []
 
 
-def check_narrative_evidence(evidence_field_paths: List[str]) -> List[PolicyViolation]:
-    """Rule 6: the durable-memory narrative is voice only — never cited as fact."""
-    narrative_fields = [
-        f for f in evidence_field_paths if _NARRATIVE_FIELD_PATTERN.match(f)
-    ]
-    if narrative_fields:
-        return [PolicyViolation(
-            rule="narrative_cited_as_fact",
-            detail=(
-                "Evidence cites the relationship narrative as a factual source: "
-                f"{narrative_fields}. The narrative is voice only and can never "
-                "ground a claim."
-            ),
-            fix_instruction=(
-                "Remove every evidence reference whose field path is under "
-                "'narrative'. The narrative is the relationship's voice, never a "
-                "fact: re-ground each affected claim in this run's metrics or the "
-                "deterministic facts, or drop the claim. The narrative may shape "
-                "your tone but must never be cited as evidence."
-            ),
-        )]
-    return []
-
-
 def check_corpus_evidence(evidence_field_paths: List[str]) -> List[PolicyViolation]:
     """Rule 7: the coaching corpus is judgment knowledge only — never cited as fact."""
     corpus_fields = [
@@ -416,8 +390,8 @@ def validate_policy(
     violations += check_ungated_interval_claim(context_pack.metrics.workout_match, full_text)
     # Rule 5: medical-scope boundary.
     violations += check_medical_overreach(full_text)
-    # Rule 6: narrative is voice only, never cited evidence.
-    violations += check_narrative_evidence(_collect_evidence_fields(content))
+    # (Rule 6 narrative-is-not-evidence retired in M4, ADR 0025 — section gone;
+    #  the runner memory profile that replaced it is deliberately citable.)
     # Rule 7: corpus is judgment knowledge only, never cited evidence.
     violations += check_corpus_evidence(_collect_evidence_fields(content))
     # Rule 8: user materials are judgment reference only, never cited evidence.
@@ -503,8 +477,7 @@ def validate_message_policy(
     violations += check_ungated_interval_claim(context_pack.metrics.workout_match, full_text)
     # Rule 5: medical-scope boundary over the full prose + tail surface.
     violations += check_medical_overreach(full_text)
-    # Rule 6: narrative is voice only, never cited evidence (tail evidence paths).
-    violations += check_narrative_evidence(_collect_message_evidence_fields(report))
+    # (Rule 6 narrative-is-not-evidence retired in M4, ADR 0025 — see validate_policy.)
     # Rule 7: corpus is judgment knowledge only, never cited evidence (tail paths).
     violations += check_corpus_evidence(_collect_message_evidence_fields(report))
     # Rule 8: user materials are judgment reference only, never cited evidence (tail).

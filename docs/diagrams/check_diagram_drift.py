@@ -47,6 +47,12 @@ _PACK_NOT_SHOWN = {
     # #451: retired legacy summary — no longer populated or serialized, kept only as an
     # Optional schema field so pre-#451 stored packs still validate. Never reaches the model.
     "recent_training_summary",
+    # M4 (ADR 0025): the retired belief / preference / narrative durable-memory sections.
+    # Kept as never-populated Optional stubs so a pre-M4 stored pack still parses; never
+    # serialized, never reach the model, so they intentionally have no node.
+    "believed_facts",
+    "preference_profile",
+    "narrative",
 }
 
 # DerivedMetric columns that are not "shown" data fields (identity / FKs / timestamps).

@@ -81,9 +81,7 @@ async def test_fuller_threads_declared_voice_into_system_prompt(db, monkeypatch)
     db.commit()
 
     fake = _fake_client()
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     system = fake.generate_coach_message.call_args.kwargs["system"]
@@ -115,9 +113,7 @@ async def test_undeclared_voice_threads_default_block_under_v3(db, monkeypatch):
     activity = _seed(db)
 
     fake = _fake_client()
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     system = fake.generate_coach_message.call_args.kwargs["system"]

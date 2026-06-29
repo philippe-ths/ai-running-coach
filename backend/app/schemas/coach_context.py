@@ -807,14 +807,15 @@ class CoachContextPack(BaseModel):
     longitudinal: Optional[LongitudinalContext] = None
     perceived_effort: PerceivedEffortContext
     adherence: AdherenceContext
-    believed_facts: BelievedFactsContext
     calibration: CalibrationContext
-    preference_profile: PreferenceProfile
-    # A2c durable-memory narrative (voice only; never overrides today's data).
-    # Defaulted so the many call sites that build a pack without a narrative (the
-    # first exchange, every test fixture) stay valid; build_b_baseline populates
-    # it from the stored CoachNarrative row when one exists.
-    narrative: NarrativeContext = NarrativeContext()
+    # M4 (ADR 0025) retired the belief loop + A2c narrative + M10 preference.
+    # These three fields are kept as never-populated Optional deprecated STUBS so a
+    # historical stored pack carrying them still strict-parses under extra="forbid"
+    # (the chat read path + eval harness load old packs); they are never set by the
+    # builder and drop from serialization when None via the PACK_SECTIONS registry.
+    believed_facts: Optional[BelievedFactsContext] = None
+    preference_profile: Optional[PreferenceProfile] = None
+    narrative: Optional[NarrativeContext] = None
     # A4 salience substrate: novelty + safety override. Defaulted (empty) so every
     # pre-A4 fixture and the legacy/single-shot paths stay valid; the opener and
     # fuller builders populate it. Adding it changes the pack fingerprint, so v2
@@ -1092,6 +1093,11 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
     # #451: the retired legacy summary — droppable but NOT prompt-gated (no longer
     # populated; a pre-#451 stored pack still round-trips its real object unchanged).
     PackSection("recent_training_summary"),
+    # M4 (ADR 0025): the retired belief / preference / narrative stubs — never
+    # populated, dropped when None, kept only so a pre-M4 stored pack still parses.
+    PackSection("believed_facts"),
+    PackSection("preference_profile"),
+    PackSection("narrative"),
     # #522 coach-input kill switches. Normally always-present sections that the
     # COACH_*_ENABLED settings can drop (the context.py builder returns None when the
     # flag is off). Not prompt-feature-gated — the gate is a runtime setting, applied

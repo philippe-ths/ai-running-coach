@@ -13,7 +13,6 @@ from app.services.coach.validator import (
     check_invalid_risk_flags,
     check_ungated_interval_claim,
     check_medical_overreach,
-    check_narrative_evidence,
     check_corpus_evidence,
     check_user_materials_evidence,
 )
@@ -683,14 +682,8 @@ class TestSharedRuleBodies:
     def test_medical_overreach_silent_on_clean_text(self):
         assert check_medical_overreach("Nice steady aerobic run.") == []
 
-    # Rule 6
-    def test_narrative_evidence_fires_on_narrative_path(self):
-        v = check_narrative_evidence(["metrics.hr_drift", "narrative.tone"])
-        assert [x.rule for x in v] == ["narrative_cited_as_fact"]
-        assert "narrative.tone" in v[0].detail
-
-    def test_narrative_evidence_silent_on_real_paths(self):
-        assert check_narrative_evidence(["metrics.hr_drift", "training_context.x"]) == []
+    # (Rule 6 narrative-is-not-evidence retired in M4, ADR 0025 — section gone;
+    #  the runner memory profile that replaced it is deliberately citable.)
 
 
 class TestCorpusEvidenceRule:
