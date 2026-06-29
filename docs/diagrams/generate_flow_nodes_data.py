@@ -48,11 +48,10 @@ from app.services.coach.service import (  # noqa: E402
 
 # Default to this branch's HEAD prompt so the diagram is a one-to-one picture of the
 # fullest pack the code can build. v13 (ADR 0025) adds pack.memory (the rewritten-from-
-# source runner memory profile) on top of v12's training_history (#561). NOTE: prod runs
-# v12 and v13 ships INERT until the owner flips COACH_PROMPT_ID + COACH_MEMORY_ENABLED,
-# so this capture is one prompt AHEAD of prod; pin PROMPT_ID=coach_message_v12 to render
-# the exact live-prod pack instead. pack.memory is absent here unless the runner has a
-# graduated runner_memory profile (cold start drops the section).
+# source runner memory profile) on top of v12's training_history (#561). Prod runs v13
+# (flipped 2026-06-29: COACH_PROMPT_ID=coach_message_v13 + COACH_MEMORY_ENABLED), so this
+# default capture matches live prod. pack.memory is absent only when the runner has no
+# graduated runner_memory profile yet (cold start drops the section).
 PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_v13")
 TARGET = Path(__file__).parent / "flow-nodes.js"
 

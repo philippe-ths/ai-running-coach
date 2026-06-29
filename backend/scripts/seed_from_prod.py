@@ -58,6 +58,7 @@ from app.models import (  # noqa: E402
     DerivedMetric,
     Exchange,
     RunnerBaseline,
+    RunnerMemory,
     StravaAccount,
     User,
     UserProfile,
@@ -69,6 +70,7 @@ USER_MODELS = [
     UserProfile,
     StravaAccount,
     RunnerBaseline,
+    RunnerMemory,
     CoachingRelationship,
 ]
 # activities.block_id <-> blocks.primary_activity_id is circular (A1), so
