@@ -33,6 +33,7 @@ from app.schemas.coach_context import CoachContextPack, ContinuityContext
 from app.services.coach.budget import over_budget as budget_over, record as budget_record
 from app.services.coach.belief_store import write_back_beliefs
 from app.services.coach.consolidation import enqueue_consolidation
+from app.services.coach.memory_update import enqueue_memory_update
 from app.services.coach.context import build_context_pack
 from app.services.coach.digest import build_report_digest
 from app.services.coach.llm import AnthropicClient
@@ -747,25 +748,31 @@ def _persist_report(
         row = db_report
 
     if fire_learning_loop and not outcome.is_fallback:
-        _fire_learning_loop(db, activity, pack)
+        _fire_learning_loop(db, activity, pack, prompt_id)
 
     return _to_read(row)
 
 
-def _fire_learning_loop(db: Session, activity: Activity, pack: CoachContextPack) -> None:
-    """The M4-M10 durable-memory write-back, fired on completion of a COMPLETE
-    non-fallback report (the single-shot report, or the A4 fuller turn — never the
-    opener, which is pre-input and carries none).
+def _fire_learning_loop(
+    db: Session, activity: Activity, pack: CoachContextPack, prompt_id: str
+) -> None:
+    """The durable-memory write-back, fired on completion of a COMPLETE non-fallback
+    report (the single-shot report, or the A4 fuller turn — never the opener, which
+    is pre-input and carries none).
 
-    M8 belief write-back feeds the durable belief store the next report reads
-    (best-effort inside, self-guarded by `beliefs_written_at` so a re-read or
-    force never double-counts). A2c consolidation re-grounds the narrative in the
-    background — enqueued, never awaited, so the turn never blocks; idempotent, so
-    no sentinel is needed.
+    The runner memory update pass (M2, ADR 0025) rewrites the user's memory profile
+    from source in the background — enqueued, never awaited, so the turn never
+    blocks; idempotent single-row rewrite, so no sentinel is needed (the
+    `enqueue_consolidation` pattern). Gated on the active prompt being memory-aware
+    (so it is inert under v12, the report's own `prompt_id` matching the file's
+    `has_feature(prompt_id, ...)` convention) AND the `COACH_MEMORY_ENABLED` switch.
+
+    The legacy belief write-back + A2c narrative consolidation are gated off pending
+    their M4 retirement; the read side emits the empty form for each, so a turn
+    carries neither.
     """
-    # Both durable-memory halves are gated off pending recalibration: no belief is
-    # written and no narrative consolidation is enqueued. The read side emits the
-    # empty form for each, so a turn carries neither.
+    if has_feature(prompt_id, PromptFeature.MEMORY) and settings.COACH_MEMORY_ENABLED:
+        enqueue_memory_update(activity.user_id)
     if settings.COACH_BELIEFS_ENABLED:
         write_back_beliefs(db, activity, pack)
     if settings.COACH_NARRATIVE_ENABLED:

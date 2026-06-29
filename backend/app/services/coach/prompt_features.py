@@ -44,6 +44,7 @@ class PromptFeature(Enum):
     STREAM_VIEW = "stream_view"        # #443 consolidated stream-view timeline in the default pack
     RECENT_TRAINING = "recent_training"  # #444 modality-aware recent-training picture
     TRAINING_HISTORY = "training_history"  # #561 multi-year LOD volume ladder + durability traits
+    MEMORY = "memory"                  # runner memory profile section (ADR 0025); attached to coach_message_v13 in M3
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know

@@ -946,6 +946,11 @@ RECENT_TRAINING_PROMPT_IDS = ids_with(PromptFeature.RECENT_TRAINING)
 # context-pack section (gates _build_training_history_context).
 TRAINING_HISTORY_PROMPT_IDS = ids_with(PromptFeature.TRAINING_HISTORY)
 
+# Prompt ids that carry the runner-memory addendum AND the `memory` context-pack
+# section (ADR 0025). Empty until M3 attaches PromptFeature.MEMORY to
+# coach_message_v13, so memory is wholly inert under the live prompt.
+MEMORY_PROMPT_IDS = ids_with(PromptFeature.MEMORY)
+
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
     """True when the active prompt is corpus-aware (P1.2+): it carries the corpus
@@ -1011,6 +1016,15 @@ def is_training_history_prompt(prompt_id: Optional[str]) -> bool:
     durability traits stay out of the pack (byte-stable under v11 and below) and the
     signal is wholly inert under a rollback."""
     return has_feature(prompt_id, PromptFeature.TRAINING_HISTORY)
+
+
+def is_memory_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt is memory-aware (ADR 0025): it carries the runner
+    memory addendum and its context pack carries the `memory` section, and the
+    background memory update pass is enqueued after its reports. False for every
+    other prompt, so the runner memory profile is wholly inert under v12 and below
+    until coach_message_v13 is registered (M3) and flipped."""
+    return has_feature(prompt_id, PromptFeature.MEMORY)
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook
