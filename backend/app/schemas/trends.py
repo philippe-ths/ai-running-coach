@@ -13,12 +13,24 @@ class WeeklyDistancePoint(BaseModel):
     week_start: date
     total_distance_m: int
     activity_count: int
+    # Edge-bucket coverage (#566): how much of the week falls inside the
+    # selected period, so the chart can split a partial edge week. Optional for
+    # back-compat; out_of_period_days == 0 means a full (non-partial) bucket.
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
+    # Value of the week's days OUTSIDE the window; the chart stacks this as a
+    # faded segment so the bar shows the whole week's total, not just the slice
+    # inside the range. total_distance_m stays the in-period sum.
+    out_of_period_distance_m: int = 0
 
 
 class WeeklyTimePoint(BaseModel):
     week_start: date
     total_moving_time_s: int
     activity_count: int
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
+    out_of_period_moving_time_s: int = 0
 
 
 class DailyDistancePoint(BaseModel):
@@ -46,7 +58,11 @@ class DailySufferScorePoint(BaseModel):
 
 class WeeklySufferScorePoint(BaseModel):
     week_start: date
-    effort_score: float
+    effort_score: float  # in-period sum
+    # Edge-bucket coverage + out-of-window load (#566); see WeeklyDistancePoint.
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
+    out_of_period_effort_score: float = 0.0
 
 
 class PeriodDistancePoint(BaseModel):
@@ -58,6 +74,10 @@ class PeriodDistancePoint(BaseModel):
     period_start: date
     total_distance_m: int
     activity_count: int
+    # Edge-bucket coverage (#566); see WeeklyDistancePoint.
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
+    out_of_period_distance_m: int = 0
 
 
 class PeriodTimePoint(BaseModel):
@@ -65,12 +85,18 @@ class PeriodTimePoint(BaseModel):
     period_start: date
     total_moving_time_s: int
     activity_count: int
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
+    out_of_period_moving_time_s: int = 0
 
 
 class PeriodSufferScorePoint(BaseModel):
     """One coarse-granularity bucket of accumulated load (#432)."""
     period_start: date
     effort_score: float
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
+    out_of_period_effort_score: float = 0.0
 
 
 class EfficiencyPoint(BaseModel):

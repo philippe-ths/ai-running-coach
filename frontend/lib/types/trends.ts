@@ -2,12 +2,22 @@ export interface WeeklyDistancePoint {
   week_start: string;
   total_distance_m: number;
   activity_count: number;
+  // #566: edge-bucket coverage. out_of_period_days > 0 marks a partial week
+  // straddling the period boundary; out_of_period_distance_m is the value of
+  // its days outside the window, stacked as a faded segment so the bar shows
+  // the whole week.
+  in_period_days?: number | null;
+  out_of_period_days?: number;
+  out_of_period_distance_m?: number;
 }
 
 export interface WeeklyTimePoint {
   week_start: string;
   total_moving_time_s: number;
   activity_count: number;
+  in_period_days?: number | null;
+  out_of_period_days?: number;
+  out_of_period_moving_time_s?: number;
 }
 
 export interface DailyDistancePoint {
@@ -36,6 +46,10 @@ export interface DailySufferScorePoint {
 export interface WeeklySufferScorePoint {
   week_start: string;
   effort_score: number;
+  // #566: edge-bucket coverage + out-of-window load; see WeeklyDistancePoint.
+  in_period_days?: number | null;
+  out_of_period_days?: number;
+  out_of_period_effort_score?: number;
 }
 
 export interface EfficiencyPoint {
@@ -64,17 +78,27 @@ export interface PeriodDistancePoint {
   period_start: string;
   total_distance_m: number;
   activity_count: number;
+  // #566: edge-bucket coverage; see WeeklyDistancePoint.
+  in_period_days?: number | null;
+  out_of_period_days?: number;
+  out_of_period_distance_m?: number;
 }
 
 export interface PeriodTimePoint {
   period_start: string;
   total_moving_time_s: number;
   activity_count: number;
+  in_period_days?: number | null;
+  out_of_period_days?: number;
+  out_of_period_moving_time_s?: number;
 }
 
 export interface PeriodSufferScorePoint {
   period_start: string;
   effort_score: number;
+  in_period_days?: number | null;
+  out_of_period_days?: number;
+  out_of_period_effort_score?: number;
 }
 
 export interface PeriodZoneLoadPoint {

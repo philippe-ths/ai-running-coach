@@ -161,6 +161,9 @@ class WeekBucket:
         "week_start", "total_distance_m", "total_moving_time_s",
         "total_effort_score", "activity_count",
         "easy_seconds", "moderate_seconds", "hard_seconds",
+        "in_period_days", "out_of_period_days",
+        "out_of_period_distance_m", "out_of_period_moving_time_s",
+        "out_of_period_effort_score",
     )
 
     def __init__(self, week_start: date):
@@ -172,6 +175,18 @@ class WeekBucket:
         self.easy_seconds = 0
         self.moderate_seconds = 0
         self.hard_seconds = 0
+        # Edge-bucket coverage (#566): how many of the 7 days fall inside the
+        # selected period. Defaults to a full week; the builder overrides for
+        # buckets that straddle the window boundary.
+        self.in_period_days = 7
+        self.out_of_period_days = 0
+        # Distance/time/load from the bucket's days OUTSIDE the selected window
+        # (the older days an edge week spans). total_* stays the in-period sum;
+        # the chart stacks this faded segment on top so the bar shows the whole
+        # week.
+        self.out_of_period_distance_m = 0
+        self.out_of_period_moving_time_s = 0
+        self.out_of_period_effort_score = 0.0
 
     def add(self, daily: DailyFact):
         self.total_distance_m += daily.total_distance_m
@@ -216,12 +231,55 @@ def _next_period_start(start: date, period: str) -> date:
     return start + timedelta(days=14)
 
 
+def _coverage_days(
+    span_start: date,
+    span_end: date,
+    period_start: Optional[date],
+    period_end: date,
+) -> tuple[int, int]:
+    """In-period vs out-of-period day counts for a bucket spanning ``[span_start,
+    span_end]`` inclusive against the selected window ``[period_start, period_end]`` (#566).
+
+    A bucket (week / fortnight / month) rarely aligns to the period boundary, so
+    an edge bucket only partially overlaps the window. Returns
+    ``(in_period_days, out_of_period_days)``; when ``period_start`` is ``None``
+    (the ALL range, no window) the bucket is treated as fully in-period.
+    """
+    total_days = (span_end - span_start).days + 1
+    if period_start is None:
+        return total_days, 0
+    lo = max(span_start, period_start)
+    hi = min(span_end, period_end)
+    in_days = (hi - lo).days + 1 if hi >= lo else 0
+    return in_days, total_days - in_days
+
+
+def _add_out_of_period_values(buckets, pre_window_daily, key_fn) -> None:
+    """Fold pre-window (out-of-period) days into the matching displayed bucket's
+    ``out_of_period_*`` totals (#566), so the chart can stack a faded segment for
+    the part of an edge bucket that falls before the window start. Pre-window
+    days whose bucket is not displayed (older than the leading bucket) are
+    ignored. ``key_fn`` maps a date to its bucket's start key.
+    """
+    if not pre_window_daily:
+        return
+    for df in pre_window_daily:
+        bucket = buckets.get(key_fn(df.local_date))
+        if bucket is not None:
+            bucket.out_of_period_distance_m += df.total_distance_m
+            bucket.out_of_period_moving_time_s += df.total_moving_time_s
+            bucket.out_of_period_effort_score += df.total_effort_score
+
+
 class PeriodBucket:
     """Aggregation bucket for one coarse granularity period (#432)."""
 
     __slots__ = (
         "period_start", "total_distance_m", "total_moving_time_s",
         "total_effort_score", "activity_count",
+        "in_period_days", "out_of_period_days",
+        "out_of_period_distance_m", "out_of_period_moving_time_s",
+        "out_of_period_effort_score",
     )
 
     def __init__(self, period_start: date):
@@ -230,6 +288,15 @@ class PeriodBucket:
         self.total_moving_time_s = 0
         self.total_effort_score = 0.0
         self.activity_count = 0
+        # Edge-bucket coverage (#566): in/out-of-period day counts, set by the
+        # builder from the bucket's full span against the selected window.
+        self.in_period_days = 0
+        self.out_of_period_days = 0
+        # Distance/time/load from the bucket's days OUTSIDE the selected window;
+        # see WeekBucket. total_* stays the in-period sum.
+        self.out_of_period_distance_m = 0
+        self.out_of_period_moving_time_s = 0
+        self.out_of_period_effort_score = 0.0
 
     def add(self, daily: DailyFact):
         self.total_distance_m += daily.total_distance_m
@@ -469,6 +536,7 @@ def build_weekly_buckets(
     range_key: str = "30D",
     since: Optional[date] = None,
     until: Optional[date] = None,
+    pre_window_daily: Optional[List[DailyFact]] = None,
 ) -> List[WeekBucket]:
     """
     Roll daily facts into ISO-week buckets (Monday start).
@@ -478,6 +546,9 @@ def build_weekly_buckets(
     Pass ``until`` to override the window end (#413): calendar mode passes the
     calendar period's last day so the chart spans the whole period. Defaults to
     today (rolling).
+    Pass ``pre_window_daily`` (days just before ``since``) so a leading edge
+    week carries the value of its out-of-window days for the stacked partial
+    bar (#566); ``total_*`` stays the in-period sum.
     """
     # Build buckets from actual data first
     buckets: dict[date, WeekBucket] = {}
@@ -508,6 +579,17 @@ def build_weekly_buckets(
             buckets[cursor] = WeekBucket(cursor)
         cursor += timedelta(weeks=1)
 
+    # Edge-bucket coverage (#566): mark how much of each week falls inside the
+    # selected window [since, end] so the chart can fade partial weeks.
+    for w in buckets.values():
+        w.in_period_days, w.out_of_period_days = _coverage_days(
+            w.week_start, w.week_start + timedelta(days=6), since, end
+        )
+    # Carry the out-of-window value of a leading edge week's earlier days.
+    _add_out_of_period_values(
+        buckets, pre_window_daily, lambda d: d - timedelta(days=d.weekday())
+    )
+
     return sorted(buckets.values(), key=lambda w: w.week_start)
 
 
@@ -517,6 +599,7 @@ def build_period_buckets(
     range_key: str = "30D",
     since: Optional[date] = None,
     until: Optional[date] = None,
+    pre_window_daily: Optional[List[DailyFact]] = None,
 ) -> List[PeriodBucket]:
     """Roll daily facts into coarse buckets (#432) for ``biweekly`` or ``monthly``.
 
@@ -549,6 +632,19 @@ def build_period_buckets(
         if cursor not in buckets:
             buckets[cursor] = PeriodBucket(cursor)
         cursor = _next_period_start(cursor, period)
+
+    # Edge-bucket coverage (#566): the bucket's full span is [period_start,
+    # next_period_start - 1 day] (14 days for biweekly, the calendar month for
+    # monthly); mark how much falls inside the selected window [since, end].
+    for b in buckets.values():
+        span_end = _next_period_start(b.period_start, period) - timedelta(days=1)
+        b.in_period_days, b.out_of_period_days = _coverage_days(
+            b.period_start, span_end, since, end
+        )
+    # Carry the out-of-window value of a leading edge bucket's earlier days.
+    _add_out_of_period_values(
+        buckets, pre_window_daily, lambda d: _period_start(d, period)
+    )
 
     return sorted(buckets.values(), key=lambda b: b.period_start)
 
@@ -865,6 +961,21 @@ def get_trends_report(
     # 2. Daily facts (sum per local date)
     daily_facts = build_daily_facts(activity_facts)
 
+    # #566: the days just before the window — back to the 1st of `since`'s month,
+    # the earliest leading-bucket start across the week / 2-week / month
+    # granularities — so a leading edge bucket can show the value of its
+    # out-of-window days as a faded stacked segment (the bar then shows the whole
+    # week/period, not just the in-window slice). Kept separate from
+    # daily_facts so the summary/header totals stay strictly in-period.
+    pre_window_daily: List[DailyFact] = []
+    if since is not None:
+        pre_start = _period_start(since, "monthly")
+        if pre_start < since:
+            pre_facts = _query_activity_facts(
+                db, pre_start, since, types=types, user_id=user_id
+            )
+            pre_window_daily = build_daily_facts(pre_facts)
+
     # Summary totals across the entire range
     cur_easy, cur_mod, cur_hard = _zone_minutes(activity_facts)
     summary = TrendsSummary(
@@ -919,7 +1030,8 @@ def get_trends_report(
 
     # 4. Weekly buckets (continuous — includes empty weeks)
     weekly = build_weekly_buckets(
-        daily_facts, range_key=range_upper, since=since, until=until
+        daily_facts, range_key=range_upper, since=since, until=until,
+        pre_window_daily=pre_window_daily,
     )
 
     weekly_distance = [
@@ -927,6 +1039,9 @@ def get_trends_report(
             week_start=w.week_start,
             total_distance_m=w.total_distance_m,
             activity_count=w.activity_count,
+            in_period_days=w.in_period_days,
+            out_of_period_days=w.out_of_period_days,
+            out_of_period_distance_m=w.out_of_period_distance_m,
         )
         for w in weekly
     ]
@@ -936,6 +1051,9 @@ def get_trends_report(
             week_start=w.week_start,
             total_moving_time_s=w.total_moving_time_s,
             activity_count=w.activity_count,
+            in_period_days=w.in_period_days,
+            out_of_period_days=w.out_of_period_days,
+            out_of_period_moving_time_s=w.out_of_period_moving_time_s,
         )
         for w in weekly
     ]
@@ -944,16 +1062,21 @@ def get_trends_report(
         WeeklySufferScorePoint(
             week_start=w.week_start,
             effort_score=round(w.total_effort_score, 1),
+            in_period_days=w.in_period_days,
+            out_of_period_days=w.out_of_period_days,
+            out_of_period_effort_score=round(w.out_of_period_effort_score, 1),
         )
         for w in weekly
     ]
 
     # 4b. Coarse buckets (#432): 2-week and month rollups of the same daily facts.
     biweekly = build_period_buckets(
-        daily_facts, "biweekly", range_key=range_upper, since=since, until=until
+        daily_facts, "biweekly", range_key=range_upper, since=since, until=until,
+        pre_window_daily=pre_window_daily,
     )
     monthly = build_period_buckets(
-        daily_facts, "monthly", range_key=range_upper, since=since, until=until
+        daily_facts, "monthly", range_key=range_upper, since=since, until=until,
+        pre_window_daily=pre_window_daily,
     )
 
     def _period_distance(buckets: List[PeriodBucket]) -> List[PeriodDistancePoint]:
@@ -962,6 +1085,9 @@ def get_trends_report(
                 period_start=b.period_start,
                 total_distance_m=b.total_distance_m,
                 activity_count=b.activity_count,
+                in_period_days=b.in_period_days,
+                out_of_period_days=b.out_of_period_days,
+                out_of_period_distance_m=b.out_of_period_distance_m,
             )
             for b in buckets
         ]
@@ -972,6 +1098,9 @@ def get_trends_report(
                 period_start=b.period_start,
                 total_moving_time_s=b.total_moving_time_s,
                 activity_count=b.activity_count,
+                in_period_days=b.in_period_days,
+                out_of_period_days=b.out_of_period_days,
+                out_of_period_moving_time_s=b.out_of_period_moving_time_s,
             )
             for b in buckets
         ]
@@ -981,6 +1110,9 @@ def get_trends_report(
             PeriodSufferScorePoint(
                 period_start=b.period_start,
                 effort_score=round(b.total_effort_score, 1),
+                in_period_days=b.in_period_days,
+                out_of_period_days=b.out_of_period_days,
+                out_of_period_effort_score=round(b.out_of_period_effort_score, 1),
             )
             for b in buckets
         ]

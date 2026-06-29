@@ -50,24 +50,46 @@ export default function TrendBarChart({
   const barColor = isDistance ? "#3b82f6" : "#10b981";
   const unitLabel = isDistance ? " km" : " min";
 
-  // Data transformation
+  // meters -> km / seconds -> minutes for the bar height.
+  const toChart = (raw: number) =>
+    isDistance ? +(raw / 1000).toFixed(1) : +(raw / 60).toFixed(0);
+
+  // Data transformation. #566: an edge bucket straddles the selected period
+  // boundary, so part of its week/fortnight/month falls outside the window.
+  // Render the WHOLE bucket as a stacked bar — the in-range value solid, the
+  // out-of-range value (the bucket's days before the window) as a faded segment
+  // on top — so the bar shows the full week's total and how much is in range,
+  // and the same week reads at the same height across ranges.
   const chartData = data.map((d) => {
-    const rawValue = isDistance ? d.total_distance_m : d.total_moving_time_s;
-    // For distance: meters -> km
-    // For time: seconds -> minutes (for bar height)
-    const chartValue = isDistance
-      ? +(rawValue / 1000).toFixed(1)
-      : +(rawValue / 60).toFixed(0);
+    const inRaw = isDistance ? d.total_distance_m : d.total_moving_time_s;
+    const outRaw =
+      (isDistance ? d.out_of_period_distance_m : d.out_of_period_moving_time_s) ?? 0;
+    const outDays = d.out_of_period_days ?? 0;
+    const inDays = d.in_period_days ?? null;
 
     return {
       ...d,
-      value: chartValue,
-      rawValue: rawValue, // preserve for tooltip
+      inValue: toChart(inRaw),
+      // null (not 0) so a full bucket renders no faded segment and drops the
+      // "outside range" tooltip row.
+      outValue: outRaw > 0 ? toChart(outRaw) : null,
+      inRaw,
+      outRaw,
       label: formatDateLabel(bucketKey(d)),
+      partial: outDays > 0,
+      inDays,
+      totalDays: inDays != null ? inDays + outDays : null,
     };
   });
 
   const tooltipPrefix = TOOLTIP_PREFIX[granularity];
+  // A faded segment is only drawn when an edge bucket has real out-of-range
+  // value (a leading week reaching before the window); the trailing in-progress
+  // bucket has none yet.
+  const hasOutSegment = chartData.some((d) => d.outValue != null);
+  const partialNoun = noun.toLowerCase();
+  const fmtRaw = (raw: number) =>
+    isDistance ? `${(raw / 1000).toFixed(2)} km` : formatMinutes(raw);
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
@@ -100,18 +122,37 @@ export default function TrendBarChart({
               content={
                 <ChartTooltip
                   formatter={(_value, _name, entry) => {
-                    const raw = (entry.payload?.rawValue as number) ?? 0;
-                    if (isDistance) return [`${(raw / 1000).toFixed(2)} km`, "Distance"];
-                    return [formatMinutes(raw), "Moving Time"];
+                    const p = entry.payload;
+                    if (entry.dataKey === "outValue") {
+                      return [fmtRaw((p?.outRaw as number) ?? 0), "Outside range"];
+                    }
+                    const inName = p?.partial
+                      ? `In range · ${p.inDays}/${p.totalDays} days`
+                      : isDistance
+                        ? "Distance"
+                        : "Moving Time";
+                    return [fmtRaw((p?.inRaw as number) ?? 0), inName];
                   }}
                   labelFormatter={(label) => `${tooltipPrefix}${label}`}
                 />
               }
               cursor={{ fill: "rgba(0,0,0,0.05)" }}
             />
+            {/* Stacked: in-range (solid) + out-of-range (faded) so the bar is
+                the whole bucket. Full buckets have a null out segment and render
+                exactly as before. */}
             <Bar
-              dataKey="value"
+              dataKey="inValue"
+              stackId="bucket"
               fill={barColor}
+              radius={[4, 4, 0, 0]}
+              maxBarSize={40}
+            />
+            <Bar
+              dataKey="outValue"
+              stackId="bucket"
+              fill={barColor}
+              fillOpacity={0.32}
               radius={[4, 4, 0, 0]}
               maxBarSize={40}
             />
@@ -128,6 +169,12 @@ export default function TrendBarChart({
             )}
           </BarChart>
         </ResponsiveContainer>
+      )}
+      {hasOutSegment && (
+        <p className="mt-3 text-xs text-gray-400 dark:text-gray-500">
+          The faded segment is the part of an edge {partialNoun} that falls
+          outside the selected period — the bar shows the whole {partialNoun}.
+        </p>
       )}
     </div>
   );
