@@ -46,6 +46,10 @@ export interface DailySufferScorePoint {
 export interface WeeklySufferScorePoint {
   week_start: string;
   effort_score: number;
+  // #566: edge-bucket coverage + out-of-window load; see WeeklyDistancePoint.
+  in_period_days?: number | null;
+  out_of_period_days?: number;
+  out_of_period_effort_score?: number;
 }
 
 export interface EfficiencyPoint {
@@ -92,6 +96,9 @@ export interface PeriodTimePoint {
 export interface PeriodSufferScorePoint {
   period_start: string;
   effort_score: number;
+  in_period_days?: number | null;
+  out_of_period_days?: number;
+  out_of_period_effort_score?: number;
 }
 
 export interface PeriodZoneLoadPoint {

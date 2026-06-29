@@ -163,6 +163,7 @@ class WeekBucket:
         "easy_seconds", "moderate_seconds", "hard_seconds",
         "in_period_days", "out_of_period_days",
         "out_of_period_distance_m", "out_of_period_moving_time_s",
+        "out_of_period_effort_score",
     )
 
     def __init__(self, week_start: date):
@@ -179,11 +180,13 @@ class WeekBucket:
         # buckets that straddle the window boundary.
         self.in_period_days = 7
         self.out_of_period_days = 0
-        # Distance/time from the bucket's days OUTSIDE the selected window (the
-        # older days an edge week spans). total_* stays the in-period sum; the
-        # chart stacks this faded segment on top so the bar shows the whole week.
+        # Distance/time/load from the bucket's days OUTSIDE the selected window
+        # (the older days an edge week spans). total_* stays the in-period sum;
+        # the chart stacks this faded segment on top so the bar shows the whole
+        # week.
         self.out_of_period_distance_m = 0
         self.out_of_period_moving_time_s = 0
+        self.out_of_period_effort_score = 0.0
 
     def add(self, daily: DailyFact):
         self.total_distance_m += daily.total_distance_m
@@ -265,6 +268,7 @@ def _add_out_of_period_values(buckets, pre_window_daily, key_fn) -> None:
         if bucket is not None:
             bucket.out_of_period_distance_m += df.total_distance_m
             bucket.out_of_period_moving_time_s += df.total_moving_time_s
+            bucket.out_of_period_effort_score += df.total_effort_score
 
 
 class PeriodBucket:
@@ -275,6 +279,7 @@ class PeriodBucket:
         "total_effort_score", "activity_count",
         "in_period_days", "out_of_period_days",
         "out_of_period_distance_m", "out_of_period_moving_time_s",
+        "out_of_period_effort_score",
     )
 
     def __init__(self, period_start: date):
@@ -287,10 +292,11 @@ class PeriodBucket:
         # builder from the bucket's full span against the selected window.
         self.in_period_days = 0
         self.out_of_period_days = 0
-        # Distance/time from the bucket's days OUTSIDE the selected window; see
-        # WeekBucket. total_* stays the in-period sum.
+        # Distance/time/load from the bucket's days OUTSIDE the selected window;
+        # see WeekBucket. total_* stays the in-period sum.
         self.out_of_period_distance_m = 0
         self.out_of_period_moving_time_s = 0
+        self.out_of_period_effort_score = 0.0
 
     def add(self, daily: DailyFact):
         self.total_distance_m += daily.total_distance_m
@@ -1056,6 +1062,9 @@ def get_trends_report(
         WeeklySufferScorePoint(
             week_start=w.week_start,
             effort_score=round(w.total_effort_score, 1),
+            in_period_days=w.in_period_days,
+            out_of_period_days=w.out_of_period_days,
+            out_of_period_effort_score=round(w.out_of_period_effort_score, 1),
         )
         for w in weekly
     ]
@@ -1101,6 +1110,9 @@ def get_trends_report(
             PeriodSufferScorePoint(
                 period_start=b.period_start,
                 effort_score=round(b.total_effort_score, 1),
+                in_period_days=b.in_period_days,
+                out_of_period_days=b.out_of_period_days,
+                out_of_period_effort_score=round(b.out_of_period_effort_score, 1),
             )
             for b in buckets
         ]

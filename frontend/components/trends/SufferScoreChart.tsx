@@ -38,12 +38,34 @@ interface Props {
 }
 
 export default function SufferScoreChart({ data, granularity, delta, typical }: Props) {
-  const chartData = data.map((d: any) => ({
-    ...d,
-    label: formatDateLabel(bucketKey(d)),
-  }));
+  // #566: an edge bucket straddles the selected period boundary; render the
+  // whole bucket as a stacked bar — in-range load solid, out-of-range load
+  // faded on top — so a partial week/period isn't misread as a low one and the
+  // same bucket reads at the same height across ranges. Daily/per-activity
+  // points carry no out-of-period value, so they render as a single bar.
+  const chartData = data.map((d: any) => {
+    const inRaw = d.effort_score ?? 0;
+    const outRaw = d.out_of_period_effort_score ?? 0;
+    const outDays = d.out_of_period_days ?? 0;
+    const inDays = d.in_period_days ?? null;
+    return {
+      ...d,
+      inValue: inRaw,
+      outValue: outRaw > 0 ? outRaw : null,
+      inRaw,
+      outRaw,
+      label: formatDateLabel(bucketKey(d)),
+      partial: outDays > 0,
+      inDays,
+      totalDays: inDays != null ? inDays + outDays : null,
+    };
+  });
 
-  const title = `Accumulated Load per ${BUCKET_NOUN[granularity]}`;
+  const noun = BUCKET_NOUN[granularity];
+  const title = `Accumulated Load per ${noun}`;
+  const hasOutSegment = chartData.some((d: any) => d.outValue != null);
+  const partialNoun = noun.toLowerCase();
+  const fmtRaw = (raw: number) => Math.round(raw).toLocaleString();
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
@@ -77,14 +99,33 @@ export default function SufferScoreChart({ data, granularity, delta, typical }: 
             <Tooltip
               content={
                 <ChartTooltip
-                  formatter={(value) => [(value as number) ?? 0, "Accumulated Load"]}
+                  formatter={(_value, _name, entry) => {
+                    const p: any = entry.payload;
+                    if (entry.dataKey === "outValue") {
+                      return [fmtRaw(p?.outRaw ?? 0), "Outside range"];
+                    }
+                    const inName = p?.partial
+                      ? `In range · ${p.inDays}/${p.totalDays} days`
+                      : "Accumulated Load";
+                    return [fmtRaw(p?.inRaw ?? 0), inName];
+                  }}
                 />
               }
               cursor={{ fill: "rgba(0,0,0,0.05)" }}
             />
+            {/* Stacked: in-range (solid) + out-of-range (faded) = whole bucket. */}
             <Bar
-              dataKey="effort_score"
+              dataKey="inValue"
+              stackId="load"
               fill="#ef4444"
+              radius={[4, 4, 0, 0]}
+              maxBarSize={40}
+            />
+            <Bar
+              dataKey="outValue"
+              stackId="load"
+              fill="#ef4444"
+              fillOpacity={0.32}
               radius={[4, 4, 0, 0]}
               maxBarSize={40}
             />
@@ -97,6 +138,12 @@ export default function SufferScoreChart({ data, granularity, delta, typical }: 
             )}
           </BarChart>
         </ResponsiveContainer>
+      )}
+      {hasOutSegment && (
+        <p className="mt-3 text-xs text-gray-400 dark:text-gray-500">
+          The faded segment is the part of an edge {partialNoun} that falls
+          outside the selected period — the bar shows the whole {partialNoun}.
+        </p>
       )}
     </div>
   );

@@ -17,9 +17,10 @@ from app.services.trends import (
 )
 
 
-def _df(d: date, dist: int = 0) -> DailyFact:
+def _df(d: date, dist: int = 0, effort: float = 0.0) -> DailyFact:
     f = DailyFact(d)
     f.total_distance_m = dist
+    f.total_effort_score = effort
     return f
 
 
@@ -93,8 +94,8 @@ def test_weekly_leading_edge_carries_out_of_period_value():
     # bucket total; the pre-window Jun 1 (3000) + Jun 2 (2000) are the
     # out-of-period value the chart stacks as a faded segment, so the bar shows
     # the whole week (6000 m) rather than only the in-window slice.
-    in_window = [_df(date(2026, 6, 5), 1000)]
-    pre = [_df(date(2026, 6, 1), 3000), _df(date(2026, 6, 2), 2000)]
+    in_window = [_df(date(2026, 6, 5), 1000, effort=10.0)]
+    pre = [_df(date(2026, 6, 1), 3000, effort=30.0), _df(date(2026, 6, 2), 2000, effort=20.0)]
     weeks = build_weekly_buckets(
         in_window, since=date(2026, 6, 3), until=date(2026, 6, 16),
         pre_window_daily=pre,
@@ -103,6 +104,9 @@ def test_weekly_leading_edge_carries_out_of_period_value():
     lead = by[date(2026, 6, 1)]
     assert lead.total_distance_m == 1000  # in-period sum stays honest
     assert lead.out_of_period_distance_m == 5000  # Jun 1-2 outside the window
+    # Load (effort_score) splits the same way for the Accumulated Load chart.
+    assert lead.total_effort_score == 10.0
+    assert lead.out_of_period_effort_score == 50.0
     # Interior weeks are unaffected.
     assert by[date(2026, 6, 8)].out_of_period_distance_m == 0
 

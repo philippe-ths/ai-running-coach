@@ -58,7 +58,11 @@ class DailySufferScorePoint(BaseModel):
 
 class WeeklySufferScorePoint(BaseModel):
     week_start: date
-    effort_score: float
+    effort_score: float  # in-period sum
+    # Edge-bucket coverage + out-of-window load (#566); see WeeklyDistancePoint.
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
+    out_of_period_effort_score: float = 0.0
 
 
 class PeriodDistancePoint(BaseModel):
@@ -90,6 +94,9 @@ class PeriodSufferScorePoint(BaseModel):
     """One coarse-granularity bucket of accumulated load (#432)."""
     period_start: date
     effort_score: float
+    in_period_days: Optional[int] = None
+    out_of_period_days: int = 0
+    out_of_period_effort_score: float = 0.0
 
 
 class EfficiencyPoint(BaseModel):
