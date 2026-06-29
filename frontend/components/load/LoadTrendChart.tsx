@@ -46,9 +46,36 @@ export default function LoadTrendChart({ weeks }: Props) {
     band: filledBands[i],
   }));
 
-  // Slice after the band fill so the carried-forward optimal range stays correct
-  // in the zoomed-in 4-week view.
-  const visibleData = view === "4w" ? chartData.slice(-4) : chartData;
+  // The 4-week view shows the 4 weeks PRECEDING the current week plus the
+  // current week itself (#565) — i.e. the trailing window the current week's
+  // optimal range is computed from (backend training_load.py: the band is
+  // 0.8-1.3x the mean of the 4 weeks before each week). Slice after the band
+  // fill so the carried-forward optimal range stays correct.
+  const WEEKS_IN_4W_VIEW = 5; // 4 trailing + current
+  const visibleData = view === "4w" ? chartData.slice(-WEEKS_IN_4W_VIEW) : chartData;
+
+  // Derivation of the current week's optimal range, for the 4-week view visual:
+  // the trailing 4-week average (the chronic baseline) and the band around it
+  // that the current week is judged against. The current week is the last entry.
+  const currentWeek = weeks[weeks.length - 1];
+  const trailingWeeks = weeks.slice(Math.max(0, weeks.length - 1 - 4), weeks.length - 1);
+  const trailingAvg =
+    trailingWeeks.length > 0
+      ? trailingWeeks.reduce((sum, w) => sum + w.score, 0) / trailingWeeks.length
+      : null;
+  const derivation =
+    currentWeek != null &&
+    currentWeek.target_min != null &&
+    currentWeek.target_max != null &&
+    trailingAvg != null
+      ? {
+          avg: trailingAvg,
+          min: currentWeek.target_min,
+          max: currentWeek.target_max,
+          score: currentWeek.score,
+          status: currentWeek.status,
+        }
+      : null;
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
@@ -124,6 +151,93 @@ export default function LoadTrendChart({ weeks }: Props) {
           </ComposedChart>
         </ResponsiveContainer>
       )}
+
+      {/* #565: in the 4-week view, show how the current week's optimal range is
+          built — the trailing 4-week average and the 0.8-1.3x band around it,
+          with the current week marked against it. */}
+      {view === "4w" && derivation && <DerivationStrip {...derivation} />}
+    </div>
+  );
+}
+
+// The calm directional palette for where the current week landed: emerald in
+// range, amber over, sky under (never red, since a quiet week is not "bad").
+const STATUS_FILL: Record<string, string> = {
+  optimal: "bg-emerald-500",
+  high: "bg-amber-500",
+  below: "bg-sky-500",
+};
+
+function DerivationStrip({
+  avg,
+  min,
+  max,
+  score,
+  status,
+}: {
+  avg: number;
+  min: number;
+  max: number;
+  score: number;
+  status: string;
+}) {
+  // Track spans 0..scaleMax with headroom so the marker never sits on the edge.
+  const scaleMax = Math.max(score, max, avg) * 1.15 || 1;
+  const pct = (v: number) => Math.max(0, Math.min(100, (v / scaleMax) * 100));
+  const fill = STATUS_FILL[status] ?? "bg-gray-500";
+  const statusLabel =
+    status === "optimal"
+      ? "in range"
+      : status === "high"
+        ? "above range"
+        : status === "below"
+          ? "below range"
+          : status;
+
+  return (
+    <div className="mt-4 rounded-md border border-gray-100 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/30 p-3">
+      <p className="text-xs font-medium text-gray-600 dark:text-gray-300 mb-3">
+        How this week&apos;s range is set
+      </p>
+      <div
+        className="relative h-2.5 rounded-full bg-gray-200 dark:bg-gray-700"
+        role="img"
+        aria-label={`This week ${Math.round(score)}, ${statusLabel}; optimal range ${min} to ${max}, trailing 4-week average ${Math.round(avg)}`}
+      >
+        {/* the 0.8-1.3x optimal band */}
+        <div
+          className="absolute inset-y-0 rounded-full bg-emerald-400/40 dark:bg-emerald-500/30"
+          style={{ left: `${pct(min)}%`, right: `${100 - pct(max)}%` }}
+        />
+        {/* trailing 4-week average (the band's basis) */}
+        <div
+          className="absolute -top-1.5 -bottom-1.5 w-0.5 -translate-x-1/2 rounded-full bg-gray-500 dark:bg-gray-300"
+          style={{ left: `${pct(avg)}%` }}
+        />
+        {/* current week */}
+        <div
+          className={`absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-white dark:ring-gray-800 ${fill}`}
+          style={{ left: `${pct(score)}%` }}
+        />
+      </div>
+      <div className="mt-3 flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+        <span>
+          Trailing 4-wk avg{" "}
+          <span className="font-semibold text-gray-700 dark:text-gray-200">{Math.round(avg)}</span>
+        </span>
+        <span>
+          Optimal range{" "}
+          <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+            {min}–{max}
+          </span>
+          <span className="text-gray-400 dark:text-gray-500"> (0.8–1.3×)</span>
+        </span>
+        <span>
+          This week{" "}
+          <span className="font-semibold text-gray-700 dark:text-gray-200">{Math.round(score)}</span>{" "}
+          <span className="text-gray-400 dark:text-gray-500">({statusLabel})</span>
+        </span>
+      </div>
     </div>
   );
 }
