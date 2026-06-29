@@ -121,18 +121,8 @@ class TestValidateMessagePolicy:
         rules = [v.rule for v in validate_message_policy(report, _make_pack())]
         assert "medical_overreach" in rules
 
-    # Rule 6 — citing a narrative.* evidence path in the tail fires.
-    def test_rule6_narrative_evidence_in_tail(self):
-        report = _make_message(next_steps=[
-            CoachNextStep(
-                action="Keep building base",
-                details="Easy miles",
-                why="Continuity",
-                evidence=[{"field": "narrative.tone", "value": "encouraging"}],
-            ),
-        ])
-        rules = [v.rule for v in validate_message_policy(report, _make_pack())]
-        assert "narrative_cited_as_fact" in rules
+    # (Rule 6 narrative-is-not-evidence retired in M4, ADR 0025 — the runner memory
+    #  profile that replaced the narrative section is deliberately citable.)
 
     # Surface-growth proofs: the message report polices fields the structured
     # path did not have a place for (tappable-option labels), so overreach there

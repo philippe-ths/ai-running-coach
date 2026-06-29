@@ -94,14 +94,6 @@ class Activity(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    # Set once this activity's coach report has contributed its belief deltas to
-    # the M8 CoachingContext store. The at-most-once-per-activity sentinel (like
-    # coach_notification_sent_at) so a re-read or force-regeneration of the report
-    # never re-counts the same physical run's observations.
-    beliefs_written_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
     # Set once the historical stream-analysis backfill (#110) has attempted this
     # activity, regardless of whether Strava had streams for it. Combined with
     # the presence of `streams` rows, it makes the backfill resumable and

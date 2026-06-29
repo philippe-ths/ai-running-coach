@@ -121,16 +121,14 @@ def override_get_db(db):
 @pytest.fixture
 def enable_durable_memory(monkeypatch):
     """Turn the prior-report-driven coaching loops back on for the tests that
-    exercise that machinery: the M8 belief loop, the A2c narrative, the M4
-    longitudinal prior-report digest, and the M7 adherence section. All default
-    OFF in prod (the belief loop misclassified rest-day advice and poisoned a
-    belief; the narrative and the prior-report digest replayed that theme forward
-    run after run), so these feature tests opt in explicitly rather than relying
-    on the disabled default.
+    exercise that machinery: the M4 longitudinal prior-report digest and the M7
+    adherence section. Both default OFF in prod (the prior-report digest replayed a
+    stale theme forward run after run), so these feature tests opt in explicitly
+    rather than relying on the disabled default. (The M8 belief loop + A2c narrative
+    halves of durable memory were retired in M4, ADR 0025, replaced by the runner
+    memory profile; their switches are gone.)
     """
     from app.core.config import settings
 
-    monkeypatch.setattr(settings, "COACH_BELIEFS_ENABLED", True)
-    monkeypatch.setattr(settings, "COACH_NARRATIVE_ENABLED", True)
     monkeypatch.setattr(settings, "COACH_PRIOR_REPORTS_ENABLED", True)
     monkeypatch.setattr(settings, "COACH_ADHERENCE_ENABLED", True)

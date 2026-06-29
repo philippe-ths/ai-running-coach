@@ -24,9 +24,7 @@ from app.models import (
     Block,
     CheckIn,
     CoachChatMessage,
-    CoachNarrative,
     CoachReport,
-    CoachingContext,
     CoachingRelationship,
     DerivedMetric,
     Exchange,
@@ -48,8 +46,6 @@ _ACTIVITY_CHILDREN = (ActivityStream, CheckIn, CoachChatMessage, CoachReport, De
 # Singletons / collections hung directly off the user (FK -> users.id), with no
 # rows referencing THEM. Deleted after activities/blocks, before the user row.
 _USER_OWNED = (
-    CoachNarrative,
-    CoachingContext,
     CoachingRelationship,
     RunnerBaseline,
     RunnerMemory,

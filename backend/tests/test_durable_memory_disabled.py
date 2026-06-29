@@ -1,18 +1,19 @@
-"""The prior-report-driven coaching kill switches (COACH_BELIEFS_ENABLED /
-COACH_NARRATIVE_ENABLED / COACH_PRIOR_REPORTS_ENABLED / COACH_ADHERENCE_ENABLED).
+"""The surviving prior-report-driven coaching kill switches
+(COACH_PRIOR_REPORTS_ENABLED / COACH_ADHERENCE_ENABLED).
 
-All four default OFF in prod. The M8 belief loop was found to misclassify "take a
-rest day" advice as easy-discipline and reinforce a poisoned "ignores easy
-guidance" belief, which the A2c narrative then replayed; the M4 prior-report
-digest and the M7 adherence section likewise carried that stale rest-day theme
-forward run after run (each report read the previous report's next_steps).
+Both default OFF in prod: the M4 prior-report digest and the M7 adherence section
+carried a stale rest-day theme forward run after run (each report read the
+previous report's next_steps), so they are disabled by default.
 
-These tests pin the DISABLED-by-default behaviour: even when belief, narrative,
-and prior-report rows exist in the database, the context pack carries the empty
-(new-runner) form for the believed_facts, preference_profile, narrative,
-longitudinal.prior_reports, and adherence sections, and the post-report learning
-loop writes nothing. They deliberately do NOT request the `enable_durable_memory`
-fixture, so they run against the prod default.
+These tests pin the DISABLED-by-default behaviour: even when prior-report rows
+exist, the pack carries the empty (new-runner) form for longitudinal.prior_reports
+and adherence, and the post-report learning loop enqueues nothing under the live
+(non-memory) prompt. They deliberately do NOT request `enable_durable_memory`, so
+they run against the prod default.
+
+(The M8 belief loop + A2c narrative halves of durable memory were retired in M4,
+ADR 0025, replaced by the runner memory profile; their switches and stores are
+gone. The memory enqueue gating is pinned in test_memory_enqueue_gating.py.)
 """
 
 import uuid
@@ -20,9 +21,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.models import Activity, DerivedMetric
-from app.models.coach_narrative import CoachNarrative
 from app.models.coach_report import CoachReport
-from app.models.coaching_context import CoachingContext
 from app.models.user import User
 from app.services.coach.context import build_context_pack
 from app.services.coach.service import _fire_learning_loop
@@ -55,56 +54,16 @@ def _activity(db, uid):
     return a
 
 
-def _seed_belief_and_narrative(db, uid):
-    """A poisoned belief and a populated narrative, exactly the prod state."""
-    db.add(CoachingContext(
-        id=uuid.uuid4(), user_id=uid, kind="adherence_pattern", key="easy_discipline",
-        value={"acted": 5, "total": 8, "statement": "mixed response to easy guidance"},
-        confidence="high", observation_count=23,
-        first_observed_at=datetime.now(timezone.utc),
-        last_reinforced_at=datetime.now(timezone.utc),
-    ))
-    db.add(CoachNarrative(
-        id=uuid.uuid4(), user_id=uid,
-        narrative="This runner reliably ignores the rest days I prescribe.",
-    ))
-    db.flush()
-
-
-def test_pack_carries_no_beliefs_when_disabled(db):
-    """believed_facts and preference_profile stay empty even with a stored belief."""
-    uid = _user(db)
-    _seed_belief_and_narrative(db, uid)
-    act = _activity(db, uid)
-
-    pack = build_context_pack(db, act)
-    assert pack.believed_facts.facts == []
-    assert pack.preference_profile.themes == []
-
-
-def test_pack_carries_no_narrative_when_disabled(db):
-    """The narrative section is empty even with a stored narrative row."""
-    uid = _user(db)
-    _seed_belief_and_narrative(db, uid)
-    act = _activity(db, uid)
-
-    assert build_context_pack(db, act).narrative.narrative is None
-
-
-def test_learning_loop_writes_nothing_when_disabled(db):
-    """No belief write-back, no consolidation enqueue, and no memory update enqueue
-    under the default flags + the live (non-memory) prompt."""
+def test_learning_loop_enqueues_nothing_under_live_prompt(db):
+    """No memory update enqueue under the default flags + the live (non-memory)
+    prompt: the only post-report enqueue gates on a memory-aware prompt (v13)."""
     uid = _user(db)
     act = _activity(db, uid)
     pack = build_context_pack(db, act)
 
-    with patch("app.services.coach.service.write_back_beliefs") as wb, \
-         patch("app.services.coach.service.enqueue_consolidation") as ec, \
-         patch("app.services.coach.service.enqueue_memory_update") as em:
+    with patch("app.services.coach.service.enqueue_memory_update") as em:
         _fire_learning_loop(db, act, pack, "coach_message_v12")
 
-    wb.assert_not_called()
-    ec.assert_not_called()
     em.assert_not_called()
 
 

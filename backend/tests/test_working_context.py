@@ -142,7 +142,9 @@ def test_working_context_splits_baseline_and_focus(db):
     assert wc.focus.metrics.effort == "tempo"
     assert wc.focus.activity.name == "Run"
     assert wc.b_baseline.safety_rules.never_diagnose is True
-    assert hasattr(wc.b_baseline, "preference_profile")
+    # The belief / preference / narrative durable-memory facts were retired in M4
+    # (ADR 0025): the B baseline no longer carries those attributes.
+    assert not hasattr(wc.b_baseline, "preference_profile")
     # The flattened pack draws its sections from the two halves.
     pack = build_context_pack(db, activity)
     assert pack.metrics == wc.focus.metrics

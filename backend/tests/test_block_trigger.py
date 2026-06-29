@@ -316,9 +316,7 @@ async def test_force_regeneration_never_resets_exchange_sentinels(db, configured
                     "options": [{"id": "rpe", "label": "Rate 1-10", "kind": "rpe"}]}],
     )]
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(fuller)), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(fuller)):
         read = await generate_fuller(db, str(activity.id), force=True)
 
     assert read is not None  # the artifact regenerated

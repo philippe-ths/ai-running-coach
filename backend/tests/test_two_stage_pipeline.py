@@ -213,9 +213,7 @@ async def test_fuller_turn_notifies_and_sets_sentinel(db, configured, notifier):
     activity = _seed(db)
     exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks()))):
         result = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert result is not None
     assert len(notifier.sent) == 1
@@ -229,9 +227,7 @@ async def test_fuller_turn_idempotent_racing_timer_noops(db, configured, notifie
     # AC2/AC5: a reply fires the fuller; the racing timer then no-ops.
     activity = _seed(db)
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks()), _result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks()), _result(_fuller_blocks()))):
         first = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
         second = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert first is not None
@@ -269,8 +265,6 @@ async def test_concurrent_timer_and_reply_fuller_yields_one_notify_one_report(
 
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()), _result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"), \
          patch.object(pna, "generate_fuller", side_effect=generate_then_race):
         first = await pna.process_fuller_turn(db=db, activity=activity, notifier=notifier)
 
@@ -324,9 +318,7 @@ async def test_fuller_raised_exception_releases_claim_and_stays_recoverable(
 
     # The turn is re-sendable: a retry re-claims and the real fuller lands + notifies.
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks()))):
         recovered = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert recovered is not None
     assert len(notifier.sent) == 1
@@ -350,9 +342,7 @@ async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, n
 
     empty = [_tail(headline="x", next_steps=[], risks=[], questions=[])]
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(empty), _result(empty))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(empty), _result(empty))):
         result = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert result is None              # a fallback fuller is not notified
     assert len(notifier.sent) == 1     # still just the opener
@@ -368,9 +358,7 @@ async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, n
 
     # And the re-fired fuller now produces and notifies the real substantive turn.
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks()))):
         recovered = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert recovered is not None
     assert len(notifier.sent) == 2
@@ -387,9 +375,7 @@ async def test_two_notifications_max_opener_then_fuller(db, configured, notifier
          patch.object(pna, "_schedule_fuller_turn"):
         await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     with patch("app.services.coach.service.AnthropicClient",
-               return_value=_client(_result(_fuller_blocks()))), \
-         patch("app.services.coach.service.write_back_beliefs"), \
-         patch("app.services.coach.service.enqueue_consolidation"):
+               return_value=_client(_result(_fuller_blocks()))):
         await process_fuller_turn(db=db, activity=activity, notifier=notifier)
 
     assert len(notifier.sent) == 2  # opener + fuller, no more
@@ -420,16 +406,12 @@ async def test_scheduled_fuller_is_inert_after_rollback_to_single_shot(
     assert len(notifier.sent) == 1  # the opener went out before the rollback
 
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")  # rollback
-    with patch("app.services.coach.service.AnthropicClient") as client_cls, \
-         patch("app.services.coach.service.write_back_beliefs") as wb, \
-         patch("app.services.coach.service.enqueue_consolidation") as ec:
+    with patch("app.services.coach.service.AnthropicClient") as client_cls:
         result = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
 
     assert result is None
     assert len(notifier.sent) == 1   # no stray single-shot notification
     client_cls.assert_not_called()   # no generation at all
-    wb.assert_not_called()
-    ec.assert_not_called()
     db.refresh(exchange)
     assert exchange.fuller_sent_at is None
 

@@ -19,13 +19,12 @@ from app.models import (
     Block,
     CheckIn,
     CoachChatMessage,
-    CoachNarrative,
     CoachReport,
-    CoachingContext,
     CoachingRelationship,
     DerivedMetric,
     Exchange,
     RunnerBaseline,
+    RunnerMemory,
     StravaAccount,
     StravaImport,
     User,
@@ -50,9 +49,8 @@ def _seed_full_user(db, *, email, athlete_id, strava_activity_id, hash_suffix):
     ))
     db.add(StravaImport(user_id=user.id, since_date=date(2026, 1, 1)))
     db.add(CoachingRelationship(user_id=user.id))
-    db.add(CoachingContext(user_id=user.id, kind="hr_confound", key="heat"))
-    db.add(CoachNarrative(user_id=user.id, narrative="the story so far"))
     db.add(RunnerBaseline(user_id=user.id, typical_easy_hr=145.0))
+    db.add(RunnerMemory(user_id=user.id, profile={"goals_and_plans": ["a race"]}))
     db.add(UserMaterial(
         user_id=user.id, kind="other", title="mine", filename="m.md",
         raw_text="private", content_hash=f"hash-{hash_suffix}", status="active",
@@ -101,8 +99,8 @@ def _seed_full_user(db, *, email, athlete_id, strava_activity_id, hash_suffix):
 # Every (model, owner-column) pair that must be empty for a deleted user.
 _USER_SCOPED = [
     (UserProfile, "user_id"), (StravaAccount, "user_id"), (StravaImport, "user_id"),
-    (CoachingRelationship, "user_id"), (CoachingContext, "user_id"),
-    (CoachNarrative, "user_id"), (RunnerBaseline, "user_id"),
+    (CoachingRelationship, "user_id"), (RunnerBaseline, "user_id"),
+    (RunnerMemory, "user_id"),
     (UserMaterial, "user_id"), (Activity, "user_id"), (Block, "user_id"),
     (Exchange, "user_id"),
 ]
