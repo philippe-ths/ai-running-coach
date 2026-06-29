@@ -87,6 +87,39 @@ def test_monthly_leading_edge_flags_partial_coverage():
     assert by[date(2026, 7, 1)].out_of_period_days == 0  # ends at window
 
 
+def test_weekly_leading_edge_carries_out_of_period_value():
+    # Window starts Wed Jun 3. The leading week (Mon Jun 1) spans Jun 1-7;
+    # Jun 1-2 are before the window. The in-window Jun 5 run (1000 m) is the
+    # bucket total; the pre-window Jun 1 (3000) + Jun 2 (2000) are the
+    # out-of-period value the chart stacks as a faded segment, so the bar shows
+    # the whole week (6000 m) rather than only the in-window slice.
+    in_window = [_df(date(2026, 6, 5), 1000)]
+    pre = [_df(date(2026, 6, 1), 3000), _df(date(2026, 6, 2), 2000)]
+    weeks = build_weekly_buckets(
+        in_window, since=date(2026, 6, 3), until=date(2026, 6, 16),
+        pre_window_daily=pre,
+    )
+    by = {w.week_start: w for w in weeks}
+    lead = by[date(2026, 6, 1)]
+    assert lead.total_distance_m == 1000  # in-period sum stays honest
+    assert lead.out_of_period_distance_m == 5000  # Jun 1-2 outside the window
+    # Interior weeks are unaffected.
+    assert by[date(2026, 6, 8)].out_of_period_distance_m == 0
+
+
+def test_monthly_leading_edge_carries_out_of_period_value():
+    # Window starts May 10; the May month bucket's May 1-9 are out-of-period.
+    in_window = [_df(date(2026, 5, 15), 1000)]
+    pre = [_df(date(2026, 5, 3), 4000)]
+    months = build_period_buckets(
+        in_window, "monthly", since=date(2026, 5, 10), until=date(2026, 5, 31),
+        pre_window_daily=pre,
+    )
+    may = {m.period_start: m for m in months}[date(2026, 5, 1)]
+    assert may.total_distance_m == 1000
+    assert may.out_of_period_distance_m == 4000
+
+
 def test_biweekly_bucket_coverage_spans_fourteen_days():
     # A fortnight bucket straddling the window start splits across 14 days.
     facts = [_df(date(2026, 6, 10), 1000)]
