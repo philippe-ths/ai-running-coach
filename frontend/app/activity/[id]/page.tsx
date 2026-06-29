@@ -1,6 +1,6 @@
 import { serverFetch } from '@/lib/serverSession';
 import { format } from 'date-fns';
-import { formatPace, formatDuration, formatDistanceKm, activityStartDate } from '@/lib/format';
+import { formatPace, formatDuration, formatDistanceKm, activityStartDate, hasMeaningfulDistance } from '@/lib/format';
 import CheckInForm from '@/components/CheckInForm';
 import Link from 'next/link';
 import { Activity } from '@/lib/types';
@@ -9,6 +9,7 @@ import RoutePath from '@/components/RoutePath';
 import StreamCharts from '@/components/StreamCharts';
 import { SplitsPanel } from '@/components/SplitsPanel';
 import { LapsPanel } from '@/components/LapsPanel';
+import { lapsAreAutoDistance } from '@/lib/laps';
 import StopsPanel from '@/components/StopsPanel';
 import FeatureDisabledGate from '@/components/FeatureDisabledGate';
 import EfficiencyPanel from '@/components/EfficiencyPanel';
@@ -33,6 +34,15 @@ export default async function ActivityDetail({ params }: { params: { id: string 
   const coachFlags = (await serverFetch('/api/coach/feature-flags')) || {};
   const stopsEnabled = coachFlags.stops_analysis !== false;
 
+  // #562: when the recorded laps are just per-km auto-distance laps, they
+  // duplicate the per-km splits, so render one unified Laps view (enriched
+  // with the splits' richer columns) instead of two near-identical cards.
+  // Device-meaningful laps (manual button / structured workout) keep both.
+  const hasLaps = !!activity.laps && activity.laps.length > 0;
+  const autoDistanceLaps = lapsAreAutoDistance(activity.laps, activity.splits);
+  const showSplitsPanel =
+    !!activity.splits && activity.splits.length > 0 && !(hasLaps && autoDistanceLaps);
+
   return (
     <div className="space-y-6 relative">
 
@@ -46,7 +56,9 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                 <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 break-words">{activity.name}</h1>
                 <div className="flex flex-wrap gap-x-4 gap-y-2 mt-2 text-gray-600 dark:text-gray-400 items-center">
                     <span>{format(activityStartDate(activity), 'PPPP p')}</span>
-                    <span>{formatDistanceKm(activity.distance_m)}</span>
+                    {hasMeaningfulDistance(activity.distance_m) && (
+                        <span>{formatDistanceKm(activity.distance_m)}</span>
+                    )}
                     {activity.metrics?.headline && (
                         <span className="inline-block px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-200 text-sm font-medium">
                             {activity.metrics.headline}
@@ -93,13 +105,18 @@ export default async function ActivityDetail({ params }: { params: { id: string 
              <StreamCharts streams={activity.streams} />
           )}
 
-          {/* Laps Panel: only when the runner recorded laps (#208) */}
-          {activity.laps && activity.laps.length > 0 && (
-              <LapsPanel laps={activity.laps} />
+          {/* Laps Panel: only when the runner recorded laps (#208). When the
+              laps are just per-km auto-distance laps, the aligned splits are
+              passed so this single view carries their richer columns (#562). */}
+          {hasLaps && (
+              <LapsPanel
+                laps={activity.laps}
+                splits={autoDistanceLaps ? activity.splits : undefined}
+              />
           )}
 
-          {/* Splits Panel */}
-          {activity.splits && activity.splits.length > 0 && (
+          {/* Splits Panel: hidden when it would duplicate auto-distance laps (#562) */}
+          {showSplitsPanel && (
               <SplitsPanel splits={activity.splits} />
           )}
 
@@ -140,17 +157,21 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                         <dd className="font-medium">{formatDuration(activity.raw_summary.elapsed_time)}</dd>
                     </div>
                 )}
-                <div className="flex justify-between">
-                   <dt className="text-gray-500 dark:text-gray-400">Avg Pace</dt>
-                   <dd className="font-medium">
-                     {formatPace(activity.distance_m, activity.moving_time_s)}
-                   </dd>
-                </div>
-                <div className="flex justify-between">
-                    <dt className="text-gray-500 dark:text-gray-400">Distance</dt>
-                    <dd className="font-medium">{formatDistanceKm(activity.distance_m)}</dd>
-                </div>
-                
+                {hasMeaningfulDistance(activity.distance_m) && (
+                  <>
+                    <div className="flex justify-between">
+                       <dt className="text-gray-500 dark:text-gray-400">Avg Pace</dt>
+                       <dd className="font-medium">
+                         {formatPace(activity.distance_m, activity.moving_time_s)}
+                       </dd>
+                    </div>
+                    <div className="flex justify-between">
+                        <dt className="text-gray-500 dark:text-gray-400">Distance</dt>
+                        <dd className="font-medium">{formatDistanceKm(activity.distance_m)}</dd>
+                    </div>
+                  </>
+                )}
+
                 <div className="border-t border-gray-100 dark:border-gray-700 my-2 pt-2"></div>
                 
                 <div className="flex justify-between">

@@ -1,11 +1,17 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Lap } from '@/lib/types/activity';
+import { Lap, Split } from '@/lib/types/activity';
 import { formatSplitDuration } from '@/lib/format';
 
 interface LapsPanelProps {
   laps?: Lap[];
+  // When the recorded laps are just per-km auto-distance laps, the page passes
+  // the aligned per-km splits so this single view can carry the richer per-row
+  // columns the splits table shows (grade, elevation, power) without losing
+  // data, instead of rendering a near-identical second card (#562). Aligned by
+  // index; the laps remain the row basis and bar-chart source.
+  splits?: Split[];
 }
 
 type Metric = 'pace' | 'hr';
@@ -43,7 +49,7 @@ function lapMetricValue(lap: Lap, metric: Metric): number | null {
   return lapHasHr(lap) ? lap.avg_hr! : null;
 }
 
-export function LapsPanel({ laps }: LapsPanelProps) {
+export function LapsPanel({ laps, splits }: LapsPanelProps) {
   const hasPace = !!laps?.some(lapHasPace);
   const hasHr = !!laps?.some(lapHasHr);
   // Default to pace when available, otherwise fall back to HR.
@@ -88,6 +94,31 @@ export function LapsPanel({ laps }: LapsPanelProps) {
     activeMetric === 'hr'
       ? `Lap ${lap.lap}: ${lap.avg_hr ? Math.round(lap.avg_hr) + ' bpm' : '-'}`
       : `Lap ${lap.lap}: ${formatLapPace(lap)}`;
+
+  // Enrichment columns sourced from the aligned per-km split (#562). Only the
+  // unified auto-distance case passes splits; each column appears only when
+  // some row has a value, mirroring SplitsPanel so no data is lost when the
+  // separate splits card is collapsed away. Cadence prefers the lap's own.
+  const splitAt = (i: number): Split | undefined => splits?.[i];
+  const cadenceFor = (lap: Lap, i: number): number | null =>
+    lap.avg_cadence ?? splitAt(i)?.avg_cadence ?? null;
+  const showCadence =
+    laps.some((l) => l.avg_cadence != null) || !!splits?.some((s) => s.avg_cadence != null);
+  const showGrade = !!splits?.some((s) => s.avg_grade != null);
+  const showElev = !!splits?.some((s) => s.elev_gain != null);
+  const showPower = !!splits?.some((s) => s.avg_watts != null);
+
+  const columns = [
+    'Lap',
+    'Distance',
+    'Time',
+    'Pace',
+    'Avg HR',
+    ...(showGrade ? ['Avg Grade'] : []),
+    ...(showElev ? ['Elev Gain'] : []),
+    ...(showPower ? ['Avg Power'] : []),
+    ...(showCadence ? ['Avg Cadence'] : []),
+  ];
 
   return (
     <div className="bg-white dark:bg-gray-800 shadow rounded-lg p-6 mb-6">
@@ -147,7 +178,7 @@ export function LapsPanel({ laps }: LapsPanelProps) {
               below the NavBar (z-30) so the header never paints over it. */}
           <thead className="sticky top-0 z-10 bg-gray-100 dark:bg-gray-700">
             <tr>
-              {['Lap', 'Distance', 'Time', 'Pace', 'Avg HR'].map((label) => (
+              {columns.map((label) => (
                 <th
                   key={label}
                   scope="col"
@@ -159,7 +190,9 @@ export function LapsPanel({ laps }: LapsPanelProps) {
             </tr>
           </thead>
           <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-            {laps.map((lap) => (
+            {laps.map((lap, i) => {
+              const split = splitAt(i);
+              return (
               <tr
                 key={lap.lap}
                 onClick={() => setSelected(selected === lap.lap ? null : lap.lap)}
@@ -174,8 +207,29 @@ export function LapsPanel({ laps }: LapsPanelProps) {
                 <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                   {lap.avg_hr ? Math.round(lap.avg_hr) : '-'}
                 </td>
+                {showGrade && (
+                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                    {split?.avg_grade != null ? `${split.avg_grade.toFixed(1)}%` : '-'}
+                  </td>
+                )}
+                {showElev && (
+                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                    {split?.elev_gain != null ? `${split.elev_gain} m` : '-'}
+                  </td>
+                )}
+                {showPower && (
+                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                    {split?.avg_watts != null ? `${Math.round(split.avg_watts)} W` : '-'}
+                  </td>
+                )}
+                {showCadence && (
+                  <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                    {cadenceFor(lap, i) != null ? Math.round(cadenceFor(lap, i)!) : '-'}
+                  </td>
+                )}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
