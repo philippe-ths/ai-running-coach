@@ -126,6 +126,15 @@ def test_derived_sets_equal_manifest_views():
     assert prompts.STREAM_VIEW_PROMPT_IDS == ids_with(F.STREAM_VIEW)
     assert prompts.RECENT_TRAINING_PROMPT_IDS == ids_with(F.RECENT_TRAINING)
     assert prompts.TRAINING_HISTORY_PROMPT_IDS == ids_with(F.TRAINING_HISTORY)
+    assert prompts.MEMORY_PROMPT_IDS == ids_with(F.MEMORY)
+
+
+def test_memory_feature_is_inert_until_v13_is_registered():
+    """ADR 0025: M2 adds PromptFeature.MEMORY + is_memory_prompt but attaches the
+    feature to no prompt, so memory is wholly inert under the live prompt until M3
+    registers coach_message_v13. M3 flips this assertion."""
+    assert prompts.MEMORY_PROMPT_IDS == frozenset()
+    assert prompts.is_memory_prompt("coach_message_v12") is False
 
 
 def test_derived_sets_match_captured_membership():
@@ -181,6 +190,7 @@ def test_predicates_agree_with_has_feature():
         assert prompts.is_stream_view_prompt(pid) == has_feature(pid, F.STREAM_VIEW)
         assert prompts.is_recent_training_prompt(pid) == has_feature(pid, F.RECENT_TRAINING)
         assert prompts.is_training_history_prompt(pid) == has_feature(pid, F.TRAINING_HISTORY)
+        assert prompts.is_memory_prompt(pid) == has_feature(pid, F.MEMORY)
 
 
 def test_opener_prompts_cover_exactly_two_stage_ids():

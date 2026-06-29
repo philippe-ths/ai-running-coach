@@ -267,6 +267,15 @@ class Settings(BaseSettings):
     # None and PACK_SECTIONS drops it byte-stably.
     COACH_TRAINING_HISTORY_ENABLED: bool = True
 
+    # Runner memory (ADR 0025), the rewrite-from-source replacement for the retired
+    # belief + narrative loop. The conventional #522 default-True kill switch on top
+    # of the prompt gate: the background memory update pass is enqueued, and the
+    # `memory` pack section is read, ONLY when the active prompt is memory-aware
+    # (coach_message_v13, M3) AND this is True. Off => no writer enqueue and the
+    # section drops byte-stably. UI-visible (greys the future memory surface), so it
+    # is on the /api/coach/feature-flags map (added in M3 alongside the read path).
+    COACH_MEMORY_ENABLED: bool = True
+
     # Two-stage Exchange cadence (A4, ADR 0010). The opener fires immediately on a
     # finished activity; the conditional fuller turn fires on the runner's reply or
     # this timer, whichever is first. Only the two-stage prompt (coach_message_v2)

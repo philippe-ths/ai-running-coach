@@ -92,17 +92,20 @@ def test_pack_carries_no_narrative_when_disabled(db):
 
 
 def test_learning_loop_writes_nothing_when_disabled(db):
-    """No belief write-back and no consolidation enqueue under the default flags."""
+    """No belief write-back, no consolidation enqueue, and no memory update enqueue
+    under the default flags + the live (non-memory) prompt."""
     uid = _user(db)
     act = _activity(db, uid)
     pack = build_context_pack(db, act)
 
     with patch("app.services.coach.service.write_back_beliefs") as wb, \
-         patch("app.services.coach.service.enqueue_consolidation") as ec:
-        _fire_learning_loop(db, act, pack)
+         patch("app.services.coach.service.enqueue_consolidation") as ec, \
+         patch("app.services.coach.service.enqueue_memory_update") as em:
+        _fire_learning_loop(db, act, pack, "coach_message_v12")
 
     wb.assert_not_called()
     ec.assert_not_called()
+    em.assert_not_called()
 
 
 def _activity_at(db, uid, dt, *, effort="easy", user_intent=None):
