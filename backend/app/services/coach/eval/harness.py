@@ -24,6 +24,13 @@ from app.services.coach.eval.fixtures import (
     known_good_message_report,
     known_good_report,
 )
+from app.services.coach.eval.judge import (
+    JUDGE_CRITERIA,
+    JudgeReportScore,
+    StructuredClient,
+    judge_report,
+    summarize_judge_scores,
+)
 from app.services.coach.eval.rubric import (
     ASSERTIONS,
     AssertionStatus,
@@ -62,6 +69,11 @@ class Scorecard:
     # fuller turn never landed). The harness scores the fuller turn only; an
     # opener row has no message to score. Operational health, not a rubric assertion.
     skipped_opener_only: int = 0
+    # #164 semantic-judge layer (OPT-IN, advisory only). Empty unless the judge was
+    # explicitly run. The judge NEVER affects the deterministic pass/fail above; its
+    # scores are aggregated into a separate, clearly-labelled `judge` section.
+    judge_scores: List[JudgeReportScore] = field(default_factory=list)
+    judge_errors: List[Dict[str, Any]] = field(default_factory=list)
 
     def assertion_summary(self) -> Dict[str, Dict[str, Any]]:
         summary: Dict[str, Dict[str, Any]] = {}
@@ -95,7 +107,7 @@ class Scorecard:
         return (passed / applicable) if applicable else 1.0
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "reports_scored": len(self.report_scores),
             "skipped_fallback": self.skipped_fallback,
             "skipped_opener_only": self.skipped_opener_only,
@@ -105,6 +117,16 @@ class Scorecard:
             "assertion_summary": self.assertion_summary(),
             "reports": [rs.to_dict() for rs in self.report_scores],
         }
+        # The judge section is present ONLY when the opt-in judge layer ran, so a
+        # default deterministic scorecard is byte-identical to the pre-#164 shape.
+        if self.judge_scores or self.judge_errors:
+            data["judge"] = {
+                "reports_judged": len(self.judge_scores),
+                "judge_errors": self.judge_errors,
+                "criterion_summary": summarize_judge_scores(self.judge_scores),
+                "reports": [js.to_dict() for js in self.judge_scores],
+            }
+        return data
 
 
 def score_db_reports(
@@ -180,6 +202,105 @@ def score_db_reports(
         tail_degraded=tail_degraded,
         errors=errors,
     )
+
+
+async def judge_db_reports(
+    db: Session,
+    client: StructuredClient,
+    *,
+    prompt_id: Optional[str] = None,
+    schema_version: Optional[str] = None,
+    all_versions: bool = False,
+    include_fallback: bool = False,
+    limit: Optional[int] = None,
+) -> tuple[List[JudgeReportScore], List[Dict[str, Any]]]:
+    """Run the opt-in semantic judge over the SAME scoreable rows the deterministic
+    scorer covers, returning (judge_scores, judge_errors).
+
+    This walks the rows independently of ``score_db_reports`` rather than refactoring
+    it, so the deterministic gate stays byte-for-byte unchanged (the conservative
+    choice — do not touch the working floor to bolt on an advisory layer). The row
+    filter, the fallback skip, and the opener-only skip mirror ``score_db_reports``
+    exactly so the two sections describe the same population. One malformed verdict or
+    transport error is recorded per-report and the run continues, never crashing — the
+    judge is advisory.
+    """
+    if prompt_id is None:
+        prompt_id = settings.COACH_PROMPT_ID
+    if schema_version is None:
+        schema_version = active_schema_version(prompt_id)
+
+    query = db.query(CoachReport)
+    if not all_versions:
+        query = query.filter(
+            CoachReport.prompt_id == prompt_id,
+            CoachReport.schema_version == schema_version,
+        )
+    rows = query.order_by(CoachReport.created_at, CoachReport.id).all()
+
+    judged: List[JudgeReportScore] = []
+    errors: List[Dict[str, Any]] = []
+    for row in rows:
+        if limit is not None and len(judged) >= limit:
+            break
+        if row.is_fallback and not include_fallback:
+            continue
+        if is_opener_only(row.report):
+            continue
+        try:
+            content = _validate_report(row.schema_version, row.report)
+            pack = CoachContextPack.model_validate(row.context_pack)
+            verdict = await judge_report(client, content, pack)
+        except Exception as exc:
+            summary = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+            errors.append(
+                {"report_id": str(row.id), "error": f"{type(exc).__name__}: {summary}"}
+            )
+            continue
+        judged.append(
+            JudgeReportScore(
+                verdict=verdict,
+                report_id=str(row.id),
+                activity_id=str(row.activity_id),
+                prompt_id=row.prompt_id,
+                schema_version=row.schema_version,
+            )
+        )
+
+    return judged, errors
+
+
+def compare_judge_sections(
+    before: Dict[str, Any],
+    after: Dict[str, Any],
+    *,
+    min_drop: float = 0.5,
+) -> List[str]:
+    """Flag a meaningful drop in any judge criterion's mean between two scorecards.
+
+    Advisory, not a hard gate: an LLM judge is not perfectly reproducible, so a small
+    wobble is noise. Only a drop of at least ``min_drop`` (half a point on the 1-5
+    scale, default) in a criterion mean is surfaced, and only when BOTH scorecards
+    carry a judge section. Returns human-readable lines; empty means nothing notable.
+    """
+    before_judge = before.get("judge")
+    after_judge = after.get("judge")
+    if not before_judge or not after_judge:
+        return []
+
+    regressions: List[str] = []
+    before_summary = before_judge.get("criterion_summary", {})
+    after_summary = after_judge.get("criterion_summary", {})
+    for name in JUDGE_CRITERIA:
+        before_mean = (before_summary.get(name) or {}).get("mean")
+        after_mean = (after_summary.get(name) or {}).get("mean")
+        if before_mean is None or after_mean is None:
+            continue
+        if after_mean <= before_mean - min_drop:
+            regressions.append(
+                f"judge {name} mean dropped {before_mean:.2f} -> {after_mean:.2f}"
+            )
+    return regressions
 
 
 def compare_scorecards(
