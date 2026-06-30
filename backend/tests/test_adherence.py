@@ -378,6 +378,115 @@ def test_caution_in_details_still_abstains_under_action_first():
 
 
 # --------------------------------------------------------------------------- #
+# #579: a deliberate rest/recovery window must abstain, never call "ignored".
+# A recovery-band effort, a recovery/rest intent, or a fired discount signal is
+# the runner managing fatigue, not a missed opportunity to add quality/distance.
+# --------------------------------------------------------------------------- #
+
+def test_add_quality_abstains_when_window_is_all_recovery():
+    """The runner deliberately recovered across the whole window (recovery-band
+    effort). Even at >= _MIN_OPPORTUNITY_RUNS comparable runs, there was no real
+    opportunity to add a quality session -> abstain, not 'ignored'."""
+    ctx = build_adherence(
+        prior_report_date="2026-02-01T10:00:00+00:00",
+        prior_next_steps=[_step("Add a tempo run")],
+        candidates=[
+            _run("2026-02-03T10:00:00+00:00", effort="recovery"),
+            _run("2026-02-05T10:00:00+00:00", effort="recovery"),
+            _run("2026-02-07T10:00:00+00:00", effort="recovery"),
+        ],
+        pushback=False,
+    )
+    assert ctx.outcomes == []
+
+
+def test_add_quality_abstains_when_recovery_intent_leaves_too_few_opportunities():
+    """Two of three comparable runs were declared recovery/rest; only one genuine
+    opportunity remains, below the quorum -> abstain."""
+    ctx = build_adherence(
+        prior_report_date="2026-02-01T10:00:00+00:00",
+        prior_next_steps=[_step("Add a tempo run")],
+        candidates=[
+            _run("2026-02-03T10:00:00+00:00", effort="easy", user_intent="Recovery"),
+            _run("2026-02-05T10:00:00+00:00", effort="easy", user_intent="Rest day jog"),
+            _run("2026-02-07T10:00:00+00:00", effort="easy"),
+        ],
+        pushback=False,
+    )
+    assert ctx.outcomes == []
+
+
+def test_add_quality_abstains_when_window_is_confounded():
+    """Every comparable run fired a discount signal (heat/hills/stimulant). A
+    confounded run is exculpatory, not a missed opportunity -> abstain."""
+    confounded = [
+        CandidateActivity(
+            date=f"2026-02-0{d}T10:00:00+00:00", effort="easy",
+            duration_class="standard", structure="continuous", is_race=False,
+            confidence="high", user_intent=None, discount_signals_fired=True,
+        )
+        for d in (3, 5, 7)
+    ]
+    ctx = build_adherence(
+        prior_report_date="2026-02-01T10:00:00+00:00",
+        prior_next_steps=[_step("Add a tempo run")],
+        candidates=confounded,
+        pushback=False,
+    )
+    assert ctx.outcomes == []
+
+
+def test_add_quality_still_ignored_with_enough_genuine_opportunity():
+    """A rest day in the window does NOT immunise a genuinely-ignored advice: with
+    >= _MIN_OPPORTUNITY_RUNS real (non-recovery, non-confounded) opportunity runs
+    and still no quality, 'ignored' remains the fair read (no regression)."""
+    ctx = build_adherence(
+        prior_report_date="2026-02-01T10:00:00+00:00",
+        prior_next_steps=[_step("Add a tempo run")],
+        candidates=[
+            _run("2026-02-02T10:00:00+00:00", effort="recovery"),  # exculpatory rest
+            _run("2026-02-03T10:00:00+00:00", effort="easy"),
+            _run("2026-02-05T10:00:00+00:00", effort="easy"),
+            _run("2026-02-07T10:00:00+00:00", effort="easy"),
+        ],
+        pushback=False,
+    )
+    assert ctx.outcomes[0].label == "ignored"
+
+
+def test_add_quality_acted_on_survives_confounded_day():
+    """The exculpatory exclusion only suppresses the NEGATIVE verdict: a real
+    quality session, even on a confounded day, still reads 'acted_on'."""
+    ctx = build_adherence(
+        prior_report_date="2026-02-01T10:00:00+00:00",
+        prior_next_steps=[_step("Add a tempo run")],
+        candidates=[
+            CandidateActivity(
+                date="2026-02-03T10:00:00+00:00", effort="tempo",
+                duration_class="standard", structure="continuous", is_race=False,
+                confidence="high", user_intent=None, discount_signals_fired=True,
+            ),
+        ],
+        pushback=False,
+    )
+    assert ctx.outcomes[0].label == "acted_on"
+
+
+def test_add_long_run_abstains_when_window_is_all_recovery():
+    ctx = build_adherence(
+        prior_report_date="2026-02-01T10:00:00+00:00",
+        prior_next_steps=[_step("Add a long run")],
+        candidates=[
+            _run("2026-02-03T10:00:00+00:00", effort="recovery", duration_class="standard"),
+            _run("2026-02-05T10:00:00+00:00", effort="recovery", duration_class="standard"),
+            _run("2026-02-07T10:00:00+00:00", effort="recovery", duration_class="standard"),
+        ],
+        pushback=False,
+    )
+    assert ctx.outcomes == []
+
+
+# --------------------------------------------------------------------------- #
 # abstention: unrecognised, multi-intent, empty
 # --------------------------------------------------------------------------- #
 

@@ -765,6 +765,59 @@ class TrainingHistoryContext(BaseModel):
     timeline: List[TrainingHistoryBucket]
 
 
+class IntensityBandShare(BaseModel):
+    """#578: an easy/moderate/hard split as percentages summing to ~100 (rounding). Used
+    both for the time split WITHIN one run and the session-count share across a window."""
+    model_config = ConfigDict(extra="forbid")
+
+    easy_pct: float
+    moderate_pct: float
+    hard_pct: float
+
+
+class IntensitySession(BaseModel):
+    """#578: this run's intensity read — its dominant band (collapsed from the HR-derived
+    `effort` axis: recovery/easy -> easy, moderate -> moderate, tempo/hard -> hard) plus,
+    when zone time is present, the easy/moderate/hard split of time WITHIN the run, and
+    whether a discount signal (heat/hills/stimulant) fired on it."""
+    model_config = ConfigDict(extra="forbid")
+
+    band: Optional[str] = None                       # easy | moderate | hard; None without HR
+    within_run: Optional[IntensityBandShare] = None  # time-in-zone split inside this run; None without zones
+    hr_confounded: bool = False                      # a fired discount signal exculpates apparent hardness
+
+
+class IntensityContext(BaseModel):
+    """#578: the deterministic intensity-distribution-and-trend signal — the data-layer
+    half of the v13 memory addendum's "read training direction from the data" discipline.
+
+    Carries THIS run's intensity (`this_session`) and the runner's RECENT distribution +
+    trend: the easy/moderate/hard share of recent comparable sessions (session-count over
+    `window_days`), both raw and confounder-EXCULPATED (`distribution_adjusted`, where a
+    session whose HR drift fired a discount signal does not count its apparent hardness),
+    plus whether this run is harder/easier than recent (`this_run_vs_recent`) and whether
+    the distribution is shifting (`trend_direction`, recent vs prior equal window's
+    exculpated hard-share). Every figure is a deterministic FACT the coach may cite; none
+    is an intensity verdict and none overrides this run's re-derived DerivedMetric or the
+    safety floor. Emitted ONLY under an intensity-aware prompt id; abstains internally
+    (null distributions, `no_norm` directions) when history is thin, like volume/
+    recent_training, and the whole section is dropped (builder returns None) only when
+    there is nothing to say."""
+    model_config = ConfigDict(extra="forbid")
+
+    this_session: IntensitySession
+    window_days: int
+    session_count: int                                  # comparable recent sessions (excl. this run, races, no-HR)
+    distribution: Optional[IntensityBandShare] = None           # raw session-count share
+    distribution_adjusted: Optional[IntensityBandShare] = None  # confounder-exculpated share
+    confounded_session_count: int = 0
+    this_run_vs_recent: str                             # easier | in_line | harder | no_norm
+    trend_direction: str                                # easier | in_line | harder | no_norm
+    trend_hard_share_delta_pct: Optional[float] = None  # recent minus prior exculpated hard-share (pct points)
+    prior_session_count: int = 0
+    has_distribution: bool = False
+
+
 class MemoryContext(BaseModel):
     """ADR 0025: the runner memory profile surfaced WHOLE — the five capped sections
     of the runner's STATED facts + soft character, plus provenance so the coach can
@@ -876,6 +929,11 @@ class CoachContextPack(BaseModel):
     # stays byte-stable pre/post v13; populated only under a memory-aware prompt id,
     # and only when a profile row exists for the runner.
     memory: Optional["MemoryContext"] = None
+    # #578 intensity-distribution-and-trend signal. None under every non-intensity prompt
+    # and OMITTED from serialization (the gated-section idiom), so the pack stays
+    # byte-stable pre/post v14; populated only under an intensity-aware prompt id, and
+    # only when there is something to say (the builder returns None otherwise).
+    intensity: Optional["IntensityContext"] = None
     safety_rules: SafetyRules
 
     def to_serializable_dict(self) -> Dict[str, Any]:
@@ -1090,6 +1148,7 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
     ),  # #444
     PackSection("training_history", PromptFeature.TRAINING_HISTORY),  # #561
     PackSection("memory", PromptFeature.MEMORY),  # ADR 0025 runner memory profile
+    PackSection("intensity", PromptFeature.INTENSITY),  # #578 intensity distribution + trend
     # #451: the retired legacy summary — droppable but NOT prompt-gated (no longer
     # populated; a pre-#451 stored pack still round-trips its real object unchanged).
     PackSection("recent_training_summary"),

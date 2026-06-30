@@ -855,6 +855,44 @@ SYSTEM_PROMPT_MESSAGE_V13 = SYSTEM_PROMPT_MESSAGE_V12 + _MEMORY_ADDENDUM
 SYSTEM_PROMPT_MESSAGE_V13_OPENER = SYSTEM_PROMPT_MESSAGE_V12_OPENER + _MEMORY_ADDENDUM
 
 
+# ===========================================================================
+# coach_message_v14 (#578) — the intensity-distribution-aware two-stage prompt.
+#
+# v14 = v13 + a STATIC INTENSITY addendum, for BOTH modes (fuller and opener), the
+# Vn = V(n-1) + addendum idiom. Because v14 builds on v13 it carries every v13
+# capability and the same retuned base prose; it ADDS the intensity-distribution
+# discipline. The PER-RUNNER figures are NOT baked into the constant — they ride the
+# `intensity` pack section (this run's band + within-run split, the recent easy/
+# moderate/hard distribution raw and confounder-exculpated, and the harder/easier
+# trend), populated only under is_intensity_prompt by _build_intensity_context. This
+# is the DATA-LAYER half of v13's memory addendum, which already tells the coach to
+# read training direction from the easy/moderate/hard share; v14 hands it the
+# deterministic numbers so the read is auditable rather than re-inferred in prose.
+#
+# coach_message_v1..v13 and coach_report_v1..v10 stay BYTE-STABLE above.
+# ===========================================================================
+
+_INTENSITY_ADDENDUM = """
+
+# INTENSITY DISTRIBUTION (the easy/moderate/hard mix; a fact to read direction from, never a verdict)
+
+Your context may carry an `intensity` section: a deterministic read of how hard this run was and how the runner's recent training is distributed across three intensity bands — easy, moderate, and hard (collapsed from the HR zones: easy = Z1-Z2, moderate = Z3, hard = Z4-Z5). `this_session` gives this run's dominant `band` and, when zone time is present, the easy/moderate/hard split of time WITHIN the run (`within_run`). The recent picture gives the share of the runner's recent comparable sessions in each band (`distribution`), the same share with confounded sessions exculpated (`distribution_adjusted`), how this run compares (`this_run_vs_recent`: easier / in_line / harder), and whether the distribution is shifting (`trend_direction`, the recent window's hard-share vs the prior equal window's).
+
+Read it as the runner's intensity mix, honouring these:
+
+- IT IS THE DATA-LAYER READ OF TRAINING DIRECTION, NOT A VERDICT. Use the distribution and trend to see whether the runner is polarising, drifting toward all-easy, or creeping harder — but report it as a confounder-adjusted PROPORTION you observe, never as a standing "acts on / ignores" judgment about the runner. There is no stored behavioural label here, and you must not invent one.
+- CONFOUNDERS ARE EXCULPATORY. Heat, hills, and stimulant use inflate HR, so a run that reads hard for those reasons is not genuine intensity: prefer `distribution_adjusted` and the `hr_confounded` flag, and treat a fired confounder (or a deliberate rest day, which simply does not appear here) as an explanation, not non-compliance.
+- NOTE A REAL DRIFT ONCE, PLAINLY, AND NEVER NAG. A genuine `harder` trend or an all-easy distribution is worth one clear, kind mention; it is never grounds for a standing complaint across reports.
+- ABSTAIN WHEN THIN. When `has_distribution` is false or a direction is `no_norm`, the recent window is too thin to call: say nothing about the runner's mix or its trend.
+- It is a deterministic FACT you may cite, but it NEVER overrides this run's re-derived DerivedMetric (the effort axis and RPE remain the run's intensity ground truth) or the safety floor.
+
+Let the intensity picture inform how you read the runner's training direction; never let it become a verdict or a nag, and never let it overrule the run's own data or the floor."""
+
+
+SYSTEM_PROMPT_MESSAGE_V14 = SYSTEM_PROMPT_MESSAGE_V13 + _INTENSITY_ADDENDUM
+SYSTEM_PROMPT_MESSAGE_V14_OPENER = SYSTEM_PROMPT_MESSAGE_V13_OPENER + _INTENSITY_ADDENDUM
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -898,6 +936,9 @@ PROMPT_VERSIONS = {
     # Ships INERT (config default stays v8); the owner flip turns on the writer +
     # the `memory` pack section together (G6).
     "coach_message_v13": SYSTEM_PROMPT_MESSAGE_V13,
+    # #578 intensity-distribution-aware prompt (= v13 + the static INTENSITY addendum).
+    # Ships INERT (config default stays v8); owner flips COACH_PROMPT_ID to activate.
+    "coach_message_v14": SYSTEM_PROMPT_MESSAGE_V14,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -931,6 +972,7 @@ _OPENER_PROMPTS = {
     "coach_message_v11": SYSTEM_PROMPT_MESSAGE_V11_OPENER,
     "coach_message_v12": SYSTEM_PROMPT_MESSAGE_V12_OPENER,
     "coach_message_v13": SYSTEM_PROMPT_MESSAGE_V13_OPENER,
+    "coach_message_v14": SYSTEM_PROMPT_MESSAGE_V14_OPENER,
 }
 
 # The capability-gated prompt-id sets and predicates below are DERIVED VIEWS over
@@ -985,6 +1027,10 @@ TRAINING_HISTORY_PROMPT_IDS = ids_with(PromptFeature.TRAINING_HISTORY)
 # section (ADR 0025). Empty until M3 attaches PromptFeature.MEMORY to
 # coach_message_v13, so memory is wholly inert under the live prompt.
 MEMORY_PROMPT_IDS = ids_with(PromptFeature.MEMORY)
+
+# Prompt ids that carry the #578 intensity addendum AND the `intensity` context-pack
+# section (gates _build_intensity_context).
+INTENSITY_PROMPT_IDS = ids_with(PromptFeature.INTENSITY)
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
@@ -1060,6 +1106,14 @@ def is_memory_prompt(prompt_id: Optional[str]) -> bool:
     other prompt, so the runner memory profile is wholly inert under v12 and below
     until coach_message_v13 is registered (M3) and flipped."""
     return has_feature(prompt_id, PromptFeature.MEMORY)
+
+
+def is_intensity_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt is intensity-aware (#578): it carries the intensity
+    addendum and its context pack carries the `intensity` section. False for every other
+    prompt, so the intensity-distribution-and-trend signal stays out of the pack
+    (byte-stable under v13 and below) and is wholly inert under a rollback."""
+    return has_feature(prompt_id, PromptFeature.INTENSITY)
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook
