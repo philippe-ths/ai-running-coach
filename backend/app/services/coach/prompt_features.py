@@ -45,6 +45,7 @@ class PromptFeature(Enum):
     RECENT_TRAINING = "recent_training"  # #444 modality-aware recent-training picture
     TRAINING_HISTORY = "training_history"  # #561 multi-year LOD volume ladder + durability traits
     MEMORY = "memory"                  # runner memory profile section (ADR 0025); attached to coach_message_v13 in M3
+    INTENSITY = "intensity"            # #578 deterministic intensity-distribution-and-trend section
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -165,6 +166,26 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.RECENT_TRAINING,
             _F.TRAINING_HISTORY,
             _F.MEMORY,
+        }
+    ),
+    # #578 — v14 = v13 + the INTENSITY capability (the deterministic intensity-
+    # distribution-and-trend section + its addendum). Same retuned base prose as v8+;
+    # adds one capability (an additive superset of v13). Ships INERT (the config default
+    # stays v8); the owner flips COACH_PROMPT_ID to coach_message_v14 to activate.
+    "coach_message_v14": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.TRAINING_LOAD,
+            _F.USER_MATERIALS,
+            _F.VOLUME,
+            _F.STREAM_VIEW,
+            _F.RECENT_TRAINING,
+            _F.TRAINING_HISTORY,
+            _F.MEMORY,
+            _F.INTENSITY,
         }
     ),
 }

@@ -49,6 +49,7 @@ def test_all_signals_registered_under_one_interface():
         "recent_training",
         "training_history",
         "memory",
+        "intensity",
     }
     assert all(isinstance(s, ReadTimeSignal) for s in READ_TIME_SIGNALS.values())
 
