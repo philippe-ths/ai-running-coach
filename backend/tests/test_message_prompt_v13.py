@@ -33,7 +33,9 @@ def test_v13_registered_carries_every_v12_capability_plus_memory():
     assert V13.startswith(MESSAGE_PROMPT_PREFIX)  # -> schema 2.0 by prefix
     assert V13 in TRAINING_HISTORY_PROMPT_IDS  # inherits v12's capabilities
     assert V13 in MEMORY_PROMPT_IDS  # ...plus the new MEMORY capability
-    assert MEMORY_PROMPT_IDS == {V13}
+    # v13 is where MEMORY was introduced; later superset versions (v14+) carry it too
+    # (the additive Vn = V(n-1) + capability chain), so v13 is no longer the SOLE member.
+    assert V12 not in MEMORY_PROMPT_IDS
     assert V13 in _OPENER_PROMPTS  # has a distinct opener form (two-stage)
     # same schema family as v12 (so v13 reports regenerate, prior history retained).
     assert active_schema_version(V13) == active_schema_version(V12)

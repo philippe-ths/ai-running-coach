@@ -18,10 +18,10 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, undefer
 
 from app.core.config import settings
@@ -50,6 +50,7 @@ from app.services.coach.stance import StanceProfile, resolve_stance
 from app.services.coach.volume import build_training_volume
 from app.services.coach.recent_training import build_recent_training
 from app.services.coach.training_history import build_training_history
+from app.services.coach.intensity import build_intensity
 from app.services.readiness import build_readiness
 from app.services.coach.retrieval import (
     fetch_corpus,
@@ -76,6 +77,7 @@ from app.schemas.coach_context import (
     TrainingVolumeContext,
     RecentTrainingContext,
     TrainingHistoryContext,
+    IntensityContext,
     LongitudinalContext,
     MemoryContext,
     MetricsContext,
@@ -266,6 +268,8 @@ def build_context_pack(
         training_history=gather(_TRAINING_HISTORY_SIGNAL, db, activity, prompt_id, as_of),
         # ADR 0025 runner memory profile (stored-artifact read, memory-aware prompt only).
         memory=gather(_MEMORY_SIGNAL, db, activity, prompt_id, as_of),
+        # #578 intensity distribution + trend (read-time scan, intensity-aware prompt only).
+        intensity=gather(_INTENSITY_SIGNAL, db, activity, prompt_id, as_of),
         safety_rules=b.safety_rules,
     )
 
@@ -481,6 +485,63 @@ def _build_training_history_context(
         user_id=activity.user_id,
     )
     return build_training_history(facts, local_day)
+
+
+# The fetch span for the intensity scan: the 28-day recent window plus its equal prior
+# window (for the trend), with a few days of slack. Summary-only (no streams).
+_INTENSITY_FETCH_DAYS = 60
+
+
+def _query_confounded_activity_ids(
+    db: Session, start_date: date, end_date: date, user_id
+) -> set:
+    """The set of activity ids in [start_date, end_date) whose stored `discount_signals`
+    fired a REAL HR-inflation confounder (a non-empty `likely_inflated_by`: heat, terrain,
+    or stimulant). Sourced separately from `_query_activity_facts` so the shared trends
+    projection (#367, which deliberately excludes the discount_signals JSON for chart
+    performance) stays untouched; this narrow id+JSON read runs only under the gated
+    intensity prompt. The temperature-unknown caution case (empty inflators) is NOT
+    counted — only an explicit confounder is exculpatory."""
+    stmt = (
+        select(DerivedMetric.activity_id, DerivedMetric.discount_signals)
+        .join(Activity, DerivedMetric.activity_id == Activity.id)
+        .where(Activity.is_deleted == False)  # noqa: E712
+        .where(DerivedMetric.discount_signals.isnot(None))
+        .where(Activity.start_date >= datetime.combine(start_date, datetime.min.time()))
+        .where(Activity.start_date < datetime.combine(end_date, datetime.min.time()))
+    )
+    if user_id is not None:
+        stmt = stmt.where(Activity.user_id == user_id)
+    out = set()
+    for activity_id, signals in db.execute(stmt).all():
+        if isinstance(signals, dict) and signals.get("likely_inflated_by"):
+            out.add(activity_id)
+    return out
+
+
+def _build_intensity_context(
+    db: Session, activity: Activity, as_of: datetime
+) -> Optional[IntensityContext]:
+    """The #578 intensity-distribution-and-trend pack section, or None.
+
+    A read-time history-scan signal behind the shared `ReadTimeSignal` seam (#492):
+    the `INTENSITY` gating is applied once in `gather`, so this `compute` is reached
+    ONLY under an intensity-aware prompt — the pack stays byte-stable otherwise (the
+    Optional-and-drop idiom). Computed read-time as of this activity's LOCAL day over a
+    ~60-day fact span (the 28-day recent window plus its equal prior window). Reuses the
+    shared `_query_activity_facts` projection (which already carries `effort` and
+    `time_in_zones`) for the bulk, plus a narrow `_query_confounded_activity_ids` read
+    for the exculpatory discount signals — keeping the trends projection untouched. A
+    deterministic FACT the coach may cite, never overriding the run's re-derived
+    DerivedMetric or the safety floor (the intensity addendum). Degrades gracefully:
+    thin history yields `has_distribution=False` and `no_norm` directions, and the
+    builder returns None (section dropped) only when there is nothing to say."""
+    local_day = activity.local_start.date()
+    start = local_day - timedelta(days=_INTENSITY_FETCH_DAYS)
+    end = local_day + timedelta(days=1)
+    facts = _query_activity_facts(db, start, end, user_id=activity.user_id)
+    confounded_ids = _query_confounded_activity_ids(db, start, end, activity.user_id)
+    return build_intensity(facts, confounded_ids, activity.id, local_day)
 
 
 def _build_memory_context(
@@ -1277,6 +1338,9 @@ _TRAINING_HISTORY_SIGNAL = ReadTimeSignal(
     "training_history", _build_training_history_context, PromptFeature.TRAINING_HISTORY
 )
 _MEMORY_SIGNAL = ReadTimeSignal("memory", _build_memory_context, PromptFeature.MEMORY)
+_INTENSITY_SIGNAL = ReadTimeSignal(
+    "intensity", _build_intensity_context, PromptFeature.INTENSITY
+)
 
 # All read-time signals, keyed by name — the registry a stored-artifact adapter
 # (#203) would look up and swap an entry in without touching the call sites above.
@@ -1292,6 +1356,7 @@ READ_TIME_SIGNALS: Dict[str, ReadTimeSignal] = {
         _RECENT_TRAINING_SIGNAL,
         _TRAINING_HISTORY_SIGNAL,
         _MEMORY_SIGNAL,
+        _INTENSITY_SIGNAL,
     )
 }
 
