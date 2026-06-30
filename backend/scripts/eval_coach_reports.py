@@ -18,8 +18,16 @@ deterministic.
     # regenerate reports under the current prompt before scoring (needs ANTHROPIC_API_KEY)
     python -m scripts.eval_coach_reports --regenerate --activities 20
 
-Exit codes: 0 = ok, 1 = self-test failed or a regression was detected, 2 = no
-reports found to score.
+    # ALSO run the opt-in advisory semantic judge (#164; needs ANTHROPIC_API_KEY)
+    python -m scripts.eval_coach_reports --semantic-judge --judge-limit 20
+
+The deterministic rubric is the gate; the ``--semantic-judge`` layer is OFF by
+default, advisory only (it never changes the exit code), and aggregated into a
+separate, clearly-labelled section of the scorecard. The deterministic policy
+validator remains the only safety floor.
+
+Exit codes: 0 = ok, 1 = self-test failed or a deterministic regression was detected,
+2 = no reports found to score.
 """
 
 import argparse
@@ -32,10 +40,13 @@ from app.db.session import SessionLocal, engine
 from app.models import Activity, DerivedMetric
 from app.services.coach.eval.harness import (
     Scorecard,
+    compare_judge_sections,
     compare_scorecards,
+    judge_db_reports,
     run_self_test,
     score_db_reports,
 )
+from app.services.coach.eval.judge import JUDGE_CRITERIA
 
 
 def _print_summary(card: Scorecard) -> None:
@@ -56,6 +67,62 @@ def _print_summary(card: Scorecard) -> None:
             f"(pass rate {stats['pass_rate']:.3f}, {stats['failed']} failed)"
         )
     print("=" * 60)
+    if "judge" in data:
+        _print_judge_section(data["judge"])
+
+
+def _print_judge_section(judge: dict) -> None:
+    """Print the opt-in semantic-judge section, clearly labelled as advisory and
+    separate from the deterministic gate above."""
+    print()
+    print("Semantic judge (ADVISORY — does NOT gate; LLM-as-judge, #164)")
+    print("=" * 60)
+    print(f"reports judged:    {judge['reports_judged']}")
+    if judge["judge_errors"]:
+        print(f"judge errors:      {len(judge['judge_errors'])}")
+        for err in judge["judge_errors"]:
+            print(f"  - {err['report_id']}: {err['error']}")
+    print("-" * 60)
+    summary = judge["criterion_summary"]
+    for name in JUDGE_CRITERIA:
+        stats = summary.get(name, {})
+        mean = stats.get("mean")
+        if mean is None:
+            print(f"  {name:<26} (no reports judged)")
+        else:
+            print(
+                f"  {name:<26} mean {mean:.2f}  "
+                f"(min {stats['min']}, max {stats['max']}, n={stats['count']})"
+            )
+    print("=" * 60)
+
+
+async def _run_judge(db, card: Scorecard, args) -> None:
+    """Run the opt-in semantic judge over the scored reports and attach the results to
+    the scorecard. Needs ANTHROPIC_API_KEY; mutates ``card`` in place."""
+    from app.core.config import settings
+    from app.services.coach.llm import AnthropicClient
+
+    if not settings.ANTHROPIC_API_KEY:
+        print(
+            "\n--semantic-judge requires ANTHROPIC_API_KEY (the deterministic gate "
+            "above ran without it). Skipping the judge.",
+            file=sys.stderr,
+        )
+        return
+    model = args.judge_model or settings.COACH_MODEL_ID
+    client = AnthropicClient(api_key=settings.ANTHROPIC_API_KEY, model=model)
+    judge_scores, judge_errors = await judge_db_reports(
+        db,
+        client,
+        prompt_id=args.prompt_id,
+        schema_version=args.schema_version,
+        all_versions=args.all_versions,
+        include_fallback=args.include_fallback,
+        limit=args.judge_limit,
+    )
+    card.judge_scores = judge_scores
+    card.judge_errors = judge_errors
 
 
 async def _regenerate(db, limit: Optional[int]) -> int:
@@ -99,6 +166,9 @@ def main() -> int:
     parser.add_argument("--output", default=None, help="write the scorecard JSON to this path")
     parser.add_argument("--compare", default=None, help="compare against a prior scorecard JSON and flag regressions")
     parser.add_argument("--self-test", action="store_true", help="validate the harness against its good/bad fixtures and exit")
+    parser.add_argument("--semantic-judge", action="store_true", help="ALSO run the opt-in advisory LLM-as-judge layer (#164; needs ANTHROPIC_API_KEY). OFF by default; never gates.")
+    parser.add_argument("--judge-model", default=None, help="model id for the semantic judge (default: COACH_MODEL_ID)")
+    parser.add_argument("--judge-limit", type=int, default=None, help="max reports to send to the semantic judge (cost control)")
     args = parser.parse_args()
 
     if args.self_test:
@@ -119,6 +189,11 @@ def main() -> int:
             all_versions=args.all_versions,
             include_fallback=args.include_fallback,
         )
+
+        # Opt-in, advisory, OFF by default: never runs unless explicitly requested,
+        # and never affects the deterministic pass/fail computed above.
+        if args.semantic_judge:
+            asyncio.run(_run_judge(db, card, args))
     finally:
         db.close()
 
@@ -153,6 +228,15 @@ def main() -> int:
                 print(f"  - {line}")
             return 1
         print("\nNo regressions against the baseline scorecard.")
+
+        # Advisory judge drift: surfaced as a SIGNAL, never an exit-code failure (the
+        # deterministic gate above owns the gate). Only flags when both scorecards
+        # carry a judge section.
+        judge_drift = compare_judge_sections(previous, data)
+        if judge_drift:
+            print("\nSEMANTIC-JUDGE DRIFT (advisory, not a gate):")
+            for line in judge_drift:
+                print(f"  - {line}")
 
     return 0
 
