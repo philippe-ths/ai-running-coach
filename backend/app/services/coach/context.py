@@ -1128,6 +1128,10 @@ def _adherence_candidates(
                 is_race=metrics.is_race,
                 confidence=metrics.confidence,
                 user_intent=act.user_intent,
+                # A fired discount-signals annotation marks a confounded run
+                # (heat/hills/stimulant); the adherence window themes treat it as
+                # exculpatory, not a missed opportunity (#579).
+                discount_signals_fired=bool(metrics.discount_signals),
             )
         )
     return candidates
