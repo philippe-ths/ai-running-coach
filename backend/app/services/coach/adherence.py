@@ -68,6 +68,12 @@ class CandidateActivity:
     is_race: Optional[bool]
     confidence: Optional[str]  # low|medium|high
     user_intent: Optional[str]
+    # True when the pipeline's discount-signals stage fired on this run (heat,
+    # hills, or stimulant use inflated its HR drift). A confounded run is the
+    # runner managing fatigue, not a fair "opportunity" to have added a hard or
+    # long session, so the window themes exclude it (see _is_rest_or_recovery).
+    # Defaulted so existing call sites and fixtures stay valid.
+    discount_signals_fired: Optional[bool] = None
 
 
 # Effort bands the easy-discipline verdict reads as "kept easy" vs "went hard".
@@ -80,6 +86,47 @@ _HARD_EFFORTS = {"tempo", "hard"}
 def _intent_is_easy(intent: Optional[str]) -> bool:
     text = (intent or "").lower()
     return "easy" in text or "recovery" in text
+
+
+# Effort band and intent tokens that mark a run as a DELIBERATE rest / recovery
+# day rather than a training opportunity. A recovery-band effort is the in-data
+# proxy for a deliberate easy/rest day; a recovery/rest intent is the runner
+# saying so explicitly.
+_REST_EFFORTS = {"recovery"}
+_REST_INTENT_TOKENS = ("recovery", "rest")
+
+
+def _intent_is_rest(intent: Optional[str]) -> bool:
+    text = (intent or "").lower()
+    return any(tok in text for tok in _REST_INTENT_TOKENS)
+
+
+def _is_rest_or_recovery(c: CandidateActivity) -> bool:
+    """Is this comparable run a deliberate rest/recovery day or a confounded run,
+    rather than a genuine OPPORTUNITY to have added a quality or long session?
+
+    Mirrors the v13 directional discipline (prompts.py): "a deliberate rest day
+    or a fired discount signal is not non-compliance." A recovery-band effort, a
+    recovery/rest intent, or a fired discount signal (heat/hills/stimulant) all
+    mean the runner was managing fatigue, so the run must not count toward the
+    opportunity quorum that lets a window theme call the advice "ignored" (#579).
+    The strong "acted_on" read is unaffected: a quality session on such a day
+    still counts (those days are only excluded from the negative verdict)."""
+    if (c.effort or "").lower() in _REST_EFFORTS:
+        return True
+    if c.discount_signals_fired:
+        return True
+    return _intent_is_rest(c.user_intent)
+
+
+def _enough_opportunity(comparables: List[CandidateActivity]) -> bool:
+    """True once the runner has had `_MIN_OPPORTUNITY_RUNS` genuine opportunity
+    runs in the window to have acted on a window theme. Deliberate rest/recovery
+    and confounded runs are excluded (#579): a window with no real opportunity
+    (e.g. only rest/recovery days) must ABSTAIN rather than accuse the runner of
+    ignoring advice it was correct to skip."""
+    opportunities = [c for c in comparables if not _is_rest_or_recovery(c)]
+    return len(opportunities) >= _MIN_OPPORTUNITY_RUNS
 
 
 # Intent labels that declare a deliberate hard/structured session. A run the
@@ -153,8 +200,8 @@ def _verdict_add_quality(comparables: List[CandidateActivity]) -> Optional[_Verd
                 "a race" if c.is_race else f"{c.effort} effort"
             )
             return "acted_on", f"a quality session followed on {c.date[:10]} ({descriptor})", c.date
-    if len(comparables) < _MIN_OPPORTUNITY_RUNS:
-        return None  # not enough opportunity yet to call it ignored
+    if not _enough_opportunity(comparables):
+        return None  # not enough genuine opportunity (rest/recovery days excluded)
     return "ignored", "no tempo, interval, or race session followed in the runs since", None
 
 
@@ -164,8 +211,8 @@ def _verdict_add_long_run(comparables: List[CandidateActivity]) -> Optional[_Ver
     for c in comparables:
         if (c.duration_class or "").lower() == "long":
             return "acted_on", f"a long run followed on {c.date[:10]}", c.date
-    if len(comparables) < _MIN_OPPORTUNITY_RUNS:
-        return None
+    if not _enough_opportunity(comparables):
+        return None  # not enough genuine opportunity (rest/recovery days excluded)
     return "ignored", "no long run followed in the runs since", None
 
 
