@@ -284,6 +284,15 @@ class Settings(BaseSettings):
     # rq-scheduler enqueue_in calls (block-complete opener, scheduled fuller turn).
     RQ_JOB_TIMEOUT_SECONDS: int = 600
 
+    # Worker concurrency (#594). How many jobs the RQ worker process runs at once.
+    # 1 (default) is exactly today's behaviour: a single in-process Worker on the
+    # "default" queue. >1 swaps in RQ's in-process WorkerPool with this many
+    # forked workers, which is safe because each spawned worker runs the embedded
+    # scheduler and RQ's scheduler takes an exclusive per-queue Redis lock (only
+    # one is ever active). Coach report generation is I/O-bound (minutes waiting
+    # on Anthropic), so concurrency is cheap. Must be >= 1.
+    WORKER_POOL_SIZE: int = 1
+
     # Block grouping (A1, ADR 0011): both the time-gap threshold that groups
     # temporally-contiguous activities into one Block AND the block-complete
     # debounce that gates the opener (the gap doubles as the trigger). An
@@ -354,6 +363,14 @@ class Settings(BaseSettings):
 
     # CORS allowlist (comma-separated). Drives app.add_middleware(CORSMiddleware).
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
+
+    @field_validator("WORKER_POOL_SIZE")
+    @classmethod
+    def _ensure_worker_pool_size_positive(cls, v: int) -> int:
+        """A pool of fewer than one worker would process no jobs at all."""
+        if v < 1:
+            raise ValueError("WORKER_POOL_SIZE must be >= 1")
+        return v
 
     @field_validator("DATABASE_URL")
     @classmethod

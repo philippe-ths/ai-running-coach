@@ -7,8 +7,11 @@ RQ's worker loop.
 
 import logging
 
+from redis import Redis
 from rq import Queue, Worker
+from rq.worker_pool import WorkerPool
 
+from app.core.config import Settings, settings
 from app.core.observability import (
     init_logging,
     init_sentry,
@@ -20,6 +23,40 @@ from app.core.queue import redis_conn
 LISTEN = ("default",)
 
 logger = logging.getLogger(__name__)
+
+
+def build_worker_runtime(
+    settings: Settings, connection: Redis
+) -> Worker | WorkerPool:
+    """Select the worker runtime from ``WORKER_POOL_SIZE`` (#594).
+
+    Size 1 (default) returns a single in-process ``Worker`` on the "default"
+    queue -- byte-identical to the pre-#594 behaviour. Size > 1 returns an RQ
+    ``WorkerPool`` of that many forked workers over the same queue. The pool is
+    safe to run with the scheduler: each spawned worker runs the embedded
+    scheduler (``run_worker`` hardcodes ``with_scheduler=True``) and RQ's
+    scheduler takes an exclusive per-queue Redis lock, so only one is ever
+    active.
+    """
+    if settings.WORKER_POOL_SIZE <= 1:
+        queues = [Queue(name, connection=connection) for name in LISTEN]
+        return Worker(queues, connection=connection)
+    return WorkerPool(
+        list(LISTEN), connection=connection, num_workers=settings.WORKER_POOL_SIZE
+    )
+
+
+def run_worker_runtime(runtime: Worker | WorkerPool) -> None:
+    """Run the selected runtime with the scheduler enabled (blocking).
+
+    A single ``Worker`` runs ``with_scheduler=True`` explicitly; a ``WorkerPool``
+    enables the scheduler per spawned worker internally, so ``start()`` takes no
+    scheduler flag.
+    """
+    if isinstance(runtime, WorkerPool):
+        runtime.start()
+    else:
+        runtime.work(with_scheduler=True)
 
 
 def main() -> None:
@@ -37,16 +74,21 @@ def main() -> None:
     # not a boot crash -- the #543 guard took prod down on Railway (#549). This
     # only logs the resulting posture.
     log_budget_cap_status()
-    logger.info("Worker booting; listening on %s", ",".join(LISTEN))
-    queues = [Queue(name, connection=redis_conn) for name in LISTEN]
-    worker = Worker(queues, connection=redis_conn)
-    # with_scheduler: the worker-embedded scheduler thread drains the
-    # ScheduledJobRegistry — both RQ's retry intervals (#215 PIPELINE_RETRY) and
-    # every deferred queue.enqueue_in job (block-complete opener, fuller-turn timer,
-    # backfill/reanalyze/import batches). Without it those are stranded forever.
-    # Since #123/ADR 0006 there is no separate rq-scheduler process: removing the
-    # polling fallback let all deferred jobs move to RQ-native scheduling here.
-    worker.work(with_scheduler=True)
+    logger.info(
+        "Worker booting; listening on %s (WORKER_POOL_SIZE=%d)",
+        ",".join(LISTEN),
+        settings.WORKER_POOL_SIZE,
+    )
+    # with_scheduler (enabled inside run_worker_runtime): the worker-embedded
+    # scheduler thread drains the ScheduledJobRegistry — both RQ's retry intervals
+    # (#215 PIPELINE_RETRY) and every deferred queue.enqueue_in job (block-complete
+    # opener, fuller-turn timer, backfill/reanalyze/import batches). Without it
+    # those are stranded forever. Since #123/ADR 0006 there is no separate
+    # rq-scheduler process: removing the polling fallback let all deferred jobs
+    # move to RQ-native scheduling here. Under a WorkerPool (#594) each spawned
+    # worker runs the scheduler; RQ's exclusive per-queue lock keeps one active.
+    runtime = build_worker_runtime(settings, redis_conn)
+    run_worker_runtime(runtime)
 
 
 if __name__ == "__main__":
