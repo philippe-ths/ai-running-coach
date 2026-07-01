@@ -259,3 +259,143 @@ async def test_generate_coach_message_logs_warning_on_remote_protocol_error(capl
             )
 
     assert any("transient" in r.message.lower() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Anthropic 429 / RateLimitError (#603)
+#
+# RateLimitError is a subclass of APIStatusError with status_code 429. Because
+# 429 < 500, the old code raised it immediately and the coach report silently
+# degraded to the deterministic fallback (is_fallback=True). The fix retries a
+# 429 with exponential backoff, honoring the Retry-After header (capped) before
+# giving up and propagating so the caller's fallback still fires as a last
+# resort.
+# ---------------------------------------------------------------------------
+
+from app.services.coach import llm as _llm_mod  # noqa: E402
+
+
+def _make_rate_limit_error(retry_after=None) -> anthropic.RateLimitError:
+    """Build a real anthropic.RateLimitError (429), optionally carrying a
+    Retry-After header (a string count of seconds, as the API sends it)."""
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    headers = {}
+    if retry_after is not None:
+        headers["retry-after"] = str(retry_after)
+    response = httpx.Response(status_code=429, request=request, headers=headers)
+    return anthropic.RateLimitError("rate limited", response=response, body=None)
+
+
+@pytest.mark.asyncio
+async def test_retries_on_429_then_succeeds():
+    client = AnthropicClient(api_key="k", model="m")
+    rate_limited = _make_rate_limit_error(retry_after=2)
+    fake_create = AsyncMock(side_effect=[rate_limited, _ok_response("ok")])
+    client.client.messages.create = fake_create
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        result = await client.generate_json("sys", "user")
+
+    assert result == "ok"
+    assert fake_create.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_429_honors_retry_after_header():
+    client = AnthropicClient(api_key="k", model="m")
+    rate_limited = _make_rate_limit_error(retry_after=7)
+    fake_create = AsyncMock(side_effect=[rate_limited, _ok_response("ok")])
+    client.client.messages.create = fake_create
+
+    sleep_mock = AsyncMock()
+    with patch("asyncio.sleep", new=sleep_mock):
+        await client.generate_json("sys", "user")
+
+    # The single backoff before the retry honored the Retry-After value.
+    assert sleep_mock.await_args_list[0].args[0] == pytest.approx(7.0)
+
+
+@pytest.mark.asyncio
+async def test_429_caps_absurd_retry_after():
+    client = AnthropicClient(api_key="k", model="m")
+    rate_limited = _make_rate_limit_error(retry_after=100000)
+    fake_create = AsyncMock(side_effect=[rate_limited, _ok_response("ok")])
+    client.client.messages.create = fake_create
+
+    sleep_mock = AsyncMock()
+    with patch("asyncio.sleep", new=sleep_mock):
+        await client.generate_json("sys", "user")
+
+    slept = sleep_mock.await_args_list[0].args[0]
+    assert slept == pytest.approx(_llm_mod._RATE_LIMIT_BACKOFF_CAP_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_429_uses_exponential_backoff_when_no_retry_after():
+    client = AnthropicClient(api_key="k", model="m")
+    # Two 429s (no header) then success — exercises retry indices 0 then 1.
+    fake_create = AsyncMock(
+        side_effect=[
+            _make_rate_limit_error(),
+            _make_rate_limit_error(),
+            _ok_response("ok"),
+        ]
+    )
+    client.client.messages.create = fake_create
+
+    sleep_mock = AsyncMock()
+    with patch("asyncio.sleep", new=sleep_mock):
+        result = await client.generate_json("sys", "user")
+
+    assert result == "ok"
+    base = _llm_mod._RATE_LIMIT_BACKOFF_BASE_SECONDS
+    first = sleep_mock.await_args_list[0].args[0]
+    second = sleep_mock.await_args_list[1].args[0]
+    assert first == pytest.approx(base)
+    assert second == pytest.approx(base * 2)
+
+
+@pytest.mark.asyncio
+async def test_propagates_429_after_retries_exhausted():
+    client = AnthropicClient(api_key="k", model="m")
+    n = _llm_mod._MAX_RATE_LIMIT_RETRIES
+    fake_create = AsyncMock(side_effect=[_make_rate_limit_error() for _ in range(n + 1)])
+    client.client.messages.create = fake_create
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        with pytest.raises(anthropic.RateLimitError):
+            await client.generate_json("sys", "user")
+
+    # initial attempt + n retries
+    assert fake_create.call_count == n + 1
+
+
+@pytest.mark.asyncio
+async def test_structured_retries_on_429_then_succeeds():
+    client = AnthropicClient(api_key="k", model="m")
+    tool = {"name": "record", "input_schema": {"type": "object"}}
+    ok = SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", name="record", input={"a": 1})],
+        usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+    )
+    fake_create = AsyncMock(side_effect=[_make_rate_limit_error(retry_after=1), ok])
+    client.client.messages.create = fake_create
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        result = await client.generate_structured(system="s", user="u", tool=tool)
+
+    assert result == {"a": 1}
+    assert fake_create.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_coach_message_retries_on_429_then_succeeds():
+    client = AnthropicClient(api_key="k", model="m")
+    ok = _make_ok_message_result()
+    err = _make_rate_limit_error(retry_after=1)
+    client.client.messages.stream = _make_streaming_ctx([err, ok])
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        result = await client.generate_coach_message(system="sys", user="user", tools=[])
+
+    assert result.stop_reason == "end_turn"
