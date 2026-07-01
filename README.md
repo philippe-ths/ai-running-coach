@@ -28,12 +28,12 @@ A deterministic policy validator gates every coach message (medical scope, HR-zo
 - **Auth:** Clerk social login (verified email is the identity); the backend verifies the session JWT against Clerk's JWKS
 - **Jobs:** Redis + RQ (the worker's embedded scheduler drains deferred and retry jobs)
 - **Coach:** Anthropic Claude (prose message + structured tail), a deterministic policy validator, and an offline eval gate
-- **Notifications:** Telegram Bot API (the deployed channel) or SMTP email (optional)
+- **Notifications:** Telegram Bot API (the only channel)
 - **Frontend:** Next.js (App Router), React, Recharts, Tailwind
 
 ## Production deployment
 
-The app runs in production on **Railway** (backend as two services off one image — `web`, `worker` — plus managed Postgres and Redis) and **Vercel** (frontend). It is **multi-user**, authenticated with **Clerk** social login ([ADR 0022](docs/adr/0022-identity-is-social-login-via-clerk-strava-stays-an-integration.md)): the Vercel frontend holds the Clerk session and forwards the session token, the backend verifies it against Clerk's JWKS and resolves the user from the verified email, and every query is scoped to that user. HTTP Basic auth is repurposed as the frontend↔backend service secret rather than the user gate. The deployed coach-notification channel is **Telegram** (Railway blocks outbound SMTP from the worker; per-user routing is [ADR 0023](docs/adr/0023-per-user-notifications-via-telegram-binding.md)). The polling fallback was retired in favour of user-triggered self-healing ([ADR 0006](docs/adr/0006-multi-user-drops-polling-for-user-triggered-self-healing.md)). The full production and local-dev topology, the connection seam, and per-service env var ownership are documented in [`docs/deployment/topology.md`](docs/deployment/topology.md).
+The app runs in production on **Railway** (backend as two services off one image — `web`, `worker` — plus managed Postgres and Redis) and **Vercel** (frontend). It is **multi-user**, authenticated with **Clerk** social login ([ADR 0022](docs/adr/0022-identity-is-social-login-via-clerk-strava-stays-an-integration.md)): the Vercel frontend holds the Clerk session and forwards the session token, the backend verifies it against Clerk's JWKS and resolves the user from the verified email, and every query is scoped to that user. HTTP Basic auth is repurposed as the frontend↔backend service secret rather than the user gate. The coach-notification channel is **Telegram** (the only channel; per-user routing is [ADR 0023](docs/adr/0023-per-user-notifications-via-telegram-binding.md)). The polling fallback was retired in favour of user-triggered self-healing ([ADR 0006](docs/adr/0006-multi-user-drops-polling-for-user-triggered-self-healing.md)). The full production and local-dev topology, the connection seam, and per-service env var ownership are documented in [`docs/deployment/topology.md`](docs/deployment/topology.md).
 
 ## Repo structure
 ```
@@ -93,7 +93,7 @@ self-healing — a Refresh action on app-open enqueues one bounded Strava check 
 than polling (see [ADR 0006](docs/adr/0006-multi-user-drops-polling-for-user-triggered-self-healing.md)).
 
 Coach notifications are off until a channel is configured: Telegram (`TELEGRAM_BOT_TOKEN`
-+ `TELEGRAM_CHAT_ID`) or email (`SMTP_HOST` + `NOTIFY_TO`) in `backend/.env`.
++ `TELEGRAM_CHAT_ID`) in `backend/.env`.
 
 ### 5) Run frontend
 ```bash

@@ -17,12 +17,10 @@ The matrix covered (channel x shape x stage + receipt + no-channel):
   - Telegram x prose x opener
   - Telegram x prose x fuller, long-message truncation path
   - Telegram x structured (CoachReportContent)        [stage defaults fuller]
-  - Email    x prose x fuller
-  - Email    x prose x opener
-  - Email    x structured
   - Telegram receipt (tap keyboard)
-  - Email    receipt (no taps)
   - No channel -> None  (both build_coach_notification and build_receipt_notification)
+
+(The email/SMTP channel was removed in #595; Telegram is the only channel.)
 
 For Telegram, both the composer-level Notification (subject/text/url/actions)
 AND the adapter wire payload (the HTML body + inline keyboard) are pinned, since
@@ -166,19 +164,6 @@ def _structured() -> CoachReportRead:
 def telegram(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "123:ABC")
     monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "42")
-    monkeypatch.setattr(settings, "SMTP_HOST", "")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "")
-    set_notifier(None)
-    yield
-    set_notifier(None)
-
-
-@pytest.fixture
-def email(monkeypatch):
-    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
-    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "")
-    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "runner@example.com")
     set_notifier(None)
     yield
     set_notifier(None)
@@ -188,8 +173,6 @@ def email(monkeypatch):
 def no_channel(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "")
-    monkeypatch.setattr(settings, "SMTP_HOST", "")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "")
 
 
 def _coach(report: CoachReportRead, stage: str = "fuller", distance_m: int = 8200):
@@ -318,104 +301,6 @@ class TestTelegramStructured:
         assert n.actions == ()
 
 
-# --- Email x prose ------------------------------------------------------------
-
-
-class TestEmailProse:
-    def test_fuller_composer_output(self, email):
-        n = _coach(_prose_fuller(), stage="fuller")
-        assert n is not None
-        assert n.to == "runner@example.com"
-        assert n.subject == "Easy Run — 8.2km"
-        assert n.actions == ()
-        assert n.html == (
-            '<!doctype html><html><body style="font-family:-apple-system,sans-serif;'
-            'max-width:600px;margin:0 auto;padding:16px;">'
-            "<h2>Easy Run · 8.2km</h2>"            "<p>Strong steady effort today.</p>"
-            "<p>Your drift held under 3% the whole way.</p>"
-            f'<p><a href="{_BASE}/activity/{_AID}">View in app</a></p>'
-            "</body></html>"
-        )
-        assert n.text == (
-            "Easy Run — 8.2km\n"
-            "\n"
-            "Strong steady effort today.\n\n"
-            "Your drift held under 3% the whole way.\n"
-            "\n"
-            f"View in app: {_BASE}/activity/{_AID}\n"
-        )
-
-    def test_opener_composer_output(self, email):
-        n = _coach(_prose_opener(), stage="opener")
-        assert n is not None
-        assert n.html == (
-            '<!doctype html><html><body style="font-family:-apple-system,sans-serif;'
-            'max-width:600px;margin:0 auto;padding:16px;">'
-            "<h2>Easy Run · 8.2km</h2>"            "<p>Nice work getting that one in!</p>"
-            "<p>Let me know how it felt and I&#x27;ll follow up with the full breakdown.</p>"
-            f'<p><a href="{_BASE}/activity/{_AID}">View in app</a></p>'
-            "</body></html>"
-        )
-        assert n.text == (
-            "Easy Run — 8.2km\n"
-            "\n"
-            "Nice work getting that one in!\n\n"
-            "Let me know how it felt and I'll follow up with the full breakdown.\n"
-            "\n"
-            f"View in app: {_BASE}/activity/{_AID}\n"
-        )
-
-
-# --- Email x structured -------------------------------------------------------
-
-
-class TestEmailStructured:
-    def test_composer_output(self, email):
-        n = _coach(_structured())
-        assert n is not None
-        assert n.subject == "Easy Run — 8.2km"
-        assert n.html == (
-            '<!doctype html><html><body style="font-family:-apple-system,sans-serif;'
-            'max-width:600px;margin:0 auto;padding:16px;">'
-            "<h2>Easy Run · 8.2km</h2>"            "<h3>Key takeaways</h3>"
-            "<ul><li>Effort stayed in zone 2 throughout.</li>"
-            "<li>HR drift was minimal at 2.1%.</li></ul>"
-            "<h3>Next steps</h3>"
-            "<ol><li><strong>Add a tempo run mid-week</strong>"
-            "<div>Target 4km at threshold pace.</div>"
-            '<div style="color:#666;"><em>Why:</em> To extend lactate clearance.</div>'
-            "</li></ol>"
-            "<h3>Risks</h3>"
-            "<ul><li><strong>cadence_low</strong>: Cadence averaged 162 spm.<br/>"
-            "<em>Mitigation:</em> Consider strides 1-2x/week.</li></ul>"
-            "<h3>Follow-up questions</h3>"
-            "<ul><li><strong>How did sleep feel last night?</strong><br/>"
-            "<em>Helps calibrate effort guidance.</em></li></ul>"
-            f'<p><a href="{_BASE}/activity/{_AID}">View in app</a></p>'
-            "</body></html>"
-        )
-        assert n.text == (
-            "Easy Run — 8.2km\n"
-            "\n"
-            "Key takeaways:\n"
-            "  - Effort stayed in zone 2 throughout.\n"
-            "  - HR drift was minimal at 2.1%.\n"
-            "\n"
-            "Next steps:\n"
-            "  - Add a tempo run mid-week: Target 4km at threshold pace.\n"
-            "      Why: To extend lactate clearance.\n"
-            "\n"
-            "Risks:\n"
-            "  - cadence_low: Cadence averaged 162 spm.\n"
-            "      Mitigation: Consider strides 1-2x/week.\n"
-            "\n"
-            "Follow-up questions:\n"
-            "  - How did sleep feel last night? (Helps calibrate effort guidance.)\n"
-            "\n"
-            f"View in app: {_BASE}/activity/{_AID}\n"
-        )
-
-
 # --- Receipt path -------------------------------------------------------------
 
 
@@ -477,22 +362,6 @@ class TestReceipt:
                 for label, token in _expected_receipt_actions()
             ]
         }
-
-    def test_email_no_taps(self, email):
-        n = build_receipt_notification(
-            receipt_text="Got your run — how did it feel?",
-            headline="Steady run",
-            activity_id=_RID,
-            distance_m=0,
-            app_base_url=_BASE,
-        )
-        assert n is not None
-        assert n.to == "runner@example.com"
-        assert n.subject == "Steady run"
-        assert n.html == "<p>Got your run — how did it feel?</p>"
-        assert n.text == "Got your run — how did it feel?"
-        assert n.url == f"{_BASE}/activity/{_RID}"
-        assert n.actions == ()
 
 
 # --- No channel ---------------------------------------------------------------

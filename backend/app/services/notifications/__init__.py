@@ -24,10 +24,6 @@ def _renderer_for_channel(channel: Optional[str]) -> Optional[NotificationRender
         from app.services.notifications.telegram_adapter import TelegramNotifier
 
         return TelegramNotifier
-    if channel == "email":
-        from app.services.notifications.smtp_adapter import SMTPNotifier
-
-        return SMTPNotifier
     return None
 
 
@@ -35,9 +31,7 @@ def _recipient_for_channel(channel: str) -> str:
     """The channel-specific recipient address (transport config, not shape)."""
     from app.core.config import settings
 
-    if channel == "telegram":
-        return str(settings.TELEGRAM_CHAT_ID)
-    return settings.NOTIFY_TO
+    return str(settings.TELEGRAM_CHAT_ID)
 
 
 def _resolve_to(channel: Optional[str], recipient: Optional[str]) -> Optional[str]:
@@ -49,8 +43,8 @@ def _resolve_to(channel: Optional[str], recipient: Optional[str]) -> Optional[st
     so we return None and never fall back to the global owner chat — defense in
     depth, so the builder refuses to leak to the owner's chat even if a caller
     bypassed `resolve_recipient`. In SINGLE-USER mode (`OWNER_EMAIL` unset) there is
-    no owner concept, so the original global fallback is preserved. Email has no
-    per-user routing yet (ADR 0023), so it keeps the global NOTIFY_TO.
+    no owner concept, so the original global fallback is preserved. Telegram is the
+    only channel (#595).
     """
     if recipient:
         return recipient
@@ -60,7 +54,7 @@ def _resolve_to(channel: Optional[str], recipient: Optional[str]) -> Optional[st
         if (settings.OWNER_EMAIL or "").strip():
             return None  # multi-user: suppress, never the global owner chat
         return _recipient_for_channel(channel)  # single-user back-compat
-    return _recipient_for_channel(channel)  # email: global NOTIFY_TO
+    return None
 
 
 def resolve_recipient(user) -> Optional[str]:
@@ -76,11 +70,6 @@ def resolve_recipient(user) -> Optional[str]:
     single-user (no multi-user owner concept), so the original global fallback is
     preserved for everyone. Tolerant of a None/partial user so a missing
     relationship never breaks the pipeline.
-
-    Email is intentionally NOT per-user-routed here: ADR 0023 defers the per-user
-    email-API channel, so the email path stays on the global NOTIFY_TO (its
-    existing behavior). Routing it to `user.email` would silently change where the
-    single-user deployment's email lands.
     """
     if _active_channel() != "telegram":
         return None
@@ -103,16 +92,13 @@ def resolve_recipient(user) -> Optional[str]:
 def _active_channel() -> Optional[str]:
     """Return the configured notification channel, or None if unconfigured.
 
-    Telegram takes priority because it is the channel that works from the
-    deployed (Railway) worker; email is the local/Pro-plan fallback. Each
-    channel requires both of its settings before it activates.
+    Telegram is the only channel (#595); the email (SMTP) channel was removed. It
+    activates when both of its settings are set, otherwise the no-op path is used.
     """
     from app.core.config import settings
 
     if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:
         return "telegram"
-    if settings.SMTP_HOST and settings.NOTIFY_TO:
-        return "email"
     return None
 
 
@@ -137,17 +123,6 @@ def get_notifier() -> NotifierPort:
             bot_token=settings.TELEGRAM_BOT_TOKEN,
             chat_id=settings.TELEGRAM_CHAT_ID,
         )
-    elif channel == "email":
-        from app.services.notifications.smtp_adapter import SMTPNotifier
-
-        _active = SMTPNotifier(
-            host=settings.SMTP_HOST,
-            port=settings.SMTP_PORT,
-            username=settings.SMTP_USER,
-            password=settings.SMTP_PASSWORD,
-            from_addr=settings.SMTP_FROM,
-            use_starttls=settings.SMTP_USE_STARTTLS,
-        )
     else:
         _active = NoOpNotifier()
     return _active
@@ -165,8 +140,7 @@ def build_coach_notification(
     """Render a coach report into a Notification for the configured channel.
 
     Returns None when no channel is configured, which the pipeline treats as
-    "notifications off" (the same skip the email-only path expressed via an
-    unset NOTIFY_TO). Keeps the pipeline channel-agnostic: channel knowledge
+    "notifications off". Keeps the pipeline channel-agnostic: channel knowledge
     lives here next to `get_notifier`.
 
     A thin dispatcher (#333): it resolves the active channel and delegates the
@@ -182,7 +156,7 @@ def build_coach_notification(
     active channel (from `resolve_recipient`). Returns None (no notification) when
     `_resolve_to` suppresses — a non-owner unbound Telegram runner in multi-user
     mode, never delivered to the owner's chat (#542). See `_resolve_to` for the
-    single-user / email fallbacks.
+    single-user fallback.
     """
     channel = _active_channel()
     renderer = _renderer_for_channel(channel)
@@ -218,14 +192,13 @@ def build_receipt_notification(
     Unlike `build_coach_notification`, this takes plain deterministic inputs (the
     receipt has no CoachReport): the rendered receipt prose, the activity headline
     for the title, and the activity id for the deep link + tap tokens. Telegram
-    carries the RPE/pain/done tap keyboard; email renders the prose only (it cannot
-    tap). A thin dispatcher (#333): channel selection here, rendering in the
-    adapter.
+    carries the RPE/pain/done tap keyboard. A thin dispatcher (#333): channel
+    selection here, rendering in the adapter.
 
     `recipient` (P2.4, #120) is the activity owner's per-user address. Returns None
     (no notification) when `_resolve_to` suppresses — a non-owner unbound Telegram
     runner in multi-user mode, never delivered to the owner's chat (#542). See
-    `_resolve_to` for the single-user / email fallbacks."""
+    `_resolve_to` for the single-user fallback."""
     channel = _active_channel()
     renderer = _renderer_for_channel(channel)
     if renderer is None:

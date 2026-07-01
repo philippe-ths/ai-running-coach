@@ -86,8 +86,8 @@ class Settings(BaseSettings):
 
     # Coach-report notifications. Channel selection (see
     # app/services/notifications/__init__.py): Telegram when
-    # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID are both set, else email when
-    # SMTP_HOST + NOTIFY_TO are both set, else no-op.
+    # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID are both set, else no-op. The email
+    # (SMTP) channel was removed (#595); the product is Telegram-only.
 
     # Telegram bot transport (#127). Railway blocks outbound SMTP, so the
     # deployed worker delivers coach reports over Telegram's HTTPS Bot API
@@ -106,16 +106,6 @@ class Settings(BaseSettings):
     # match (the stronger, secret-ish check, paired with a chat_id match).
     # Empty disables the secret check (local dev), leaving only the chat_id gate.
     TELEGRAM_WEBHOOK_SECRET: str = ""
-
-    # Email notifications (legacy/local channel; SMTP is unreachable from the
-    # Railway worker, kept for local use and Pro-plan deployments).
-    SMTP_HOST: str = ""
-    SMTP_PORT: int = 587
-    SMTP_USER: str = ""
-    SMTP_PASSWORD: str = ""
-    SMTP_FROM: str = ""
-    SMTP_USE_STARTTLS: bool = True
-    NOTIFY_TO: str = ""
 
     # User-triggered self-healing for missed Strava webhooks (#123, ADR 0006).
     # The time-based polling fallback was removed: Strava's rate limit is

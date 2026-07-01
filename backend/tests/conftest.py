@@ -15,14 +15,14 @@ def _isolate_notification_channels(monkeypatch):
     """Pin notification-channel settings off by default.
 
     Channel selection (`_active_channel`) reads `settings`, which loads from
-    `backend/.env`. Without this, a developer `.env` that has Telegram or SMTP
-    configured leaks into tests and flips channel selection, so the email-path
-    tests fail (and CI passes only because CI has none of these set). Resetting
-    them here makes every test start from "no channel configured"; tests that
-    need a channel opt in via their own monkeypatch. Autouse fixtures run before
-    a test's explicitly-requested fixtures, so per-test overrides still win.
+    `backend/.env`. Without this, a developer `.env` that has Telegram configured
+    leaks into tests and flips channel selection, so the no-channel tests fail
+    (and CI passes only because CI has none of these set). Resetting them here
+    makes every test start from "no channel configured"; tests that need a channel
+    opt in via their own monkeypatch. Autouse fixtures run before a test's
+    explicitly-requested fixtures, so per-test overrides still win.
     """
-    for var in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SMTP_HOST", "NOTIFY_TO"):
+    for var in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
         monkeypatch.setattr(settings, var, "")
 
 

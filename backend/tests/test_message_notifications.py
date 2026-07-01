@@ -1,9 +1,9 @@
 """Notification rendering for the A3 prose-message shape (deliverable 6, backend).
 
 A notification is one transmission of the prose message (CONTEXT.md: Notification).
-These pin that the email and Telegram templates render the prose instead of
-crashing on the absent key_takeaways, and that Telegram truncates at a paragraph
-boundary under its 4096-char limit.
+These pin that the Telegram template renders the prose instead of crashing on
+the absent key_takeaways, and that Telegram truncates at a paragraph boundary
+under its 4096-char limit. (The email channel was removed in #595.)
 """
 
 from datetime import datetime, timezone
@@ -17,7 +17,6 @@ from app.schemas.coach import (
     CoachReportRead,
 )
 from app.services.notifications._prose import truncate_at_paragraph
-from app.services.notifications.email_template import render_coach_report_email
 from app.services.notifications.telegram_template import render_coach_report_telegram
 
 
@@ -52,31 +51,6 @@ class TestTruncateAtParagraph:
     def test_hard_limit_respected(self):
         out = truncate_at_paragraph("word " * 2000, 200)
         assert len(out) <= 200
-
-
-class TestEmailMessageRender:
-    def test_html_renders_prose_paragraphs(self):
-        read = _message_read("Nice steady run.\n\nYour drift stayed low throughout.")
-        subject, html, text = render_coach_report_email(
-            report=read, headline="Easy Run", distance_m=5000,
-            app_base_url="https://app.example.com",
-        )
-        assert "Nice steady run." in html
-        assert "Your drift stayed low throughout." in html
-        assert "<p>Nice steady run.</p>" in html
-        # The form-shaped sections are gone for the prose family.
-        assert "Key takeaways" not in html
-        assert "Nice steady run." in text
-        assert "Key takeaways" not in text
-
-    def test_subject_unchanged(self):
-        read = _message_read("Body.")
-        subject, _, _ = render_coach_report_email(
-            report=read, headline="Easy Run", distance_m=5000,
-            app_base_url="https://app.example.com",
-        )
-        # #338: confidence rating no longer surfaced in the subject (still in meta)
-        assert subject == "Easy Run — 5.0km"
 
 
 class TestTelegramMessageRender:
@@ -141,18 +115,6 @@ class TestOpenerStageRender:
         assert "Nice work getting that one in!" in body
         assert OPENER_REPLY_LINE in body
         assert url.endswith(f"/activity/{read.activity_id}")
-
-    def test_email_opener_renders_opener_prose(self):
-        from app.services.notifications._prose import OPENER_REPLY_LINE
-
-        read = _opener_read("Quick reaction: solid steady effort.")
-        _, html, text = render_coach_report_email(
-            report=read, headline="Easy Run", distance_m=5000,
-            app_base_url="https://app.example.com", stage="opener",
-        )
-        assert "Quick reaction: solid steady effort." in html
-        assert "Quick reaction: solid steady effort." in text
-        assert OPENER_REPLY_LINE in text
 
     def test_fuller_stage_default_unchanged_for_message_rows(self):
         # The default stage stays 'fuller' and renders message (not opener_message),

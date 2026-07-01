@@ -38,11 +38,9 @@ pytestmark = pytest.mark.asyncio
 @pytest.fixture
 def configured(monkeypatch):
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_message_v2")
-    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "runner@example.com")
     monkeypatch.setattr(settings, "APP_BASE_URL", "https://app.example.com")
-    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
-    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "runner-chat")
 
 
 @pytest.fixture
