@@ -32,6 +32,8 @@ from app.core.queue import queue
 from app.db.session import SessionLocal
 from app.models import Activity, ActivityStream
 from app.services.analysis import analyze_with_streams
+from app.services.strava_ingestion import strava_budget
+from app.services.strava_ingestion.port import StravaRateLimited
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,10 @@ def count_eligible(db: Session, *, user_id: Optional[str] = None) -> int:
 class BackfillBatchResult:
     processed: list[int] = field(default_factory=list)  # strava_activity_ids
     remaining: int = 0
+    # Set when the batch stopped early because the shared Strava budget was
+    # exhausted (or Strava rate-limited us) mid-batch. The job then reschedules
+    # after the budget backoff instead of the normal batch pause (#601).
+    budget_exhausted: bool = False
 
 
 async def backfill_streams_batch(
@@ -83,19 +89,44 @@ async def backfill_streams_batch(
 ) -> BackfillBatchResult:
     """Process up to `limit` eligible activities: fetch streams + re-analyze.
 
-    Marks each attempted activity via `streams_backfilled_at` in a `finally`, so
-    even a hard failure counts as attempted and the job converges (transient
-    Strava errors are already retried inside the HTTP adapter). Commits per
-    activity so progress survives an interruption. Scoped to `user_id` when given
-    (#470). Never notifies.
+    Re-checks the shared Strava budget before EACH activity, not once per batch
+    (#601): a batch of up to BACKFILL_BATCH_SIZE would otherwise fire that many
+    uninterrupted streams calls after a single gate pass, so N concurrent per-user
+    chains could overshoot Strava's 100/15min ceiling. On an exhausted budget — or
+    a StravaRateLimited raised mid-batch (#602) — the loop stops and leaves the
+    remaining activities eligible so they are retried once capacity frees.
+
+    A genuine per-activity failure still marks `streams_backfilled_at` so the job
+    converges (transient Strava errors are retried inside the HTTP adapter, and an
+    activity Strava has no streams for must not be retried forever). Only the
+    budget/rate-limit yield leaves an activity unmarked. Commits per activity so
+    progress survives an interruption. Scoped to `user_id` when given (#470). Never
+    notifies.
     """
     batch = db.execute(_eligible_stmt(user_id=user_id).limit(limit)).scalars().all()
     result = BackfillBatchResult()
 
     for activity in batch:
+        if strava_budget.over_budget():
+            result.budget_exhausted = True
+            logger.info(
+                "Backfill batch yielding mid-batch: Strava budget exhausted "
+                "(%d processed, remaining left eligible)",
+                len(result.processed),
+            )
+            break
         strava_id = activity.strava_activity_id
         try:
             await analyze_with_streams(db, str(activity.id))
+        except StravaRateLimited as exc:
+            # Shared window hit mid-batch: leave this activity eligible (do NOT
+            # mark attempted) and stop so the job reschedules after the backoff.
+            result.budget_exhausted = True
+            logger.info(
+                "Backfill batch yielding: Strava rate limited (retry_after=%s)",
+                exc.retry_after,
+            )
+            break
         except Exception as exc:  # noqa: BLE001 - convergence over completeness
             logger.error(
                 "Backfill failed for activity %s (strava id %s): %s",
@@ -103,11 +134,12 @@ async def backfill_streams_batch(
                 strava_id,
                 exc,
             )
-        finally:
-            activity.streams_backfilled_at = datetime.now(timezone.utc)
-            db.add(activity)
-            db.commit()
-            result.processed.append(strava_id)
+        # Reached only for a genuine attempt (success or terminal-for-this-activity
+        # failure), never the budget/rate-limit break above.
+        activity.streams_backfilled_at = datetime.now(timezone.utc)
+        db.add(activity)
+        db.commit()
+        result.processed.append(strava_id)
 
     result.remaining = count_eligible(db, user_id=user_id)
     logger.info(
@@ -153,14 +185,12 @@ def backfill_streams_job(user_id: Optional[str] = None) -> None:
     `user_id` scopes the eligible set to one runner (#470); the user-triggered
     path always supplies it, while an unscoped call still backfills globally.
 
-    Yields to the shared Strava budget (#544): each batch makes one streams call
-    per activity, the heaviest onboarding cost, so when the global budget is
-    exhausted this defers the whole batch (re-enqueues after the backoff) instead
-    of calling Strava, leaving the shared ceiling for live webhook traffic.
+    Yields to the shared Strava budget (#544/#601): the budget is checked before
+    the batch AND before each activity inside it, so when the global budget is
+    exhausted (up front or mid-batch) this defers (re-enqueues after the backoff)
+    instead of calling Strava, leaving the shared ceiling for live webhook traffic.
     """
-    from app.services.strava_ingestion.strava_budget import over_budget
-
-    if over_budget():
+    if strava_budget.over_budget():
         _reschedule_after_budget(user_id)
         logger.info(
             "Backfill deferred: Strava budget exhausted; retrying in %ds",
@@ -176,7 +206,17 @@ def backfill_streams_job(user_id: Optional[str] = None) -> None:
     finally:
         db.close()
 
-    if result.remaining > 0:
+    if result.budget_exhausted:
+        # Stopped mid-batch on the budget/rate-limit: resume after the budget
+        # backoff (not the short batch pause), so we wait for capacity to free.
+        _reschedule_after_budget(user_id)
+        logger.info(
+            "Backfill deferred mid-batch: Strava budget exhausted; retrying in %ds "
+            "(%d remaining)",
+            settings.STRAVA_BUDGET_BACKOFF_SECONDS,
+            result.remaining,
+        )
+    elif result.remaining > 0:
         _schedule_next_batch(user_id)
         logger.info(
             "Backfill scheduled next batch in %ds (%d remaining)",
