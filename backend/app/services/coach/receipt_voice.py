@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.coaching_relationship import CoachingRelationship
-from app.services.coach.budget import record as budget_record
+from app.services.coach.budget import over_budget as budget_over, record as budget_record
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.receipt import (
     ALLOWED_SLOTS,
@@ -233,6 +233,20 @@ async def generate_receipt_templates(
     None when generation could not run / failed (the caller keeps the floor). The
     Haiku spend is recorded on the per-user budget counter when `user_id` is given
     (#472)."""
+    # Soft over-budget entry gate (#607). Voiced receipt templates are a
+    # NON-ESSENTIAL, regenerable convenience — the deterministic house-default floor
+    # covers the gap. At the per-user/global spend cap, PAUSE generation rather than
+    # overshoot the ceiling with a Haiku call that only records spend afterward.
+    # Non-fatal and retryable: returning None leaves the caller's provenance
+    # UNSTAMPED (`refresh_receipt_templates` returns without setting
+    # `receipt_templates_generated_at`), so `maybe_enqueue_lazy_refresh` re-attempts
+    # on the next receipt once spend has rolled over. Only gated when we know the
+    # user (spend is per-user); over_budget degrades to False on any backend error.
+    if user_id is not None and budget_over(user_id):
+        logger.info(
+            "receipt-voice generation skipped: over LLM budget; house-default floor stands"
+        )
+        return None
     if client is None:
         if not settings.ANTHROPIC_API_KEY:
             return None

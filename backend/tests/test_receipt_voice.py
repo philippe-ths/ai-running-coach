@@ -193,3 +193,70 @@ def test_lazy_refresh_skips_default_and_already_generated(db, monkeypatch):
     rel.receipt_templates_generated_at = datetime.now(timezone.utc)
     RV.maybe_enqueue_lazy_refresh(rel)
     assert calls == [rel.user_id]
+
+
+# --- #607: soft over-budget entry gate (PAUSE, not overshoot; non-fatal) -------
+
+
+def _arm_over_budget(monkeypatch, user_id):
+    """Drive the real budget gate over a per-user daily ceiling for `user_id`."""
+    from app.core.config import settings
+    from app.services.coach import budget as B
+
+    B.set_gate(B.new_in_memory_gate())
+    monkeypatch.setattr(settings, "LLM_BUDGET_USER_DAILY_USD", 0.01)
+    B.record(user_id, "claude-opus-4-8", 1_000_000, 0)  # ~$5.00 >> $0.01 ceiling
+
+
+@pytest.mark.asyncio
+async def test_generate_over_budget_skips_llm_returns_none(monkeypatch):
+    """Over budget: generation PAUSES — no Haiku call, returns None so the caller
+    keeps the house-default floor."""
+    from app.services.coach import budget as B
+
+    uid = uuid4()
+    _arm_over_budget(monkeypatch, uid)
+    try:
+        client = _client({"first": ["boom {type}? feel?"], "second": [], "multi": []})
+        out = await RV.generate_receipt_templates(_declared_voice(), client=client, user_id=uid)
+        assert out is None
+        client.generate_structured_with_usage.assert_not_called()
+    finally:
+        B.set_gate(None)
+
+
+@pytest.mark.asyncio
+async def test_refresh_over_budget_leaves_templates_regenerable(db, monkeypatch):
+    """Over budget through refresh: no call, provenance is left UNSTAMPED and the
+    stored set untouched, so the lazy path re-attempts once spend rolls over."""
+    from app.services.coach import budget as B
+
+    rel = _seed_relationship(db, preset="roast", freetext="be cheeky")
+    _arm_over_budget(monkeypatch, rel.user_id)
+    try:
+        client = _client({"first": ["boom {type}? feel?"], "second": [], "multi": []})
+        out = await RV.refresh_receipt_templates(db, rel.user_id, client=client)
+        client.generate_structured_with_usage.assert_not_called()
+        assert out is not None
+        assert out.receipt_templates_generated_at is None  # retryable: not stamped
+        assert out.receipt_templates is None
+        # the lazy path still sees "never generated" and will re-enqueue
+        assert RV.resolve_voice(out).is_default is False
+    finally:
+        B.set_gate(None)
+
+
+@pytest.mark.asyncio
+async def test_generate_under_budget_with_user_proceeds(monkeypatch):
+    """Under budget: passing a user_id does not gate — the call proceeds as before."""
+    from app.services.coach import budget as B
+
+    uid = uuid4()
+    B.set_gate(B.new_in_memory_gate())  # fresh gate, no ceiling armed -> not over
+    try:
+        client = _client({"first": ["boom {type}? feel?"], "second": [], "multi": []})
+        out = await RV.generate_receipt_templates(_declared_voice(), client=client, user_id=uid)
+        client.generate_structured_with_usage.assert_called_once()
+        assert out is not None
+    finally:
+        B.set_gate(None)

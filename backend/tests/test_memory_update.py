@@ -205,3 +205,61 @@ def test_writer_pass_is_idempotent_on_identical_sources(db):
     assert first_profile == second.profile
     assert RunnerMemoryProfile.model_validate(second.profile).goals_and_plans == ["Targeting a sub-3 marathon"]
     assert len(db.query(RunnerMemory).filter_by(user_id=uid).all()) == 1
+
+
+# --------------------------------------------------------------------------- #
+# #607 — soft over-budget entry gate (PAUSE, not overshoot; non-fatal).
+# --------------------------------------------------------------------------- #
+def _arm_over_budget(monkeypatch, user_id):
+    """Drive the real budget gate over a per-user daily ceiling for `user_id`.
+
+    Uses a fresh in-process gate + a real recorded overspend (not a mock of the
+    thing under test), mirroring test_budget_cap_guard. Returns nothing; caller
+    resets via budget.set_gate(None)."""
+    from app.core.config import settings
+    from app.services.coach import budget as B
+
+    B.set_gate(B.new_in_memory_gate())
+    monkeypatch.setattr(settings, "LLM_BUDGET_USER_DAILY_USD", 0.01)
+    B.record(user_id, "claude-opus-4-8", 1_000_000, 0)  # ~$5.00 >> $0.01 ceiling
+
+
+def test_over_budget_skips_llm_call_and_writes_nothing(db, monkeypatch):
+    """Over budget: the rewrite-from-source pass PAUSES — no Haiku call, no write,
+    the profile is unchanged (retryable on the next non-fallback report)."""
+    from app.services.coach import budget as B
+
+    uid = _user(db)
+    act = _activity(db, uid)
+    _note(db, act, "Left knee niggle since February")  # sources present (not cold start)
+
+    _arm_over_budget(monkeypatch, uid)
+    try:
+        stub = _StubClient([_cand("should never appear", "who_you_are", ["note0"])])
+        result = asyncio.run(update_memory(db, uid, client=stub))
+        assert result is None            # non-fatal skip
+        assert stub.calls == 0           # the aux Haiku call was NOT made
+        assert get_memory(db, uid) is None  # nothing written -> next report retries
+    finally:
+        B.set_gate(None)
+
+
+def test_under_budget_proceeds_as_before(db, monkeypatch):
+    """Under budget: behaviour is unchanged — the pass calls the writer and stores."""
+    from app.services.coach import budget as B
+
+    uid = _user(db)
+    a1 = _activity(db, uid, when=datetime(2026, 5, 1, 7, 0, tzinfo=timezone.utc))
+    a2 = _activity(db, uid, when=datetime(2026, 6, 1, 7, 0, tzinfo=timezone.utc))
+    _note(db, a1, "Sub-3 marathon")
+    _note(db, a2, "Sub-3 marathon again")
+
+    B.set_gate(B.new_in_memory_gate())  # fresh gate, no ceiling armed -> not over
+    try:
+        stub = _StubClient([_cand("Targeting a sub-3 marathon", "goals_and_plans", ["note0", "note1"])])
+        result = asyncio.run(update_memory(db, uid, client=stub))
+        assert stub.calls == 1
+        assert result is not None
+        assert get_memory(db, uid) is not None
+    finally:
+        B.set_gate(None)
