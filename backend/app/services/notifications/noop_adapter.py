@@ -6,11 +6,11 @@ logger = logging.getLogger(__name__)
 
 
 class NoOpNotifier:
-    """Notifier that drops sends. Used when SMTP is not configured."""
+    """Notifier that drops sends. Used when no channel is configured."""
 
     def send(self, notification: Notification) -> None:
         logger.info(
-            "Notifier no-op (SMTP not configured); would have sent to %s subject=%r",
+            "Notifier no-op (no channel configured); would have sent to %s subject=%r",
             notification.to,
             notification.subject,
         )

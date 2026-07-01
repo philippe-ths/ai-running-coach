@@ -42,9 +42,9 @@ def notifier():
 
 @pytest.fixture
 def configured(monkeypatch):
-    monkeypatch.setattr(settings, "NOTIFY_TO", "runner@example.com")
     monkeypatch.setattr(settings, "APP_BASE_URL", "http://localhost:3000")
-    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "42")
 
 
 def _seed(db, *, strava_activity_id: int = 9001):
@@ -115,37 +115,6 @@ def _valid_llm_json() -> str:
 
 
 @pytest.mark.asyncio
-async def test_pipeline_sends_email_on_happy_path(
-    db, strava_adapter, notifier, configured
-):
-    _user, account = _seed(db)
-    _seed_strava(strava_adapter)
-
-    fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value=_valid_llm_json())
-
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake_client):
-        result = await process_new_activity(
-            db=db,
-            account=account,
-            strava_activity_id=9001,
-            strava_port=strava_adapter,
-            notifier=notifier,
-        )
-
-    assert result is not None
-    assert len(notifier.sent) == 1
-    sent = notifier.sent[0]
-    assert sent.to == "runner@example.com"
-    assert "8.2km" in sent.subject
-    assert "Stayed in zone 2 throughout." in sent.text
-    assert "Stayed in zone 2 throughout." in sent.html
-
-    activity = db.query(Activity).filter_by(strava_activity_id=9001).first()
-    assert activity.coach_notification_sent_at is not None
-
-
-@pytest.mark.asyncio
 async def test_pipeline_dedupes_second_run(
     db, strava_adapter, notifier, configured
 ):
@@ -160,7 +129,7 @@ async def test_pipeline_dedupes_second_run(
             db=db, account=account, strava_activity_id=9001,
             strava_port=strava_adapter, notifier=notifier,
         )
-        # Second invocation must not send a second email
+        # Second invocation must not send a second notification
         result_2 = await process_new_activity(
             db=db, account=account, strava_activity_id=9001,
             strava_port=strava_adapter, notifier=notifier,
@@ -171,7 +140,7 @@ async def test_pipeline_dedupes_second_run(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_skips_email_when_llm_fallback(
+async def test_pipeline_skips_notification_when_llm_fallback(
     db, strava_adapter, notifier, configured
 ):
     _user, account = _seed(db)
@@ -194,12 +163,10 @@ async def test_pipeline_skips_email_when_llm_fallback(
 
 @pytest.mark.asyncio
 async def test_pipeline_sends_telegram_on_happy_path(
-    db, strava_adapter, notifier, configured, monkeypatch
+    db, strava_adapter, notifier, configured
 ):
-    # Telegram configured on top of the email settings: the Telegram channel
-    # takes priority, so the notification is rendered Telegram-shaped.
-    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "123:ABC")
-    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "42")
+    # Telegram is the only channel (#595): the notification is rendered
+    # Telegram-shaped (link out of band, no HTML body).
     _user, account = _seed(db)
     _seed_strava(strava_adapter)
 
@@ -310,12 +277,12 @@ async def test_pipeline_fallback_gate_uses_active_version_not_stale_row(
 
 
 @pytest.mark.asyncio
-async def test_pipeline_skips_when_notify_to_unset(
+async def test_pipeline_skips_when_channel_unset(
     db, strava_adapter, notifier, monkeypatch
 ):
-    monkeypatch.setattr(settings, "NOTIFY_TO", "")
     monkeypatch.setattr(settings, "APP_BASE_URL", "http://localhost:3000")
-    monkeypatch.setattr(settings, "SMTP_HOST", "")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "")
     _user, account = _seed(db)
     _seed_strava(strava_adapter)
 

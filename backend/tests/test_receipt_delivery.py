@@ -1,5 +1,5 @@
 """Receipt delivery (#296): the 'done' callback token and the deterministic
-receipt Notification (taps over Telegram, prose-only over email)."""
+receipt Notification (taps over Telegram, the only channel)."""
 
 import pytest
 
@@ -54,19 +54,6 @@ def test_unknown_kind_rejected():
 def telegram(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "tok")
     monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "12345")
-    monkeypatch.setattr(settings, "SMTP_HOST", "")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "")
-    set_notifier(None)
-    yield
-    set_notifier(None)
-
-
-@pytest.fixture
-def email(monkeypatch):
-    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
-    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "")
-    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "runner@example.com")
     set_notifier(None)
     yield
     set_notifier(None)
@@ -76,8 +63,6 @@ def email(monkeypatch):
 def no_channel(monkeypatch):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "")
-    monkeypatch.setattr(settings, "SMTP_HOST", "")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "")
 
 
 def _aid():
@@ -100,20 +85,6 @@ def test_receipt_notification_telegram_carries_taps(telegram):
     assert "rpe" in kinds and "pain" in kinds and "done" in kinds
     # every action token resolves to THIS activity
     assert all(decode(a.token).activity_id == _aid() for a in n.actions)
-
-
-def test_receipt_notification_email_has_no_taps(email):
-    n = build_receipt_notification(
-        receipt_text="Got your run — how did it feel?",
-        headline="Steady run",
-        activity_id=_aid(),
-        distance_m=0,
-        app_base_url="https://app.example.com",
-    )
-    assert n is not None
-    assert n.actions == ()
-    assert "Got your run" in n.text and "Got your run" in n.html
-    assert n.subject == "Steady run"  # no distance suffix when distance is 0
 
 
 def test_receipt_notification_none_without_channel(no_channel):

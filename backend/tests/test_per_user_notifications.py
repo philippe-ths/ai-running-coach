@@ -21,8 +21,6 @@ from app.services.notifications.telegram_adapter import TelegramNotifier
 def _telegram_active(monkeypatch, *, chat_id="GLOBAL", owner_email=""):
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "bot-token")
     monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", chat_id)
-    monkeypatch.setattr(settings, "SMTP_HOST", "")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "")
     # Default to single-user mode (no owner concept) unless a test opts in, so the
     # #542 owner-only fallback is exercised explicitly where it matters.
     monkeypatch.setattr(settings, "OWNER_EMAIL", owner_email)
@@ -62,12 +60,10 @@ def test_resolve_recipient_unbound_non_owner_is_suppressed(monkeypatch):
     assert resolve_recipient(None) is None
 
 
-def test_resolve_recipient_email_channel_is_deferred(monkeypatch):
-    # ADR 0023 defers per-user email; the email path stays on the global NOTIFY_TO.
+def test_resolve_recipient_none_without_telegram_channel(monkeypatch):
+    # No channel configured (email was removed, #595): the resolver returns None.
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "")
-    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "global@x.dev")
     user = SimpleNamespace(telegram_chat_id="USER_CHAT_1", email="a@x.dev")
     assert resolve_recipient(user) is None
 
@@ -104,20 +100,6 @@ def test_receipt_telegram_multiuser_suppressed_when_recipient_none(monkeypatch):
         distance_m=5000, app_base_url="http://app",  # no recipient
     )
     assert n is None  # suppressed, not routed to OWNER_CHAT
-
-
-def test_receipt_email_falls_back_to_global_notify_to(monkeypatch):
-    # Email has no per-user routing yet (ADR 0023): a None recipient keeps the
-    # global NOTIFY_TO, unchanged by #542 (which is Telegram-only).
-    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
-    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "")
-    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "global@x.dev")
-    n = build_receipt_notification(
-        receipt_text="Nice run", headline="Easy 5k", activity_id="act-1",
-        distance_m=5000, app_base_url="http://app",  # no recipient
-    )
-    assert n is not None and n.to == "global@x.dev"
 
 
 def test_non_owner_unbound_receipt_is_not_built_end_to_end(monkeypatch):
