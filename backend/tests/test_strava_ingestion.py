@@ -279,3 +279,23 @@ class TestIngestRetryOn401:
         assert activity.strava_activity_id == 700
         assert adapter.refresh_calls == ["fake_refresh"]
         assert adapter._calls == 2
+
+
+@pytest.mark.asyncio
+async def test_ingest_recent_propagates_rate_limit(db):
+    """A StravaRateLimited from list_recent_activities must propagate out of
+    ingest_recent_activities (not be swallowed into stats.errors), so the live
+    sync path can surface HTTP 429 via the app-level handler (#602/#596)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.services.strava_ingestion import StravaRateLimited
+
+    account = _make_account(db, athlete_id=54321)
+    port = MagicMock()
+    port.get_athlete_zones = AsyncMock(return_value=None)
+    port.list_recent_activities = AsyncMock(
+        side_effect=StravaRateLimited(retry_after=120, label="list_recent_activities")
+    )
+
+    with pytest.raises(StravaRateLimited):
+        await ingest_recent_activities(db, account, port, fetch_streams=False)

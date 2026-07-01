@@ -304,6 +304,30 @@ def test_enqueue_backfill_counts_and_enqueues_first_batch(db):
     assert kwargs["job_id"] == f"backfill_streams_{user.id}"
 
 
+def test_enqueue_backfill_collapses_rapid_retriggers_into_one_chain(db):
+    """Called on every sync now (#596): a burst of enqueues for one user must
+    start only ONE chain, so overlapping chains can't double-fetch the same
+    activity's streams against the shared budget."""
+    from app.jobs import backfill_streams as mod
+
+    user, _account = _seed_user_and_account(db)
+    _seed_summary_activity(db, user, 4101)
+
+    fake_queue = MagicMock()
+    fake_redis = MagicMock()
+    fake_redis.set.side_effect = [True, None]  # first acquires the slot, second throttled
+    with patch.object(mod, "queue", fake_queue), patch(
+        "app.core.queue.redis_conn", fake_redis
+    ):
+        first = mod.enqueue_backfill(db, user.id)
+        second = mod.enqueue_backfill(db, user.id)
+
+    # Both report the eligible count, but only one chain is enqueued.
+    assert first == 1
+    assert second == 1
+    fake_queue.enqueue.assert_called_once()
+
+
 def test_enqueue_backfill_is_noop_when_nothing_eligible(db):
     from app.jobs import backfill_streams as mod
 

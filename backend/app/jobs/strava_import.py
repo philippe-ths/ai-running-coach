@@ -53,6 +53,7 @@ from app.services.strava_ingestion.ingestion import (
     _assign_block,
     reconcile_unassigned_activities,
 )
+from app.services.strava_ingestion.port import StravaRateLimited
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,11 @@ async def run_import_batch(
             batch = await port.list_activities_page(
                 access_token, after=after, page=page, per_page=limit
             )
+    except StravaRateLimited:
+        # A rate limit is transient: propagate it so the job reschedules after the
+        # budget backoff (status left "running"), rather than marking the whole
+        # import permanently failed and losing the cursor (#602 / mirrors #601).
+        raise
     except Exception as exc:  # noqa: BLE001 - surface the failure on the row, don't crash the worker
         import_obj.status = "failed"
         import_obj.error = f"Strava list failed: {exc}"
@@ -220,9 +226,22 @@ def strava_import_job(import_id: str) -> None:
                 import_obj.status,
             )
             return
-        result = asyncio.run(
-            run_import_batch(db, import_obj, limit=settings.IMPORT_PAGE_SIZE)
-        )
+        try:
+            result = asyncio.run(
+                run_import_batch(db, import_obj, limit=settings.IMPORT_PAGE_SIZE)
+            )
+        except StravaRateLimited as exc:
+            # Shared window hit mid-walk: defer after the budget backoff, leaving
+            # status "running" so the walk resumes with its cursor intact (#602).
+            _reschedule_after_budget(str(import_id))
+            logger.info(
+                "Historical import %s deferred: Strava rate limited (retry_after=%s); "
+                "retrying in %ds",
+                import_id,
+                exc.retry_after,
+                settings.STRAVA_BUDGET_BACKOFF_SECONDS,
+            )
+            return
     finally:
         db.close()
 

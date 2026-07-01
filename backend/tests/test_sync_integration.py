@@ -75,18 +75,22 @@ def test_sync_large_window_is_summary_only_backfill(client, db):
     assert abs((captured["since"] - expected).total_seconds()) < 5
 
 
-def test_sync_returns_429_when_strava_rate_limited(client, db):
-    """A Strava rate limit on the live sync path surfaces as HTTP 429 with the
-    true Retry-After, not a 500 (#602)."""
+def test_sync_returns_429_when_strava_rate_limited(client, db, strava_adapter):
+    """A Strava rate limit surfaces as HTTP 429 with the true Retry-After, not a
+    500 or a 200-with-buried-error, driven end to end through the REAL
+    ingest_recent_activities (which must propagate the rate limit) and the
+    app-level handler (#602/#596)."""
     from app.services.strava_ingestion import StravaRateLimited
 
     _seed_account(db, athlete_id=70003)
 
-    async def _rate_limited(db_, account_, port_, *, since, fetch_streams):
+    async def _rate_limited(*args, **kwargs):
         raise StravaRateLimited(retry_after=42, label="list_recent_activities")
 
-    with patch("app.api.activities.ingest_recent_activities", _rate_limited):
-        resp = client.post("/api/sync?strava_athlete_id=70003")
+    # The live sync makes exactly one Strava call (summary list); make it rate-limit.
+    strava_adapter.list_recent_activities = _rate_limited
+
+    resp = client.post("/api/sync?strava_athlete_id=70003")
 
     assert resp.status_code == 429, resp.text
     assert resp.headers.get("Retry-After") == "42"

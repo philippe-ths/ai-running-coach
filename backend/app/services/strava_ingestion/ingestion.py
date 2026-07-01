@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, undefer
 from app.core.queue import redis_conn
 from app.models import Activity, ActivityStream, StravaAccount, UserProfile
 from app.schemas import SyncResponse
-from app.services.strava_ingestion.port import StravaPort, Tokens
+from app.services.strava_ingestion.port import StravaPort, StravaRateLimited, Tokens
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +84,17 @@ _TOKEN_REFRESH_BUFFER_S = 60
 # (invalidates) the refresh token, so two concurrent refreshes for one account
 # race: the second runs with a now-stale refresh token and can permanently
 # unlink the account. We serialize refresh per account with a short Redis lock.
-# TIMEOUT auto-releases if a holder dies mid-refresh (avoids a deadlock); WAIT
-# bounds how long a concurrent caller blocks for the winner (a refresh HTTP call
-# is ~1-2s). If Redis is unavailable we degrade to an unlocked refresh rather
-# than block ingestion — best-effort serialization, never a hard dependency.
-_TOKEN_REFRESH_LOCK_TIMEOUT_S = 15
-_TOKEN_REFRESH_LOCK_WAIT_S = 15
+#
+# TIMEOUT auto-releases the lock if a holder dies mid-refresh (avoids a
+# deadlock). It MUST exceed the worst-case hold — a refresh HTTP call can take up
+# to the adapter's _HTTP_TIMEOUT_S (30s) plus the DB commit — or the lock could
+# expire while the winner is still refreshing and a waiter would double-refresh,
+# defeating the serialization. WAIT bounds how long a concurrent caller blocks
+# for the winner (refreshes are typically ~1-2s); on timeout, or if Redis is
+# unavailable, we degrade to an unlocked refresh rather than block ingestion —
+# best-effort serialization, never a hard dependency.
+_TOKEN_REFRESH_LOCK_TIMEOUT_S = 60
+_TOKEN_REFRESH_LOCK_WAIT_S = 30
 
 
 def _token_is_fresh(account: StravaAccount) -> bool:
@@ -365,6 +370,12 @@ async def ingest_recent_activities(
         # ingest committed but left block-less because its guarded assignment
         # raised (#515).
         reconcile_unassigned_activities(db, account.user_id)
+    except StravaRateLimited:
+        # A rate limit is a "retry shortly" signal, not a per-activity error to
+        # log-and-continue: propagate it so the live path returns HTTP 429 (#602,
+        # via the app-level handler) rather than a 200 with the failure buried in
+        # stats.errors. Background callers let it surface to the job/budget gate.
+        raise
     except Exception as exc:
         msg = f"Ingestion failed globally: {exc}"
         logger.error(msg)

@@ -39,6 +39,12 @@ logger = logging.getLogger(__name__)
 
 _BACKFILL_JOB_ID = "backfill_streams"
 
+# Best-effort window collapsing rapid re-triggers of a user's backfill into one
+# chain (#596/#601). Short: it only guards against a burst of syncs/taps, not the
+# whole (minutes-to-hours) chain lifetime; the streams_backfilled_at marker keeps
+# any later overlap idempotent.
+_BACKFILL_ENQUEUE_COOLDOWN_S = 120
+
 
 def _eligible_stmt(*, user_id: Optional[str] = None):
     """Activities lacking stream-derived analysis and not yet attempted.
@@ -227,17 +233,45 @@ def backfill_streams_job(user_id: Optional[str] = None) -> None:
         logger.info("Backfill complete: no eligible activities remain")
 
 
+def _acquire_enqueue_slot(user_id: str) -> bool:
+    """Best-effort guard: at most one backfill chain enqueued per user per
+    cooldown, so rapid re-triggers (a double Sync tap, or Sync racing the manual
+    backfill endpoint) don't spawn overlapping chains that double-fetch the same
+    activity's streams against the shared budget. Degrades OPEN on any Redis error
+    so a coordination outage never blocks a legitimate backfill."""
+    try:
+        from app.core.queue import redis_conn
+
+        return bool(
+            redis_conn.set(
+                f"backfill_enqueue:{user_id}",
+                "1",
+                nx=True,
+                ex=_BACKFILL_ENQUEUE_COOLDOWN_S,
+            )
+        )
+    except Exception as exc:  # Redis down / misconfigured: enqueue anyway
+        logger.warning(
+            "backfill_enqueue_guard_unavailable user=%s: %s; enqueuing anyway",
+            user_id,
+            exc,
+        )
+        return True
+
+
 def enqueue_backfill(db: Session, user_id) -> int:
     """Count the runner's eligible activities and enqueue their first backfill batch.
 
-    Returns the eligible count, scoped to `user_id` (#470). A per-user job id
-    keeps a re-trigger from starting a second chain for the same runner while one
-    is in flight, without colliding with another runner's chain; the
-    `streams_backfilled_at` marker makes any overlap idempotent regardless.
-    """
+    Returns the eligible count, scoped to `user_id` (#470). Now called on every
+    `POST /api/sync` (#596), so a best-effort per-user cooldown collapses rapid
+    re-triggers into one chain: `queue.enqueue`'s per-user `job_id` only dedups a
+    still-queued run (not a chain already dequeued and self-rescheduling under a
+    fresh id), so without the cooldown two near-simultaneous syncs could run two
+    chains. The `streams_backfilled_at` marker makes any residual overlap
+    idempotent, and the per-activity budget re-check (#601) bounds the cost."""
     user_id = str(user_id)
     eligible = count_eligible(db, user_id=user_id)
-    if eligible:
+    if eligible and _acquire_enqueue_slot(user_id):
         queue.enqueue(
             backfill_streams_job,
             user_id,
