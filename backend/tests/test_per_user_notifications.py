@@ -8,10 +8,13 @@ auth are the deferred follow-up (need P2.0's authenticated user).
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 from app.core.config import settings
+from app.models import User
 from app.services.notifications import (
     build_receipt_notification,
+    resolve_owner_user,
     resolve_recipient,
 )
 from app.services.notifications.port import Notification
@@ -34,12 +37,49 @@ def test_resolve_recipient_returns_bound_telegram_chat(monkeypatch):
     assert resolve_recipient(user) == "USER_CHAT_1"
 
 
-def test_resolve_recipient_unbound_single_user_falls_back_to_global(monkeypatch):
-    # OWNER_EMAIL unset => single-user mode: an unbound user keeps the original
-    # global fallback (back-compat), so the single-owner deployment is unchanged.
+def test_resolve_recipient_unbound_no_owner_email_and_no_db_fails_closed(monkeypatch):
+    # #600: safety no longer hinges on OWNER_EMAIL presence. With OWNER_EMAIL unset
+    # and no db to prove the deployment is single-user, an unbound user resolves to
+    # None (suppress) rather than the global owner chat — fail closed.
     _telegram_active(monkeypatch, chat_id="GLOBAL", owner_email="")
-    assert resolve_recipient(SimpleNamespace(telegram_chat_id=None, email="a@x.dev")) == "GLOBAL"
-    assert resolve_recipient(None) == "GLOBAL"
+    assert resolve_recipient(SimpleNamespace(telegram_chat_id=None, email="a@x.dev")) is None
+    assert resolve_recipient(None) is None
+
+
+def test_resolve_recipient_unbound_single_user_db_falls_back_to_global(monkeypatch, db):
+    # #600: OWNER_EMAIL unset but the db proves exactly one user exists => genuine
+    # single-user deployment => the unbound user keeps the global fallback
+    # (back-compat for the single-owner deployment).
+    _telegram_active(monkeypatch, chat_id="GLOBAL", owner_email="")
+    only = User(id=uuid4(), email="a@x.dev", telegram_chat_id=None)
+    db.add(only)
+    db.commit()
+    assert resolve_recipient(only, db=db) == "GLOBAL"
+
+
+def test_resolve_recipient_unbound_multi_user_no_owner_email_is_suppressed(monkeypatch, db):
+    # #600: OWNER_EMAIL unset AND more than one user exists => the owner is not
+    # identifiable, so an unbound runner fails closed to None instead of leaking to
+    # the global owner chat. This is the leak #600 closes without keying on config.
+    _telegram_active(monkeypatch, chat_id="GLOBAL", owner_email="")
+    u1 = User(id=uuid4(), email="a@x.dev", telegram_chat_id=None)
+    u2 = User(id=uuid4(), email="b@x.dev", telegram_chat_id=None)
+    db.add_all([u1, u2])
+    db.commit()
+    assert resolve_recipient(u1, db=db) is None
+    assert resolve_recipient(u2, db=db) is None
+
+
+def test_resolve_recipient_owner_email_mistyped_still_fails_closed(monkeypatch, db):
+    # #600: a mistyped OWNER_EMAIL that matches no user must NOT reopen the leak.
+    # Every unbound runner (none matching the owner email) resolves to None.
+    _telegram_active(monkeypatch, chat_id="GLOBAL", owner_email="typo@x.dev")
+    u1 = User(id=uuid4(), email="a@x.dev", telegram_chat_id=None)
+    u2 = User(id=uuid4(), email="b@x.dev", telegram_chat_id=None)
+    db.add_all([u1, u2])
+    db.commit()
+    assert resolve_recipient(u1, db=db) is None
+    assert resolve_recipient(u2, db=db) is None
 
 
 def test_resolve_recipient_unbound_owner_falls_back_to_global(monkeypatch):
@@ -58,6 +98,41 @@ def test_resolve_recipient_unbound_non_owner_is_suppressed(monkeypatch):
     assert resolve_recipient(non_owner) is None
     # A partial/None user in multi-user mode is also suppressed (no email to match).
     assert resolve_recipient(None) is None
+
+
+# --- resolve_owner_user (the identified deployment owner, #600/#608) -----------
+
+def test_resolve_owner_user_by_email_case_insensitive(monkeypatch, db):
+    monkeypatch.setattr(settings, "OWNER_EMAIL", "Owner@X.dev")
+    owner = User(id=uuid4(), email="owner@x.dev")
+    other = User(id=uuid4(), email="runner@x.dev")
+    db.add_all([owner, other])
+    db.commit()
+    assert resolve_owner_user(db).id == owner.id
+
+
+def test_resolve_owner_user_single_user_without_owner_email(monkeypatch, db):
+    # OWNER_EMAIL unset + exactly one user => that user is the implicit owner.
+    monkeypatch.setattr(settings, "OWNER_EMAIL", "")
+    only = User(id=uuid4(), email="solo@x.dev")
+    db.add(only)
+    db.commit()
+    assert resolve_owner_user(db).id == only.id
+
+
+def test_resolve_owner_user_none_when_multi_user_and_no_owner_email(monkeypatch, db):
+    # OWNER_EMAIL unset + more than one user => owner not identifiable => None.
+    monkeypatch.setattr(settings, "OWNER_EMAIL", "")
+    db.add_all([User(id=uuid4(), email="a@x.dev"), User(id=uuid4(), email="b@x.dev")])
+    db.commit()
+    assert resolve_owner_user(db) is None
+
+
+def test_resolve_owner_user_none_when_owner_email_matches_nobody(monkeypatch, db):
+    monkeypatch.setattr(settings, "OWNER_EMAIL", "ghost@x.dev")
+    db.add_all([User(id=uuid4(), email="a@x.dev"), User(id=uuid4(), email="b@x.dev")])
+    db.commit()
+    assert resolve_owner_user(db) is None
 
 
 def test_resolve_recipient_none_without_telegram_channel(monkeypatch):

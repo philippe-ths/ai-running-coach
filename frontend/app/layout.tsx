@@ -4,6 +4,7 @@ import { Fraunces, Hanken_Grotesk, IBM_Plex_Mono } from 'next/font/google';
 import { ClerkProvider } from '@clerk/nextjs';
 import NavBar from '@/components/NavBar';
 import BottomNav from '@/components/BottomNav';
+import PwaOpenInAppBanner from '@/components/PwaOpenInAppBanner';
 import ThemeProvider from '@/components/ThemeProvider';
 import { clerkEnabled } from '@/lib/authMode';
 
@@ -64,6 +65,7 @@ export default function RootLayout({
       <body className="font-sans min-h-screen flex flex-col">
         <ThemeProvider>
           <NavBar />
+          <PwaOpenInAppBanner />
           <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-8 pb-[calc(4rem+env(safe-area-inset-bottom)+1rem)] md:pb-8">
             {children}
           </main>

@@ -266,6 +266,60 @@ class TestSecretRedaction:
         assert "bot123456789:<redacted>" in out
 
 
+class TestWarnNotificationConfig:
+    """Non-fatal production boot warning for incomplete Telegram config (#600/#609)."""
+
+    def _telegram_active(self, monkeypatch, *, env="production", username="bot", owner="o@x.dev"):
+        monkeypatch.setattr(settings, "APP_ENV", env)
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "tok")
+        monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "GLOBAL")
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_USERNAME", username)
+        monkeypatch.setattr(settings, "OWNER_EMAIL", owner)
+
+    def test_noop_outside_production(self, monkeypatch, caplog):
+        # Missing everything, but not production => silent (dev/test run unset).
+        self._telegram_active(monkeypatch, env="local", username="", owner="")
+        with caplog.at_level(logging.WARNING, logger="app.core.observability"):
+            observability.warn_notification_config()
+        assert not caplog.records
+
+    def test_noop_when_telegram_not_active(self, monkeypatch, caplog):
+        # Telegram channel off (no token/chat) => these vars are irrelevant.
+        monkeypatch.setattr(settings, "APP_ENV", "production")
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
+        monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "")
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_USERNAME", "")
+        monkeypatch.setattr(settings, "OWNER_EMAIL", "")
+        with caplog.at_level(logging.WARNING, logger="app.core.observability"):
+            observability.warn_notification_config()
+        assert not caplog.records
+
+    def test_silent_when_fully_configured(self, monkeypatch, caplog):
+        self._telegram_active(monkeypatch)
+        with caplog.at_level(logging.WARNING, logger="app.core.observability"):
+            observability.warn_notification_config()
+        assert not caplog.records
+
+    def test_warns_when_bot_username_unset(self, monkeypatch, caplog):
+        # #609: linking breaks silently without TELEGRAM_BOT_USERNAME.
+        self._telegram_active(monkeypatch, username="")
+        with caplog.at_level(logging.WARNING, logger="app.core.observability"):
+            observability.warn_notification_config()
+        assert any("TELEGRAM_BOT_USERNAME" in r.getMessage() + str(getattr(r, "missing", "")) for r in caplog.records)
+
+    def test_warns_when_owner_email_unset(self, monkeypatch, caplog):
+        # #600: without OWNER_EMAIL the owner's own unbound fallback is suppressed.
+        self._telegram_active(monkeypatch, owner="")
+        with caplog.at_level(logging.WARNING, logger="app.core.observability"):
+            observability.warn_notification_config()
+        assert any("OWNER_EMAIL" in r.getMessage() + str(getattr(r, "missing", "")) for r in caplog.records)
+
+    def test_never_raises(self, monkeypatch):
+        # Non-fatal by design (the #549 lesson): must never crash the boot.
+        self._telegram_active(monkeypatch, username="", owner="")
+        observability.warn_notification_config()  # no exception
+
+
 @pytest.fixture(autouse=True)
 def _restore_logging_after_each_test():
     """Tests mutate the root logger; restore baseline afterwards."""

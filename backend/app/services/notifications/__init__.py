@@ -57,19 +57,62 @@ def _resolve_to(channel: Optional[str], recipient: Optional[str]) -> Optional[st
     return None
 
 
-def resolve_recipient(user) -> Optional[str]:
-    """The per-user recipient address for the active channel (P2.4, #120, #542).
+def _user_count(db) -> int:
+    """How many User rows exist. `limit(2)` is enough to answer "more than one?"."""
+    from app.models import User
+
+    return db.query(User.id).limit(2).count()
+
+
+def resolve_owner_user(db):
+    """The `User` who is the deployment owner, or None if not identifiable (#600/#608).
+
+    Identity, in order:
+      1. `OWNER_EMAIL` set -> the user whose email matches it (case-insensitive),
+         or None when no user matches (a mistyped/stale OWNER_EMAIL identifies
+         nobody rather than falling through to a wrong user).
+      2. `OWNER_EMAIL` unset + exactly one user -> that user is the implicit owner
+         (single-user back-compat).
+      3. `OWNER_EMAIL` unset + more than one user -> the owner is not identifiable
+         -> None (fail closed).
+
+    Shared by the outbound recipient resolver and the inbound global-owner-chat
+    ownership check, so both agree on who "the owner" is without keying safety on
+    `OWNER_EMAIL` being present (#600).
+    """
+    from sqlalchemy import func
+
+    from app.core.config import settings
+    from app.models import User
+
+    owner_email = (settings.OWNER_EMAIL or "").strip().lower()
+    if owner_email:
+        return (
+            db.query(User)
+            .filter(func.lower(User.email) == owner_email)
+            .first()
+        )
+    users = db.query(User).limit(2).all()
+    return users[0] if len(users) == 1 else None
+
+
+def resolve_recipient(user, db=None) -> Optional[str]:
+    """The per-user recipient address for the active channel (P2.4, #120, #542, #600).
 
     Telegram routes to the user's bound chat (`telegram_chat_id`) — the decided
     per-user channel (ADR 0023). When the user has NOT bound a chat, the global
-    `TELEGRAM_CHAT_ID` is used ONLY for the deployment owner (`OWNER_EMAIL`); for a
-    non-owner the resolver returns None, which the composer turns into NO
-    notification rather than delivering to the owner's chat. This closes the
-    multi-user leak where any unbound runner's coach messages were routed to the
-    owner's Telegram (#542). When `OWNER_EMAIL` is unset the deployment is
-    single-user (no multi-user owner concept), so the original global fallback is
-    preserved for everyone. Tolerant of a None/partial user so a missing
-    relationship never breaks the pipeline.
+    `TELEGRAM_CHAT_ID` is delivered ONLY to the identified deployment owner; every
+    other unbound runner resolves to None, which the composer turns into NO
+    notification rather than delivering to the owner's chat (the #542 multi-user
+    leak).
+
+    #600 hardening: cross-tenant safety no longer HINGES on `OWNER_EMAIL` being
+    set. The owner is identified by `OWNER_EMAIL` when present; when it is unset,
+    the global fallback is kept ONLY for a deployment `db` proves is single-user
+    (exactly one user). With `OWNER_EMAIL` unset AND more than one user — or with
+    no `db` to check — an unbound runner fails closed to None, so a dropped or
+    mistyped `OWNER_EMAIL` on a multi-user deploy cannot reopen the leak. Tolerant
+    of a None/partial user so a missing relationship never breaks the pipeline.
     """
     if _active_channel() != "telegram":
         return None
@@ -78,15 +121,18 @@ def resolve_recipient(user) -> Optional[str]:
     bound = getattr(user, "telegram_chat_id", None) if user is not None else None
     if bound:
         return bound
-    # Unbound: fall back to the global owner chat only for the owner, so a
-    # non-owner who hasn't linked Telegram is never delivered to the owner's chat.
+
     owner_email = (settings.OWNER_EMAIL or "").strip().lower()
-    if not owner_email:
-        return str(settings.TELEGRAM_CHAT_ID)  # single-user back-compat
-    user_email = (getattr(user, "email", "") or "").strip().lower()
-    if user_email and user_email == owner_email:
+    if owner_email:
+        user_email = (getattr(user, "email", "") or "").strip().lower()
+        if user_email and user_email == owner_email:
+            return str(settings.TELEGRAM_CHAT_ID)
+        return None  # non-owner, unbound -> suppress (no leak to the owner chat)
+    # OWNER_EMAIL unset: keep the single-user global fallback ONLY when we can prove
+    # the deployment has at most one user; otherwise fail closed (#600).
+    if db is not None and _user_count(db) <= 1:
         return str(settings.TELEGRAM_CHAT_ID)
-    return None  # non-owner, unbound -> suppress (no leak to the owner chat)
+    return None
 
 
 def _active_channel() -> Optional[str]:
@@ -232,6 +278,7 @@ __all__ = [
     "build_coach_notification",
     "build_receipt_notification",
     "get_notifier",
+    "resolve_owner_user",
     "resolve_recipient",
     "set_notifier",
 ]
