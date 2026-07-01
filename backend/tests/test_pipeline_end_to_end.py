@@ -1,9 +1,9 @@
-"""End-to-end: HTTP webhook → enqueued job → email captured.
+"""End-to-end: HTTP webhook → enqueued job → notification captured.
 
 Replaces RQ with an inline enqueuer that runs the captured job synchronously
 inside the test session, using in-memory Strava and notifier adapters and a
 patched AnthropicClient. This is the test the user pointed at in the design:
-'simulate a webhook create event end-to-end and assert one email captured;
+'simulate a webhook create event end-to-end and assert one notification captured;
 a second webhook for the same activity captures no further sends.'
 """
 
@@ -40,11 +40,11 @@ def notifier():
 
 @pytest.fixture
 def configured(monkeypatch):
-    monkeypatch.setattr(settings, "NOTIFY_TO", "runner@example.com")
     monkeypatch.setattr(settings, "APP_BASE_URL", "http://localhost:3000")
-    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "runner-chat")
     monkeypatch.setattr(settings, "STRAVA_WEBHOOK_VERIFY_TOKEN", "x")
-    # Exercises the SINGLE-SHOT structured email pipeline; the active default now
+    # Exercises the SINGLE-SHOT structured pipeline; the active default now
     # tracks the feature-bearing message prompt (#424), so pin the structured one.
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")
 
@@ -124,7 +124,7 @@ def _webhook_payload(*, aspect_type: str, activity_id: int, athlete_id: int):
     }
 
 
-def test_webhook_create_triggers_one_email_and_dedupes_on_replay(
+def test_webhook_create_triggers_one_notification_and_dedupes_on_replay(
     client, db, strava_adapter, notifier, configured
 ):
     _seed(db)
@@ -177,7 +177,7 @@ def test_webhook_create_triggers_one_email_and_dedupes_on_replay(
 
         assert sent_notif is not None
         assert len(notifier.sent) == 1
-        assert notifier.sent[0].to == "runner@example.com"
+        assert notifier.sent[0].to == "runner-chat"
         assert "8.2km" in notifier.sent[0].subject
 
         # Second webhook for same activity — handler still enqueues (RQ would
@@ -201,7 +201,7 @@ def test_webhook_create_triggers_one_email_and_dedupes_on_replay(
         )
 
     assert sent_notif_2 is None
-    assert len(notifier.sent) == 1  # still one email total
+    assert len(notifier.sent) == 1  # still one notification total
 
     activity = db.query(Activity).filter_by(strava_activity_id=1234567).first()
     assert activity.coach_notification_sent_at is not None

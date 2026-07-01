@@ -35,15 +35,13 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 def configured(monkeypatch):
-    # Two-stage prompt + the receipt-cadence flag ON, with an email channel so
+    # Two-stage prompt + the receipt-cadence flag ON, with a Telegram channel so
     # build_receipt_notification produces a Notification the InMemoryNotifier sends.
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_message_v6")
     monkeypatch.setattr(settings, "COACH_RECEIPT_CADENCE", True)
-    monkeypatch.setattr(settings, "SMTP_HOST", "smtp.example.com")
-    monkeypatch.setattr(settings, "NOTIFY_TO", "runner@example.com")
     monkeypatch.setattr(settings, "APP_BASE_URL", "https://app.example.com")
-    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "")
-    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "123:ABC")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "runner-chat")
 
 
 @pytest.fixture

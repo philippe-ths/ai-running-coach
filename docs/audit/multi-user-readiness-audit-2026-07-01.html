@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-User Readiness Audit — 10 New Signups</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --muted:#5f6368; --line:#e3e3e0; --bg:#faf9f6; --card:#fff;
+    --crit:#b3261e; --crit-bg:#fdeceb; --imp:#b26a00; --imp-bg:#fdf3e2;
+    --worth:#3a6ea5; --worth-bg:#eef4fa; --ok:#2e7d32; --ok-bg:#eaf4ea;
+  }
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    color:var(--ink);background:var(--bg);margin:0;line-height:1.55;font-size:15px}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 28px 80px}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:-.02em}
+  .sub{color:var(--muted);margin:0 0 28px;font-size:14px}
+  .verdict{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:22px 24px;margin-bottom:34px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .verdict h2{margin:0 0 10px;font-size:19px}
+  .verdict p{margin:0 0 10px}
+  .verdict strong{color:var(--crit)}
+  .tldr{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px}
+  .pill{border-radius:999px;padding:5px 13px;font-size:12.5px;font-weight:600;white-space:nowrap}
+  .pill.crit{background:var(--crit-bg);color:var(--crit)}
+  .pill.imp{background:var(--imp-bg);color:var(--imp)}
+  .pill.worth{background:var(--worth-bg);color:var(--worth)}
+  .pill.ok{background:var(--ok-bg);color:var(--ok)}
+  h2.sec{font-size:16px;text-transform:uppercase;letter-spacing:.06em;margin:38px 0 4px}
+  .secnote{color:var(--muted);font-size:13px;margin:0 0 16px}
+  .f{background:var(--card);border:1px solid var(--line);border-left-width:4px;
+    border-radius:9px;padding:16px 18px;margin-bottom:14px}
+  .f.crit{border-left-color:var(--crit)}
+  .f.imp{border-left-color:var(--imp)}
+  .f.worth{border-left-color:var(--worth)}
+  .f-head{display:flex;align-items:baseline;gap:10px;margin-bottom:7px}
+  .f-num{font-weight:700;color:var(--muted);font-size:13px;min-width:22px}
+  .f-title{font-weight:650;font-size:15.5px}
+  .f-body{margin:0;font-size:14px}
+  .f-body div{margin:5px 0}
+  .lab{font-weight:650;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+  code{background:#f0efe9;padding:1px 6px;border-radius:5px;font-size:12.5px;
+    font-family:"SF Mono",Menlo,Consolas,monospace}
+  .area{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+  .tag{font-size:11px;color:var(--muted);background:#f0efe9;border-radius:5px;padding:2px 8px}
+  .ok-box{background:var(--ok-bg);border:1px solid #cfe6cf;border-radius:9px;padding:16px 18px}
+  .ok-box ul{margin:8px 0 0;padding-left:20px}
+  .ok-box li{margin:4px 0;font-size:14px}
+  footer{color:var(--muted);font-size:12.5px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Multi-User Readiness Audit</h1>
+  <p class="sub">AI Running Coach &middot; Scenario: 10 new people sign in tomorrow and use every feature concurrently &middot; 2026-07-01 &middot; read-only code audit across 5 feature branches</p>
+
+  <div class="verdict">
+    <h2>Would it cope?</h2>
+    <p><strong>Not cleanly on day one, but it would not lose or leak data.</strong> The multi-tenant foundations are genuinely solid: per-user data isolation is thorough, Clerk auth is sound, Strava webhook routing is correct, and both the global Strava rate budget (#544) and the LLM cost cap are merged and armed in prod. Nobody's run data reaches the wrong person under the live Telegram config.</p>
+    <p>What breaks the "cope" is <b>throughput and onboarding friction</b>, not correctness: one background worker serializes every coach report (~40&ndash;50 min tail for 10 simultaneous reports), the first-sync path can time out under the shared Strava budget, a handful of first-load races throw 500s, and &mdash; the one that will actually break features tomorrow &mdash; <b>production deploys don't auto-apply DB migrations</b>, so any schema a release expects can simply be absent until an operator runs it by hand.</p>
+    <div class="tldr">
+      <span class="pill crit">3 Critical</span>
+      <span class="pill imp">14 Needs improvement</span>
+      <span class="pill worth">9 Worth considering</span>
+      <span class="pill ok">Foundations sound</span>
+    </div>
+  </div>
+
+  <!-- ============ CRITICAL ============ -->
+  <h2 class="sec" style="color:var(--crit)">Critical</h2>
+  <p class="secnote">Breaks a feature, stalls the system, or is a latent data leak &mdash; fix before inviting 10 users.</p>
+
+  <div class="f crit">
+    <div class="f-head"><span class="f-num">C1</span><span class="f-title">Prod deploys do not auto-apply Alembic migrations</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;Issue #586; <code>docs/deployment/deploy-checklist.md:106</code> &mdash; <code>alembic upgrade head</code> is only a <em>recommended</em> manual pre-deploy step; the v13 cutover required a hand-run migration.</div>
+      <div><span class="lab">Impact</span> &nbsp;Any table/column a merged release expects (e.g. <code>runner_memory</code>, <code>exchange</code> sentinels) is missing in prod, so the pipeline 500s on every new user's first activity until an operator manually migrates against <code>DATABASE_PUBLIC_URL</code>.</div>
+      <div><span class="lab">Fix</span> &nbsp;Wire <code>alembic upgrade head</code> into both services' Railway Pre-Deploy Command so schema applies atomically with every deploy.</div>
+    </p>
+    <div class="area"><span class="tag">Infra</span><span class="tag">Deploy</span></div>
+  </div>
+
+  <div class="f crit">
+    <div class="f-head"><span class="f-num">C2</span><span class="f-title">Single RQ worker processes one job at a time &mdash; coach reports back up to ~40&ndash;50 min</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>app/worker.py:41</code> constructs exactly one <code>Worker</code> over one queue, no fork pool; a full report runs ~120&ndash;360s (<code>RQ_JOB_TIMEOUT_SECONDS=600</code>).</div>
+      <div><span class="lab">Impact</span> &nbsp;10 users' reports on one lane = 10 &times; ~240s &asymp; <b>~40 min tail</b> for the last runner &mdash; before ingest/analyze/self-heal/distill jobs share the same lane, and before the +30 min block-complete debounce herd all fires into it at once.</div>
+      <div><span class="lab">Fix</span> &nbsp;Run 2&ndash;3 worker replicas (exactly one with <code>with_scheduler</code>) or a dedicated queue for heavy fuller/memory jobs.</div>
+    </p>
+    <div class="area"><span class="tag">Infra</span><span class="tag">Coach/LLM</span></div>
+  </div>
+
+  <div class="f crit">
+    <div class="f-head"><span class="f-num">C3</span><span class="f-title">Email channel routes every user's coach report to one global inbox (latent leak)</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>app/services/notifications/__init__.py:60,96</code> &mdash; <code>_resolve_to</code> always returns the global <code>NOTIFY_TO</code> for the email channel, never <code>user.email</code>.</div>
+      <div><span class="lab">Impact</span> &nbsp;<b>Inert today</b> (prod runs the Telegram channel), but if a deploy ever has SMTP configured and Telegram not, all 10 users' reports land in one inbox &mdash; a direct cross-user privacy leak with nothing enforcing the channel choice.</div>
+      <div><span class="lab">Fix</span> &nbsp;Suppress email for non-owner users the same way Telegram does, or hard-gate the email channel to single-user deployments until per-user email (ADR 0023) ships.</div>
+    </p>
+    <div class="area"><span class="tag">Notifications</span><span class="tag">Privacy</span></div>
+  </div>
+
+  <!-- ============ NEEDS IMPROVEMENT ============ -->
+  <h2 class="sec" style="color:var(--imp)">Needs improvement</h2>
+  <p class="secnote">Works but degrades, is fragile, or throws avoidable errors at 10 users.</p>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N1</span><span class="f-title">First-sync fetches streams synchronously in-request, ungated by the Strava budget</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>app/api/activities.py:162</code> &rarr; <code>ingestion.py:270</code> per-activity streams loop inside the HTTP request.</div>
+      <div><span class="lab">Impact</span> &nbsp;A new user's 30-day sync fires one streams call per activity in-request; 10 concurrent first-syncs blow the shared 100/15min ceiling and each request blocks past the gateway timeout &mdash; onboarding sync appears to hang/fail.</div>
+      <div><span class="lab">Fix</span> &nbsp;Move the default-window sync to a background RQ job returning 202 that yields to <code>over_budget()</code> between activities.</div>
+    </p>
+    <div class="area"><span class="tag">Strava</span><span class="tag">Onboarding</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N2</span><span class="f-title">Strava token refresh has a check-then-refresh race that can brick an account</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>ingestion.py:98</code> <code>ensure_valid_access_token</code> &mdash; unlocked read of <code>expires_at</code>, then refresh + commit.</div>
+      <div><span class="lab">Impact</span> &nbsp;During onboarding a user's webhook, self-heal, and backfill run together; two can both refresh, and Strava rotates (invalidates) the refresh token, so the second uses a stale token and can permanently unlink that account.</div>
+      <div><span class="lab">Fix</span> &nbsp;Serialize refresh per account with a short Redis lock or <code>SELECT ... FOR UPDATE</code> on the <code>StravaAccount</code> row.</div>
+    </p>
+    <div class="area"><span class="tag">Strava</span><span class="tag">Data integrity</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N3</span><span class="f-title">Singleton get-or-create (UserProfile / CoachingRelationship) is not race-safe on first load</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>app/api/profile.py:42</code> &mdash; bare <code>select &rarr; add &rarr; commit</code> with no <code>IntegrityError</code> recovery (the <code>User</code> insert already does this; the profile path was missed).</div>
+      <div><span class="lab">Impact</span> &nbsp;A new user's first screen fires <code>/profile</code>, <code>/coach/voice</code>, <code>/coach/stance</code> concurrently; all three miss the SELECT and INSERT, the losers hit the unique constraint and 500. Self-heals on retry, but every new user sees errors on their first screen.</div>
+      <div><span class="lab">Fix</span> &nbsp;Reuse the same rollback-and-re-select <code>IntegrityError</code> recovery already used for <code>User</code>.</div>
+    </p>
+    <div class="area"><span class="tag">Auth</span><span class="tag">Onboarding</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N4</span><span class="f-title">Expired/absent Strava OAuth state strands a real user on an orphan placeholder account</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>app/api/auth.py:123</code> &mdash; on unresolvable <code>state</code>, links to the sole user only if <code>len(existing_users)==1</code>, else mints <code>strava-{id}@placeholder.invalid</code>; state TTL 600s (<code>oauth_state.py:29</code>).</div>
+      <div><span class="lab">Impact</span> &nbsp;With &gt;1 user, a runner who lingers on Strava's consent screen (state expires) gets a new orphan placeholder user; their real account has no Strava link but the app reads "connected". No misroute, but the connect is silently lost.</div>
+      <div><span class="lab">Fix</span> &nbsp;In production, reject an absent/invalid state on the new-athlete path (prompt reconnect) instead of the placeholder fallback; consider a longer TTL.</div>
+    </p>
+    <div class="area"><span class="tag">Strava</span><span class="tag">Auth</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N5</span><span class="f-title">Notification cross-tenant safety hinges on unguarded OWNER_EMAIL config</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>app/services/notifications/__init__.py:94</code> &mdash; the #542 leak-close only engages when <code>OWNER_EMAIL</code> is non-empty; unset/typo'd reverts to single-user mode.</div>
+      <div><span class="lab">Impact</span> &nbsp;If <code>OWNER_EMAIL</code> is ever unset on a multi-user deploy, all 9 non-owner runners' coach reports route to the owner's global Telegram chat. Set in prod today, so this is config fragility, not a live leak.</div>
+      <div><span class="lab">Fix</span> &nbsp;Fail closed (return None) for an unbound non-owner whenever more than one user exists, and add a production boot guard.</div>
+    </p>
+    <div class="area"><span class="tag">Notifications</span><span class="tag">Config safety</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N6</span><span class="f-title">Strava budget gate is checked once per batch, not per call &mdash; concurrent backfills overshoot</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>backfill_streams.py:163</code> &mdash; single <code>over_budget()</code> at batch start, then up to 20 uninterrupted streams calls.</div>
+      <div><span class="lab">Impact</span> &nbsp;10 per-user backfill chains all pass the gate in the same window, then each fire ~20 calls &asymp; 200 requests before any re-check, overshooting Strava's 100/15min despite the gate; the tiny 429 backoff becomes the real floor.</div>
+      <div><span class="lab">Fix</span> &nbsp;Re-check <code>over_budget()</code> inside the per-activity loop before each streams call.</div>
+    </p>
+    <div class="area"><span class="tag">Strava</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N7</span><span class="f-title">Strava 429 handling gives up after 2 retries and caps Retry-After at 60s</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>http_adapter.py:19</code> <code>_MAX_RETRIES=2</code>, <code>:22</code> <code>_MAX_RETRY_AFTER_S=60</code> &mdash; below Strava's up-to-15-min window.</div>
+      <div><span class="lab">Impact</span> &nbsp;When the shared short window is exhausted, live calls (sync <code>list_recent_activities</code>) raise and fail the whole operation rather than recovering &mdash; users see hard errors during contention.</div>
+      <div><span class="lab">Fix</span> &nbsp;On the live path surface a "rate-limited, retry shortly" state or honor a longer Retry-After; let the budget gate absorb the wait on background jobs.</div>
+    </p>
+    <div class="area"><span class="tag">Strava</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N8</span><span class="f-title">Anthropic 429 is never retried &mdash; silently degrades to a fallback report</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>app/services/coach/llm.py:117,231,310</code> &mdash; retry only on <code>status_code &ge; 500</code>; no <code>RateLimitError</code>/429 handling anywhere in the coach layer.</div>
+      <div><span class="lab">Impact</span> &nbsp;Concurrent worker fuller turns + web chat streams can trip Anthropic's per-minute limit; a 429 (&lt;500) is raised immediately and the report is stored <code>is_fallback=True</code> &mdash; the runner silently gets a template instead of a real report.</div>
+      <div><span class="lab">Fix</span> &nbsp;Catch <code>anthropic.RateLimitError</code> and retry with exponential backoff honoring <code>Retry-After</code> before falling back.</div>
+    </p>
+    <div class="area"><span class="tag">Coach/LLM</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N9</span><span class="f-title">New unbound runners get zero push delivery, silently</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>notifications/__init__.py:100</code> returns None (suppressed) for an unbound non-owner; <code>process_new_activity.py:124,265</code> pass it through.</div>
+      <div><span class="lab">Impact</span> &nbsp;A user who connects Strava but hasn't done <code>/start</code> Telegram linking gets no receipt, opener, or report on any channel (email is owner-only too). Nine of ten new users see nothing pushed until they link, with no in-band nudge.</div>
+      <div><span class="lab">Fix</span> &nbsp;When a recipient resolves to None, surface an in-app "link Telegram to get coached" prompt so the drop is visible.</div>
+    </p>
+    <div class="area"><span class="tag">Notifications</span><span class="tag">Onboarding</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N10</span><span class="f-title">Postgres connection pool is unmanaged (default 5 + 10 overflow per process)</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>app/db/session.py:11</code> &mdash; <code>create_engine</code> sets only <code>pool_pre_ping</code>; no <code>pool_size</code>/<code>max_overflow</code>/<code>pool_recycle</code>.</div>
+      <div><span class="lab">Impact</span> &nbsp;Web and worker each open their own 15-connection pool against one Railway Postgres; concurrent bursts plus background jobs approach the plan's connection ceiling, and a leaked session blocks the pool for 30s before erroring. Thin, unmanaged headroom at 10 users.</div>
+      <div><span class="lab">Fix</span> &nbsp;Set explicit pool sizing tuned to Railway's Postgres limit and the process count.</div>
+    </p>
+    <div class="area"><span class="tag">Infra</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N11</span><span class="f-title">Web service likely runs a single uvicorn worker</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;No gunicorn dependency; Railway start command <code>uvicorn app.main:app</code> with no <code>--workers</code> (topology.md:46) &rarr; one process.</div>
+      <div><span class="lab">Impact</span> &nbsp;One worker serves all <code>/api/*</code> traffic for 10 people plus inbound webhooks; a single slow synchronous handler head-of-line-blocks everyone. Async reads are fine, but there is zero horizontal headroom.</div>
+      <div><span class="lab">Fix</span> &nbsp;Run uvicorn with <code>--workers N</code> (or gunicorn+uvicorn workers) sized to CPU.</div>
+    </p>
+    <div class="area"><span class="tag">Infra</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N12</span><span class="f-title">Aux Haiku jobs (distill / memory / receipt-voice) are record-only, no entry gate</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>material_distiller.py:176</code>, <code>memory_update.py:472</code>, <code>receipt_voice.py:250</code> call <code>budget_record</code> but never <code>budget_over</code> before the call.</div>
+      <div><span class="lab">Impact</span> &nbsp;When the cap trips, the main report + chat degrade correctly, but every upload/memory-rebuild/voice-regen still fires a Haiku call and only accounts for it afterward, so aux spend overshoots the ceiling. (Deliberate &mdash; background jobs must not hard-fail on budget.)</div>
+      <div><span class="lab">Fix</span> &nbsp;Add a soft over-budget skip on the non-essential ones (receipt-voice regen, memory-update) so they pause instead of overshooting.</div>
+    </p>
+    <div class="area"><span class="tag">Coach/LLM</span><span class="tag">Cost</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N13</span><span class="f-title">Telegram global-owner-chat inbound path bypasses the per-activity ownership check</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>app/api/webhooks.py:447,473</code> &mdash; a tap from the global <code>TELEGRAM_CHAT_ID</code> is treated as <code>bound_user=None</code>, so the <code>activity.user_id != bound_user.id</code> guard is skipped.</div>
+      <div><span class="lab">Impact</span> &nbsp;That chat (the deployment owner's) can write a CheckIn / "done" to any user's activity. Exposure is limited to the single owner chat, but the authorization hole is real.</div>
+      <div><span class="lab">Fix</span> &nbsp;Resolve the global-owner chat to its actual <code>User</code> and run the same ownership check; drop the unauthenticated path once the owner binds their own chat.</div>
+    </p>
+    <div class="area"><span class="tag">Notifications</span><span class="tag">Authz</span></div>
+  </div>
+
+  <div class="f imp">
+    <div class="f-head"><span class="f-num">N14</span><span class="f-title">TELEGRAM_BOT_USERNAME unset breaks linking silently</span></div>
+    <p class="f-body">
+      <div><span class="lab">Evidence</span> &nbsp;<code>app/api/coach.py:91</code> &mdash; <code>link-token</code> returns without a usable deep link when unset; defaults to <code>""</code> (<code>config.py:101</code>).</div>
+      <div><span class="lab">Impact</span> &nbsp;If the web service misses this var, no new user can bind Telegram &mdash; and combined with N9 that means none of the 10 receive notifications, with no boot-time signal.</div>
+      <div><span class="lab">Fix</span> &nbsp;Add a production boot check that it is set whenever Telegram is the active channel.</div>
+    </p>
+    <div class="area"><span class="tag">Notifications</span><span class="tag">Config safety</span></div>
+  </div>
+
+  <!-- ============ WORTH CONSIDERING ============ -->
+  <h2 class="sec" style="color:var(--worth)">Worth considering</h2>
+  <p class="secnote">Hardening and polish &mdash; safe to defer past the first 10 users.</p>
+
+  <div class="f worth">
+    <div class="f-head"><span class="f-num">W1</span><span class="f-title">PIPELINE_RETRY (3 attempts, 60/300/900s) amplifies backlog during any incident</span></div>
+    <p class="f-body"><div><span class="lab">Evidence</span> &nbsp;<code>process_new_activity.py:75</code>. <span class="lab">Impact</span> &nbsp;A provider hiccup turns 10 jobs into up to 40 scheduled executions competing for the single lane (compounds C2). <span class="lab">Fix</span> &nbsp;Pair with worker concurrency and cap retry fan-out.</div></p>
+    <div class="area"><span class="tag">Infra</span></div>
+  </div>
+
+  <div class="f worth">
+    <div class="f-head"><span class="f-num">W2</span><span class="f-title">LLM cap degrades permissive on any Redis error &mdash; it's a soft wall, not a hard refusal</span></div>
+    <p class="f-body"><div><span class="lab">Evidence</span> &nbsp;<code>budget.py:172</code> &mdash; <code>over_budget</code> returns False on backend error ("a cap must not become an availability risk"). <span class="lab">Impact</span> &nbsp;A Redis blip makes spend uncapped for the duration; low risk for 10 trusted users. <span class="lab">Fix</span> &nbsp;Alert on <code>llm_budget_check_failed</code>/<code>llm_budget_exceeded</code> so a permissive window is visible.</div></p>
+    <div class="area"><span class="tag">Coach/LLM</span><span class="tag">Cost</span></div>
+  </div>
+
+  <div class="f worth">
+    <div class="f-head"><span class="f-num">W3</span><span class="f-title">Coach call escalates max_tokens to 16384 on retry &mdash; cost multiplier on the priciest path</span></div>
+    <p class="f-body"><div><span class="lab">Evidence</span> &nbsp;<code>service.py:78,87</code> (8192&rarr;16384), Sonnet at $15/MTok out. <span class="lab">Impact</span> &nbsp;A pathological pack can cost ~$0.20&ndash;0.30/report; across 10 active users daily spend can approach the $10 global window and trip degrade-for-everyone. <span class="lab">Fix</span> &nbsp;Confirm the window is sized for launch volume; monitor <code>coach_budget_degraded_*</code>.</div></p>
+    <div class="area"><span class="tag">Coach/LLM</span><span class="tag">Cost</span></div>
+  </div>
+
+  <div class="f worth">
+    <div class="f-head"><span class="f-num">W4</span><span class="f-title">RQ failed-job registry retains failures ~1 year by default</span></div>
+    <p class="f-body"><div><span class="lab">Evidence</span> &nbsp;No <code>failure_ttl</code> override on the pipeline enqueue paths (<code>queue.py:14</code>). <span class="lab">Impact</span> &nbsp;Every failed job (amplified by W1) sits in Redis for a year with args + traceback; steady-state failures slowly grow the single Redis instance. <span class="lab">Fix</span> &nbsp;Set explicit <code>failure_ttl</code>/<code>result_ttl</code>.</div></p>
+    <div class="area"><span class="tag">Infra</span></div>
+  </div>
+
+  <div class="f worth">
+    <div class="f-head"><span class="f-num">W5</span><span class="f-title">"View in app" Telegram link opens Safari, not the installed PWA (#228)</span></div>
+    <p class="f-body"><div><span class="lab">Evidence</span> &nbsp;<code>telegram_adapter.py:193</code> &mdash; plain https anchor. <span class="lab">Impact</span> &nbsp;Every runner tapping through lands in a browser tab instead of the PWA &mdash; friction, not correctness. <span class="lab">Fix</span> &nbsp;Low priority; experiment with a PWA deep-link scheme later.</div></p>
+    <div class="area"><span class="tag">Notifications</span><span class="tag">UX</span></div>
+  </div>
+
+  <div class="f worth">
+    <div class="f-head"><span class="f-num">W6</span><span class="f-title">Sync aborts the whole batch on a list-page failure; extra per-sync zones call</span></div>
+    <p class="f-body"><div><span class="lab">Evidence</span> &nbsp;<code>ingestion.py:257,252</code>. <span class="lab">Impact</span> &nbsp;A single rate-limit/5xx on the first list page discards the entire sync for that user; the zones call adds marginal budget pressure during the onboarding burst. <span class="lab">Fix</span> &nbsp;Make list fetch resilient/resumable; skip zones when <code>over_budget()</code>.</div></p>
+    <div class="area"><span class="tag">Strava</span></div>
+  </div>
+
+  <div class="f worth">
+    <div class="f-head"><span class="f-num">W7</span><span class="f-title">Kill switches require an env flip + redeploy &mdash; no runtime throttle</span></div>
+    <p class="f-body"><div><span class="lab">Evidence</span> &nbsp;12 <code>COACH_*_ENABLED</code> flags + <code>COACH_PROMPT_ID</code>/<code>COACH_RECEIPT_CADENCE</code>, all env-driven. <span class="lab">Impact</span> &nbsp;If cost/rate spikes, the only levers are rolling redeploys; the budget cap is the sole automatic backstop. <span class="lab">Fix</span> &nbsp;Longer term, a runtime concurrency limiter on worker LLM calls.</div></p>
+    <div class="area"><span class="tag">Coach/LLM</span></div>
+  </div>
+
+  <div class="f worth">
+    <div class="f-head"><span class="f-num">W8</span><span class="f-title">Embedded scheduler is a single point for all deferred jobs</span></div>
+    <p class="f-body"><div><span class="lab">Evidence</span> &nbsp;<code>worker.py:43</code> <code>work(with_scheduler=True)</code> &mdash; one thread drains block-complete openers, fuller timers, and batch successors. <span class="lab">Impact</span> &nbsp;If the single worker is down/saturated, all time-deferred work stalls; no redundancy. <span class="lab">Fix</span> &nbsp;With replicas, keep exactly one scheduler owner (or a dedicated scheduler).</div></p>
+    <div class="area"><span class="tag">Infra</span></div>
+  </div>
+
+  <div class="f worth">
+    <div class="f-head"><span class="f-num">W9</span><span class="f-title">/_debug/sentry-test has no per-user dependency</span></div>
+    <p class="f-body"><div><span class="lab">Evidence</span> &nbsp;<code>app/api/debug.py:21</code> &mdash; guarded only by the shared service secret, no <code>require_current_user</code>. <span class="lab">Impact</span> &nbsp;Touches no user data (raises a test exception), but is an un-scoped diagnostic the file's own TODO flags. <span class="lab">Fix</span> &nbsp;Remove or gate behind admin/flag before broader signup.</div></p>
+    <div class="area"><span class="tag">Auth</span></div>
+  </div>
+
+  <!-- ============ SOUND ============ -->
+  <h2 class="sec" style="color:var(--ok)">Foundations that are already sound</h2>
+  <div class="ok-box">
+    <ul>
+      <li><b>Per-user data isolation</b> &mdash; every application router scopes reads/writes by <code>user.id</code>; shared helpers (<code>get_owned_activity</code>, chat's <code>_build_cross_activity_block</code>) require a <code>user_id</code> filter; cross-tenant ids return 404, not a leak.</li>
+      <li><b>Clerk auth</b> &mdash; RS256-pinned JWT verification, issuer/azp checks, resolution by verified email, race-safe <code>User</code> creation, production fail-closed 503 when unconfigured (#480).</li>
+      <li><b>Strava webhook routing</b> &mdash; create/update/delete resolve the owner via <code>StravaAccount.strava_athlete_id</code>; the #512 object-owner bind stops athlete B acting on athlete A's activity. No single-owner fallback on this path.</li>
+      <li><b>Telegram <code>/start</code> binding</b> &mdash; single-use Redis nonce (GETDEL, 10-min TTL), per-user tokens, stale-claim clearing before rebind; 10 concurrent linkers cannot cross-bind or replay.</li>
+      <li><b>Global Strava rate budget (#544)</b> &mdash; MERGED and armed in prod (75/15min, 800/day backstop); metered calls record to a Redis counter, background jobs defer on <code>over_budget()</code>. Prevents total collapse.</li>
+      <li><b>LLM cost cap</b> &mdash; a HARD entry gate on the two paths that dominate spend (report + chat); prod auto-applies a global backstop, armed at $10 global / $5 user windows.</li>
+    </ul>
+  </div>
+
+  <footer>
+    Read-only audit across 5 domains (auth &amp; isolation, Strava ingestion, webhooks &amp; Telegram, coach/LLM, infra capacity). Evidence is file:line at time of audit. Severity: <b>Critical</b> = breaks a feature / stalls the system / latent leak &middot; <b>Needs improvement</b> = degrades or throws avoidable errors at scale &middot; <b>Worth considering</b> = hardening. Related open issues: #586, #544 (merged), #228.
+  </footer>
+</div>
+</body>
+</html>
