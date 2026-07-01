@@ -19,7 +19,7 @@ from app.jobs.strava_sync import sync_activity_job
 from app.schemas import CheckInCreate
 from app.services.blocks import remove_activity_from_block
 from app.services.checkins import write_checkin
-from app.services.notifications import get_notifier
+from app.services.notifications import get_notifier, resolve_owner_user
 from app.services.notifications import telegram_link_token
 from app.services.notifications.port import Notification
 from app.services.notifications.callback_token import decode as decode_callback_token
@@ -440,11 +440,17 @@ def receive_telegram_callback(
         return {"status": "ignored", "reason": "not_callback"}
 
     # Inner authorization: which user owns this chat? A bound user may act only on
-    # their own activities; an unbound chat is allowed only when it is the global
-    # owner chat (single-owner back-compat, the dual of the outbound fallback).
+    # their own activities. An unbound chat is allowed only when it is the global
+    # owner chat, and even then we resolve it to its owning User (#608) so the SAME
+    # per-activity ownership check runs — the global chat gets no unauthenticated
+    # write to any activity. When the owner is not identifiable (OWNER_EMAIL unset
+    # on a multi-user deploy), `resolve_owner_user` returns None and the tap is
+    # rejected (fail closed, #600).
     chat_id = callback.message.chat.id if callback.message else 0
-    bound_user = _resolve_bound_user(db, chat_id)
-    if bound_user is None and not _is_global_owner_chat(chat_id):
+    acting_user = _resolve_bound_user(db, chat_id)
+    if acting_user is None and _is_global_owner_chat(chat_id):
+        acting_user = resolve_owner_user(db)
+    if acting_user is None:
         logger.warning(
             "telegram_callback_rejected_unauthorized_chat", extra={"chat_id": chat_id}
         )
@@ -468,9 +474,9 @@ def receive_telegram_callback(
         _answer_callback(callback.id)
         return {"status": "ignored", "reason": "unknown_activity"}
 
-    # Ownership: a bound user can only tap their own activities (#477). The global
-    # owner-chat fallback (no bound user) keeps today's single-owner behaviour.
-    if bound_user is not None and activity.user_id != bound_user.id:
+    # Ownership: the acting user (bound chat, or the resolved global-owner, #608)
+    # can only tap their own activities (#477).
+    if activity.user_id != acting_user.id:
         logger.warning(
             "telegram_callback_rejected_not_owner",
             extra={"chat_id": chat_id, "activity_id": str(activity_uuid)},

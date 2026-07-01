@@ -408,8 +408,14 @@ class TestParityWithInApp:
     def test_telegram_and_in_app_rpe_write_identical_fields(
         self, client, db, configured, isolate_side_effects
     ):
-        a_app = _seed_activity(db)
-        a_tg = _seed_activity(db)
+        # One user owns both activities so the global-owner chat resolves to them
+        # (single-user) and the tap authorizes — this test asserts CheckIn field
+        # parity, not multi-user auth (covered by TestMultiUserInboundAuth, #608).
+        owner = User(id=uuid4(), email="parity-owner@x.dev")
+        db.add(owner)
+        db.commit()
+        a_app = _seed_activity_for(db, owner)
+        a_tg = _seed_activity_for(db, owner)
 
         client.post(f"/api/activities/{a_app.id}/checkin", json={"rpe": 7})
         client.post(
@@ -621,8 +627,10 @@ class TestMultiUserInboundAuth:
         self, client, db, configured, isolate_side_effects
     ):
         # Back-compat: today's owner has a null telegram_chat_id and taps on the
-        # global chat (42). That path must keep working.
-        a = _seed_activity(db)  # owner has no bound chat
+        # global chat (42). With OWNER_EMAIL unset and exactly one user, that user
+        # is the implicit owner, so their global-chat tap on their own activity
+        # keeps working.
+        a = _seed_activity(db)  # the only user; no bound chat
         token = encode(kind="rpe", activity_id=str(a.id), value=5)
         resp = client.post(
             "/api/webhooks/telegram",
@@ -631,6 +639,74 @@ class TestMultiUserInboundAuth:
         )
         assert resp.status_code == 200
         assert db.query(CheckIn).filter(CheckIn.activity_id == a.id).first() is not None
+
+    def test_global_owner_chat_cannot_tap_another_users_activity(
+        self, client, db, configured, isolate_side_effects, monkeypatch
+    ):
+        # #608: the global owner chat is resolved to its owning User (via
+        # OWNER_EMAIL) and subjected to the SAME per-activity ownership check as a
+        # bound user. A tap from the owner's global chat on ANOTHER runner's
+        # activity is rejected — no write.
+        monkeypatch.setattr(settings, "OWNER_EMAIL", "owner@x.dev")
+        owner = User(id=uuid4(), email="owner@x.dev", telegram_chat_id=None)
+        victim = _seed_user_with_chat(db, "999")
+        db.add(owner)
+        db.commit()
+        victim_activity = _seed_activity_for(db, victim)
+        token = encode(kind="rpe", activity_id=str(victim_activity.id), value=6)
+        resp = client.post(
+            "/api/webhooks/telegram",
+            json=_update(token, chat_id=42),  # global owner chat, victim's activity
+            headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["reason"] == "not_owner"
+        assert (
+            db.query(CheckIn).filter(CheckIn.activity_id == victim_activity.id).first()
+            is None
+        )
+
+    def test_global_owner_chat_writes_for_identified_owners_own_activity(
+        self, client, db, configured, isolate_side_effects, monkeypatch
+    ):
+        # #608: the identified owner (OWNER_EMAIL) tapping their OWN activity from
+        # the global chat still writes — the ownership check passes.
+        monkeypatch.setattr(settings, "OWNER_EMAIL", "owner@x.dev")
+        owner = User(id=uuid4(), email="owner@x.dev", telegram_chat_id=None)
+        db.add(owner)
+        db.commit()
+        _seed_user_with_chat(db, "999")  # a second, unrelated runner exists
+        owner_activity = _seed_activity_for(db, owner)
+        token = encode(kind="rpe", activity_id=str(owner_activity.id), value=5)
+        resp = client.post(
+            "/api/webhooks/telegram",
+            json=_update(token, chat_id=42),
+            headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["action"] == "checkin_written"
+        assert (
+            db.query(CheckIn).filter(CheckIn.activity_id == owner_activity.id).first()
+            is not None
+        )
+
+    def test_global_owner_chat_unidentifiable_owner_is_rejected(
+        self, client, db, configured, isolate_side_effects
+    ):
+        # #608/#600: OWNER_EMAIL unset AND more than one user => the global chat's
+        # owner is not identifiable, so its tap is rejected (fail closed) rather
+        # than granted an unauthenticated write to any activity.
+        a = _seed_activity(db)  # first user
+        _seed_user_with_chat(db, "999")  # a second user => owner ambiguous
+        token = encode(kind="rpe", activity_id=str(a.id), value=5)
+        resp = client.post(
+            "/api/webhooks/telegram",
+            json=_update(token, chat_id=42),
+            headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["reason"] == "unauthorized_chat"
+        assert db.query(CheckIn).filter(CheckIn.activity_id == a.id).first() is None
 
 
 class TestStartLink:

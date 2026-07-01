@@ -119,9 +119,10 @@ def _notify(
         distance_m=activity.distance_m or 0,
         app_base_url=settings.APP_BASE_URL,
         stage=stage,
-        # P2.4 (#120): route to the activity owner's bound channel; None falls
-        # back to the configured global recipient (single-user back-compat).
-        recipient=resolve_recipient(activity.user),
+        # P2.4 (#120): route to the activity owner's bound channel; an unbound
+        # non-owner resolves to None (suppressed), and the global fallback is kept
+        # only for the identified owner or a db-proven single-user deploy (#600).
+        recipient=resolve_recipient(activity.user, db=db),
     )
     if notification is None:
         logger.info(
@@ -260,9 +261,10 @@ async def _send_receipt(
         activity_id=str(activity.id),
         distance_m=activity.distance_m or 0,
         app_base_url=settings.APP_BASE_URL,
-        # P2.4 (#120): route the receipt to the activity owner's bound channel;
-        # None falls back to the configured global recipient.
-        recipient=resolve_recipient(activity.user),
+        # P2.4 (#120): route the receipt to the activity owner's bound channel; an
+        # unbound non-owner is suppressed, and the global fallback is kept only for
+        # the identified owner or a db-proven single-user deploy (#600).
+        recipient=resolve_recipient(activity.user, db=db),
     )
 
     # Open the exchange on the first receipt, independent of delivery (A4 posture):

@@ -147,6 +147,45 @@ def warn_if_coach_prompt_inert() -> None:
     )
 
 
+def warn_notification_config() -> None:
+    """Log a loud WARNING when Telegram is the active channel in production but a
+    var that SILENTLY degrades multi-user delivery or linking is unset (#600/#609).
+
+    NON-FATAL by design. The #549 lesson: a boot crash took prod fully down on
+    Railway (removed deploys), so this is left as a warning rather than a
+    ``ProductionConfigError``. Unlike the Clerk/basic-auth gates, a missing value
+    here does NOT 503 every route — it fails quietly:
+      - ``TELEGRAM_BOT_USERNAME`` unset -> the ``/start`` deep link cannot be minted,
+        so the "Link Telegram" button produces nothing and no new user can bind (#609).
+      - ``OWNER_EMAIL`` unset on a multi-user deploy -> the owner's own unbound
+        global-chat fallback is suppressed (fail closed, #600), so even the owner
+        stops receiving notifications until they bind a chat.
+
+    Only warns when Telegram is actually the active channel (both bot token + chat
+    id set) and ``APP_ENV=production``; a no-Telegram or non-production process is a
+    silent no-op. Called once per process group right after ``init_logging``. Never
+    raises, so it can never crash the boot.
+    """
+    if settings.APP_ENV != "production":
+        return
+    if not (settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID):
+        return  # Telegram is not the active channel; these vars are irrelevant.
+    missing = [
+        name
+        for name in ("TELEGRAM_BOT_USERNAME", "OWNER_EMAIL")
+        if not str(getattr(settings, name, "") or "").strip()
+    ]
+    if not missing:
+        return
+    logging.getLogger(__name__).warning(
+        "notification_config_incomplete: Telegram is the active channel but %s "
+        "unset -- new-user linking and/or the owner's unbound fallback will fail "
+        "silently. Set these on the web service. See docs/deployment/topology.md.",
+        ", ".join(missing),
+        extra={"missing": missing},
+    )
+
+
 class ProductionConfigError(RuntimeError):
     """A setting that fails closed in production is unset at startup."""
 
