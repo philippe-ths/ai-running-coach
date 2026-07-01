@@ -119,11 +119,11 @@ def update_activity_intent(
     
     return activity
 
-# Sync windows up to this many days fetch streams eagerly (full deep
-# processing). Beyond it, sync is treated as a historical backfill and imports
-# summaries only, because one stream call per activity over a long window would
-# exceed Strava's 100-requests/15-min limit. See #109.
-_STREAM_FETCH_WINDOW_DAYS = 30
+# Default sync window (days). Sync imports summaries for this window in-request
+# and defers all stream fetching to the gated background backfill (#596), so the
+# window size no longer changes whether streams are fetched eagerly — it only
+# bounds how far back the summary import reaches.
+_DEFAULT_SYNC_WINDOW_DAYS = 30
 
 
 @router.post("/sync", response_model=SyncResponse)
@@ -133,21 +133,25 @@ async def sync_activities(
         Query(
             ge=1,
             description=(
-                "How many days back to sync. Windows up to "
-                f"{_STREAM_FETCH_WINDOW_DAYS} days fetch full streams; larger "
-                "windows import activity summaries only (historical backfill)."
+                "How many days back to sync activity summaries. Stream-derived "
+                "analysis is fetched afterwards by the background backfill."
             ),
         ),
-    ] = _STREAM_FETCH_WINDOW_DAYS,
+    ] = _DEFAULT_SYNC_WINDOW_DAYS,
     db: Session = Depends(get_db),
     user: User = Depends(require_current_user),
 ):
     """
     Triggers a manual sync of the last `since_days` days of activities.
 
-    The default window fetches streams and is the routine sync. A larger window
-    backfills summaries only (streams cost one Strava call each and would breach
-    the rate limit over a long window); analysis still runs from the summary.
+    Imports activity summaries in-request (one paginated Strava call) and runs
+    summary-level analysis immediately, then hands stream fetching + stream-derived
+    analysis to the gated background backfill chain (#596). Streams are NOT fetched
+    in-request: one Strava streams call per activity, ungated by the shared rate
+    budget, meant a first sync could fire dozens of calls in-request — blowing
+    Strava's 100/15min ceiling under concurrent onboarding and blocking the request
+    to the gateway timeout. Metrics/coach then populate asynchronously, exactly as
+    the webhook path already does.
     """
     # P2.1: sync only the authenticated user's own Strava account.
     account = db.execute(
@@ -158,9 +162,8 @@ async def sync_activities(
         raise HTTPException(status_code=404, detail="No linked Strava account found. Connect Strava first.")
 
     since = datetime.now() - timedelta(days=since_days)
-    fetch_streams = since_days <= _STREAM_FETCH_WINDOW_DAYS
     activities, stats = await ingest_recent_activities(
-        db, account, get_strava_port(), since=since, fetch_streams=fetch_streams
+        db, account, get_strava_port(), since=since, fetch_streams=False
     )
 
     for activity in activities:
@@ -171,6 +174,14 @@ async def sync_activities(
             stats.errors.append(
                 f"Analysis failed for activity {activity.strava_activity_id}: {exc}"
             )
+
+    # Populate stream-derived analysis in the background, gated by the Strava
+    # budget and self-paced (#601), so concurrent first-syncs cannot overshoot the
+    # shared ceiling. Idempotent + scoped to this user; a no-op when nothing lacks
+    # streams (e.g. a routine re-sync of already-deep-processed activities).
+    from app.jobs.backfill_streams import enqueue_backfill
+
+    enqueue_backfill(db, user.id)
 
     return stats
 

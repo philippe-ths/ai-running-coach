@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.api.activities import sync_activities
+from app.core.config import settings
 from app.models import Activity, ActivityStream, StravaAccount, User
 from app.schemas import SyncResponse
 from app.services.strava_ingestion import (
@@ -54,17 +55,19 @@ def _run_sync_capturing_args(client, db, athlete_id, query=""):
     return captured
 
 
-def test_sync_default_window_fetches_streams_over_30_days(client, db):
-    """Default sync: 30-day window, streams fetched (routine deep processing)."""
+def test_sync_default_window_imports_summaries_only(client, db):
+    """Default sync: 30-day window, streams NOT fetched in-request — deferred to
+    the gated background backfill so a first sync cannot overshoot Strava's rate
+    ceiling (#596)."""
     captured = _run_sync_capturing_args(client, db, athlete_id=70001)
 
-    assert captured["fetch_streams"] is True
+    assert captured["fetch_streams"] is False
     expected = datetime.now() - timedelta(days=30)
     assert abs((captured["since"] - expected).total_seconds()) < 5
 
 
 def test_sync_large_window_is_summary_only_backfill(client, db):
-    """A window beyond 30 days imports summaries only (rate-limit-safe backfill)."""
+    """A window beyond 30 days also imports summaries only (rate-limit-safe)."""
     captured = _run_sync_capturing_args(client, db, athlete_id=70002, query="&since_days=3650")
 
     assert captured["fetch_streams"] is False
@@ -91,9 +94,14 @@ def test_sync_returns_429_when_strava_rate_limited(client, db):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_sync_upserts_activity_and_streams_and_runs_analysis(
+async def test_sync_upserts_summary_defers_streams_then_backfill_fills_them(
     db, strava_adapter
 ):
+    """End to end: the in-request sync upserts the summary + runs summary analysis
+    and enqueues the background backfill (no streams fetched in-request, #596);
+    running that backfill batch then fetches and stores the streams."""
+    from app.jobs import backfill_streams as bf
+
     user = User(email="sync_test@example.com")
     db.add(user)
     db.commit()
@@ -132,10 +140,11 @@ async def test_sync_upserts_activity_and_streams_and_runs_analysis(
         },
     )
 
-    # Phase 2 (#473) made sync user-scoped (require_current_user) instead of
-    # athlete-id-keyed: the endpoint resolves the account from the authenticated
-    # user. since_days defaults to the routine 30-day stream-fetch window.
-    result = await sync_activities(db=db, user=user)
+    # Phase 2 (#473) made sync user-scoped (require_current_user). The backfill
+    # enqueue goes through RQ, so stub the queue to keep the test off Redis.
+    fake_queue = MagicMock()
+    with patch.object(bf, "queue", fake_queue):
+        result = await sync_activities(db=db, user=user)
 
     assert isinstance(result, SyncResponse)
     assert result.fetched == 1
@@ -145,8 +154,22 @@ async def test_sync_upserts_activity_and_streams_and_runs_analysis(
     assert activity is not None
     assert activity.name == "Integration Run"
 
+    # Streams are deferred: none fetched in-request, and the gated backfill chain
+    # was enqueued to populate them.
     streams = (
         db.query(ActivityStream).filter(ActivityStream.activity_id == activity.id).all()
     )
-    stream_types = {s.stream_type for s in streams}
+    assert streams == []
+    fake_queue.enqueue.assert_called_once()
+
+    # Running the backfill batch now fetches + stores the streams.
+    await bf.backfill_streams_batch(
+        db, limit=settings.BACKFILL_BATCH_SIZE, user_id=str(user.id)
+    )
+    stream_types = {
+        s.stream_type
+        for s in db.query(ActivityStream)
+        .filter(ActivityStream.activity_id == activity.id)
+        .all()
+    }
     assert stream_types == {"time", "heartrate"}
