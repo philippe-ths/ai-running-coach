@@ -10,8 +10,9 @@ The token is HMAC-SHA256 over ``"{user_id}.{exp}"`` (a Unix expiry), encoded
 base64url so it survives the un-encoded query builder in the Strava adapter. An
 attacker cannot forge a state for a victim's user_id without the signing secret,
 and the short TTL bounds replay. ``decode_state`` never raises: a malformed,
-tampered, or expired token resolves to ``None`` (the caller then falls back to
-the single-owner path), mirroring ``callback_token.decode``.
+tampered, or expired token resolves to ``None``; in production the callback then
+rejects the new-athlete link and prompts a reconnect (#599), while non-production
+falls back to the single-owner path. Mirrors ``callback_token.decode``.
 """
 
 from __future__ import annotations
@@ -26,7 +27,10 @@ from typing import Optional
 
 from app.core.config import settings
 
-_DEFAULT_TTL_SECONDS = 600  # 10 minutes
+# 30 minutes. A runner can linger on Strava's consent screen for several minutes
+# before granting; a too-short TTL expires the state and, in production, forces a
+# reconnect (#599). Long enough to cover a slow consent, short enough to bound replay.
+_DEFAULT_TTL_SECONDS = 1800
 
 
 def _signing_secret() -> bytes:

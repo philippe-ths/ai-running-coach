@@ -379,3 +379,68 @@ def test_callback_with_invalid_state_falls_back_to_single_owner(
         db.query(StravaAccount).filter(StravaAccount.strava_athlete_id == 9003).one()
     )
     assert account.user_id == owner.id
+
+
+def test_callback_in_production_rejects_new_athlete_without_valid_state(
+    client: TestClient, db, _inmemory_strava, monkeypatch
+):
+    """#599: in production an absent/invalid state on a NEW athlete is rejected
+    (reconnect), never linked to a guessed owner or an orphan placeholder — even
+    with a single existing user (the old single-owner fallback is prod-disabled)."""
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    owner = _new_user(db, "prod_owner@example.com")
+    users_before = db.query(User).count()
+    _inmemory_strava.seed_exchange_response(
+        Tokens(
+            access_token="acc",
+            refresh_token="ref",
+            expires_at=int(time.time()) + 3600,
+            athlete={"id": 9101},
+        )
+    )
+
+    response = client.get(
+        "/api/auth/strava/callback",
+        params={"code": "x"},  # no state
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 307)
+    assert "strava_error=state_expired" in response.headers["location"]
+    # No account linked and no orphan placeholder user minted.
+    assert (
+        db.query(StravaAccount).filter(StravaAccount.strava_athlete_id == 9101).first()
+        is None
+    )
+    assert db.query(User).count() == users_before
+    assert owner.email == "prod_owner@example.com"
+
+
+def test_callback_in_production_links_new_athlete_with_valid_state(
+    client: TestClient, db, _inmemory_strava, monkeypatch
+):
+    """A valid signed state still links correctly in production (#599 rejects only
+    the absent/invalid-state path)."""
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    _new_user(db, "other_prod@example.com")
+    target = _new_user(db, "target_prod@example.com")
+    _inmemory_strava.seed_exchange_response(
+        Tokens(
+            access_token="acc",
+            refresh_token="ref",
+            expires_at=int(time.time()) + 3600,
+            athlete={"id": 9102},
+        )
+    )
+
+    response = client.get(
+        "/api/auth/strava/callback",
+        params={"code": "x", "state": encode_state(target.id)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 307)
+    account = (
+        db.query(StravaAccount).filter(StravaAccount.strava_athlete_id == 9102).one()
+    )
+    assert account.user_id == target.id

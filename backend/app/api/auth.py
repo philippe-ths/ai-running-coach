@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -11,6 +13,8 @@ from app.core.oauth_state import encode_state, decode_state
 from app.db.session import get_db
 from app.models import User, StravaAccount
 from app.services.strava_ingestion import get_strava_port
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -113,15 +117,25 @@ async def strava_callback(
         # the `state` token, so a valid state links the account to exactly that
         # user. This is the fix for mis-linking a second user's Strava account.
         #
-        # Back-compat fallback: when `state` is absent or invalid (a stale link,
-        # a direct callback hit, or single-owner local dev with no state secret)
-        # fall through to the legacy single-owner rule -- attach to the single
-        # existing app user when there is exactly one, else mint a placeholder
-        # email so the non-null constraint holds. The single-owner prod path is
-        # unchanged. (A stricter prod-only reject of an invalid-but-present state
-        # is a possible follow-up; see the PR for #469.)
+        # Multi-user prod (#599): a brand-new athlete MUST arrive with a valid
+        # signed state. If it is absent or invalid (the user lingered on Strava's
+        # consent screen past the state TTL, or hit the callback directly), reject
+        # and send them back to reconnect -- do NOT guess an owner or mint an
+        # orphan `strava-{id}@placeholder.invalid` user that silently loses the
+        # connect while the app still reads as "connected".
+        #
+        # Non-production keeps the legacy single-owner + placeholder fallback so
+        # local/dev without a state secret still links (there is no adversary and
+        # the flow is single-owner).
         new_user = _resolve_user_from_state(db, state)
         if new_user is None:
+            if settings.APP_ENV == "production":
+                logger.warning(
+                    "strava_callback_rejected_no_valid_state athlete=%s", athlete_id
+                )
+                return RedirectResponse(
+                    url=f"{settings.APP_BASE_URL}?strava_error=state_expired"
+                )
             existing_users = db.execute(select(User)).scalars().all()
             if len(existing_users) == 1:
                 new_user = existing_users[0]
