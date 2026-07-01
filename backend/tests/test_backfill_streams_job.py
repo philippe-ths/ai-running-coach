@@ -208,6 +208,83 @@ def test_job_does_not_reschedule_when_drained():
     sched.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_batch_yields_mid_batch_when_budget_exhausted(db, strava_adapter, monkeypatch):
+    """The Strava budget is re-checked before EACH activity, not once per batch
+    (#601): once the shared window crosses the ceiling mid-batch the loop stops,
+    so a batch cannot fire all BACKFILL_BATCH_SIZE calls after a single gate pass."""
+    from app.jobs import backfill_streams as mod
+    from app.services.strava_ingestion import strava_budget
+
+    user, _account = _seed_user_and_account(db)
+    for sid in (7101, 7102, 7103):
+        _seed_summary_activity(db, user, sid)
+        _seed_streams(strava_adapter, sid)
+
+    # Budget: pass the first per-activity check, then read exhausted.
+    checks = {"n": 0}
+
+    def fake_over_budget():
+        checks["n"] += 1
+        return checks["n"] > 1
+
+    monkeypatch.setattr(strava_budget, "over_budget", fake_over_budget)
+
+    result = await mod.backfill_streams_batch(db, limit=settings.BACKFILL_BATCH_SIZE)
+
+    assert len(result.processed) == 1
+    assert result.budget_exhausted is True
+    # The two unprocessed activities stay eligible (never marked attempted).
+    assert result.remaining == 2
+    assert mod.count_eligible(db) == 2
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_activity_is_not_marked_and_stays_eligible(db, monkeypatch):
+    """A StravaRateLimited raised mid-batch (the #602 fail-fast signal) must leave
+    the activity eligible — NOT marked attempted — so it is retried once the
+    window frees, rather than silently skipped by the convergence marker."""
+    from app.jobs import backfill_streams as mod
+    from app.services.strava_ingestion import StravaRateLimited, strava_budget
+
+    user, _account = _seed_user_and_account(db)
+    activity = _seed_summary_activity(db, user, 8201)
+
+    async def _raise_rate_limited(db_, activity_id):
+        raise StravaRateLimited(retry_after=300, label="get_activity_streams")
+
+    monkeypatch.setattr(mod, "analyze_with_streams", _raise_rate_limited)
+    monkeypatch.setattr(strava_budget, "over_budget", lambda: False)
+
+    result = await mod.backfill_streams_batch(db, limit=settings.BACKFILL_BATCH_SIZE)
+
+    db.refresh(activity)
+    assert activity.streams_backfilled_at is None
+    assert 8201 not in result.processed
+    assert result.budget_exhausted is True
+    assert mod.count_eligible(db) == 1
+
+
+def test_job_reschedules_after_budget_when_batch_yields():
+    """When a batch yields mid-way on the budget, the job re-enqueues after the
+    Strava-budget backoff (not the normal batch pause) so it resumes when capacity
+    frees rather than hammering again after the short pause."""
+    from app.jobs import backfill_streams as mod
+
+    from app.services.strava_ingestion import strava_budget
+
+    result = mod.BackfillBatchResult(processed=[1], remaining=3, budget_exhausted=True)
+    with patch.object(mod, "SessionLocal", return_value=MagicMock()), patch.object(
+        mod, "backfill_streams_batch", new=AsyncMock(return_value=result)
+    ), patch.object(strava_budget, "over_budget", return_value=False), patch.object(
+        mod, "_schedule_next_batch"
+    ) as sched, patch.object(mod, "_reschedule_after_budget") as resched:
+        mod.backfill_streams_job()
+
+    resched.assert_called_once()
+    sched.assert_not_called()
+
+
 def test_enqueue_backfill_counts_and_enqueues_first_batch(db):
     from app.jobs import backfill_streams as mod
 
@@ -225,6 +302,30 @@ def test_enqueue_backfill_counts_and_enqueues_first_batch(db):
     # runners' chains never collide.
     assert args[1] == str(user.id)
     assert kwargs["job_id"] == f"backfill_streams_{user.id}"
+
+
+def test_enqueue_backfill_collapses_rapid_retriggers_into_one_chain(db):
+    """Called on every sync now (#596): a burst of enqueues for one user must
+    start only ONE chain, so overlapping chains can't double-fetch the same
+    activity's streams against the shared budget."""
+    from app.jobs import backfill_streams as mod
+
+    user, _account = _seed_user_and_account(db)
+    _seed_summary_activity(db, user, 4101)
+
+    fake_queue = MagicMock()
+    fake_redis = MagicMock()
+    fake_redis.set.side_effect = [True, None]  # first acquires the slot, second throttled
+    with patch.object(mod, "queue", fake_queue), patch(
+        "app.core.queue.redis_conn", fake_redis
+    ):
+        first = mod.enqueue_backfill(db, user.id)
+        second = mod.enqueue_backfill(db, user.id)
+
+    # Both report the eligible count, but only one chain is enqueued.
+    assert first == 1
+    assert second == 1
+    fake_queue.enqueue.assert_called_once()
 
 
 def test_enqueue_backfill_is_noop_when_nothing_eligible(db):

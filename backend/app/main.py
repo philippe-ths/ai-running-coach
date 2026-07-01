@@ -1,8 +1,10 @@
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import health, auth, activities, blocks, webhooks, profile, trends, coach, debug, strava_import, materials, account
 from app.core.auth import BasicAuthMiddleware
+from app.services.strava_ingestion.port import StravaRateLimited
 from app.core.clerk_auth import verify_clerk_session
 from app.core.config import settings
 from app.core.observability import (
@@ -31,6 +33,21 @@ app = FastAPI(
     description="Local-first Strava Coach MVP",
     version="0.2.0",
 )
+
+
+@app.exception_handler(StravaRateLimited)
+async def _strava_rate_limited_handler(request: Request, exc: StravaRateLimited):
+    """Surface a Strava rate limit as HTTP 429 on the live request path (#602),
+    so a contended sync returns a clean "retry shortly" instead of a 500. The
+    true Retry-After (when Strava supplied one) rides the standard header."""
+    headers = {}
+    if exc.retry_after is not None:
+        headers["Retry-After"] = str(int(exc.retry_after))
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Strava is rate-limiting requests right now. Please try again shortly."},
+        headers=headers,
+    )
 
 # BasicAuthMiddleware is REPURPOSED under ADR 0022 as the frontend-to-backend
 # service secret ("proves it is our frontend"), defense in depth beneath the

@@ -247,6 +247,48 @@ def test_job_does_not_reschedule_when_done():
     sched.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_batch_propagates_rate_limit_without_marking_failed(db, strava_adapter):
+    """A transient Strava rate limit during the list call must NOT flip the import
+    to `failed` (which would lose the cursor); it propagates for the job to
+    reschedule (#602 / mirrors #601)."""
+    from app.jobs.strava_import import run_import_batch
+    from app.services.strava_ingestion import StravaRateLimited
+
+    user, _account = _seed_user_and_account(db)
+    imp = _make_import(db, user)
+
+    async def _rate_limited(*args, **kwargs):
+        raise StravaRateLimited(retry_after=120, label="list_activities_page")
+
+    strava_adapter.list_activities_page = _rate_limited
+
+    with pytest.raises(StravaRateLimited):
+        await run_import_batch(db, imp, limit=50)
+
+    db.refresh(imp)
+    assert imp.status == "running"
+
+
+def test_job_reschedules_on_rate_limit_and_leaves_running():
+    from app.jobs import strava_import as mod
+    from app.services.strava_ingestion import StravaRateLimited, strava_budget
+
+    fake_db = MagicMock()
+    running = MagicMock()
+    running.status = "running"
+    fake_db.get.return_value = running
+    with patch.object(mod, "SessionLocal", return_value=fake_db), patch.object(
+        mod, "run_import_batch", new=AsyncMock(side_effect=StravaRateLimited(retry_after=120))
+    ), patch.object(strava_budget, "over_budget", return_value=False), patch.object(
+        mod, "_reschedule_after_budget"
+    ) as resched, patch.object(mod, "_schedule_next_batch") as sched:
+        mod.strava_import_job(str(uuid4()))
+
+    resched.assert_called_once()
+    sched.assert_not_called()
+
+
 def test_enqueue_import_creates_row_and_enqueues(db):
     from app.jobs import strava_import as mod
 

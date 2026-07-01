@@ -3,6 +3,27 @@ from datetime import datetime
 from typing import Protocol
 
 
+class StravaRateLimited(Exception):
+    """Raised when Strava's rate limit is hit and the wait cannot be absorbed
+    inline (the honoured Retry-After exceeds the small inline ceiling, or the
+    bounded inline retries are exhausted).
+
+    Carries the true Retry-After (uncapped, seconds) when Strava supplied one so
+    callers can decide what to do: the live request path surfaces HTTP 429
+    "retry shortly" (see the app-level handler), while background jobs let the
+    Strava budget gate (#544) absorb the wait by rescheduling rather than
+    sleeping a worker for the full window (#602).
+    """
+
+    def __init__(self, *, retry_after: float | None = None, label: str | None = None):
+        self.retry_after = retry_after
+        self.label = label
+        detail = f"Strava rate limited ({label})" if label else "Strava rate limited"
+        if retry_after is not None:
+            detail += f"; retry after {retry_after:.0f}s"
+        super().__init__(detail)
+
+
 @dataclass(frozen=True)
 class Tokens:
     access_token: str

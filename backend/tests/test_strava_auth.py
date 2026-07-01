@@ -1,4 +1,5 @@
 import time
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -63,6 +64,92 @@ async def test_ensure_valid_access_token_returns_existing_when_valid(db):
 
     assert token == "old_access"
     assert adapter.refresh_calls == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_defers_to_a_concurrent_winner_and_reuses_its_token(db):
+    """#597: if another caller rotated the token while we waited for the
+    per-account lock, reuse that token rather than refreshing again with the now
+    stale refresh token (which Strava would reject / could unlink the account)."""
+    from app.services.strava_ingestion import ingestion
+
+    account = _make_account(db, expires_at=int(time.time()) - 3600)
+    adapter = InMemoryStravaAdapter()
+    adapter.seed_refresh_response(
+        Tokens(access_token="ours", refresh_token="ours_r", expires_at=int(time.time()) + 21600)
+    )
+
+    class _WinnerLock:
+        """Acquiring models the winner having finished a refresh while we waited."""
+
+        def acquire(self):
+            db.query(StravaAccount).filter(StravaAccount.id == account.id).update(
+                {
+                    "access_token": "winner_access",
+                    "refresh_token": "winner_refresh",
+                    "expires_at": int(time.time()) + 21600,
+                }
+            )
+            db.commit()
+            return True
+
+        def release(self):
+            pass
+
+    fake_redis = MagicMock()
+    fake_redis.lock.return_value = _WinnerLock()
+    with patch.object(ingestion, "redis_conn", fake_redis):
+        token = await ensure_valid_access_token(db, account, adapter)
+
+    assert token == "winner_access"
+    assert adapter.refresh_calls == []  # we did NOT burn the stale refresh token
+
+
+@pytest.mark.asyncio
+async def test_refresh_degrades_to_unlocked_when_redis_unavailable(db):
+    """A coordination outage must never block ingestion: with Redis down the
+    refresh still proceeds (unlocked, best effort)."""
+    from app.services.strava_ingestion import ingestion
+
+    account = _make_account(db, expires_at=int(time.time()) - 3600)
+    adapter = InMemoryStravaAdapter()
+    adapter.seed_refresh_response(
+        Tokens(access_token="new_access", refresh_token="new_refresh", expires_at=int(time.time()) + 21600)
+    )
+
+    fake_redis = MagicMock()
+    fake_redis.lock.side_effect = RuntimeError("redis down")
+    with patch.object(ingestion, "redis_conn", fake_redis):
+        token = await ensure_valid_access_token(db, account, adapter)
+
+    assert token == "new_access"
+    assert adapter.refresh_calls == ["old_refresh"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_takes_and_releases_a_per_account_lock(db):
+    """The refresh path acquires and releases the per-account lock, keyed so two
+    accounts never contend (#597)."""
+    from app.services.strava_ingestion import ingestion
+
+    account = _make_account(db, expires_at=int(time.time()) - 3600)
+    adapter = InMemoryStravaAdapter()
+    adapter.seed_refresh_response(
+        Tokens(access_token="new_access", refresh_token="new_refresh", expires_at=int(time.time()) + 21600)
+    )
+
+    lock = MagicMock()
+    lock.acquire.return_value = True
+    fake_redis = MagicMock()
+    fake_redis.lock.return_value = lock
+    with patch.object(ingestion, "redis_conn", fake_redis):
+        token = await ensure_valid_access_token(db, account, adapter)
+
+    assert token == "new_access"
+    assert adapter.refresh_calls == ["old_refresh"]
+    lock.acquire.assert_called_once()
+    lock.release.assert_called_once()
+    assert str(account.id) in fake_redis.lock.call_args.args[0]
 
 
 def test_strava_status_returns_disconnected_when_no_account(client: TestClient):
@@ -292,3 +379,68 @@ def test_callback_with_invalid_state_falls_back_to_single_owner(
         db.query(StravaAccount).filter(StravaAccount.strava_athlete_id == 9003).one()
     )
     assert account.user_id == owner.id
+
+
+def test_callback_in_production_rejects_new_athlete_without_valid_state(
+    client: TestClient, db, _inmemory_strava, monkeypatch
+):
+    """#599: in production an absent/invalid state on a NEW athlete is rejected
+    (reconnect), never linked to a guessed owner or an orphan placeholder — even
+    with a single existing user (the old single-owner fallback is prod-disabled)."""
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    owner = _new_user(db, "prod_owner@example.com")
+    users_before = db.query(User).count()
+    _inmemory_strava.seed_exchange_response(
+        Tokens(
+            access_token="acc",
+            refresh_token="ref",
+            expires_at=int(time.time()) + 3600,
+            athlete={"id": 9101},
+        )
+    )
+
+    response = client.get(
+        "/api/auth/strava/callback",
+        params={"code": "x"},  # no state
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 307)
+    assert "strava_error=state_expired" in response.headers["location"]
+    # No account linked and no orphan placeholder user minted.
+    assert (
+        db.query(StravaAccount).filter(StravaAccount.strava_athlete_id == 9101).first()
+        is None
+    )
+    assert db.query(User).count() == users_before
+    assert owner.email == "prod_owner@example.com"
+
+
+def test_callback_in_production_links_new_athlete_with_valid_state(
+    client: TestClient, db, _inmemory_strava, monkeypatch
+):
+    """A valid signed state still links correctly in production (#599 rejects only
+    the absent/invalid-state path)."""
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    _new_user(db, "other_prod@example.com")
+    target = _new_user(db, "target_prod@example.com")
+    _inmemory_strava.seed_exchange_response(
+        Tokens(
+            access_token="acc",
+            refresh_token="ref",
+            expires_at=int(time.time()) + 3600,
+            athlete={"id": 9102},
+        )
+    )
+
+    response = client.get(
+        "/api/auth/strava/callback",
+        params={"code": "x", "state": encode_state(target.id)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 307)
+    account = (
+        db.query(StravaAccount).filter(StravaAccount.strava_athlete_id == 9102).one()
+    )
+    assert account.user_id == target.id

@@ -6,7 +6,7 @@ from typing import Awaitable, Callable
 import httpx
 
 from app.core.config import settings
-from app.services.strava_ingestion.port import Tokens
+from app.services.strava_ingestion.port import StravaRateLimited, Tokens
 from app.services.strava_ingestion.strava_budget import record as _record_strava_call
 
 logger = logging.getLogger(__name__)
@@ -14,12 +14,20 @@ logger = logging.getLogger(__name__)
 _OAUTH_URL = "https://www.strava.com/oauth/token"
 _BASE_URL = "https://www.strava.com/api/v3"
 
-# Retry tuning. The pipeline job and the polling fallback both flow through
-# this adapter; a single 429 from Strava used to fail the whole pipeline.
+# Retry tuning. The pipeline job, the self-heal check, and the live sync all
+# flow through this adapter.
+#
+# 429 policy (#602): a transient 429 with a short Retry-After is absorbed inline
+# with a bounded retry, but a 429 whose wait exceeds _MAX_INLINE_RETRY_AFTER_S is
+# NOT slept out inline (Strava's window can be up to 15 minutes and holding a
+# worker that long ties up the pool and can still trip the gateway timeout).
+# Instead we raise StravaRateLimited carrying the true Retry-After: the live path
+# turns it into an HTTP 429 "retry shortly", and background jobs let the Strava
+# budget gate (#544) absorb the wait by rescheduling.
 _MAX_RETRIES = 2  # 2 retries after the initial attempt = up to 3 calls total
 _BASE_BACKOFF_S = 1.0
-# Cap an honoured Retry-After so a misbehaving header cannot freeze a worker.
-_MAX_RETRY_AFTER_S = 60.0
+# Longest Retry-After we will absorb with an inline sleep before failing fast.
+_MAX_INLINE_RETRY_AFTER_S = 5.0
 
 # Hard cap on pages walked by list_recent_activities. At per_page=50 this bounds
 # a single call to 2000 activities, enough for a full-history backfill of a
@@ -33,14 +41,17 @@ _MAX_PAGES = 40
 _HTTP_TIMEOUT_S = 30.0
 
 
-def _parse_retry_after(response: httpx.Response, default: float) -> float:
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """Return the honoured Retry-After in seconds (uncapped), or None if absent
+    or unparseable. Callers decide whether the wait is short enough to absorb
+    inline or must be surfaced via StravaRateLimited."""
     raw = response.headers.get("Retry-After")
     if raw:
         try:
-            return min(float(raw), _MAX_RETRY_AFTER_S)
+            return float(raw)
         except ValueError:
             pass
-    return min(default, _MAX_RETRY_AFTER_S)
+    return None
 
 
 async def _send_with_retry(
@@ -50,9 +61,11 @@ async def _send_with_retry(
 ) -> httpx.Response:
     """Run request_fn() with bounded retries on 429 + 5xx.
 
-    Returns the final response. Raising is left to the caller via
-    response.raise_for_status() so each method keeps its existing error
-    semantics (e.g. get_activity_streams returns None on failure).
+    On a non-absorbable 429 (Retry-After beyond the inline ceiling, or the
+    bounded retries exhausted) raises StravaRateLimited carrying the true
+    Retry-After (#602). Otherwise returns the final response; raising for other
+    statuses is left to the caller via response.raise_for_status() so each method
+    keeps its existing error semantics (e.g. get_activity_streams returns None).
     """
     response: httpx.Response | None = None
     for attempt in range(_MAX_RETRIES + 1):
@@ -62,14 +75,24 @@ async def _send_with_retry(
         # (#544). This makes the counter honest about ALL metered traffic (webhook
         # ingest included); only the background jobs gate on it, never the live path.
         _record_strava_call()
-        if response.status_code == 429 and attempt < _MAX_RETRIES:
-            wait = _parse_retry_after(response, _BASE_BACKOFF_S * (2 ** attempt))
+        if response.status_code == 429:
+            retry_after = _retry_after_seconds(response)
+            wait = retry_after if retry_after is not None else _BASE_BACKOFF_S * (2 ** attempt)
+            # Absorb a short blip inline; otherwise fail fast so the wait is
+            # handled by the caller (live 429 response, or a background reschedule)
+            # rather than by sleeping a worker for the full window.
+            if attempt < _MAX_RETRIES and wait <= _MAX_INLINE_RETRY_AFTER_S:
+                logger.warning(
+                    "strava_429_retry",
+                    extra={"label": label, "attempt": attempt + 1, "wait_s": wait},
+                )
+                await asyncio.sleep(wait)
+                continue
             logger.warning(
-                "strava_429_retry",
-                extra={"label": label, "attempt": attempt + 1, "wait_s": wait},
+                "strava_429_rate_limited",
+                extra={"label": label, "attempt": attempt + 1, "retry_after_s": retry_after},
             )
-            await asyncio.sleep(wait)
-            continue
+            raise StravaRateLimited(retry_after=retry_after, label=label)
         if 500 <= response.status_code < 600 and attempt < _MAX_RETRIES:
             wait = _BASE_BACKOFF_S * (2 ** attempt)
             logger.warning(
@@ -284,11 +307,11 @@ class HTTPStravaAdapter:
     async def get_athlete_zones(self, access_token: str) -> dict | None:
         headers = {"Authorization": f"Bearer {access_token}"}
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
-            response = await _send_with_retry(
-                lambda: client.get(f"{_BASE_URL}/athlete/zones", headers=headers),
-                label="get_athlete_zones",
-            )
             try:
+                response = await _send_with_retry(
+                    lambda: client.get(f"{_BASE_URL}/athlete/zones", headers=headers),
+                    label="get_athlete_zones",
+                )
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError as e:
@@ -296,4 +319,9 @@ class HTTPStravaAdapter:
                 # not a sync prerequisite. A 403 means the profile:read_all scope
                 # was not granted; we log and fall back to the %max scheme.
                 logger.warning("Strava Zones Error: %s", e.response.status_code)
+                return None
+            except StravaRateLimited as e:
+                # Also non-fatal: a rate limit must not fail the whole sync just
+                # for the optional zones refresh; degrade to the %-of-max scheme.
+                logger.warning("Strava Zones rate limited: retry_after=%s", e.retry_after)
                 return None
