@@ -7,7 +7,7 @@ from app.services.strava_ingestion.ingestion import (
     refetch_streams,
     upsert_activity,
 )
-from app.services.strava_ingestion.port import StravaPort, Tokens
+from app.services.strava_ingestion.port import StravaPort, StravaRateLimited, Tokens
 
 _default_port: StravaPort | None = None
 
@@ -30,6 +30,7 @@ __all__ = [
     "HTTPStravaAdapter",
     "InMemoryStravaAdapter",
     "StravaPort",
+    "StravaRateLimited",
     "Tokens",
     "ensure_valid_access_token",
     "get_strava_port",

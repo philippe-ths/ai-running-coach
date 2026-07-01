@@ -3,13 +3,18 @@
 The Phase 1 deployment runs ingestion through this adapter. A single 429
 used to fail the pipeline job entirely; the next run for that activity
 would only happen on the next webhook or manual sync. Acceptance:
-- 429 honours Retry-After (capped at a ceiling so a misbehaving header
-  cannot freeze a worker).
-- 5xx retries are bounded with exponential backoff.
+- A transient 429 (short Retry-After) is absorbed inline with a bounded retry.
+- A 429 whose Retry-After exceeds the small inline ceiling fails fast with a
+  typed StravaRateLimited carrying the true Retry-After, rather than sleeping a
+  worker for the full (up to 15-minute) Strava window (#602). The live request
+  path turns that into an HTTP 429 "retry shortly"; background jobs let the
+  Strava budget gate absorb the wait by rescheduling.
+- When the bounded inline 429 retries are exhausted, StravaRateLimited is
+  raised.
+- 5xx retries are bounded with exponential backoff, then the underlying
+  httpx.HTTPStatusError surfaces.
 - 4xx other than 429 propagates immediately (auth / bad request will not
   get better on retry).
-- After retries are exhausted, the underlying httpx.HTTPStatusError
-  surfaces so the polling job's except-Exception still catches it.
 """
 
 from datetime import datetime, timezone
@@ -18,7 +23,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from app.services.strava_ingestion import HTTPStravaAdapter
+from app.services.strava_ingestion import HTTPStravaAdapter, StravaRateLimited
 
 
 class _SeqRecorder:
@@ -97,26 +102,54 @@ class TestListRecentActivitiesRetries:
         assert len(recorder.requests) == 2
 
     @pytest.mark.asyncio
-    async def test_429_is_capped_at_ceiling(self, monkeypatch, _no_real_sleep):
-        """Strava sometimes sends Retry-After hours away. We cap so a single
-        bad header cannot freeze the worker for an hour."""
-        _install_seq_transport(
+    async def test_large_retry_after_fails_fast(self, monkeypatch, _no_real_sleep):
+        """Strava sometimes sends Retry-After minutes/hours away. Rather than
+        sleep a worker for the full window, fail fast with a typed error that
+        carries the true Retry-After so the caller can react (#602)."""
+        recorder = _install_seq_transport(
             monkeypatch,
             [
                 httpx.Response(429, headers={"Retry-After": "3600"}, json={}),
-                httpx.Response(200, json=[]),
+                httpx.Response(200, json=[]),  # must NOT be consumed
             ],
         )
 
-        await HTTPStravaAdapter().list_recent_activities(
-            access_token="abc",
-            since=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        with pytest.raises(StravaRateLimited) as exc_info:
+            await HTTPStravaAdapter().list_recent_activities(
+                access_token="abc",
+                since=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            )
+
+        # True Retry-After surfaced uncapped; no inline sleep; no wasted retry.
+        assert exc_info.value.retry_after == 3600
+        _no_real_sleep.assert_not_called()
+        assert len(recorder.requests) == 1
+
+    @pytest.mark.asyncio
+    async def test_exhausted_429_retries_raise_rate_limited(
+        self, monkeypatch, _no_real_sleep
+    ):
+        """A run of short-Retry-After 429s is retried inline up to the bound,
+        then raises StravaRateLimited once the retries are used up."""
+        recorder = _install_seq_transport(
+            monkeypatch,
+            [
+                httpx.Response(429, headers={"Retry-After": "1"}, json={}),
+                httpx.Response(429, headers={"Retry-After": "1"}, json={}),
+                httpx.Response(429, headers={"Retry-After": "1"}, json={}),
+            ],
         )
 
-        # The sleep call must have been bounded; pull the last call's first arg.
-        _no_real_sleep.assert_called()
-        last_wait = _no_real_sleep.call_args.args[0]
-        assert last_wait <= 120, f"Retry-After cap not honoured (slept {last_wait}s)"
+        with pytest.raises(StravaRateLimited) as exc_info:
+            await HTTPStravaAdapter().list_recent_activities(
+                access_token="abc",
+                since=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            )
+
+        assert exc_info.value.retry_after == 1
+        # initial attempt + 2 bounded retries = 3 requests, 2 inline sleeps.
+        assert len(recorder.requests) == 3
+        assert _no_real_sleep.call_count == 2
 
     @pytest.mark.asyncio
     async def test_raises_after_bounded_5xx_retries(self, monkeypatch, _no_real_sleep):
@@ -229,6 +262,24 @@ class TestGetActivityStreamsRetries:
             activity_id=42,
             stream_types=["time"],
         )
+
+        assert result is None
+
+
+class TestGetAthleteZonesRetries:
+    @pytest.mark.asyncio
+    async def test_rate_limit_is_swallowed_as_none(self, monkeypatch, _no_real_sleep):
+        """Zones are a non-fatal enhancement to time-in-zone, never a sync
+        prerequisite; a rate limit must degrade to None (fall back to %-of-max),
+        not fail the sync."""
+        _install_seq_transport(
+            monkeypatch,
+            [
+                httpx.Response(429, headers={"Retry-After": "3600"}, json={}),
+            ],
+        )
+
+        result = await HTTPStravaAdapter().get_athlete_zones(access_token="abc")
 
         assert result is None
 
