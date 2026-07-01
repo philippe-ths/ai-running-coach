@@ -48,6 +48,7 @@ Two platforms. Vercel serves the frontend and proxies API traffic to the backend
   - `scheduler` — `rqscheduler`, fires the recurring polling job. (ADR 0006 deletes this service under multi-user.)
 - Two managed databases: `Postgres` and `Redis`.
 - Env vars are per-service (see "Configuration" below). The `worker` runs the RQ jobs and sends coach notifications over Telegram, so the Telegram vars must be present on `worker`, not only `web`.
+- Each service's **Pre-Deploy Command** is `python -m scripts.pre_deploy` (#593): it runs the #551 env preflight, then applies `alembic upgrade head` when `RUN_MIGRATIONS=true`. Set `RUN_MIGRATIONS=true` on `web` ONLY (so schema migrations apply once per deploy and the two services never migrate concurrently); leave it unset on `worker`. This is what makes migrations auto-apply on deploy (fixes #586). See `docs/deployment/deploy-checklist.md`.
 
 ### The Vercel → Railway connection seam
 
