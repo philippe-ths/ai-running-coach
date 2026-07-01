@@ -96,18 +96,39 @@ disturb the already-serving version — the gate is safe to rely on for blocking
 
 The script ships inside the runtime image (the Dockerfile copies `scripts/`), so it
 runs as each service's **Pre-Deploy Command** (Railway → service → Settings → Deploy →
-Pre-Deploy Command). Env is per-service on Railway, so each service passes its own
-scope (`web` checks the fail-closed HTTP gates + the DB; `worker` checks only
-`DATABASE_URL`), and `--require-production` keeps the gate armed:
+Pre-Deploy Command). As of #593 the wired Pre-Deploy Command is `scripts.pre_deploy`
+(which runs this preflight first, then optionally migrates — see
+"Auto-applied migrations" below), not `scripts.preflight_env_check` directly. The
+preflight logic and per-scope wiring are unchanged; only the entrypoint moved.
 
-- `web` service:    `python -m scripts.preflight_env_check --scope web --require-production`
-- `worker` service: `python -m scripts.preflight_env_check --scope worker --require-production`
+Sanity-check the preflight locally any time with `PREFLIGHT_FORCE=1 make preflight-env-check`.
 
-Order it ahead of `alembic upgrade head` if that also runs pre-deploy, so a missing
-env fails before any migration runs:
-`python -m scripts.preflight_env_check --scope web --require-production && alembic upgrade head`.
+## Auto-applied migrations on deploy (#593, fixes #586)
 
-Sanity-check locally any time with `PREFLIGHT_FORCE=1 make preflight-env-check`.
+Railway production deploys do NOT auto-run Alembic migrations, so code could ship
+ahead of its schema and 500 for every user until someone migrated by hand (#586).
+`scripts/pre_deploy.py` (`python -m scripts.pre_deploy`) closes that gap: it runs
+the #551 env preflight FIRST (fail-fast — a failing preflight exits non-zero and
+migrations never run, so the previous deploy keeps serving), then, only when the
+`RUN_MIGRATIONS` env flag is truthy, applies `alembic upgrade head` in-process.
+
+The `RUN_MIGRATIONS` gate keeps migrations to ONE service so the two never migrate
+concurrently: **set `RUN_MIGRATIONS=true` on the `web` service only; leave it unset
+on `worker`.** With the flag off the script is the plain preflight (worker
+behaviour). `RUN_MIGRATIONS` is read straight from the deploy env (an ops flag, not
+in `app/core/config.py`).
+
+Wire the Pre-Deploy Command on each service (env is per-service on Railway, so each
+passes its own scope; `--require-production` keeps the gate armed — see the gotcha
+below). The migration flag is what differs, not the command:
+
+- `web` service:    `python -m scripts.pre_deploy --scope web --require-production`
+  with `RUN_MIGRATIONS=true` set on the service.
+- `worker` service: `python -m scripts.pre_deploy --scope worker --require-production`
+  with `RUN_MIGRATIONS` unset.
+
+This supersedes the old `... && alembic upgrade head` chaining idea: ordering
+(preflight before migrate) and fail-fast are now built into the script.
 
 ### Two gotchas found while wiring it (2026-06-27)
 
