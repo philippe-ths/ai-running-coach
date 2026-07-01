@@ -11,7 +11,22 @@ class Settings(BaseSettings):
     # Defaulting to a sensible local docker default if not provided, 
     # but strictly it should come from .env
     DATABASE_URL: str
-    
+
+    # Connection pool sizing (#605). Without these, each process uses
+    # SQLAlchemy's implicit QueuePool default of 5 persistent + 10 overflow = 15
+    # connections. Web (uvicorn) and worker each open their own pool against one
+    # managed Postgres, so the implicit totals approach a small plan's
+    # connection ceiling and a leaked/long-held session blocks the pool for
+    # DB_POOL_TIMEOUT seconds before erroring. These bound it explicitly and are
+    # env-tunable per environment. Sized conservatively for two processes (web +
+    # worker) plus the worker's WORKER_POOL_SIZE concurrency against a typical
+    # ~100-connection managed-Postgres ceiling; raise per plan via the env.
+    # (Applied only to a real pooled backend; the SQLite test path ignores them.)
+    DB_POOL_SIZE: int = 5           # persistent connections kept open per process
+    DB_MAX_OVERFLOW: int = 5        # extra connections allowed under burst, then queue
+    DB_POOL_RECYCLE: int = 1800     # recycle a connection after this many seconds (30 min)
+    DB_POOL_TIMEOUT: int = 30       # seconds a checkout waits for a free connection
+
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
