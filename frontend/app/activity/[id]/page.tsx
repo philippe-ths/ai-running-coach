@@ -15,6 +15,7 @@ import FeatureDisabledGate from '@/components/FeatureDisabledGate';
 import EfficiencyPanel from '@/components/EfficiencyPanel';
 import CoachSection from '@/components/CoachSection';
 import TrainingLoadCard from '@/components/TrainingLoadCard';
+import TelegramLinkPrompt from '@/components/TelegramLinkPrompt';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,6 +50,8 @@ export default async function ActivityDetail({ params }: { params: { id: string 
       <div className="mb-4">
         <Link href="/" className="text-blue-600 dark:text-blue-400 hover:underline text-sm">← Back to Dashboard</Link>
       </div>
+
+      <TelegramLinkPrompt />
 
       <header className="border-b dark:border-gray-700 pb-4">
         <div className="flex justify-between items-start">
