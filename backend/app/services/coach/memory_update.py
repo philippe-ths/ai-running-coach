@@ -52,7 +52,7 @@ from app.schemas.coach_memory import (
     MEMORY_SECTION_FIELDS,
     RunnerMemoryProfile,
 )
-from app.services.coach.budget import record as budget_record
+from app.services.coach.budget import over_budget as budget_over, record as budget_record
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.memory_store import upsert_memory
 from app.services.coach.retrieval import fetch_recent_user_digests
@@ -451,6 +451,17 @@ async def update_memory(
     sources = gather_memory_sources(db, user_id, as_of=as_of)
     if not sources.sources:
         return None  # cold start: nothing stated yet — no LLM call, no enqueue loop
+
+    # Soft over-budget entry gate (#607). Memory is a NON-ESSENTIAL, regenerable
+    # background artifact: at the per-user/global spend cap, PAUSE this pass rather
+    # than overshoot the ceiling with a Haiku call that only records spend after
+    # the fact. Non-fatal and retryable by construction — no LLM call, no write, the
+    # stored profile is unchanged, and the next non-fallback report re-enqueues
+    # update_memory_job once spend has rolled over. over_budget degrades to False on
+    # any backend error, so the cap never becomes an availability risk.
+    if budget_over(user_id):
+        logger.info("memory update skipped for user %s: over LLM budget", user_id)
+        return None
 
     if client is None:
         if not settings.ANTHROPIC_API_KEY:
