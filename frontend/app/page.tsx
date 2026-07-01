@@ -6,6 +6,7 @@ import ActivityList from '@/components/ActivityList';
 import SyncButton from '@/components/SyncButton';
 import SelfHealTrigger from '@/components/SelfHealTrigger';
 import StatDiff from '@/components/StatDiff';
+import StravaConnectNotice from '@/components/StravaConnectNotice';
 
 // Force dynamic since we fetch user data (no static cache for dashboard)
 export const dynamic = 'force-dynamic';
@@ -46,6 +47,7 @@ export default async function Dashboard() {
 
   return (
     <div className="space-y-8">
+      <StravaConnectNotice />
       <header className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-start">
         <div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Weekly Summary</h1>
