@@ -30,6 +30,49 @@ _COACH_EFFORT = "high"
 # Initial backoff before the single retry on transient failures.
 _RETRY_BACKOFF_SECONDS = 1.0
 
+# Transient (timeout / connection / 5xx) retry budget: initial attempt + this
+# many retries. Kept at 1 to preserve the file's prior "initial + one retry".
+_MAX_TRANSIENT_RETRIES = 1
+
+# 429 / rate-limit retry budget (#603). A burst of concurrent generations
+# (worker fuller turns + web-process chat) can trip Anthropic's per-minute
+# limit; a 429 is retriable (unlike a 4xx bug) because capacity frees up. We
+# honor the Retry-After header when present, else fall back to exponential
+# backoff, and cap both so a single report generation stays well under the RQ
+# ~600s death penalty. Worst case: _MAX_RATE_LIMIT_RETRIES * cap seconds of
+# sleep before propagating to the caller's deterministic fallback.
+_MAX_RATE_LIMIT_RETRIES = 2
+_RATE_LIMIT_BACKOFF_BASE_SECONDS = 1.0
+_RATE_LIMIT_BACKOFF_CAP_SECONDS = 30.0
+
+
+def _retry_after_header_seconds(exc: Any) -> Optional[float]:
+    """Parse the Retry-After header (a count of seconds) off a RateLimitError,
+    or None when it is absent, non-numeric (e.g. an HTTP-date form we don't
+    honor), or negative."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def _rate_limit_backoff_seconds(exc: Any, retry_index: int) -> float:
+    """Seconds to sleep before the next 429 retry: honor Retry-After when the
+    server sent it, else exponential backoff on the retry index; both capped."""
+    retry_after = _retry_after_header_seconds(exc)
+    if retry_after is not None:
+        return min(retry_after, _RATE_LIMIT_BACKOFF_CAP_SECONDS)
+    backoff = _RATE_LIMIT_BACKOFF_BASE_SECONDS * (2 ** retry_index)
+    return min(backoff, _RATE_LIMIT_BACKOFF_CAP_SECONDS)
+
 
 @dataclass
 class Usage:
@@ -91,9 +134,9 @@ class AnthropicClient:
         """`generate_json` that also returns token usage for the budget gate (#472)."""
         import anthropic
 
-        max_attempts = 2  # initial + one retry
-        last_exc: Exception | None = None
-        for attempt in range(max_attempts):
+        transient_retries = 0
+        rate_limit_retries = 0
+        while True:
             try:
                 response = await self.client.messages.create(
                     model=self.model,
@@ -105,30 +148,39 @@ class AnthropicClient:
                 )
                 return response.content[0].text, _usage_from_response(response)
             except (anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
-                last_exc = exc
-                logger.warning(
-                    "anthropic_transient_failure",
-                    extra={"attempt": attempt + 1, "kind": type(exc).__name__},
-                )
-                if attempt + 1 < max_attempts:
-                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
-                    continue
-                raise
-            except anthropic.APIStatusError as exc:
-                # Retry only on 5xx; 4xx (bad request, auth, etc.) is a caller
-                # bug and won't get better on retry.
-                if exc.status_code >= 500 and attempt + 1 < max_attempts:
-                    last_exc = exc
+                if transient_retries < _MAX_TRANSIENT_RETRIES:
+                    transient_retries += 1
                     logger.warning(
-                        "anthropic_5xx_retry",
-                        extra={"attempt": attempt + 1, "status": exc.status_code},
+                        "anthropic_transient_failure",
+                        extra={"attempt": transient_retries, "kind": type(exc).__name__},
                     )
                     await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
                     continue
                 raise
-        # Defensive: loop only exits via return or raise above.
-        assert last_exc is not None
-        raise last_exc
+            except anthropic.RateLimitError as exc:
+                # 429: capacity, not a caller bug — retry honoring Retry-After (#603).
+                if rate_limit_retries < _MAX_RATE_LIMIT_RETRIES:
+                    delay = _rate_limit_backoff_seconds(exc, rate_limit_retries)
+                    rate_limit_retries += 1
+                    logger.warning(
+                        "anthropic_rate_limit_retry",
+                        extra={"attempt": rate_limit_retries, "sleep": delay},
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+            except anthropic.APIStatusError as exc:
+                # Retry only on 5xx; other 4xx (bad request, auth, etc.) is a
+                # caller bug and won't get better on retry.
+                if exc.status_code >= 500 and transient_retries < _MAX_TRANSIENT_RETRIES:
+                    transient_retries += 1
+                    logger.warning(
+                        "anthropic_5xx_retry",
+                        extra={"attempt": transient_retries, "status": exc.status_code},
+                    )
+                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+                    continue
+                raise
 
     async def generate_text(
         self, system: str, user: str, max_tokens: int = 512
@@ -186,9 +238,9 @@ class AnthropicClient:
         import anthropic
 
         tool_name = tool["name"]
-        max_attempts = 2  # initial + one retry on transient transport failure
-        last_exc: Exception | None = None
-        for attempt in range(max_attempts):
+        transient_retries = 0
+        rate_limit_retries = 0
+        while True:
             try:
                 response = await self.client.messages.create(
                     model=self.model,
@@ -219,27 +271,36 @@ class AnthropicClient:
                         return result, usage
                 raise ValueError(f"no {tool_name} tool_use block in response")
             except (anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
-                last_exc = exc
-                logger.warning(
-                    "anthropic_structured_transient_failure",
-                    extra={"attempt": attempt + 1, "kind": type(exc).__name__},
-                )
-                if attempt + 1 < max_attempts:
-                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
-                    continue
-                raise
-            except anthropic.APIStatusError as exc:
-                if exc.status_code >= 500 and attempt + 1 < max_attempts:
-                    last_exc = exc
+                if transient_retries < _MAX_TRANSIENT_RETRIES:
+                    transient_retries += 1
                     logger.warning(
-                        "anthropic_structured_5xx_retry",
-                        extra={"attempt": attempt + 1, "status": exc.status_code},
+                        "anthropic_structured_transient_failure",
+                        extra={"attempt": transient_retries, "kind": type(exc).__name__},
                     )
                     await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
                     continue
                 raise
-        assert last_exc is not None
-        raise last_exc
+            except anthropic.RateLimitError as exc:
+                if rate_limit_retries < _MAX_RATE_LIMIT_RETRIES:
+                    delay = _rate_limit_backoff_seconds(exc, rate_limit_retries)
+                    rate_limit_retries += 1
+                    logger.warning(
+                        "anthropic_structured_rate_limit_retry",
+                        extra={"attempt": rate_limit_retries, "sleep": delay},
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+            except anthropic.APIStatusError as exc:
+                if exc.status_code >= 500 and transient_retries < _MAX_TRANSIENT_RETRIES:
+                    transient_retries += 1
+                    logger.warning(
+                        "anthropic_structured_5xx_retry",
+                        extra={"attempt": transient_retries, "status": exc.status_code},
+                    )
+                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+                    continue
+                raise
 
     async def generate_coach_message(
         self,
@@ -262,9 +323,9 @@ class AnthropicClient:
         """
         import anthropic
 
-        max_attempts = 2  # initial + one retry on transient transport failure
-        last_exc: Exception | None = None
-        for attempt in range(max_attempts):
+        transient_retries = 0
+        rate_limit_retries = 0
+        while True:
             try:
                 async with self.client.messages.stream(
                     model=self.model,
@@ -298,27 +359,38 @@ class AnthropicClient:
                 # so they follow the same retry-then-propagate path (#302).
                 httpx.RemoteProtocolError,
             ) as exc:
-                last_exc = exc
-                logger.warning(
-                    "anthropic_message_transient_failure",
-                    extra={"attempt": attempt + 1, "kind": type(exc).__name__},
-                )
-                if attempt + 1 < max_attempts:
-                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
-                    continue
-                raise
-            except anthropic.APIStatusError as exc:
-                if exc.status_code >= 500 and attempt + 1 < max_attempts:
-                    last_exc = exc
+                if transient_retries < _MAX_TRANSIENT_RETRIES:
+                    transient_retries += 1
                     logger.warning(
-                        "anthropic_message_5xx_retry",
-                        extra={"attempt": attempt + 1, "status": exc.status_code},
+                        "anthropic_message_transient_failure",
+                        extra={"attempt": transient_retries, "kind": type(exc).__name__},
                     )
                     await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
                     continue
                 raise
-        assert last_exc is not None
-        raise last_exc
+            except anthropic.RateLimitError as exc:
+                # 429 under concurrent-generation load: retry honoring
+                # Retry-After before the caller's fallback fires (#603).
+                if rate_limit_retries < _MAX_RATE_LIMIT_RETRIES:
+                    delay = _rate_limit_backoff_seconds(exc, rate_limit_retries)
+                    rate_limit_retries += 1
+                    logger.warning(
+                        "anthropic_message_rate_limit_retry",
+                        extra={"attempt": rate_limit_retries, "sleep": delay},
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+            except anthropic.APIStatusError as exc:
+                if exc.status_code >= 500 and transient_retries < _MAX_TRANSIENT_RETRIES:
+                    transient_retries += 1
+                    logger.warning(
+                        "anthropic_message_5xx_retry",
+                        extra={"attempt": transient_retries, "status": exc.status_code},
+                    )
+                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+                    continue
+                raise
 
     async def stream_chat(
         self,
