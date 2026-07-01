@@ -1,4 +1,5 @@
 import time
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -63,6 +64,92 @@ async def test_ensure_valid_access_token_returns_existing_when_valid(db):
 
     assert token == "old_access"
     assert adapter.refresh_calls == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_defers_to_a_concurrent_winner_and_reuses_its_token(db):
+    """#597: if another caller rotated the token while we waited for the
+    per-account lock, reuse that token rather than refreshing again with the now
+    stale refresh token (which Strava would reject / could unlink the account)."""
+    from app.services.strava_ingestion import ingestion
+
+    account = _make_account(db, expires_at=int(time.time()) - 3600)
+    adapter = InMemoryStravaAdapter()
+    adapter.seed_refresh_response(
+        Tokens(access_token="ours", refresh_token="ours_r", expires_at=int(time.time()) + 21600)
+    )
+
+    class _WinnerLock:
+        """Acquiring models the winner having finished a refresh while we waited."""
+
+        def acquire(self):
+            db.query(StravaAccount).filter(StravaAccount.id == account.id).update(
+                {
+                    "access_token": "winner_access",
+                    "refresh_token": "winner_refresh",
+                    "expires_at": int(time.time()) + 21600,
+                }
+            )
+            db.commit()
+            return True
+
+        def release(self):
+            pass
+
+    fake_redis = MagicMock()
+    fake_redis.lock.return_value = _WinnerLock()
+    with patch.object(ingestion, "redis_conn", fake_redis):
+        token = await ensure_valid_access_token(db, account, adapter)
+
+    assert token == "winner_access"
+    assert adapter.refresh_calls == []  # we did NOT burn the stale refresh token
+
+
+@pytest.mark.asyncio
+async def test_refresh_degrades_to_unlocked_when_redis_unavailable(db):
+    """A coordination outage must never block ingestion: with Redis down the
+    refresh still proceeds (unlocked, best effort)."""
+    from app.services.strava_ingestion import ingestion
+
+    account = _make_account(db, expires_at=int(time.time()) - 3600)
+    adapter = InMemoryStravaAdapter()
+    adapter.seed_refresh_response(
+        Tokens(access_token="new_access", refresh_token="new_refresh", expires_at=int(time.time()) + 21600)
+    )
+
+    fake_redis = MagicMock()
+    fake_redis.lock.side_effect = RuntimeError("redis down")
+    with patch.object(ingestion, "redis_conn", fake_redis):
+        token = await ensure_valid_access_token(db, account, adapter)
+
+    assert token == "new_access"
+    assert adapter.refresh_calls == ["old_refresh"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_takes_and_releases_a_per_account_lock(db):
+    """The refresh path acquires and releases the per-account lock, keyed so two
+    accounts never contend (#597)."""
+    from app.services.strava_ingestion import ingestion
+
+    account = _make_account(db, expires_at=int(time.time()) - 3600)
+    adapter = InMemoryStravaAdapter()
+    adapter.seed_refresh_response(
+        Tokens(access_token="new_access", refresh_token="new_refresh", expires_at=int(time.time()) + 21600)
+    )
+
+    lock = MagicMock()
+    lock.acquire.return_value = True
+    fake_redis = MagicMock()
+    fake_redis.lock.return_value = lock
+    with patch.object(ingestion, "redis_conn", fake_redis):
+        token = await ensure_valid_access_token(db, account, adapter)
+
+    assert token == "new_access"
+    assert adapter.refresh_calls == ["old_refresh"]
+    lock.acquire.assert_called_once()
+    lock.release.assert_called_once()
+    assert str(account.id) in fake_redis.lock.call_args.args[0]
 
 
 def test_strava_status_returns_disconnected_when_no_account(client: TestClient):

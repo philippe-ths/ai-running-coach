@@ -6,6 +6,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session, undefer
 
+from app.core.queue import redis_conn
 from app.models import Activity, ActivityStream, StravaAccount, UserProfile
 from app.schemas import SyncResponse
 from app.services.strava_ingestion.port import StravaPort, Tokens
@@ -79,6 +80,21 @@ async def sync_athlete_zones(
 # Buffer in seconds before token expiry we'll trigger a refresh.
 _TOKEN_REFRESH_BUFFER_S = 60
 
+# Per-account refresh serialization (#597). A Strava token refresh ROTATES
+# (invalidates) the refresh token, so two concurrent refreshes for one account
+# race: the second runs with a now-stale refresh token and can permanently
+# unlink the account. We serialize refresh per account with a short Redis lock.
+# TIMEOUT auto-releases if a holder dies mid-refresh (avoids a deadlock); WAIT
+# bounds how long a concurrent caller blocks for the winner (a refresh HTTP call
+# is ~1-2s). If Redis is unavailable we degrade to an unlocked refresh rather
+# than block ingestion — best-effort serialization, never a hard dependency.
+_TOKEN_REFRESH_LOCK_TIMEOUT_S = 15
+_TOKEN_REFRESH_LOCK_WAIT_S = 15
+
+
+def _token_is_fresh(account: StravaAccount) -> bool:
+    return account.expires_at > time.time() + _TOKEN_REFRESH_BUFFER_S
+
 # Stream types pulled during deep ingestion.
 _STREAM_TYPES = [
     "time",
@@ -101,10 +117,74 @@ async def ensure_valid_access_token(
     """Return a valid access token, refreshing and persisting if needed.
 
     Pass force=True to unconditionally refresh (e.g. after a mid-flight 401).
+
+    Refresh is serialized per account behind a Redis lock (#597): a Strava
+    refresh rotates the refresh token, so concurrent refreshes for one account
+    race and the loser can unlink it. The winner refreshes; a loser, on acquiring
+    the lock, RE-READS the row and — if the winner already rotated the token —
+    reuses it instead of refreshing again with a stale refresh token.
     """
-    if not force and account.expires_at > time.time() + _TOKEN_REFRESH_BUFFER_S:
+    if not force and _token_is_fresh(account):
         return account.access_token
 
+    original_access = account.access_token
+    lock = _acquire_refresh_lock(account)
+    if lock is None:
+        # Redis unavailable / not acquired: degrade to an unlocked refresh so a
+        # coordination outage never blocks ingestion.
+        return await _do_refresh(db, account, port)
+    try:
+        # A concurrent caller may have refreshed while we waited. Re-read the row
+        # (READ COMMITTED sees the winner's commit) and, if the access token has
+        # changed, reuse it rather than burning the freshly-rotated refresh token.
+        db.refresh(account)
+        if account.access_token != original_access:
+            return account.access_token
+        if not force and _token_is_fresh(account):
+            return account.access_token
+        return await _do_refresh(db, account, port)
+    finally:
+        _release_refresh_lock(lock)
+
+
+def _acquire_refresh_lock(account: StravaAccount):
+    """Acquire the per-account refresh lock, or None if it can't be taken.
+
+    Returns the held lock (release it via _release_refresh_lock) or None when
+    Redis is unavailable or the wait times out, in which case the caller
+    refreshes unlocked rather than failing."""
+    try:
+        lock = redis_conn.lock(
+            f"strava_token_refresh:{account.id}",
+            timeout=_TOKEN_REFRESH_LOCK_TIMEOUT_S,
+            blocking_timeout=_TOKEN_REFRESH_LOCK_WAIT_S,
+        )
+        if lock.acquire():
+            return lock
+        logger.warning(
+            "strava_token_refresh_lock_timeout account=%s; refreshing unlocked",
+            account.id,
+        )
+        return None
+    except Exception as exc:  # Redis down / misconfigured: degrade, do not block
+        logger.warning(
+            "strava_token_refresh_lock_unavailable account=%s: %s; refreshing unlocked",
+            account.id,
+            exc,
+        )
+        return None
+
+
+def _release_refresh_lock(lock) -> None:
+    try:
+        lock.release()
+    except Exception:  # lock already expired (TTL) or owned by another holder
+        pass
+
+
+async def _do_refresh(
+    db: Session, account: StravaAccount, port: StravaPort
+) -> str:
     tokens = await port.refresh_token(account.refresh_token)
     _apply_tokens(account, tokens)
     db.add(account)
