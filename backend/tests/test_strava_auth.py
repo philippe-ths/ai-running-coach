@@ -126,6 +126,47 @@ async def test_refresh_degrades_to_unlocked_when_redis_unavailable(db):
     assert adapter.refresh_calls == ["old_refresh"]
 
 
+@pytest.mark.integration
+def test_refresh_lock_mutually_excludes_against_real_redis(monkeypatch):
+    """#614: verify the per-account refresh lock actually serializes holders
+    against a REAL Redis (the other #597 tests use a fake lock). While account X's
+    lock is held, another acquire for X is refused; after release it frees; and a
+    different account never contends. Skips if Redis is unreachable."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.core.queue import redis_conn
+    from app.services.strava_ingestion import ingestion
+
+    try:
+        redis_conn.ping()
+    except Exception:
+        pytest.skip("real Redis not available")
+
+    # Shorten the contended wait so the refused acquire returns promptly.
+    monkeypatch.setattr(ingestion, "_TOKEN_REFRESH_LOCK_WAIT_S", 0.2)
+
+    account_a = SimpleNamespace(id=uuid4())
+    account_b = SimpleNamespace(id=uuid4())
+
+    held = ingestion._acquire_refresh_lock(account_a)
+    assert held is not None
+    try:
+        # Same account: cannot acquire while the lock is held (mutual exclusion).
+        assert ingestion._acquire_refresh_lock(account_a) is None
+        # Different account: never contends (keyed per account).
+        other = ingestion._acquire_refresh_lock(account_b)
+        assert other is not None
+        ingestion._release_refresh_lock(other)
+    finally:
+        ingestion._release_refresh_lock(held)
+
+    # After release the lock is free again.
+    reacquired = ingestion._acquire_refresh_lock(account_a)
+    assert reacquired is not None
+    ingestion._release_refresh_lock(reacquired)
+
+
 @pytest.mark.asyncio
 async def test_refresh_takes_and_releases_a_per_account_lock(db):
     """The refresh path acquires and releases the per-account lock, keyed so two
