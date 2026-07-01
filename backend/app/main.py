@@ -13,11 +13,15 @@ from app.core.observability import (
     init_sentry,
     log_budget_cap_status,
     warn_if_coach_prompt_inert,
+    warn_notification_config,
 )
 
 init_logging()
 init_sentry("web")
 warn_if_coach_prompt_inert()
+# Loud (NON-FATAL) warning if Telegram is the active channel but linking/owner
+# routing config is incomplete (#600/#609). No-op outside production.
+warn_notification_config()
 # Crash the boot if a fail-closed production setting is unset, so the platform
 # keeps the last healthy deploy serving instead of promoting one that 503s every
 # route (the Phase 2 deploy-outran-config outage). No-op outside production.
