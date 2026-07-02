@@ -36,7 +36,7 @@ def test_v10_registered_carries_every_v9_capability_plus_stream_view():
     # v11 (#444) inherits STREAM_VIEW too.
     assert STREAM_VIEW_PROMPT_IDS == {
         V10, "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14",
+        "coach_message_v14", "coach_message_lean_v1",
     }
     assert V10 in _OPENER_PROMPTS  # has a distinct opener form (two-stage)
     # same schema family as v9 (so v10 reports regenerate, prior history retained).

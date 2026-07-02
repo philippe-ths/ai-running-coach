@@ -120,6 +120,23 @@ EXPECTED_CAPABILITIES = {
         F.MEMORY,
         F.INTENSITY,
     },
+    # EXPERIMENT — coach_message_lean_v1 carries the SAME full capability set as v14 by
+    # design (prompt-feature parity => identical context pack), so the disposition-first
+    # prose rewrite is a clean A/B on system-prompt text alone.
+    "coach_message_lean_v1": {
+        F.TWO_STAGE,
+        F.VOICE,
+        F.CORPUS,
+        F.STANCE,
+        F.TRAINING_LOAD,
+        F.USER_MATERIALS,
+        F.VOLUME,
+        F.STREAM_VIEW,
+        F.RECENT_TRAINING,
+        F.TRAINING_HISTORY,
+        F.MEMORY,
+        F.INTENSITY,
+    },
 }
 
 # Ids that must carry NO capabilities (the inert-under-rollback set).
@@ -164,60 +181,68 @@ def test_memory_feature_is_active_on_v13():
     v13 flip. (M2 shipped the feature inert; this assertion was flipped here.) v12 and
     below stay memory-free, so the rollback is a pure config flip. (v14+ are additive
     supersets and carry MEMORY too, #578.)"""
-    assert prompts.MEMORY_PROMPT_IDS == {"coach_message_v13", "coach_message_v14"}
+    assert prompts.MEMORY_PROMPT_IDS == {
+        "coach_message_v13", "coach_message_v14", "coach_message_lean_v1",
+    }
     assert prompts.is_memory_prompt("coach_message_v13") is True
     assert prompts.is_memory_prompt("coach_message_v12") is False
 
 
 def test_derived_sets_match_captured_membership():
     """Belt-and-suspenders: the derived sets equal the explicit captured membership."""
+    # coach_message_lean_v1 (the experiment) carries the FULL capability set, so it joins
+    # every derived set below alongside the vN ids it shares that feature with.
+    LEAN = "coach_message_lean_v1"
     assert prompts.TWO_STAGE_PROMPT_IDS == {
         "coach_message_v2", "coach_message_v3", "coach_message_v4",
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14",
+        "coach_message_v13", "coach_message_v14", LEAN,
     }
     assert prompts.VOICE_PROMPT_IDS == {
         "coach_message_v3", "coach_message_v4", "coach_message_v5",
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14",
+        "coach_message_v14", LEAN,
     }
     assert prompts.CORPUS_PROMPT_IDS == {
         "coach_message_v4", "coach_message_v5", "coach_message_v6",
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
+        LEAN,
     }
     assert prompts.STANCE_PROMPT_IDS == {
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14",
+        "coach_message_v13", "coach_message_v14", LEAN,
     }
     assert prompts.TRAINING_LOAD_PROMPT_IDS == {
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14",
+        "coach_message_v14", LEAN,
     }
     assert prompts.USER_MATERIALS_PROMPT_IDS == {
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
+        LEAN,
     }
     assert prompts.VOLUME_PROMPT_IDS == {
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14",
+        "coach_message_v13", "coach_message_v14", LEAN,
     }
     assert prompts.STREAM_VIEW_PROMPT_IDS == {
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14",
+        "coach_message_v14", LEAN,
     }
     assert prompts.RECENT_TRAINING_PROMPT_IDS == {
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
+        LEAN,
     }
     assert prompts.TRAINING_HISTORY_PROMPT_IDS == {
-        "coach_message_v12", "coach_message_v13", "coach_message_v14",
+        "coach_message_v12", "coach_message_v13", "coach_message_v14", LEAN,
     }
-    assert prompts.MEMORY_PROMPT_IDS == {"coach_message_v13", "coach_message_v14"}
-    assert prompts.INTENSITY_PROMPT_IDS == {"coach_message_v14"}
+    assert prompts.MEMORY_PROMPT_IDS == {"coach_message_v13", "coach_message_v14", LEAN}
+    assert prompts.INTENSITY_PROMPT_IDS == {"coach_message_v14", LEAN}
 
 
 def test_predicates_agree_with_has_feature():

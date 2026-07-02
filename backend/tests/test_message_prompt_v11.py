@@ -35,6 +35,7 @@ def test_v11_registered_carries_every_v10_capability_plus_recent_training():
     assert V11 in RECENT_TRAINING_PROMPT_IDS  # ...plus the new RECENT_TRAINING capability
     assert RECENT_TRAINING_PROMPT_IDS == {
         V11, "coach_message_v12", "coach_message_v13", "coach_message_v14",
+        "coach_message_lean_v1",
     }
     assert V11 in _OPENER_PROMPTS  # has a distinct opener form (two-stage)
     # same schema family as v10 (so v11 reports regenerate, prior history retained).

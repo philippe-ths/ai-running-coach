@@ -188,6 +188,27 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.INTENSITY,
         }
     ),
+    # EXPERIMENT — coach_message_lean_v1 is a ground-up prose rewrite (voice-lesson +
+    # Matt-Pocock disciplines), NOT a vN increment. It carries the SAME full capability
+    # set as v14 ON PURPOSE: prompt-feature parity means it receives the byte-identical
+    # context pack, so flipping COACH_PROMPT_ID to it is a clean A/B on the system-prompt
+    # TEXT alone. Ships INERT (config default unchanged).
+    "coach_message_lean_v1": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.TRAINING_LOAD,
+            _F.USER_MATERIALS,
+            _F.VOLUME,
+            _F.STREAM_VIEW,
+            _F.RECENT_TRAINING,
+            _F.TRAINING_HISTORY,
+            _F.MEMORY,
+            _F.INTENSITY,
+        }
+    ),
 }
 
 
