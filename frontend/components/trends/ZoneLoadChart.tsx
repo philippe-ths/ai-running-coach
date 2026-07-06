@@ -17,12 +17,14 @@ import {
   PeriodZoneLoadPoint,
   TrendsGranularity,
 } from "@/lib/types";
-import { formatDateLabel } from "@/lib/format";
-import { BUCKET_NOUN, bucketKey } from "./granularity";
+import { BUCKET_NOUN, bucketAxisLabel, bucketKey } from "./granularity";
 
 interface ZoneLoadChartProps {
   data: ZoneLoadWeekPoint[] | DailyZoneLoadPoint[] | PeriodZoneLoadPoint[];
   granularity: TrendsGranularity;
+  /** Rolling mode (#630): coarse buckets roll back from today and are labelled by
+   * their end day rather than snapping to calendar chunks. */
+  rolling: boolean;
   /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
   delta?: ReactNode;
 }
@@ -70,7 +72,7 @@ function CustomTooltip({
   );
 }
 
-export default function ZoneLoadChart({ data, granularity, delta }: ZoneLoadChartProps) {
+export default function ZoneLoadChart({ data, granularity, rolling, delta }: ZoneLoadChartProps) {
   const title = `Training Load by Zone per ${BUCKET_NOUN[granularity]}`;
 
   // Check if all entries have zero zone data
@@ -91,7 +93,7 @@ export default function ZoneLoadChart({ data, granularity, delta }: ZoneLoadChar
 
   const chartData = data.map((d) => ({
     ...d,
-    label: formatDateLabel(bucketKey(d)),
+    label: bucketAxisLabel(bucketKey(d), granularity, rolling),
   }));
 
   return (

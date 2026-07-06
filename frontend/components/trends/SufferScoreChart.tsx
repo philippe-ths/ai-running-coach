@@ -18,10 +18,9 @@ import {
   PeriodSufferScorePoint,
   TrendsGranularity,
 } from "@/lib/types";
-import { formatDateLabel } from "@/lib/format";
 import ChartTooltip from "@/components/charts/ChartTooltip";
 import { TYPICAL_LINE_PROPS, renderTypicalLabel } from "./typicalLine";
-import { BUCKET_NOUN, bucketKey } from "./granularity";
+import { BUCKET_NOUN, bucketAxisLabel, bucketKey } from "./granularity";
 
 interface Props {
   data:
@@ -30,6 +29,9 @@ interface Props {
     | WeeklySufferScorePoint[]
     | PeriodSufferScorePoint[];
   granularity: TrendsGranularity;
+  /** Rolling mode (#630): coarse buckets roll back from today and are labelled by
+   * their end day rather than snapping to calendar chunks. */
+  rolling: boolean;
   /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
   delta?: ReactNode;
   /** Runner's typical load per bucket, in chart units (#413). Draws a dashed
@@ -37,7 +39,7 @@ interface Props {
   typical?: number;
 }
 
-export default function SufferScoreChart({ data, granularity, delta, typical }: Props) {
+export default function SufferScoreChart({ data, granularity, rolling, delta, typical }: Props) {
   // #566: an edge bucket straddles the selected period boundary; render the
   // whole bucket as a stacked bar — in-range load solid, out-of-range load
   // faded on top — so a partial week/period isn't misread as a low one and the
@@ -54,7 +56,7 @@ export default function SufferScoreChart({ data, granularity, delta, typical }: 
       outValue: outRaw > 0 ? outRaw : null,
       inRaw,
       outRaw,
-      label: formatDateLabel(bucketKey(d)),
+      label: bucketAxisLabel(bucketKey(d), granularity, rolling),
       partial: outDays > 0,
       inDays,
       totalDays: inDays != null ? inDays + outDays : null,
