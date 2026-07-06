@@ -6,6 +6,7 @@
 // 7D/30D showed daily bars, everything longer showed weekly bars.
 
 import type { TrendsGranularity, TrendsRange } from "@/lib/types";
+import { formatDateLabel } from "@/lib/format";
 
 export const GRANULARITY_LABEL: Record<TrendsGranularity, string> = {
   day: "Day",
@@ -23,12 +24,61 @@ export const BUCKET_NOUN: Record<TrendsGranularity, string> = {
 };
 
 // Prefix shown before a bucket's date in a chart tooltip.
+// Calendar mode: buckets are calendar chunks keyed by their first day ("Week of
+// Jun 15"). Rolling mode (#630): buckets roll back from today and are labelled
+// by the block's END (most recent) day, so the prefix names the trailing span.
 export const TOOLTIP_PREFIX: Record<TrendsGranularity, string> = {
   day: "",
   week: "Week of ",
   "2week": "Fortnight of ",
   month: "Month of ",
 };
+
+export const ROLLING_TOOLTIP_PREFIX: Record<TrendsGranularity, string> = {
+  day: "",
+  week: "Week ending ",
+  "2week": "2 weeks ending ",
+  month: "30 days ending ",
+};
+
+export function tooltipPrefixFor(
+  granularity: TrendsGranularity,
+  rolling: boolean,
+): string {
+  return rolling ? ROLLING_TOOLTIP_PREFIX[granularity] : TOOLTIP_PREFIX[granularity];
+}
+
+// Fixed block width per coarse granularity in rolling mode (#630). Matches the
+// backend rolling bins (week 7d, 2-week 14d, month 30d); day is a single day.
+export const ROLLING_BIN_DAYS: Record<TrendsGranularity, number> = {
+  day: 1,
+  week: 7,
+  "2week": 14,
+  month: 30,
+};
+
+// Add `days` to a "YYYY-MM-DD" key, staying in UTC so no timezone shift creeps
+// in (mirrors formatDateLabel's timezone-free parsing).
+function shiftISO(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, (m || 1) - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+// The x-axis label for a bucket. Calendar mode labels by the bucket's first day;
+// rolling mode (#630) labels a coarse bucket by its END day, so the bar reads as
+// "the trailing block ending here" rather than a calendar-chunk start date.
+export function bucketAxisLabel(
+  keyISO: string,
+  granularity: TrendsGranularity,
+  rolling: boolean,
+): string {
+  if (rolling && granularity !== "day") {
+    return formatDateLabel(shiftISO(keyISO, ROLLING_BIN_DAYS[granularity] - 1));
+  }
+  return formatDateLabel(keyISO);
+}
 
 // The bucket's first-day key, whichever granularity-specific field carries it.
 export function bucketKey(d: {

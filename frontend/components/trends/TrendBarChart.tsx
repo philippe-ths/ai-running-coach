@@ -12,15 +12,17 @@ import {
 } from "recharts";
 import { ReactNode } from "react";
 import { TrendsGranularity } from "@/lib/types";
-import { formatDateLabel } from "@/lib/format";
 import ChartTooltip from "@/components/charts/ChartTooltip";
 import { TYPICAL_LINE_PROPS, renderTypicalLabel } from "./typicalLine";
-import { BUCKET_NOUN, TOOLTIP_PREFIX, bucketKey } from "./granularity";
+import { BUCKET_NOUN, bucketAxisLabel, bucketKey, tooltipPrefixFor } from "./granularity";
 
 interface TrendBarChartProps {
   data: any[];
   type: "distance" | "time";
   granularity: TrendsGranularity;
+  /** Rolling mode (#630): coarse buckets roll back from today and are labelled by
+   * their end day, rather than snapping to calendar chunks. */
+  rolling: boolean;
   /** Period-over-period delta shown under the title (e.g. a <StatDiff>). */
   delta?: ReactNode;
   /** Runner's typical level per bucket, in chart units (#413). Draws a dashed
@@ -39,6 +41,7 @@ export default function TrendBarChart({
   data,
   type,
   granularity,
+  rolling,
   delta,
   typical,
 }: TrendBarChartProps) {
@@ -75,14 +78,14 @@ export default function TrendBarChart({
       outValue: outRaw > 0 ? toChart(outRaw) : null,
       inRaw,
       outRaw,
-      label: formatDateLabel(bucketKey(d)),
+      label: bucketAxisLabel(bucketKey(d), granularity, rolling),
       partial: outDays > 0,
       inDays,
       totalDays: inDays != null ? inDays + outDays : null,
     };
   });
 
-  const tooltipPrefix = TOOLTIP_PREFIX[granularity];
+  const tooltipPrefix = tooltipPrefixFor(granularity, rolling);
   // A faded segment is only drawn when an edge bucket has real out-of-range
   // value (a leading week reaching before the window); the trailing in-progress
   // bucket has none yet.
