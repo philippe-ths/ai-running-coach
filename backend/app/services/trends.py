@@ -573,8 +573,9 @@ def build_weekly_buckets(
     bar (#566); ``total_*`` stays the in-period sum.
     Pass ``rolling_anchor`` (today) to bucket by 7-day blocks rolling back from
     that anchor instead of ISO-Monday weeks (#630): the bars then roll back from
-    the current date. When set, no faded out-of-window segment is produced (the
-    leading edge is simply a shorter bar); ``pre_window_daily`` is ignored.
+    the current date. A leading block that only partly overlaps the window fades
+    its out-of-window days via ``pre_window_daily``, the same as a calendar edge
+    week — the bar shows the whole block, in-window solid and excluded part faded.
     """
     def _key(d: date) -> date:
         if rolling_anchor is not None:
@@ -610,20 +611,18 @@ def build_weekly_buckets(
         cursor += timedelta(weeks=1)
 
     # Edge-bucket coverage (#566): mark how much of each week falls inside the
-    # selected window [since, end]. Rolling bins align to the window, so the only
-    # partial is the leading short bar and it carries no faded segment (#630).
+    # selected window [since, end] so the chart can fade the partial leading week.
+    # Rolling and calendar are handled the same here (#630): a leading rolling
+    # block that only partly overlaps the window shows its out-of-window days as a
+    # faded segment, exactly like a calendar edge week — the bar shows the whole
+    # 7-day block, in-window solid and the excluded part faded.
     for w in buckets.values():
-        in_days, out_days = _coverage_days(
+        w.in_period_days, w.out_of_period_days = _coverage_days(
             w.week_start, w.week_start + timedelta(days=6), since, end
         )
-        w.in_period_days = in_days
-        w.out_of_period_days = 0 if rolling_anchor is not None else out_days
-    # Carry the out-of-window value of a leading edge week's earlier days
-    # (calendar mode only — rolling bins show no faded segment).
-    if rolling_anchor is None:
-        _add_out_of_period_values(
-            buckets, pre_window_daily, lambda d: d - timedelta(days=d.weekday())
-        )
+    # Carry the out-of-window value of a leading edge week's earlier days, keyed
+    # the same way the buckets are (rolling block start or ISO Monday).
+    _add_out_of_period_values(buckets, pre_window_daily, _key)
 
     return sorted(buckets.values(), key=lambda w: w.week_start)
 
@@ -645,9 +644,9 @@ def build_period_buckets(
     they default to the range start and today.
     Pass ``rolling_anchor`` (today) to bucket by fixed-width blocks rolling back
     from that anchor instead of the calendar grid (#630): 14-day blocks for
-    ``biweekly``, 30-day blocks for ``monthly``. When set, no faded out-of-window
-    segment is produced (the leading edge is a shorter bar); ``pre_window_daily``
-    is ignored.
+    ``biweekly``, 30-day blocks for ``monthly``. A leading block that only partly
+    overlaps the window fades its out-of-window days via ``pre_window_daily``, the
+    same as a calendar edge bucket.
     """
     bin_days = _ROLLING_BIN_DAYS[period]  # rolling-mode block width
 
@@ -693,18 +692,16 @@ def build_period_buckets(
 
     # Edge-bucket coverage (#566): the bucket's full span is [period_start,
     # span_end] (the calendar month / fortnight in calendar mode, a fixed
-    # 14-/30-day block in rolling mode); mark how much falls inside [since, end].
+    # 14-/30-day block in rolling mode); mark how much falls inside [since, end]
+    # so a leading edge bucket fades its out-of-window part in either mode (#630).
     for b in buckets.values():
         span_end = _span_end(b.period_start)
-        in_days, out_days = _coverage_days(b.period_start, span_end, since, end)
-        b.in_period_days = in_days
-        b.out_of_period_days = 0 if rolling_anchor is not None else out_days
-    # Carry the out-of-window value of a leading edge bucket's earlier days
-    # (calendar mode only — rolling bins show no faded segment).
-    if rolling_anchor is None:
-        _add_out_of_period_values(
-            buckets, pre_window_daily, lambda d: _period_start(d, period)
+        b.in_period_days, b.out_of_period_days = _coverage_days(
+            b.period_start, span_end, since, end
         )
+    # Carry the out-of-window value of a leading edge bucket's earlier days, keyed
+    # the same way the buckets are (rolling block start or calendar period start).
+    _add_out_of_period_values(buckets, pre_window_daily, _key)
 
     return sorted(buckets.values(), key=lambda b: b.period_start)
 
@@ -1041,15 +1038,22 @@ def get_trends_report(
     # 2. Daily facts (sum per local date)
     daily_facts = build_daily_facts(activity_facts)
 
-    # #566: the days just before the window — back to the 1st of `since`'s month,
-    # the earliest leading-bucket start across the week / 2-week / month
-    # granularities — so a leading edge bucket can show the value of its
-    # out-of-window days as a faded stacked segment (the bar then shows the whole
-    # week/period, not just the in-window slice). Kept separate from
+    # #566/#630: the days just before the window, back to the earliest leading
+    # edge-bucket start across the week / 2-week / month granularities, so a
+    # leading edge bucket can show the value of its out-of-window days as a faded
+    # stacked segment (the bar then shows the whole week/period, not just the
+    # in-window slice). Calendar buckets snap to the 1st of `since`'s month;
+    # rolling blocks are anchored to today, and the three widths don't nest, so
+    # take the earliest of the three leading-block starts. Kept separate from
     # daily_facts so the summary/header totals stay strictly in-period.
     pre_window_daily: List[DailyFact] = []
-    if mode == "calendar" and since is not None:
-        pre_start = _period_start(since, "monthly")
+    if since is not None:
+        if rolling_anchor is not None:
+            pre_start = min(
+                _rolling_bin_start(since, rolling_anchor, d) for d in (7, 14, 30)
+            )
+        else:
+            pre_start = _period_start(since, "monthly")
         if pre_start < since:
             pre_facts = _query_activity_facts(
                 db, pre_start, since, types=types, user_id=user_id
