@@ -168,10 +168,28 @@ def test_window_total_is_identical_across_all_granularities(db):
 
 
 def test_coarse_series_are_continuous_over_the_range(db):
+    """Default (rolling) coarse series step by a fixed block width (#630): 14-day
+    fortnights and 30-day 'months' rolling back from today, with no gaps."""
     user_id = _user(db)
     _activity_on(db, user_id, date.today(), distance_m=4000)
 
     report = get_trends_report(db, "1Y", user_id=user_id)
+
+    bi = [p.period_start for p in report.biweekly_distance]
+    for a, b in zip(bi, bi[1:]):
+        assert (b - a).days == 14
+    mo = [p.period_start for p in report.monthly_distance]
+    for a, b in zip(mo, mo[1:]):
+        assert (b - a).days == 30
+
+
+def test_calendar_coarse_series_stay_on_the_calendar_grid(db):
+    """Calendar mode is unchanged (#630 is rolling-only): fortnights step 14 days
+    and months land on the 1st, incrementing by one calendar month."""
+    user_id = _user(db)
+    _activity_on(db, user_id, date.today(), distance_m=4000)
+
+    report = get_trends_report(db, "1Y", user_id=user_id, mode="calendar")
 
     bi = [p.period_start for p in report.biweekly_distance]
     for a, b in zip(bi, bi[1:]):

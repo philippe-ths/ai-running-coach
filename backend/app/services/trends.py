@@ -231,6 +231,27 @@ def _next_period_start(start: date, period: str) -> date:
     return start + timedelta(days=14)
 
 
+# ---------------------------------------------------------------------------
+# 3c. Rolling-mode bins (#630)
+# ---------------------------------------------------------------------------
+#
+# In rolling mode the bars must roll back from the current date, not snap to
+# calendar boundaries (ISO-Monday weeks / calendar months / the epoch-anchored
+# fortnight grid above). So a day's bucket is chosen by its offset back from the
+# anchor (today): the newest bin ends today and each older bin is the preceding
+# fixed-width block. Calendar mode is unchanged and keeps the calendar-anchored
+# keys above. "month" has no fixed length, so a rolling month is a 30-day block.
+_ROLLING_BIN_DAYS = {"biweekly": 14, "monthly": 30}
+
+
+def _rolling_bin_start(d: date, anchor: date, bin_days: int) -> date:
+    """First local day of the today-anchored rolling bin of width ``bin_days``
+    that ``d`` falls in. The newest bin is ``[anchor - bin_days + 1, anchor]``;
+    older bins step back by ``bin_days``. ``d`` is assumed on or before ``anchor``."""
+    k = (anchor - d).days // bin_days
+    return anchor - timedelta(days=(k + 1) * bin_days - 1)
+
+
 def _coverage_days(
     span_start: date,
     span_end: date,
@@ -537,9 +558,10 @@ def build_weekly_buckets(
     since: Optional[date] = None,
     until: Optional[date] = None,
     pre_window_daily: Optional[List[DailyFact]] = None,
+    rolling_anchor: Optional[date] = None,
 ) -> List[WeekBucket]:
     """
-    Roll daily facts into ISO-week buckets (Monday start).
+    Roll daily facts into 7-day buckets.
     Fills every week in the range so charts have continuous x-axes.
 
     Pass ``since`` to override the window start (the #400 calendar mode).
@@ -549,46 +571,58 @@ def build_weekly_buckets(
     Pass ``pre_window_daily`` (days just before ``since``) so a leading edge
     week carries the value of its out-of-window days for the stacked partial
     bar (#566); ``total_*`` stays the in-period sum.
+    Pass ``rolling_anchor`` (today) to bucket by 7-day blocks rolling back from
+    that anchor instead of ISO-Monday weeks (#630): the bars then roll back from
+    the current date. A leading block that only partly overlaps the window fades
+    its out-of-window days via ``pre_window_daily``, the same as a calendar edge
+    week — the bar shows the whole block, in-window solid and excluded part faded.
     """
+    def _key(d: date) -> date:
+        if rolling_anchor is not None:
+            return _rolling_bin_start(d, rolling_anchor, 7)
+        return d - timedelta(days=d.weekday())
+
     # Build buckets from actual data first
     buckets: dict[date, WeekBucket] = {}
     for df in daily_facts:
-        monday = df.local_date - timedelta(days=df.local_date.weekday())
-        if monday not in buckets:
-            buckets[monday] = WeekBucket(monday)
-        buckets[monday].add(df)
+        k = _key(df.local_date)
+        if k not in buckets:
+            buckets[k] = WeekBucket(k)
+        buckets[k].add(df)
 
     # Determine the full span of weeks to show
     end = until if until is not None else date.today()
-    end_monday = end - timedelta(days=end.weekday())  # last week to show
+    end_key = _key(end)  # last week to show
 
     if since is None:
         since = _resolve_since(range_key)
     if since is not None:
-        start_monday = since - timedelta(days=since.weekday())
+        start_key = _key(since)
     elif daily_facts:
-        earliest = daily_facts[0].local_date
-        start_monday = earliest - timedelta(days=earliest.weekday())
+        start_key = _key(daily_facts[0].local_date)
     else:
-        start_monday = end_monday
+        start_key = end_key
 
-    # Walk from start_monday to end_monday, inserting empty buckets
-    cursor = start_monday
-    while cursor <= end_monday:
+    # Walk from start_key to end_key, inserting empty buckets (7-day step either way)
+    cursor = start_key
+    while cursor <= end_key:
         if cursor not in buckets:
             buckets[cursor] = WeekBucket(cursor)
         cursor += timedelta(weeks=1)
 
     # Edge-bucket coverage (#566): mark how much of each week falls inside the
-    # selected window [since, end] so the chart can fade partial weeks.
+    # selected window [since, end] so the chart can fade the partial leading week.
+    # Rolling and calendar are handled the same here (#630): a leading rolling
+    # block that only partly overlaps the window shows its out-of-window days as a
+    # faded segment, exactly like a calendar edge week — the bar shows the whole
+    # 7-day block, in-window solid and the excluded part faded.
     for w in buckets.values():
         w.in_period_days, w.out_of_period_days = _coverage_days(
             w.week_start, w.week_start + timedelta(days=6), since, end
         )
-    # Carry the out-of-window value of a leading edge week's earlier days.
-    _add_out_of_period_values(
-        buckets, pre_window_daily, lambda d: d - timedelta(days=d.weekday())
-    )
+    # Carry the out-of-window value of a leading edge week's earlier days, keyed
+    # the same way the buckets are (rolling block start or ISO Monday).
+    _add_out_of_period_values(buckets, pre_window_daily, _key)
 
     return sorted(buckets.values(), key=lambda w: w.week_start)
 
@@ -600,6 +634,7 @@ def build_period_buckets(
     since: Optional[date] = None,
     until: Optional[date] = None,
     pre_window_daily: Optional[List[DailyFact]] = None,
+    rolling_anchor: Optional[date] = None,
 ) -> List[PeriodBucket]:
     """Roll daily facts into coarse buckets (#432) for ``biweekly`` or ``monthly``.
 
@@ -607,23 +642,45 @@ def build_period_buckets(
     empty bucket across the window so charts have continuous x-axes. ``since`` /
     ``until`` override the window start/end (the #400/#413 calendar framing);
     they default to the range start and today.
+    Pass ``rolling_anchor`` (today) to bucket by fixed-width blocks rolling back
+    from that anchor instead of the calendar grid (#630): 14-day blocks for
+    ``biweekly``, 30-day blocks for ``monthly``. A leading block that only partly
+    overlaps the window fades its out-of-window days via ``pre_window_daily``, the
+    same as a calendar edge bucket.
     """
+    bin_days = _ROLLING_BIN_DAYS[period]  # rolling-mode block width
+
+    def _key(d: date) -> date:
+        if rolling_anchor is not None:
+            return _rolling_bin_start(d, rolling_anchor, bin_days)
+        return _period_start(d, period)
+
+    def _advance(cur: date) -> date:
+        if rolling_anchor is not None:
+            return cur + timedelta(days=bin_days)
+        return _next_period_start(cur, period)
+
+    def _span_end(start: date) -> date:
+        if rolling_anchor is not None:
+            return start + timedelta(days=bin_days - 1)
+        return _next_period_start(start, period) - timedelta(days=1)
+
     buckets: dict[date, PeriodBucket] = {}
     for df in daily_facts:
-        ps = _period_start(df.local_date, period)
+        ps = _key(df.local_date)
         if ps not in buckets:
             buckets[ps] = PeriodBucket(ps)
         buckets[ps].add(df)
 
     end = until if until is not None else date.today()
-    end_start = _period_start(end, period)
+    end_start = _key(end)
 
     if since is None:
         since = _resolve_since(range_key)
     if since is not None:
-        start = _period_start(since, period)
+        start = _key(since)
     elif daily_facts:
-        start = _period_start(daily_facts[0].local_date, period)
+        start = _key(daily_facts[0].local_date)
     else:
         start = end_start
 
@@ -631,20 +688,20 @@ def build_period_buckets(
     while cursor <= end_start:
         if cursor not in buckets:
             buckets[cursor] = PeriodBucket(cursor)
-        cursor = _next_period_start(cursor, period)
+        cursor = _advance(cursor)
 
     # Edge-bucket coverage (#566): the bucket's full span is [period_start,
-    # next_period_start - 1 day] (14 days for biweekly, the calendar month for
-    # monthly); mark how much falls inside the selected window [since, end].
+    # span_end] (the calendar month / fortnight in calendar mode, a fixed
+    # 14-/30-day block in rolling mode); mark how much falls inside [since, end]
+    # so a leading edge bucket fades its out-of-window part in either mode (#630).
     for b in buckets.values():
-        span_end = _next_period_start(b.period_start, period) - timedelta(days=1)
+        span_end = _span_end(b.period_start)
         b.in_period_days, b.out_of_period_days = _coverage_days(
             b.period_start, span_end, since, end
         )
-    # Carry the out-of-window value of a leading edge bucket's earlier days.
-    _add_out_of_period_values(
-        buckets, pre_window_daily, lambda d: _period_start(d, period)
-    )
+    # Carry the out-of-window value of a leading edge bucket's earlier days, keyed
+    # the same way the buckets are (rolling block start or calendar period start).
+    _add_out_of_period_values(buckets, pre_window_daily, _key)
 
     return sorted(buckets.values(), key=lambda b: b.period_start)
 
@@ -764,22 +821,28 @@ def _collapse_to_3_zones(time_in_zones: dict) -> tuple[int, int, int]:
 def build_zone_load_weekly(
     activity_facts: List[ActivityFact],
     weekly_buckets: List["WeekBucket"],
+    rolling_anchor: Optional[date] = None,
 ) -> List[dict]:
     """
     Aggregate per-activity time_in_zones into weekly 3-zone buckets.
 
     Returns one dict per week: {week_start, easy_min, moderate_min, hard_min}.
-    Weeks with no zone data get zeros.
+    Weeks with no zone data get zeros. ``rolling_anchor`` must match the value
+    passed to ``build_weekly_buckets`` so the zone keys line up with the bars
+    (#630): today-anchored 7-day bins when set, ISO-Monday weeks otherwise.
     """
-    # Sum zone seconds per ISO-week Monday
+    # Sum zone seconds per bucket key (must match the weekly_buckets keys)
     zone_by_week: dict[date, tuple[int, int, int]] = {}
     for af in activity_facts:
         if not af.time_in_zones:
             continue
-        monday = af.local_date - timedelta(days=af.local_date.weekday())
+        if rolling_anchor is not None:
+            key = _rolling_bin_start(af.local_date, rolling_anchor, 7)
+        else:
+            key = af.local_date - timedelta(days=af.local_date.weekday())
         easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
-        prev = zone_by_week.get(monday, (0, 0, 0))
-        zone_by_week[monday] = (
+        prev = zone_by_week.get(key, (0, 0, 0))
+        zone_by_week[key] = (
             prev[0] + easy_s,
             prev[1] + mod_s,
             prev[2] + hard_s,
@@ -834,13 +897,22 @@ def build_zone_load_period(
     activity_facts: List[ActivityFact],
     period_buckets: List["PeriodBucket"],
     period: str,
+    rolling_anchor: Optional[date] = None,
 ) -> List[dict]:
-    """Per-coarse-bucket 3-zone minutes (#432), continuous over ``period_buckets``."""
+    """Per-coarse-bucket 3-zone minutes (#432), continuous over ``period_buckets``.
+
+    ``rolling_anchor`` must match ``build_period_buckets`` so the zone keys line
+    up with the bars (#630): today-anchored 14-/30-day bins when set, the
+    calendar grid otherwise.
+    """
     zone_by_period: dict[date, tuple[int, int, int]] = {}
     for af in activity_facts:
         if not af.time_in_zones:
             continue
-        ps = _period_start(af.local_date, period)
+        if rolling_anchor is not None:
+            ps = _rolling_bin_start(af.local_date, rolling_anchor, _ROLLING_BIN_DAYS[period])
+        else:
+            ps = _period_start(af.local_date, period)
         easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
         prev = zone_by_period.get(ps, (0, 0, 0))
         zone_by_period[ps] = (
@@ -944,6 +1016,11 @@ def get_trends_report(
     # comparison spans [prev_start, prev_end). Calendar mode shifts both.
     since, prev_start, prev_end = _resolve_window(range_upper, mode)
 
+    # Rolling mode buckets the bars in fixed-width blocks rolling back from today
+    # rather than snapping to the calendar grid (#630). None keeps the calendar
+    # keying (ISO-Monday weeks / calendar months / the fortnight grid).
+    rolling_anchor: Optional[date] = date.today() if mode == "rolling" else None
+
     # Chart x-axis frame end (#413): rolling stops at today (until=None); calendar
     # spans the whole current period (e.g. Mon–Sun for 7D), so the period's last
     # day frames the chart and days after today render as empty bars.
@@ -961,15 +1038,22 @@ def get_trends_report(
     # 2. Daily facts (sum per local date)
     daily_facts = build_daily_facts(activity_facts)
 
-    # #566: the days just before the window — back to the 1st of `since`'s month,
-    # the earliest leading-bucket start across the week / 2-week / month
-    # granularities — so a leading edge bucket can show the value of its
-    # out-of-window days as a faded stacked segment (the bar then shows the whole
-    # week/period, not just the in-window slice). Kept separate from
+    # #566/#630: the days just before the window, back to the earliest leading
+    # edge-bucket start across the week / 2-week / month granularities, so a
+    # leading edge bucket can show the value of its out-of-window days as a faded
+    # stacked segment (the bar then shows the whole week/period, not just the
+    # in-window slice). Calendar buckets snap to the 1st of `since`'s month;
+    # rolling blocks are anchored to today, and the three widths don't nest, so
+    # take the earliest of the three leading-block starts. Kept separate from
     # daily_facts so the summary/header totals stay strictly in-period.
     pre_window_daily: List[DailyFact] = []
     if since is not None:
-        pre_start = _period_start(since, "monthly")
+        if rolling_anchor is not None:
+            pre_start = min(
+                _rolling_bin_start(since, rolling_anchor, d) for d in (7, 14, 30)
+            )
+        else:
+            pre_start = _period_start(since, "monthly")
         if pre_start < since:
             pre_facts = _query_activity_facts(
                 db, pre_start, since, types=types, user_id=user_id
@@ -1031,7 +1115,7 @@ def get_trends_report(
     # 4. Weekly buckets (continuous — includes empty weeks)
     weekly = build_weekly_buckets(
         daily_facts, range_key=range_upper, since=since, until=until,
-        pre_window_daily=pre_window_daily,
+        pre_window_daily=pre_window_daily, rolling_anchor=rolling_anchor,
     )
 
     weekly_distance = [
@@ -1072,11 +1156,11 @@ def get_trends_report(
     # 4b. Coarse buckets (#432): 2-week and month rollups of the same daily facts.
     biweekly = build_period_buckets(
         daily_facts, "biweekly", range_key=range_upper, since=since, until=until,
-        pre_window_daily=pre_window_daily,
+        pre_window_daily=pre_window_daily, rolling_anchor=rolling_anchor,
     )
     monthly = build_period_buckets(
         daily_facts, "monthly", range_key=range_upper, since=since, until=until,
-        pre_window_daily=pre_window_daily,
+        pre_window_daily=pre_window_daily, rolling_anchor=rolling_anchor,
     )
 
     def _period_distance(buckets: List[PeriodBucket]) -> List[PeriodDistancePoint]:
@@ -1146,7 +1230,7 @@ def get_trends_report(
     # 9. Zone load (3-zone stacked bar)
     weekly_zone_load = [
         ZoneLoadWeekPoint(**p)
-        for p in build_zone_load_weekly(activity_facts, weekly)
+        for p in build_zone_load_weekly(activity_facts, weekly, rolling_anchor=rolling_anchor)
     ]
     daily_zone_load = [
         DailyZoneLoadPoint(**p)
@@ -1154,11 +1238,11 @@ def get_trends_report(
     ]
     biweekly_zone_load = [
         PeriodZoneLoadPoint(**p)
-        for p in build_zone_load_period(activity_facts, biweekly, "biweekly")
+        for p in build_zone_load_period(activity_facts, biweekly, "biweekly", rolling_anchor=rolling_anchor)
     ]
     monthly_zone_load = [
         PeriodZoneLoadPoint(**p)
-        for p in build_zone_load_period(activity_facts, monthly, "monthly")
+        for p in build_zone_load_period(activity_facts, monthly, "monthly", rolling_anchor=rolling_anchor)
     ]
 
     return TrendsResponse(

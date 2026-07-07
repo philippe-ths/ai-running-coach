@@ -6,7 +6,7 @@ import { formatDistanceKm, formatDuration } from "@/lib/format";
 import { fetchFromAPI } from "@/lib/api";
 import RangeSelector from "@/components/trends/RangeSelector";
 import GranularitySelector from "@/components/trends/GranularitySelector";
-import { resolveGranularity, DAYS_PER_BUCKET } from "@/components/trends/granularity";
+import { resolveGranularity, DAYS_PER_BUCKET, ROLLING_BIN_DAYS } from "@/components/trends/granularity";
 import ActivityTypeFilter from "@/components/trends/ActivityTypeFilter";
 import TrendBarChart from "@/components/trends/TrendBarChart";
 import SufferScoreChart from "@/components/trends/SufferScoreChart";
@@ -174,7 +174,13 @@ export default function TrendsPage() {
     const m = normByMetric[metric];
     if (!framing || !m || m.norm == null || framing.window_days <= 0) return undefined;
     const perDay = m.norm / framing.window_days;
-    return perDay * DAYS_PER_BUCKET[effectiveGranularity] * scale;
+    // Rolling buckets are fixed-width blocks (#630: month = 30d), so scale the
+    // per-day norm by the rolling bin width; calendar uses the mean month (30.44).
+    const bucketDays =
+      effectiveMode === "rolling"
+        ? ROLLING_BIN_DAYS[effectiveGranularity]
+        : DAYS_PER_BUCKET[effectiveGranularity];
+    return perDay * bucketDays * scale;
   };
 
   return (
@@ -302,6 +308,7 @@ export default function TrendsPage() {
               data.monthly_distance,
             )}
             granularity={effectiveGranularity}
+            rolling={effectiveMode === "rolling"}
             typical={typicalPerBucket("distance_m", 1 / 1000)}
             delta={
               <ComparisonRows
@@ -322,6 +329,7 @@ export default function TrendsPage() {
               data.monthly_time,
             )}
             granularity={effectiveGranularity}
+            rolling={effectiveMode === "rolling"}
             typical={typicalPerBucket("moving_time_s", 1 / 60)}
             delta={
               <ComparisonRows
@@ -342,6 +350,7 @@ export default function TrendsPage() {
               data.monthly_suffer_score,
             )}
             granularity={effectiveGranularity}
+            rolling={effectiveMode === "rolling"}
             typical={typicalPerBucket("effort_score", 1)}
             delta={
               <ComparisonRows
@@ -381,6 +390,7 @@ export default function TrendsPage() {
               data.monthly_zone_load,
             )}
             granularity={effectiveGranularity}
+            rolling={effectiveMode === "rolling"}
             delta={
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs tabular-nums">
                 {(
