@@ -29,14 +29,17 @@ def _make_interval_structure(
     work_segments = []
     rest_segments = []
     for i in range(reps):
+        seg_distance = round(distance_per_rep + rng.uniform(-20, 20), 1)
         seg = {
             "segment_number": i + 1,
             "start_time_s": 300 + i * (work_duration + rest_duration),
             "duration_s": work_duration,
-            "distance_m": round(distance_per_rep + rng.uniform(-20, 20), 1),
+            "distance_m": seg_distance,
             "avg_speed_mps": round(work_speed + rng.uniform(-0.2, 0.2), 2),
+            "pace_s_per_km": int(round(work_duration / (seg_distance / 1000.0))),
             "avg_hr": 170.0 if include_hr else None,
             "peak_hr": 178.0 if include_hr else None,
+            "peak_hr_pct_max": 94 if include_hr else None,
         }
         work_segments.append(seg)
         if i < reps - 1:
@@ -44,6 +47,8 @@ def _make_interval_structure(
                 "segment_number": i + 1,
                 "duration_s": rest_duration,
                 "avg_hr": 145.0 if include_hr else None,
+                "restart_hr": 145.0 if include_hr else None,
+                "restart_pct_max": 76 if include_hr else None,
                 "hr_recovery_bpm": 33.0 if include_hr else None,
             })
 
@@ -219,35 +224,54 @@ class TestBuildIntervalKPIs:
         structure = _make_interval_structure(reps=4, include_hr=True)
         kpis = build_interval_kpis(structure)
         assert "rep_pace_consistency_cv" in kpis
-        assert "first_vs_last_fade" in kpis
-        assert "recovery_quality_per_60s" in kpis
+        assert "pace" in kpis
+        assert "recovery_floor" in kpis
         assert "work_rest_ratio" in kpis
         assert "total_z4_plus_s" in kpis
 
-    def test_first_vs_last_fade(self):
+    def test_pace_fade_reads_as_fading(self):
         structure = _make_interval_structure(reps=5)
-        # Make last rep slower
-        structure["work_segments"][-1]["avg_speed_mps"] = 3.5
-        structure["work_segments"][0]["avg_speed_mps"] = 4.5
+        # First rep fast, last rep clearly slower (bigger s/km).
+        structure["work_segments"][0]["pace_s_per_km"] = 225
+        structure["work_segments"][-1]["pace_s_per_km"] = 248
         kpis = build_interval_kpis(structure)
-        assert kpis["first_vs_last_fade"] is not None
-        assert kpis["first_vs_last_fade"] < 0.9  # significant fade
+        assert kpis["pace"]["direction"] == "fading"
+        assert kpis["pace"]["fade_s_per_km"] == 23
+        assert kpis["pace"]["first_s_per_km"] == 225
+        assert kpis["pace"]["last_s_per_km"] == 248
 
-    def test_no_fade_equal_speeds(self):
+    def test_equal_paces_read_as_holding(self):
         structure = _make_interval_structure(reps=4)
-        # Force equal speeds
         for w in structure["work_segments"]:
-            w["avg_speed_mps"] = 4.5
+            w["pace_s_per_km"] = 225
         kpis = build_interval_kpis(structure)
-        assert kpis["first_vs_last_fade"] == 1.0
+        assert kpis["pace"]["direction"] == "holding"
+        assert kpis["pace"]["fade_s_per_km"] == 0
 
-    def test_recovery_quality_normalized_to_60s(self):
-        structure = _make_interval_structure(reps=4, rest_duration=120, include_hr=True)
-        # Rest is 120s with 33bpm drop → per 60s = ~16.5
+    def test_negative_split_reads_as_such(self):
+        structure = _make_interval_structure(reps=4)
+        structure["work_segments"][0]["pace_s_per_km"] = 240
+        structure["work_segments"][-1]["pace_s_per_km"] = 222
         kpis = build_interval_kpis(structure)
-        rq = kpis["recovery_quality_per_60s"]
-        assert rq is not None
-        assert rq > 0
+        assert kpis["pace"]["direction"] == "negative_split"
+
+    def test_recovery_floor_rising_is_the_fatigue_tell(self):
+        structure = _make_interval_structure(reps=4, include_hr=True)
+        # Runner restarts each rep progressively hotter -> rising floor.
+        for pct, rest in zip([72, 77, 81], structure["rest_segments"]):
+            rest["restart_pct_max"] = pct
+        kpis = build_interval_kpis(structure)
+        assert kpis["recovery_floor"]["trend"] == "rising"
+        assert kpis["recovery_floor"]["first_pct_max"] == 72
+        assert kpis["recovery_floor"]["last_pct_max"] == 81
+        assert kpis["recovery_floor"]["delta_pct"] == 9
+
+    def test_flat_recovery_floor_reads_flat(self):
+        structure = _make_interval_structure(reps=4, include_hr=True)
+        for rest in structure["rest_segments"]:
+            rest["restart_pct_max"] = 75
+        kpis = build_interval_kpis(structure)
+        assert kpis["recovery_floor"]["trend"] == "flat"
 
     def test_z4_plus_only_when_calibrated(self):
         structure = _make_interval_structure(reps=4)
@@ -261,12 +285,13 @@ class TestBuildIntervalKPIs:
         kpis = build_interval_kpis(structure, zones_calibrated=True, time_in_zones=zones)
         assert kpis["total_z4_plus_s"] == 300
 
-    def test_single_rep_no_fade(self):
+    def test_single_rep_no_pace_trend(self):
         structure = _make_interval_structure(reps=1)
         kpis = build_interval_kpis(structure)
-        assert kpis["first_vs_last_fade"] is None
+        assert kpis["pace"] is None
 
-    def test_no_hr_recovery_quality_none(self):
+    def test_no_hr_recovery_floor_none(self):
+        # Without HR the segments carry no restart floor -> abstain.
         structure = _make_interval_structure(reps=4, include_hr=False)
         kpis = build_interval_kpis(structure)
-        assert kpis["recovery_quality_per_60s"] is None
+        assert kpis["recovery_floor"] is None

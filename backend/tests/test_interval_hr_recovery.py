@@ -21,6 +21,7 @@ from app.services.analysis.intervals import (
     _hr_window_by_time,
     detect_intervals_from_laps,
 )
+from app.services.analysis.workout_matching import build_interval_kpis
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "interval_recovery_real.json"
 
@@ -96,3 +97,33 @@ class TestRealSessionRecovery:
         result = detect_intervals_from_laps({"laps": laps})  # no streams
         assert result is not None
         assert all(r["hr_recovery_bpm"] is None for r in result["rest_segments"])
+
+
+class TestRealSessionCoachView:
+    """The coach-facing shape (#637): per-rep pace/%max, per-rest restart floor,
+    and the two trends, on the same real 7x400m session (max HR 190)."""
+
+    def _run(self):
+        data = json.loads(_FIXTURE.read_text())
+        streams = {"heartrate": data["heartrate"], "time": data["time"]}
+        return detect_intervals_from_laps({"laps": data["laps"]}, streams, max_hr=190)
+
+    def test_per_rep_pace_and_effort(self):
+        reps = self._run()["work_segments"]
+        # Pace in s/km (3:45, 3:42, ... then the middle-set fade), effort as %max.
+        assert [r["pace_s_per_km"] for r in reps] == [225, 222, 230, 248, 242, 245, 238]
+        assert [r["peak_hr_pct_max"] for r in reps] == [95, 97, 96, 97, 96, 98, 98]
+
+    def test_per_rest_restart_floor_rises(self):
+        rests = self._run()["rest_segments"]
+        # The runner restarts each rep progressively hotter -- the fatigue tell.
+        assert [r["restart_pct_max"] for r in rests] == [72, 74, 77, 79, 81, 80]
+
+    def test_kpis_read_the_trends(self):
+        kpis = build_interval_kpis(self._run(), max_hr=190)
+        assert kpis["pace"]["direction"] == "fading"
+        assert kpis["pace"]["first_s_per_km"] == 225
+        assert kpis["pace"]["last_s_per_km"] == 238
+        assert kpis["recovery_floor"]["trend"] == "rising"
+        assert kpis["recovery_floor"]["first_pct_max"] == 72
+        assert kpis["recovery_floor"]["last_pct_max"] == 80
