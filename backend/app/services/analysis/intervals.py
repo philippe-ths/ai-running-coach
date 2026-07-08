@@ -32,6 +32,53 @@ _MIN_CLUSTER_SEPARATION = 1.3
 _STEADY_STATE_CV_THRESHOLD = 10.0
 
 
+def _hr_recovery_bpm(peak_hr, hr_window) -> Optional[float]:
+    """Peak-to-trough HR recovery: how far HR fell from the rep peak to its
+    lowest point during the recovery (#636).
+
+    This is the physiological quantity a runner means by "recovery" -- the drop
+    from the effort peak to the floor reached before the next rep. It replaces
+    the earlier ``peak - mean(recovery)`` definition, which understated recovery
+    and shrank toward zero as recovery jogs got harder even when the true drop
+    stayed large.
+
+    Returns None when the peak or the recovery HR window is missing, so a lap
+    session with no stream trough abstains rather than emitting a misleading
+    number.
+    """
+    if peak_hr is None or not hr_window:
+        return None
+    nums = [v for v in hr_window if isinstance(v, (int, float))]
+    if not nums:
+        return None
+    return round(float(peak_hr) - float(min(nums)), 1)
+
+
+def _hr_window_by_time(
+    hr_stream: Optional[List],
+    time_stream: Optional[List],
+    start_s: float,
+    end_s: float,
+) -> Optional[List]:
+    """HR samples whose elapsed stream time falls in ``[start_s, end_s)``.
+
+    The recovery window is selected by TIME, not by the lap's Strava record
+    indices: those indices reference the (different) resolution Strava computed
+    the lap against and do NOT line up with the stored stream, whereas the
+    ``time`` channel is a physical axis both share (#636). None when either
+    stream is missing or no sample falls in the window (e.g. a summary-only
+    import that never fetched streams)."""
+    if not hr_stream or not time_stream:
+        return None
+    n = min(len(hr_stream), len(time_stream))
+    window = [
+        hr_stream[i]
+        for i in range(n)
+        if start_s <= time_stream[i] < end_s
+    ]
+    return window or None
+
+
 def detect_intervals(
     streams_dict: Dict[str, List],
     activity_class: str,
@@ -128,15 +175,13 @@ def detect_intervals(
                 break
 
         avg_rest_hr = round(float(np.mean(hr_arr[rs:re_])), 1) if hr_arr is not None else None
+        rest_window = hr_arr[rs:re_].tolist() if hr_arr is not None else None
         rest_details.append({
             "segment_number": len(rest_details) + 1,
             "duration_s": rest["duration_s"],
             "avg_hr": avg_rest_hr,
-            "hr_recovery_bpm": (
-                round(prev_peak_hr - avg_rest_hr, 1)
-                if prev_peak_hr is not None and avg_rest_hr is not None
-                else None
-            ),
+            # Peak-to-trough recovery from the raw HR stream (#636).
+            "hr_recovery_bpm": _hr_recovery_bpm(prev_peak_hr, rest_window),
         })
 
     return {
@@ -393,7 +438,10 @@ def _split_laps_work_rest(speeds: List[float]) -> Optional[List[bool]]:
     return [s >= threshold for s in speeds]
 
 
-def detect_intervals_from_laps(raw_summary: Optional[dict]) -> Optional[dict]:
+def detect_intervals_from_laps(
+    raw_summary: Optional[dict],
+    streams_dict: Optional[Dict[str, List]] = None,
+) -> Optional[dict]:
     """Build interval structure from the runner's recorded Strava laps.
 
     Returns the same dict contract as `detect_intervals` (plus a
@@ -480,6 +528,8 @@ def detect_intervals_from_laps(raw_summary: Optional[dict]) -> Optional[dict]:
         })
 
     # Rest segments: recovery laps that fall between the first and last work lap.
+    hr_stream = streams_dict.get("heartrate") if streams_dict else None
+    time_stream = streams_dict.get("time") if streams_dict else None
     rest_details = []
     for i in range(first_work + 1, last_work):
         if i in work_set:
@@ -492,15 +542,18 @@ def detect_intervals_from_laps(raw_summary: Optional[dict]) -> Optional[dict]:
             if j in work_set:
                 prev_peak_hr = laps[j].get("max_heartrate")
                 break
+        # Peak-to-trough recovery: the lap summary carries only avg/max HR (no
+        # trough), so read the trough from the raw HR stream over this recovery
+        # lap's elapsed-time window. Abstain when no stream is available rather
+        # than emit a misleading peak-minus-mean number (#636).
+        rest_window = _hr_window_by_time(
+            hr_stream, time_stream, starts[i], starts[i] + durations[i]
+        )
         rest_details.append({
             "segment_number": len(rest_details) + 1,
             "duration_s": durations[i],
             "avg_hr": avg_rest_hr,
-            "hr_recovery_bpm": (
-                round(float(prev_peak_hr) - avg_rest_hr, 1)
-                if prev_peak_hr is not None and avg_rest_hr is not None
-                else None
-            ),
+            "hr_recovery_bpm": _hr_recovery_bpm(prev_peak_hr, rest_window),
         })
 
     warmup_duration = (

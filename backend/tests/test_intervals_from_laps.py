@@ -175,7 +175,10 @@ class TestDetectIntervalsFromLaps:
         ):
             assert key in work, f"missing work_segment field {key}"
 
-    def test_rest_segment_fields_and_positive_recovery(self):
+    def test_rest_segment_fields_and_abstains_without_stream(self):
+        # The lap summary carries only avg/max HR, not the recovery trough, so
+        # peak-to-trough recovery abstains without the raw HR stream (#636).
+        # avg_hr remains (it is a lap-summary field).
         laps = _make_interval_laps(reps=4)
         result = detect_intervals_from_laps({"laps": laps})
 
@@ -184,8 +187,8 @@ class TestDetectIntervalsFromLaps:
         rest = result["rest_segments"][0]
         for key in ("segment_number", "duration_s", "avg_hr", "hr_recovery_bpm"):
             assert key in rest, f"missing rest_segment field {key}"
-        # work peak 185 - rest avg 150 = 35 bpm recovered.
-        assert rest["hr_recovery_bpm"] > 0
+        assert rest["avg_hr"] == 150.0
+        assert rest["hr_recovery_bpm"] is None
 
     def test_rep_distance_reflects_recorded_laps(self):
         """Rep distance comes from the recorded lap, not a stream re-derivation."""

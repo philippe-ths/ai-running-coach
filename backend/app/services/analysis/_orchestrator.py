@@ -235,7 +235,7 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     # usable laps are present (#170). The stream re-segmentation can smear short
     # reps, drop a recorded warmup, and fabricate rep variability that the
     # recorded laps do not contain.
-    lap_structure = detect_intervals_from_laps(activity.raw_summary)
+    lap_structure = detect_intervals_from_laps(activity.raw_summary, streams_dict)
     stream_structure = detect_intervals(streams_dict, "Intervals") if streams_dict else None
     interval_structure = lap_structure or stream_structure
     classification = classify_activity(
