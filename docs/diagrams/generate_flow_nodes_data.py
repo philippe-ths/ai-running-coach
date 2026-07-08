@@ -12,8 +12,8 @@ actually receives at the chosen prompt version. The hand-authored NODES / fate m
 helpers below the data in flow-nodes.js are left untouched.
 
 Usage:
-    python docs/diagrams/generate_flow_nodes_data.py                  # newest good activity, v12 (branch head)
-    PROMPT_ID=coach_message_v11 ACTIVITY_ID=<uuid> python ...         # pin both (e.g. to the live prod prompt)
+    python docs/diagrams/generate_flow_nodes_data.py                  # newest good activity, live prod prompt (lean_v1)
+    PROMPT_ID=coach_message_v14 ACTIVITY_ID=<uuid> python ...         # pin both (e.g. to a specific prompt / activity)
 
 Read-only against the DB; rewrites only the two generated lines of flow-nodes.js.
 Local DB only.
@@ -46,13 +46,14 @@ from app.services.coach.service import (  # noqa: E402
     _resolve_voice_for_activity,
 )
 
-# Default to this branch's HEAD prompt so the diagram is a one-to-one picture of the
-# fullest pack the code can build. v13 (ADR 0025) adds pack.memory (the rewritten-from-
-# source runner memory profile) on top of v12's training_history (#561). Prod runs v13
-# (flipped 2026-06-29: COACH_PROMPT_ID=coach_message_v13 + COACH_MEMORY_ENABLED), so this
-# default capture matches live prod. pack.memory is absent only when the runner has no
-# graduated runner_memory profile yet (cold start drops the section).
-PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_v13")
+# Default to the live prod prompt so the diagram is a one-to-one picture of what the
+# coach actually receives in production. Prod flipped to coach_message_lean_v1 on
+# 2026-07-07 (the disposition-first ground-up rewrite): it carries the SAME twelve
+# capabilities as coach_message_v14 (prompt-feature parity), so it receives the
+# IDENTICAL context pack — only the SYSTEM_PROMPT text differs (radically shorter).
+# pack.memory is absent only when the runner has no graduated runner_memory profile
+# yet (cold start drops the section).
+PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_lean_v1")
 TARGET = Path(__file__).parent / "flow-nodes.js"
 
 # DerivedMetric columns the diagram shows (order = render order; excludes id / fks /
@@ -255,6 +256,14 @@ def build_data(db):
             "primary_activity_id": str(block.primary_activity_id) if block.primary_activity_id else None,
         } if block else None,
         "smoothing": _smoothing(db, activity.id),
+        # The real COACH_*_ENABLED kill-switch states for THIS capture, so the diagram's
+        # #522 "turned off" banners render only when a switch is ACTUALLY off (not as a
+        # static claim that contradicts the data chips when everything is on).
+        "flags": {
+            k: getattr(settings, k)
+            for k in dir(settings)
+            if k.startswith("COACH_") and k.endswith("_ENABLED")
+        },
     }
     return data, system_prompt, activity
 
