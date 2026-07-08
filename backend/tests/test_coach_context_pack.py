@@ -348,6 +348,30 @@ def test_detected_session_keeps_structured_interval_group():
     assert "interval_workout" not in out
 
 
+def test_coach_view_drops_avg_speed_mps_from_work_segments():
+    """#637 coach-facing trim: the coach reads pace_s_per_km, so avg_speed_mps is
+    dropped from each work_segment in the serialised pack — while staying in the
+    stored model (where the speed CV / consistency calc needs it)."""
+    pack_dict = _legacy_full_pack()
+    pack_dict["metrics"]["interval_structure"] = {
+        "source": "recorded_laps",
+        "work_segments": [
+            {"duration_s": 90, "distance_m": 400.0, "avg_speed_mps": 4.44,
+             "pace_s_per_km": 225, "peak_hr_pct_max": 95},
+        ],
+        "rest_segments": [{"duration_s": 89, "restart_pct_max": 72}],
+        "summary": {"rep_count": 6},
+    }
+    pack_dict["metrics"]["workout_match"] = {"detection_confidence": "high", "match_score": 0.9}
+    pack = CoachContextPack.model_validate(pack_dict)
+    seg = pack.to_serializable_dict()["metrics"]["interval_structure"]["work_segments"][0]
+    assert "avg_speed_mps" not in seg          # dropped from the coach view
+    assert seg["pace_s_per_km"] == 225         # coach reads pace instead
+    assert seg["peak_hr_pct_max"] == 95
+    # The stored model is not mutated by serialisation.
+    assert pack.metrics.interval_structure["work_segments"][0]["avg_speed_mps"] == 4.44
+
+
 def test_old_verbose_no_session_pack_still_validates_and_collapses():
     """Backward compat: a pre-collapse stored pack (the three interval fields present and
     null, no `interval_workout`) still validates under extra='forbid', and re-serialises to

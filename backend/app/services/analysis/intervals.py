@@ -32,9 +32,81 @@ _MIN_CLUSTER_SEPARATION = 1.3
 _STEADY_STATE_CV_THRESHOLD = 10.0
 
 
+def _trough(hr_window) -> Optional[float]:
+    """The lowest HR reached in a recovery window -- the floor the runner drops
+    to before the next rep, i.e. roughly the HR they restart at. None when the
+    window is missing or carries no numeric samples."""
+    if not hr_window:
+        return None
+    nums = [v for v in hr_window if isinstance(v, (int, float))]
+    return float(min(nums)) if nums else None
+
+
+def _hr_recovery_bpm(peak_hr, hr_window) -> Optional[float]:
+    """Peak-to-trough HR recovery: how far HR fell from the rep peak to its
+    lowest point during the recovery (#636).
+
+    This is the physiological quantity a runner means by "recovery" -- the drop
+    from the effort peak to the floor reached before the next rep. It replaces
+    the earlier ``peak - mean(recovery)`` definition, which understated recovery
+    and shrank toward zero as recovery jogs got harder even when the true drop
+    stayed large.
+
+    Returns None when the peak or the recovery HR window is missing, so a lap
+    session with no stream trough abstains rather than emitting a misleading
+    number.
+    """
+    trough = _trough(hr_window)
+    if peak_hr is None or trough is None:
+        return None
+    return round(float(peak_hr) - trough, 1)
+
+
+def _pace_s_per_km(distance_m, duration_s) -> Optional[int]:
+    """Rep pace in seconds per kilometre -- what a coach reads, unlike raw m/s.
+    None when distance or duration is missing/zero."""
+    if not distance_m or distance_m <= 0 or not duration_s or duration_s <= 0:
+        return None
+    return int(round(float(duration_s) / (float(distance_m) / 1000.0)))
+
+
+def _pct_max(hr, max_hr) -> Optional[int]:
+    """HR as a percentage of the athlete's max -- the reference frame a coach
+    reads effort in, not raw bpm. None when either input is missing."""
+    if hr is None or not max_hr or max_hr <= 0:
+        return None
+    return int(round(float(hr) / float(max_hr) * 100))
+
+
+def _hr_window_by_time(
+    hr_stream: Optional[List],
+    time_stream: Optional[List],
+    start_s: float,
+    end_s: float,
+) -> Optional[List]:
+    """HR samples whose elapsed stream time falls in ``[start_s, end_s)``.
+
+    The recovery window is selected by TIME, not by the lap's Strava record
+    indices: those indices reference the (different) resolution Strava computed
+    the lap against and do NOT line up with the stored stream, whereas the
+    ``time`` channel is a physical axis both share (#636). None when either
+    stream is missing or no sample falls in the window (e.g. a summary-only
+    import that never fetched streams)."""
+    if not hr_stream or not time_stream:
+        return None
+    n = min(len(hr_stream), len(time_stream))
+    window = [
+        hr_stream[i]
+        for i in range(n)
+        if start_s <= time_stream[i] < end_s
+    ]
+    return window or None
+
+
 def detect_intervals(
     streams_dict: Dict[str, List],
     activity_class: str,
+    max_hr: Optional[int] = None,
 ) -> Optional[dict]:
     """
     Detect work/rest segments in an interval session.
@@ -102,14 +174,22 @@ def detect_intervals(
     work_details = []
     for idx, seg in enumerate(work_segs):
         s, e = seg["start"], seg["start"] + seg["duration_s"]
+        distance_m = (
+            round(float(distance_arr[min(e, len(distance_arr) - 1)] - distance_arr[s]), 1)
+            if distance_arr is not None else None
+        )
+        peak_hr = round(float(np.max(hr_arr[s:e])), 1) if hr_arr is not None else None
         detail = {
             "segment_number": idx + 1,
             "start_time_s": s,
             "duration_s": seg["duration_s"],
-            "distance_m": round(float(distance_arr[min(e, len(distance_arr) - 1)] - distance_arr[s]), 1) if distance_arr is not None else None,
+            "distance_m": distance_m,
             "avg_speed_mps": round(float(np.mean(vel_arr[s:e])), 2),
+            # Coach-facing reads (#637): pace, not raw m/s; effort as % of max HR.
+            "pace_s_per_km": _pace_s_per_km(distance_m, seg["duration_s"]),
             "avg_hr": round(float(np.mean(hr_arr[s:e])), 1) if hr_arr is not None else None,
-            "peak_hr": round(float(np.max(hr_arr[s:e])), 1) if hr_arr is not None else None,
+            "peak_hr": peak_hr,
+            "peak_hr_pct_max": _pct_max(peak_hr, max_hr),
         }
         work_details.append(detail)
 
@@ -128,15 +208,18 @@ def detect_intervals(
                 break
 
         avg_rest_hr = round(float(np.mean(hr_arr[rs:re_])), 1) if hr_arr is not None else None
+        rest_window = hr_arr[rs:re_].tolist() if hr_arr is not None else None
+        floor = _trough(rest_window)
         rest_details.append({
             "segment_number": len(rest_details) + 1,
             "duration_s": rest["duration_s"],
             "avg_hr": avg_rest_hr,
-            "hr_recovery_bpm": (
-                round(prev_peak_hr - avg_rest_hr, 1)
-                if prev_peak_hr is not None and avg_rest_hr is not None
-                else None
-            ),
+            # The floor the runner drops to (~the HR they restart the next rep
+            # at) and its % of max -- a rising restart is the fatigue tell (#637).
+            "restart_hr": round(floor, 1) if floor is not None else None,
+            "restart_pct_max": _pct_max(floor, max_hr),
+            # Peak-to-trough recovery from the raw HR stream (#636).
+            "hr_recovery_bpm": _hr_recovery_bpm(prev_peak_hr, rest_window),
         })
 
     return {
@@ -393,7 +476,11 @@ def _split_laps_work_rest(speeds: List[float]) -> Optional[List[bool]]:
     return [s >= threshold for s in speeds]
 
 
-def detect_intervals_from_laps(raw_summary: Optional[dict]) -> Optional[dict]:
+def detect_intervals_from_laps(
+    raw_summary: Optional[dict],
+    streams_dict: Optional[Dict[str, List]] = None,
+    max_hr: Optional[int] = None,
+) -> Optional[dict]:
     """Build interval structure from the runner's recorded Strava laps.
 
     Returns the same dict contract as `detect_intervals` (plus a
@@ -469,17 +556,24 @@ def detect_intervals_from_laps(raw_summary: Optional[dict]) -> Optional[dict]:
         avg_hr = lap.get("average_heartrate")
         peak_hr = lap.get("max_heartrate")
         distance = lap.get("distance")
+        distance_m = round(float(distance), 1) if distance is not None else None
+        peak_hr_r = round(float(peak_hr), 1) if peak_hr is not None else None
         work_details.append({
             "segment_number": seg_num,
             "start_time_s": starts[i],
             "duration_s": durations[i],
-            "distance_m": round(float(distance), 1) if distance is not None else None,
+            "distance_m": distance_m,
             "avg_speed_mps": round(float(speeds[i]), 2),
+            # Coach-facing reads (#637): pace, not raw m/s; effort as % of max HR.
+            "pace_s_per_km": _pace_s_per_km(distance_m, durations[i]),
             "avg_hr": round(float(avg_hr), 1) if avg_hr is not None else None,
-            "peak_hr": round(float(peak_hr), 1) if peak_hr is not None else None,
+            "peak_hr": peak_hr_r,
+            "peak_hr_pct_max": _pct_max(peak_hr_r, max_hr),
         })
 
     # Rest segments: recovery laps that fall between the first and last work lap.
+    hr_stream = streams_dict.get("heartrate") if streams_dict else None
+    time_stream = streams_dict.get("time") if streams_dict else None
     rest_details = []
     for i in range(first_work + 1, last_work):
         if i in work_set:
@@ -492,15 +586,23 @@ def detect_intervals_from_laps(raw_summary: Optional[dict]) -> Optional[dict]:
             if j in work_set:
                 prev_peak_hr = laps[j].get("max_heartrate")
                 break
+        # Peak-to-trough recovery: the lap summary carries only avg/max HR (no
+        # trough), so read the trough from the raw HR stream over this recovery
+        # lap's elapsed-time window. Abstain when no stream is available rather
+        # than emit a misleading peak-minus-mean number (#636).
+        rest_window = _hr_window_by_time(
+            hr_stream, time_stream, starts[i], starts[i] + durations[i]
+        )
+        floor = _trough(rest_window)
         rest_details.append({
             "segment_number": len(rest_details) + 1,
             "duration_s": durations[i],
             "avg_hr": avg_rest_hr,
-            "hr_recovery_bpm": (
-                round(float(prev_peak_hr) - avg_rest_hr, 1)
-                if prev_peak_hr is not None and avg_rest_hr is not None
-                else None
-            ),
+            # The floor the runner drops to (~the HR they restart the next rep
+            # at) and its % of max -- a rising restart is the fatigue tell (#637).
+            "restart_hr": round(floor, 1) if floor is not None else None,
+            "restart_pct_max": _pct_max(floor, max_hr),
+            "hr_recovery_bpm": _hr_recovery_bpm(prev_peak_hr, rest_window),
         })
 
     warmup_duration = (

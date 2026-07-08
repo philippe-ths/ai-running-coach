@@ -982,6 +982,16 @@ class CoachContextPack(BaseModel):
             ds = metrics.get("discount_signals")
             if isinstance(ds, dict):
                 ds.pop("hr_drift_pct", None)
+            # Coach-facing trim (#637): the coach reads pace_s_per_km, not raw m/s.
+            # Drop avg_speed_mps from each work_segment in the coach view; it stays
+            # in the stored artifact (where _summarize's speed CV / consistency
+            # still needs it). Serialization-only, so re-parse of a stored pack is
+            # unaffected.
+            istruct = metrics.get("interval_structure")
+            if isinstance(istruct, dict):
+                for seg in istruct.get("work_segments") or []:
+                    if isinstance(seg, dict):
+                        seg.pop("avg_speed_mps", None)
         # One-fact-one-place fold (the analytical sections restated a scalar that has
         # its own home elsewhere in the pack). Drop the copy at serialization; each
         # field stays declared so a stored pre-fold pack still re-parses. Sole homes:

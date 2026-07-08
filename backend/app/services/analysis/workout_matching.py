@@ -9,6 +9,11 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+# Deadbands so a trivial rep-to-rep wobble is read as "holding"/"flat" rather
+# than manufacturing a fade or a fatigue trend (#637).
+_PACE_FADE_DEADBAND_S = 5      # s/km first->last before it counts as fade/negative-split
+_FLOOR_TREND_DEADBAND_PCT = 3  # % of max the restart floor must move to count as a trend
+
 
 def match_planned_to_detected(
     interval_structure: Optional[dict],
@@ -203,10 +208,12 @@ def build_interval_kpis(
     """
     Compute interval-specific coaching KPIs from detected structure.
 
-    Returns dict with:
-        rep_pace_consistency_cv: speed CV across reps
-        recovery_quality_per_60s: avg HR drop normalized to 60s recovery
-        first_vs_last_fade: speed ratio of last rep to first rep
+    Trend-led so the coaching story falls out of the data instead of being
+    read off isolated points (#637). Returns dict with:
+        rep_pace_consistency_cv: how even the reps were (speed CV %)
+        pace: {first_s_per_km, last_s_per_km, fade_s_per_km, direction} across reps
+        recovery_floor: {first_pct_max, last_pct_max, delta_pct, trend} -- the HR
+            the runner restarts each rep at; a RISING floor is the fatigue tell
         work_rest_ratio: actual work:rest
         total_z4_plus_s: seconds in Z4+Z5 (only if zones calibrated)
     """
@@ -216,33 +223,50 @@ def build_interval_kpis(
 
     kpis: Dict[str, Any] = {}
 
-    # Rep pace consistency (speed CV)
+    # Rep pace consistency (how even the reps were).
     kpis["rep_pace_consistency_cv"] = summary.get("work_speed_cv")
 
-    # First vs last rep fade
-    if len(work_segments) >= 2:
-        first_speed = work_segments[0].get("avg_speed_mps")
-        last_speed = work_segments[-1].get("avg_speed_mps")
-        if first_speed and last_speed and first_speed > 0:
-            kpis["first_vs_last_fade"] = round(last_speed / first_speed, 2)
-        else:
-            kpis["first_vs_last_fade"] = None
+    # Pace across reps, in coach units (s/km): where it started, where it ended,
+    # and the fade. Positive fade = slower (fading); negative = negative split.
+    paces = [w.get("pace_s_per_km") for w in work_segments if w.get("pace_s_per_km")]
+    if len(paces) >= 2:
+        fade = paces[-1] - paces[0]
+        direction = (
+            "fading" if fade > _PACE_FADE_DEADBAND_S
+            else "negative_split" if fade < -_PACE_FADE_DEADBAND_S
+            else "holding"
+        )
+        kpis["pace"] = {
+            "first_s_per_km": paces[0],
+            "last_s_per_km": paces[-1],
+            "fade_s_per_km": fade,
+            "direction": direction,
+        }
     else:
-        kpis["first_vs_last_fade"] = None
+        kpis["pace"] = None
 
-    # Recovery quality: HR drop per 60s of recovery
-    hr_drops_per_60 = []
-    for rest in rest_segments:
-        recovery_bpm = rest.get("hr_recovery_bpm")
-        duration = rest.get("duration_s")
-        if recovery_bpm is not None and duration and duration > 0:
-            # Normalize to 60s
-            drop_per_60 = (recovery_bpm / duration) * 60.0
-            hr_drops_per_60.append(drop_per_60)
-    if hr_drops_per_60:
-        kpis["recovery_quality_per_60s"] = round(float(np.mean(hr_drops_per_60)), 1)
+    # Recovery floor across the session: the HR the runner restarts each rep at,
+    # as % of max. A RISING floor means recovery was getting incomplete -- the
+    # clearest fatigue signal in the set, and the one the raw per-rest drop hid.
+    floors = [
+        r.get("restart_pct_max") for r in rest_segments
+        if r.get("restart_pct_max") is not None
+    ]
+    if len(floors) >= 2:
+        delta = floors[-1] - floors[0]
+        trend = (
+            "rising" if delta >= _FLOOR_TREND_DEADBAND_PCT
+            else "falling" if delta <= -_FLOOR_TREND_DEADBAND_PCT
+            else "flat"
+        )
+        kpis["recovery_floor"] = {
+            "first_pct_max": floors[0],
+            "last_pct_max": floors[-1],
+            "delta_pct": delta,
+            "trend": trend,
+        }
     else:
-        kpis["recovery_quality_per_60s"] = None
+        kpis["recovery_floor"] = None
 
     # Work:rest ratio
     kpis["work_rest_ratio"] = summary.get("work_to_rest_ratio")
