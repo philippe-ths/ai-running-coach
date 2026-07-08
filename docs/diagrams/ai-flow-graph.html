@@ -246,7 +246,7 @@
 
   <div class="kgrp">Node state</div>
   <div class="krow"><span class="kmark"><span style="color:#5eead4;font-size:15px;line-height:1">▶</span></span><div class="ktext"><b>Start of chain</b> — nothing precedes this node; it is a raw input the pipeline begins from.</div></div>
-  <div class="krow"><span class="kmark"><span class="sw" style="background:#15171c;border:1px dashed #6b7280"></span></span><div class="ktext"><b>Off by default</b> (dashed + dimmed) — a section disabled by config; it still rides the pack but emits empty.</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:#15171c;border:1px dashed #6b7280"></span></span><div class="ktext"><b>Empty this run</b> (dashed + dimmed) — computed from THIS capture: the node carries no active content for this run (absent, config-disabled, or emitted empty). It goes solid on a run/runner where it IS populated.</div></div>
 
   <div class="kgrp">Edges — appear when you click a node</div>
   <div class="krow"><span class="kmark"><span class="dash" style="border-color:var(--up)"></span></span><div class="ktext"><b>Came from</b> (cyan) — the upstream lineage this node's data was built from.</div></div>
@@ -398,10 +398,39 @@ NODES.forEach(n=>(n.from||[]).forEach(s=>{
 /* ----- nodes ----- */
 const isOrigin = n => !(n.from && n.from.length);     // nothing precedes it — a chain start
 const isTerminal = n => !(consumers[n.id] && consumers[n.id].length);  // nothing follows it
+
+// A node's "off" (dashed + dimmed) state is COMPUTED from THIS capture, not a static
+// hand-authored default, so the graph is one-to-one with what the coach actually received
+// (a runner who declared a voice/stance, or a run that carries adherence/salience, shows
+// those nodes live — not stale-dashed). Each conditionally-emitted node has a rule that is
+// true only when its section / prompt-injection carries active content for this run; every
+// other node has no rule and keeps its (absent) static n.off.
+const _len = a => Array.isArray(a) ? a.length : 0;
+const NODE_ACTIVE = {
+  // pack sections — active when they carry real content for this run, not just an empty shell
+  p_longitudinal: () => !!(P.longitudinal && (_len(P.longitudinal.prior_reports) || P.longitudinal.baseline_trend)),
+  p_adherence:    () => !!(P.adherence && _len(P.adherence.outcomes)),
+  p_salience:     () => !!(P.salience && (_len(P.salience.novelty && P.salience.novelty.first_of_kind) || (P.salience.safety_override && P.salience.safety_override.force_fuller))),
+  p_continuity:   () => !!(P.continuity && (P.continuity.opener_message || P.continuity.reply)),
+  // system-prompt injections — active when the block is actually present in SYSTEM_PROMPT
+  playbook:       () => /\n[A-Z][A-Z ]+FOCUS:/.test(SYSTEM_PROMPT),
+  voice_block:    () => SYSTEM_PROMPT.indexOf('YOUR VOICE FOR THIS RUNNER') !== -1,
+  // source (deriv/ingest) nodes — mirror their pack consumer, or test their own presence
+  d_baseline:     () => !!(P.longitudinal && P.longitudinal.baseline_trend),
+  d_salience:     () => NODE_ACTIVE.p_salience(),
+  d_memory:       () => NODE_ACTIVE.p_adherence(),
+  d_relationship: () => !!(D.relationship && (D.relationship.voice_preset || D.relationship.stance_school || D.relationship.voice_warmth != null || D.relationship.stance_data_sentiment != null)),
+  d_corpus:       () => !!(P.corpus && P.corpus.school),
+  user_material:  () => !!(P.corpus && _len(P.corpus.user_materials)),
+};
+function nodeOff(n){
+  const rule = NODE_ACTIVE[n.id];
+  return rule ? !rule() : !!n.off;
+}
 const nodeEls={};
 NODES.forEach(n=>{
   const p=pos[n.id]; if(!p) return;
-  const cls='node'+(n.off?' off':'')+(isOrigin(n)?' origin':'')+(isTerminal(n)?' terminal':'');
+  const cls='node'+(nodeOff(n)?' off':'')+(isOrigin(n)?' origin':'')+(isTerminal(n)?' terminal':'');
   const g=document.createElementNS(SVGNS,'g'); g.setAttribute('class',cls); g.dataset.id=n.id;
   g.setAttribute('transform',`translate(${p.x},${p.y})`);
   g.style.setProperty('--kind', KCOL[n.kind]||'#8892a0');  // drives the node's fill/border tint (CSS)
@@ -418,7 +447,7 @@ NODES.forEach(n=>{
     const cap=document.createElementNS(SVGNS,'path'); cap.setAttribute('class','startcap');
     cap.setAttribute('d',`M-12,${NH/2} L-4,${NH/2-6} L-4,${NH/2+6} Z`); g.appendChild(cap);
   }
-  if(n.badge){ const b=document.createElementNS(SVGNS,'circle'); b.setAttribute('cx',NW-11); b.setAttribute('cy',11); b.setAttribute('r',4); b.setAttribute('fill','#ef4444'); g.appendChild(b); }
+  if(n.badge && nodeOff(n)){ const b=document.createElementNS(SVGNS,'circle'); b.setAttribute('cx',NW-11); b.setAttribute('cy',11); b.setAttribute('r',4); b.setAttribute('fill','#ef4444'); g.appendChild(b); }
   g.addEventListener('click', e=>{ e.stopPropagation(); select(n.id); });
   cam.appendChild(g); nodeEls[n.id]=g;
 });
@@ -468,17 +497,17 @@ function clearSel(){
 
 /* ----- drawer ----- */
 const drawer=document.getElementById('drawer');
-function chip(i, cls){ return '<span class="chip '+cls+(byId[i].off?' off':'')+'" data-go="'+i+'">'+esc(shortLabel(byId[i]))+'</span>'; }
-function relGroup(ids, cls){ // live chips first, off-by-default ones broken out below
-  const on=ids.filter(i=>!byId[i].off), off=ids.filter(i=>byId[i].off);
+function chip(i, cls){ return '<span class="chip '+cls+(nodeOff(byId[i])?' off':'')+'" data-go="'+i+'">'+esc(shortLabel(byId[i]))+'</span>'; }
+function relGroup(ids, cls){ // live chips first, empty-for-this-run ones broken out below
+  const on=ids.filter(i=>!nodeOff(byId[i])), off=ids.filter(i=>nodeOff(byId[i]));
   let h=on.map(i=>chip(i,cls)).join('');
-  if(off.length) h+='<div class="offsub"><span class="offlbl">off by default</span>'+off.map(i=>chip(i,cls)).join('')+'</div>';
+  if(off.length) h+='<div class="offsub"><span class="offlbl">empty this run</span>'+off.map(i=>chip(i,cls)).join('')+'</div>';
   return h;
 }
 function openDrawer(id, up, down){
   const n=byId[id];
   document.getElementById('dTag').textContent=n.tag; document.getElementById('dTag').className='tag '+n.kind;
-  document.getElementById('dTitle').innerHTML=esc(n.title)+(n.off?' <span class="offpill">off by default</span>':'');
+  document.getElementById('dTitle').innerHTML=esc(n.title)+(nodeOff(n)?' <span class="offpill">empty this run</span>':'');
   document.getElementById('dPath').textContent=n.path||'';
   const froms=(n.from||[]), feeds=(consumers[id]||[]);
   document.getElementById('dRel').innerHTML=
