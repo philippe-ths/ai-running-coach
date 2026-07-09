@@ -26,6 +26,9 @@ class ActivityContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     date: str
+    # #650: the run's weekday as the coach's "today" anchor, so it never derives the day
+    # of week from the date string. Optional so packs stored before #650 still validate.
+    weekday: Optional[str] = None
     name: Optional[str]
     type: Optional[str]
     distance_m: Optional[int]
@@ -633,6 +636,17 @@ class RecentActivityItem(BaseModel):
     # without these keys) still validate under extra="forbid" on strict re-parse.
     distance_m: Optional[int] = None
     moving_time_s: Optional[int] = None
+    # #650: the session's weekday as GIVEN data (never derived from a date string), its
+    # structure, and a compact rep shape for interval sessions — so the coach can place
+    # the session in the week and recognise past rep work without asking. All Optional so
+    # packs stored before #650 still validate on strict re-parse.
+    weekday: Optional[str] = None
+    structure: Optional[str] = None  # continuous | intervals (the classifier verdict)
+    interval_shape: Optional[str] = None  # e.g. "7x400m"; None for a continuous run
+    # #650: the classifier's runner-RELATIVE "long run" verdict, surfaced only when long
+    # (None otherwise) so the coach recognises a past long run without guessing a
+    # per-runner distance threshold. The symmetric case to the interval marker.
+    long_run: Optional[bool] = None
 
 
 class RecentComparison(BaseModel):
@@ -962,6 +976,12 @@ class CoachContextPack(BaseModel):
                 data.pop(section.field, None)
             elif section.nested_drop is not None:
                 section.nested_drop(value, data)
+        # #650: the "today" weekday anchor is always populated on a freshly built pack;
+        # drop it only when None so a pack STORED before #650 (no weekday key) still
+        # serialises byte-identically (the A2b legacy-dict round-trip invariant).
+        act = data.get("activity")
+        if isinstance(act, dict) and act.get("weekday") is None:
+            act.pop("weekday", None)
         metrics = data.get("metrics")
         if isinstance(metrics, dict):
             # Collapse the gated interval/workout group to ONE signal when no session was
@@ -1134,6 +1154,14 @@ def _drop_recent_training_dedup(rt: Dict[str, Any], _data: Dict[str, Any]) -> No
         for comp in win.get("comparisons", []):
             for k in [k for k, v in comp.items() if v is None]:
                 comp.pop(k, None)
+        # #650: drop the null session-shape fields so they cost no tokens — a continuous
+        # run has no rep shape, and a non-run (ride/walk) has no running structure at all.
+        # weekday is always populated (from the date), so it stays. Re-parse safe: both
+        # default to None when absent.
+        for act in win.get("activities", []):
+            for k in ("structure", "interval_shape", "long_run"):
+                if act.get(k) is None:
+                    act.pop(k, None)
 
 
 # One descriptor per droppable Optional section. Order matches the historical

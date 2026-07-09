@@ -66,6 +66,32 @@ def _unknown_type(fact: Any) -> str:
     return (getattr(fact, "activity_type", None) or "unknown")
 
 
+def _interval_shape(interval_structure: Any) -> Optional[str]:
+    """#650: a compact rep shape ("7x400m") for a past session's per-session marker,
+    read from the stored `interval_structure`'s work segments so the coach can see at a
+    glance what a recent interval session was (cadence tracking, plan recognition)
+    without re-deriving it. Returns None when there is no rep structure to describe.
+
+    Distances are clustered to the nearest 50m so honest GPS jitter (398/402m) reads as
+    "400m"; when the reps carry no usable distance (time-based reps) it falls back to a
+    plain rep count ("6 reps")."""
+    if not isinstance(interval_structure, dict):
+        return None
+    segments = interval_structure.get("work_segments") or []
+    n = len(segments)
+    if n == 0:
+        return None
+    dists = [s.get("distance_m") for s in segments if isinstance(s, dict) and s.get("distance_m")]
+    if not dists:
+        return f"{n} reps"
+    dists.sort()
+    median = dists[len(dists) // 2]
+    rounded = int(round(median / 50.0)) * 50
+    if rounded <= 0:
+        return f"{n} reps"
+    return f"{n}x{rounded}m"
+
+
 def _by_type(window_facts: List[Any]) -> List[RecentTypeBreakdown]:
     """Per-activity-type counts + totals + the type's session share of the window,
     most-frequent type first (ties broken by type name for determinism)."""
@@ -113,6 +139,12 @@ def _recent_activities(window_facts: List[Any]) -> List[RecentActivityItem]:
             # #647: per-run volume from the same fact; facts carry these (default 0).
             distance_m=int(f.distance_m) if f.distance_m is not None else None,
             moving_time_s=int(f.moving_time_s) if f.moving_time_s is not None else None,
+            # #650: weekday as given data + structure + compact rep shape, plus the
+            # runner-relative "long run" verdict surfaced only when long.
+            weekday=f.local_date.strftime("%a"),
+            structure=getattr(f, "structure", None),
+            interval_shape=_interval_shape(getattr(f, "interval_structure", None)),
+            long_run=True if getattr(f, "duration_class", None) == "long" else None,
         )
         for f in ordered
     ]
