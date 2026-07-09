@@ -443,7 +443,9 @@ def _build_recent_training_context(
     directions."""
     local_day = activity.local_start.date()
     facts = _query_activity_facts(
-        db, local_day - timedelta(days=210), local_day + timedelta(days=1), user_id=activity.user_id
+        db, local_day - timedelta(days=210), local_day + timedelta(days=1),
+        user_id=activity.user_id,
+        include_session_shape=True,  # #650: the per-session structure + rep-shape marker
     )
     return build_recent_training(
         facts, local_day, include_previous_30d=settings.COACH_PREVIOUS_30D_ENABLED
@@ -808,6 +810,7 @@ def build_focus_payload(
     return FocusPayload(
         activity=ActivityContext(
             date=subject.local_start.isoformat(),  # local wall-clock (#399)
+            weekday=subject.local_start.strftime("%a"),  # #650: the "today" anchor
             name=subject.name,
             type=subject.user_intent or subject.type,
             distance_m=subject.distance_m,

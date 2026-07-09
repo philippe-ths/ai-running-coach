@@ -20,7 +20,8 @@ from app.services.coach.recent_training import _MAX_RECENT_ACTIVITIES, build_rec
 _AS_OF = date(2026, 6, 1)
 
 
-def _fact(days_ago, *, type="Run", dist=8000, time=2400, effort_score=50.0, effort="easy"):
+def _fact(days_ago, *, type="Run", dist=8000, time=2400, effort_score=50.0, effort="easy",
+          structure="continuous", interval_structure=None, duration_class="standard"):
     return SimpleNamespace(
         activity_id=uuid.uuid4(),
         local_date=date.fromordinal(_AS_OF.toordinal() - days_ago),
@@ -29,6 +30,9 @@ def _fact(days_ago, *, type="Run", dist=8000, time=2400, effort_score=50.0, effo
         moving_time_s=time,
         effort_score=effort_score,
         effort=effort,
+        structure=structure,
+        interval_structure=interval_structure,
+        duration_class=duration_class,
     )
 
 
@@ -92,6 +96,58 @@ def test_recent_window_activity_carries_distance_and_duration():
     item = ctx.last_7d.activities[0]
     assert item.distance_m == 15200
     assert item.moving_time_s == 5400
+
+
+# --- #650: compact rep-shape helper ----------------------------------------
+
+def test_interval_shape_reads_rep_count_and_typical_distance():
+    """#650: a compact per-session rep shape ("7x400m") the coach can read at a
+    glance, derived from the stored interval structure's work segments."""
+    from app.services.coach.recent_training import _interval_shape
+    struct = {
+        "work_segments": [{"distance_m": 400.0} for _ in range(7)],
+    }
+    assert _interval_shape(struct) == "7x400m"
+
+
+def test_interval_shape_none_without_work_segments():
+    from app.services.coach.recent_training import _interval_shape
+    assert _interval_shape(None) is None
+    assert _interval_shape({}) is None
+    assert _interval_shape({"work_segments": []}) is None
+
+
+def test_recent_session_carries_weekday_structure_and_shape():
+    """#650: each recent session is tagged with its weekday (given, not derived from a
+    date string), its structure, and a compact rep shape for interval sessions, so the
+    coach can place sessions in the week and recognise past rep work without asking."""
+    struct = {"work_segments": [{"distance_m": 400.0} for _ in range(7)]}
+    facts = [
+        _fact(0, type="Run", structure="intervals", interval_structure=struct),  # 2026-06-01, a Monday
+        _fact(1, type="Run", structure="continuous"),                            # 2026-05-31, a Sunday
+    ]
+    ctx = build_recent_training(facts, _AS_OF)
+    interval = ctx.last_7d.activities[0]
+    assert interval.weekday == "Mon"
+    assert interval.structure == "intervals"
+    assert interval.interval_shape == "7x400m"
+    easy = ctx.last_7d.activities[1]
+    assert easy.weekday == "Sun"
+    assert easy.structure == "continuous"
+    assert easy.interval_shape is None  # a continuous run has no rep shape
+
+
+def test_recent_session_marks_long_run_only_when_long():
+    """#650: a recent session carries a long-run marker ONLY when the classifier's
+    runner-relative verdict is "long" — a standard run stays unmarked (no per-session
+    noise), the symmetric case to the interval marker."""
+    facts = [
+        _fact(0, type="Run", dist=25000, time=9000, duration_class="long"),
+        _fact(1, type="Run", dist=8000, time=2400, duration_class="standard"),
+    ]
+    ctx = build_recent_training(facts, _AS_OF)
+    assert ctx.last_7d.activities[0].long_run is True
+    assert ctx.last_7d.activities[1].long_run is None  # standard run is unmarked
 
 
 # --- vs-prev ---------------------------------------------------------------
@@ -236,6 +292,52 @@ def test_recent_training_in_default_pack_only_under_v11(db):
         assert "recent_training_summary" not in pack.to_serializable_dict()
 
 
+def test_activity_context_carries_weekday_anchor(db):
+    """#650: the subject activity carries its weekday as the coach's "today" anchor,
+    present under every prompt (not gated), so the coach never derives the day of week
+    from a date string. 2026-06-01 is a Monday."""
+    activity = _seed(db)
+    pack = build_context_pack(db, activity)
+    assert pack.activity.weekday == "Mon"
+    assert pack.to_serializable_dict()["activity"]["weekday"] == "Mon"
+
+
+def test_recent_session_shape_reaches_pack_from_the_db(db):
+    """#650: the per-session structure + rep shape travel the REAL facts path (the
+    opt-in shape projection on the shared query) into the serialized recent-training
+    section, so the coach reads a past interval session as fact."""
+    user = User(id=uuid.uuid4(), email=f"rt-{uuid.uuid4()}@example.com")
+    db.add(user)
+    db.flush()
+    activity = Activity(
+        id=uuid.uuid4(), user_id=user.id,
+        strava_activity_id=abs(hash(str(uuid.uuid4()))) % 10**9,
+        name="Intervals", type="Run",
+        start_date=datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc),
+        distance_m=9000, moving_time_s=2400, elapsed_time_s=2400,
+        avg_hr=165.0, raw_summary={},
+    )
+    db.add(activity)
+    db.flush()
+    db.add(DerivedMetric(
+        id=uuid.uuid4(), activity_id=activity.id,
+        effort="tempo", structure="intervals", duration_class="long",
+        effort_score=100.0, flags=[], confidence="high", confidence_reasons=[],
+        interval_structure={"work_segments": [{"distance_m": 400.0} for _ in range(7)]},
+    ))
+    db.flush()
+    db.refresh(activity)
+
+    serialized = build_context_pack(
+        db, activity, prompt_id="coach_message_v11"
+    ).to_serializable_dict()
+    session = serialized["recent_training"]["last_7d"]["activities"][0]
+    assert session["weekday"] == "Mon"
+    assert session["structure"] == "intervals"
+    assert session["interval_shape"] == "7x400m"
+    assert session["long_run"] is True  # #650: the runner-relative long verdict travels too
+
+
 def test_serialization_drops_deduplicated_recent_training_fields(db):
     """Pack trim: the serialized recent-training section omits the deduplicated/empty
     fields so they cost no tokens — per-row current_all/current_runs/basis and the 7d
@@ -328,4 +430,21 @@ def test_pre_647_populated_activity_list_still_validates():
     )
     item = ctx.last_7d.activities[0]
     assert item.effort_score == 50.0  # the pre-647 fields still land
-    assert item.distance_m is None and item.moving_time_s is None  # new fields absent -> None
+    assert item.distance_m is None and item.moving_time_s is None  # #647 fields absent -> None
+    # #650 fields likewise absent on a pre-650 stored entry -> None (no strict-parse break).
+    assert item.weekday is None and item.structure is None and item.interval_shape is None
+    assert item.long_run is None
+
+
+def test_pre_650_activity_context_without_weekday_still_validates():
+    """#650: a subject-activity section stored before the weekday anchor existed must
+    still validate under extra='forbid'; the missing weekday resolves to None."""
+    from app.schemas.coach_context import ActivityContext
+    old = {
+        "date": "2026-06-01T10:00:00", "name": "Run", "type": "Run",
+        "distance_m": 10000, "moving_time_s": 3600, "avg_hr": 150.0, "max_hr": 170.0,
+        "avg_cadence": 170.0, "elev_gain_m": 50.0,
+    }
+    ctx = ActivityContext.model_validate(old)
+    assert ctx.date == "2026-06-01T10:00:00"
+    assert ctx.weekday is None

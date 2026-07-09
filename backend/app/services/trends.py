@@ -51,6 +51,9 @@ class ActivityFact:
         "distance_m", "moving_time_s", "elapsed_time_s",
         "elev_gain_m", "avg_hr", "avg_cadence", "average_speed_mps",
         "effort_score", "effort", "time_in_zones",
+        # #650: session shape, projected ONLY when a caller opts in
+        # (include_session_shape); None otherwise, so the wide/10-year scans stay lean.
+        "structure", "interval_structure", "duration_class",
     )
 
     def __init__(self, activity: Activity):
@@ -76,6 +79,17 @@ class ActivityFact:
         )
         self.time_in_zones: Optional[dict] = (
             activity.metrics.time_in_zones if activity.metrics else None
+        )
+        # #650: session shape (classifier structure + interval structure) for the
+        # per-session marker; None when there is no DerivedMetric.
+        self.structure: Optional[str] = (
+            activity.metrics.structure if activity.metrics else None
+        )
+        self.interval_structure: Optional[dict] = (
+            activity.metrics.interval_structure if activity.metrics else None
+        )
+        self.duration_class: Optional[str] = (
+            activity.metrics.duration_class if activity.metrics else None
         )
 
     @classmethod
@@ -104,6 +118,11 @@ class ActivityFact:
         self.effort_score = row.effort_score
         self.effort = row.effort
         self.time_in_zones = row.time_in_zones
+        # #650: present only when the caller opted into the shape projection; absent
+        # from the lean default projection, so getattr falls back to None.
+        self.structure = getattr(row, "structure", None)
+        self.interval_structure = getattr(row, "interval_structure", None)
+        self.duration_class = getattr(row, "duration_class", None)
         return self
 
     @property
@@ -429,6 +448,7 @@ def _query_activity_facts(
     types: Optional[List[str]] = None,
     *,
     user_id=None,
+    include_session_shape: bool = False,
 ) -> List[ActivityFact]:
     """
     Internal helper to query activities by exact date range (start inclusive, end exclusive).
@@ -462,6 +482,17 @@ def _query_activity_facts(
             DerivedMetric.effort_score,
             DerivedMetric.effort,
             DerivedMetric.time_in_zones,
+            # #650: the session-shape columns ride the projection ONLY on opt-in, so the
+            # lean scans (trends, the 10-year training-history) never load them.
+            *(
+                (
+                    DerivedMetric.structure,
+                    DerivedMetric.interval_structure,
+                    DerivedMetric.duration_class,
+                )
+                if include_session_shape
+                else ()
+            ),
         )
         .outerjoin(DerivedMetric, DerivedMetric.activity_id == Activity.id)
         .where(Activity.is_deleted == False)  # noqa: E712
