@@ -217,7 +217,7 @@ def upsert_activity(db: Session, raw: dict, user_id) -> Activity:
     existing = db.execute(stmt).scalars().first()
 
     # Preserve recorded laps across a lap-less re-sync. The detail endpoint
-    # (webhook/polling, ingest_activity_by_id) returns the runner's `laps`;
+    # (webhook/self-heal, ingest_activity_by_id) returns the runner's `laps`;
     # the summary list endpoint (manual sync, backfill) does not. Without this,
     # a routine "Sync Now" would overwrite an activity's recorded laps with a
     # lap-less payload and re-analysis would silently downgrade its lap-sourced
@@ -419,7 +419,7 @@ RECONCILE_MAX_PER_RUN = 25
 
 def _assign_block(db: Session, activity) -> None:
     """A1: every newly-ingested activity is grouped into its Block here, so all
-    ingest paths (webhook, polling, manual sync, backfill) converge on the same
+    ingest paths (webhook, self-heal, manual sync, backfill) converge on the same
     grouping. A re-synced activity keeps its block. Guarded: a grouping failure
     must never break ingestion (the baseline-recompute pattern).
 

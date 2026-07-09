@@ -36,8 +36,8 @@ _MAX_INLINE_RETRY_AFTER_S = 5.0
 _MAX_PAGES = 40
 
 # Hard cap on how long we wait for a single Strava response. 30 s is well
-# above typical latency but short enough to free a worker within one polling
-# interval. Without this, a slow Strava response hangs the job queue forever.
+# above typical latency but short enough to free a stuck worker quickly.
+# Without this, a slow Strava response hangs the job queue forever.
 _HTTP_TIMEOUT_S = 30.0
 
 

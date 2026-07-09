@@ -135,8 +135,8 @@ class Settings(BaseSettings):
     # self-pacing job fetches streams + re-runs analysis for activities that
     # were imported summary-only. Each batch makes one Strava call per activity;
     # batch size over the pause must stay under Strava's 100-requests/15-min
-    # ceiling alongside polling. Default 20 calls per 300s = 60/15min, plus
-    # polling's ~7, stays well under 100. The backfill is one-time, so the daily
+    # ceiling. Default 20 calls per 300s = 60/15min stays well under 100 even
+    # alongside the webhook/self-heal ingest calls. The backfill is one-time, so the daily
     # total is just the backlog size and converges to zero.
     BACKFILL_BATCH_SIZE: int = 20
     BACKFILL_BATCH_PAUSE_SECONDS: int = 300
@@ -146,7 +146,7 @@ class Settings(BaseSettings):
     # (no Strava calls), so a derivation change (e.g. #297 zone binning)
     # propagates to historical DerivedMetric rows. Unlike the stream backfill the
     # pacing is not rate-limit driven (re-analysis is local compute) — the pause
-    # just yields the single worker to webhooks/polling between batches, so the
+    # just yields the single worker to webhooks/self-heal between batches, so the
     # batch can be large and the pause short.
     REANALYZE_BATCH_SIZE: int = 100
     REANALYZE_BATCH_PAUSE_SECONDS: int = 5
@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     # summaries per batch (no streams, no AI coach analysis, no notifications).
     # Each batch is a single Strava list call, far below the backfill's
     # per-activity stream cost; the pause only keeps the worker free for
-    # webhooks/polling between batches. 50 activities per page (Strava's max).
+    # webhooks/self-heal between batches. 50 activities per page (Strava's max).
     IMPORT_PAGE_SIZE: int = 50
     IMPORT_BATCH_PAUSE_SECONDS: int = 5
 

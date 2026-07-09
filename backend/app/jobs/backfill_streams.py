@@ -14,7 +14,7 @@ activity is attempted exactly once, guaranteeing convergence.
 Pacing: when work remains after a batch, the job schedules its own successor via
 rq-scheduler `enqueue_in` after `BACKFILL_BATCH_PAUSE_SECONDS`, keeping the
 worker free between batches and the combined Strava call rate under the
-100-requests/15-min ceiling alongside polling. See #110.
+100-requests/15-min ceiling. See #110.
 """
 
 import asyncio

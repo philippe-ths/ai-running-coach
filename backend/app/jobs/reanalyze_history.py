@@ -22,7 +22,7 @@ re-derives until it passes where it stopped.
 
 Unlike the stream backfill (#110) the pacing is not rate-limit driven — there are
 no Strava calls — so the batch is large and the pause is short; it just yields
-the single worker to webhooks/polling between batches.
+the single worker to webhooks/self-heal between batches.
 """
 
 import logging

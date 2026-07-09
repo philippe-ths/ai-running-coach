@@ -25,7 +25,7 @@ State lives entirely in a `StravaImport` row:
 
 Pacing: when a full page comes back there is likely more history, so the job
 schedules its own successor via rq-scheduler after `IMPORT_BATCH_PAUSE_SECONDS`,
-keeping the single worker free for webhooks and polling between batches. Each
+keeping the single worker free for webhooks and self-heal between batches. Each
 batch is a single Strava list call (no per-activity stream calls), so the call
 rate stays comfortably under the 100-requests/15-min ceiling.
 """
