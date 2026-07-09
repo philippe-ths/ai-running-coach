@@ -295,8 +295,8 @@ const fmt = (x)=> (x===null||x===undefined)?'null':(typeof x==='object'?JSON.str
 const _toModel = {f:'forwarded',to:'the model',note:'placed into json.dumps(pack) — the model’s user message — on the single hop into the call'};
 const _gatedModel = (passed,note)=>({f:'gated',passed:passed,to:'the model',note:note});
 // True when a #522 kill switch is ACTUALLY off in this capture (D.flags carries the
-// generator's real COACH_*_ENABLED values). Shared by the fate maps below and the
-// OFF_522 banner helpers, so both read the capture instead of a static claim.
+// generator's real COACH_*_ENABLED values). Drives the section fates below and the
+// per-field DROPPED_522 chips, so the off-state always reads off the capture.
 const _flagOff = (flag)=> !!(D.flags && D.flags[flag]===false);
 const PACK_PROV = {
   activity:          {src:{id:'act_row',label:'Activity row'},          fate:_toModel},
@@ -325,6 +325,22 @@ function provMaps(section){
 }
 const jProv     = (section)=> renderTree(P[section], false, ...provMaps(section));
 const jTallProv = (section)=> renderTree(P[section], true,  ...provMaps(section));
+// A #522 kill switch that is OFF in this capture removes an input from the coach. Instead of
+// a separate banner, the affected FIELD carries a `dropped` fate chip naming the flag, so the
+// chip is accurate to what prod actually sends (the reported inconsistency: a gated field must
+// not read as "forwarded"). Capture-driven via D.flags, like everything else here.
+const DROPPED_522 = (flag, note)=> ({f:'dropped', to:null, note:'removed for the coach — '+flag+'=false (#522). '+(note||'')});
+// The per-field fate override for a flag that is off, else null (keep the section's normal fate).
+const off522Fate = (flag, note)=> _flagOff(flag) ? DROPPED_522(flag, note) : null;
+// provMaps + a {field: fateOrNull} override map (null entries ignored), so one nested field can
+// carry a dropped chip while its siblings keep the section fate.
+function provMapsX(section, overrides){
+  const [src,fate]=provMaps(section);
+  if(fate && overrides) for(const k in overrides){ if(overrides[k]) fate[k]=overrides[k]; }
+  return [src,fate];
+}
+const jProvX     = (section, ov)=> renderTree(P[section], false, ...provMapsX(section, ov));
+const jTallProvX = (section, ov)=> renderTree(P[section], true,  ...provMapsX(section, ov));
 
 /* The read-time BUILDER (derivation) nodes render the same data one hop earlier — they
    COMPUTE it from their inputs and forward it into the matching pack.<section>. So their
@@ -349,18 +365,12 @@ function jp(obj, key, tall){
 
 /* ---------- the graph ---------- */
 // from = upstream sources (where this node's data came from). consumers are derived by inversion.
-// #522 coach-input kill switches: eleven reversible config gates (COACH_*_ENABLED) that
-// remove a section / prompt part / input from what the coach receives. This capture was
-// regenerated with all eleven set OFF, so their nodes are greyed (off:true) and their data
-// is dropped; flip the flag back on (default) to restore. Reusable banner:
-// #522 kill-switch banners are CAPTURE-DRIVEN: they render only when the referenced
-// COACH_*_ENABLED switch is ACTUALLY off in this capture (D.flags carries the generator's
-// real settings). The flag name is read straight out of the banner text (which already
-// names it), so an all-on capture shows no "off" banner that would contradict the field
-// chips. Missing D.flags (pre-flags capture) => silent, the safe default.
-const _anyFlagOff = (what)=> (String(what).match(/COACH_[A-Z_]+_ENABLED/g)||[]).some(_flagOff);
-const OFF_522  = (what)=> _anyFlagOff(what) ? '<div class="offbanner"><b>Turned OFF (#522).</b> '+what+' Reversible config flip (a COACH_*_ENABLED setting); on by default.</div>' : '';
-const OFF_522P = (what)=> _anyFlagOff(what) ? '<div class="offbanner"><b>Partly OFF (#522).</b> '+what+'</div>' : '';
+// #522 coach-input kill switches: reversible config gates (COACH_*_ENABLED) that remove a
+// section / prompt part / input from what the coach receives. The off-state is capture-driven:
+// whole-section / prompt-injection nodes grey via the content-presence NODE_ACTIVE rules
+// (ai-flow-graph.html), and a nested field that is dropped-to-null carries a `dropped (#522)`
+// fate chip (DROPPED_522, keyed on D.flags). No separate banner, so nothing can drift out of
+// sync with the field chips. Missing D.flags (pre-flags capture) => nothing marked off.
 const NODES = [
 
 /* ===== LAYER: MODEL ===== */
@@ -389,14 +399,12 @@ const NODES = [
 { id:'playbook', off:true, layer:'model', kind:'code', tag:'prompt', badge:'disabled',
   title:'playbook (classification)', path:'services/coach/prompts.build_system_prompt',
   from:['a_classifier'],
-  body:()=> OFF_522('<code>COACH_PLAYBOOK_ENABLED=false</code> — the activity-type playbook is no longer appended to the system prompt.')
-    + _promptHTML(SYSTEM_PROMPT, c=>c==='play')
+  body:()=> _promptHTML(SYSTEM_PROMPT, c=>c==='play')
 },
 { id:'voice_block', off:true, layer:'model', kind:'code', tag:'prompt', badge:'disabled',
   title:'voice block (rendered)', path:'services/coach/prompts.render_voice_block',
   from:['d_relationship'],
-  body:()=> OFF_522('<code>COACH_VOICE_BLOCK_ENABLED=false</code> — the rendered per-runner voice block is no longer appended to the system prompt.')
-    + _promptHTML(SYSTEM_PROMPT, c=>c==='voice')
+  body:()=> _promptHTML(SYSTEM_PROMPT, c=>c==='voice')
 },
 { id:'sysprompt', layer:'model', kind:'code', tag:'prompt',
   title:'build_system_prompt('+D.meta.prompt_id+', mode, voice)', path:'services/coach/prompts.py',
@@ -419,34 +427,35 @@ const NODES = [
     _IV_KEYS.forEach(k=>{ if(k in fate) fate[k]={f:'gated',to:'the model',note:'gated interval-session group; reaches the model only when an interval/workout was detected'}; });
     // the collapsed signal the real pack ships when no session was detected → it still feeds the model
     if('interval_workout' in fate) fate.interval_workout={f:'gated',passed:false,to:'the model',note:'the interval/workout gate did not fire; the three columns collapsed to this one signal in the pack (CoachContextPack.to_serializable_dict)'};
-    return OFF_522P('<code>stops_analysis</code> is dropped for the coach (<code>COACH_STOPS_ANALYSIS_ENABLED=false</code>, now null here); the pipeline still computes + stores it on the DerivedMetric for non-coach use.')
-      + '<div class="fatebanner">Each field carries two chips: <span class="srctag" style="cursor:default">↤ where it was written</span> one stage earlier, and its <b>fate</b> on this last hop — <span class="fate-forwarded">forwarded → the model</span> (this pack <em>is</em> the model’s input, so nothing is dropped here). The interval/workout group is <span class="fate-gated">gated</span>: collapsed to one row when no session was detected.</div>'
+    // #522: with COACH_STOPS_ANALYSIS_ENABLED off, stops_analysis is null in the pack — dropped
+    // for the coach (the pipeline still computes + stores it on the DerivedMetric for non-coach use).
+    if('stops_analysis' in fate){ const d=off522Fate('COACH_STOPS_ANALYSIS_ENABLED','sent as null; still stored on the DerivedMetric for risk/flags + the detail view.'); if(d) fate.stops_analysis=d; }
+    return '<div class="fatebanner">Each field carries two chips: <span class="srctag" style="cursor:default">↤ where it was written</span> one stage earlier, and its <b>fate</b> on this last hop — <span class="fate-forwarded">forwarded → the model</span> (this pack <em>is</em> the model’s input). A field a #522 kill switch turned off is <span class="fate-dropped">dropped</span> (sent null, coach ignores it); the interval/workout group is <span class="fate-gated">gated</span>: collapsed to one row when no session was detected.</div>'
       + renderTree(obj, true, src, fate); } },
 { id:'p_check_in', layer:'pack', kind:'code', tag:'fact', title:'pack.check_in', path:'context.py',
-  from:['checkin'], body:()=> OFF_522P('<code>sleep_quality</code> is dropped for the coach (<code>COACH_SLEEP_QUALITY_ENABLED=false</code>); <code>risk.py</code>/<code>flags.py</code> keep their safe defaults.')+ jProv('check_in') },
+  from:['checkin'], body:()=> jProvX('check_in', {sleep_quality: off522Fate('COACH_SLEEP_QUALITY_ENABLED','risk.py/flags.py keep their safe defaults.')}) },
 { id:'p_profile', layer:'pack', kind:'code', tag:'fact', title:'pack.profile', path:'context.py',
   from:['profile'], body:()=> jProv('profile') },
 { id:'p_longitudinal', off:true, layer:'pack', kind:'memory', tag:'memory + fact', span:true, title:'pack.longitudinal', path:'retrieval.fetch_prior_digests + baseline', badge:'disabled',
   from:['d_baseline','d_memory'],
-  body:()=> OFF_522('<code>COACH_LONGITUDINAL_ENABLED=false</code> — the WHOLE section is dropped (both the <code>prior_reports</code> digest and the numeric <code>baseline_trend</code>).')
-    + (P.longitudinal ? jTallProv('longitudinal') : '<div class="data kv">section dropped from the pack</div>') },
+  body:()=> (P.longitudinal ? jTallProv('longitudinal')
+    : '<div class="data kv">'+(_flagOff('COACH_LONGITUDINAL_ENABLED') ? 'dropped — COACH_LONGITUDINAL_ENABLED=false (#522)' : 'section absent for this run')+'</div>') },
 { id:'p_perceived', layer:'pack', kind:'code', tag:'fact', title:'pack.perceived_effort', path:'perceived_effort.py',
   from:['d_perceived'], body:()=> jProv('perceived_effort') },
 { id:'p_adherence', off:true, layer:'pack', kind:'memory', tag:'memory', title:'pack.adherence', path:'adherence.py',
-  from:['d_memory'], body:()=> OFF_522('<code>COACH_ADHERENCE_ENABLED=false</code> — M7 adherence outcomes are not gathered for the coach (off by default, PR #418).')+ jProv('adherence') },
+  from:['d_memory'], body:()=> jProv('adherence') },
 { id:'p_calibration', layer:'pack', kind:'code', tag:'fact', title:'pack.calibration', path:'calibration.py',
   from:['d_calibration'],
   body:()=> jProv('calibration') },
 { id:'p_salience', off:true, layer:'pack', kind:'code', tag:'fact', title:'pack.salience', path:'salience.py + novelty.py', badge:'disabled',
-  from:['d_salience'], body:()=> OFF_522('<code>COACH_SALIENCE_ENABLED=false</code> — the section is dropped from the pack. (The deterministic fuller-turn scheduling that reuses the safety override is untouched.)')
-    + (P.salience ? jProv('salience') : '<div class="data kv">section dropped from the pack</div>') },
+  from:['d_salience'], body:()=> (P.salience ? jProv('salience')
+    : '<div class="data kv">'+(_flagOff('COACH_SALIENCE_ENABLED') ? 'dropped — COACH_SALIENCE_ENABLED=false (#522); fuller-turn scheduling is untouched' : 'section absent for this run')+'</div>') },
 { id:'p_continuity', off:true, layer:'pack', kind:'code', tag:'two-stage', title:'pack.continuity', path:'context.py', badge:'disabled',
-  from:[], body:()=> OFF_522('<code>COACH_CONTINUITY_ENABLED=false</code> — the section is dropped from the pack.')
-    + (P.continuity ? j(P.continuity) : '<div class="data kv">section dropped from the pack</div>') },
+  from:[], body:()=> (P.continuity ? j(P.continuity)
+    : '<div class="data kv">'+(_flagOff('COACH_CONTINUITY_ENABLED') ? 'dropped — COACH_CONTINUITY_ENABLED=false (#522)' : 'section absent for this run')+'</div>') },
 { id:'p_corpus', layer:'pack', kind:'runner', tag:'runner', span:true, title:'pack.corpus', path:'retrieval.fetch_corpus + corpus.py',
   from:['d_corpus','d_relationship','user_material'],
-  body:()=> OFF_522P('<code>house_principles</code> (HOUSE_CORE) stay on; <code>school</code> is dropped (<code>COACH_HOUSE_SCHOOLS_ENABLED=false</code>) and <code>user_materials</code> is dropped (<code>COACH_USER_MATERIALS_ENABLED=false</code>).')
-    + jTallProv('corpus') },
+  body:()=> jTallProvX('corpus', {school: off522Fate('COACH_HOUSE_SCHOOLS_ENABLED','HOUSE_CORE principles stay on; user_materials (COACH_USER_MATERIALS_ENABLED) is not read in at all.')}) },
 { id:'p_stance', layer:'pack', kind:'runner', tag:'runner', title:'pack.stance', path:'stance.py',
   from:['d_relationship'], body:()=> jProv('stance') },
 { id:'p_training_load', layer:'pack', kind:'code', tag:'fact', title:'pack.training_load', path:'readiness.build_readiness',
@@ -454,21 +463,21 @@ const NODES = [
 { id:'p_training_volume', layer:'pack', kind:'code', tag:'fact', title:'pack.training_volume', path:'context.py ← volume.build_training_volume',
   from:['d_volume'], body:()=> jProv('training_volume') },
 { id:'p_recent_training', layer:'pack', kind:'code', tag:'fact', span:true, title:'pack.recent_training', path:'context.py ← recent_training.build_recent_training',
-  from:['d_recent_training'], body:()=> OFF_522P('the <code>previous_30d</code> window is dropped (<code>COACH_PREVIOUS_30D_ENABLED=false</code>); <code>last_7d</code>/<code>last_30d</code> and the vs-prev reads are unaffected.')+ (P.recent_training ? jTallProv('recent_training') : '<div class="offbanner">Absent under '+D.meta.prompt_id+' (v11+ only).</div>') },
+  from:['d_recent_training'], body:()=> (P.recent_training ? jTallProv('recent_training') : '<div class="data kv">Absent under '+D.meta.prompt_id+' (v11+ only).</div>') },
 { id:'p_training_history', layer:'pack', kind:'code', tag:'fact', span:true, title:'pack.training_history', path:'context.py ← training_history.build_training_history',
-  from:['d_training_history'], body:()=> (P.training_history ? jTallProv('training_history') : '<div class="offbanner">Absent under '+D.meta.prompt_id+' (v12+ only).</div>') },
+  from:['d_training_history'], body:()=> (P.training_history ? jTallProv('training_history') : '<div class="data kv">Absent under '+D.meta.prompt_id+' (v12+ only).</div>') },
 { id:'p_memory', layer:'pack', kind:'memory', tag:'memory + fact', span:true, title:'pack.memory', path:'context._build_memory_context ← memory_store.get_memory',
   from:['d_runner_memory'],
-  body:()=> (P.memory ? jTallProv('memory') : '<div class="offbanner">Absent under '+D.meta.prompt_id+' — memory is emitted only under a memory-aware prompt (v13+) once the runner has a graduated profile. INERT in prod (config default pre-v13).</div>') },
+  body:()=> (P.memory ? jTallProv('memory') : '<div class="data kv">Absent under '+D.meta.prompt_id+' — memory is emitted only under a memory-aware prompt (v13+) once the runner has a graduated profile.</div>') },
 { id:'p_intensity', layer:'pack', kind:'code', tag:'fact', span:true, title:'pack.intensity', path:'context._build_intensity_context ← intensity.build_intensity',
   from:['d_intensity'],
-  body:()=> (P.intensity ? jTallProv('intensity') : '<div class="offbanner">Absent under '+D.meta.prompt_id+' (v14+ only). INERT in prod (config default pre-v14).</div>') },
+  body:()=> (P.intensity ? jTallProv('intensity') : '<div class="data kv">Absent under '+D.meta.prompt_id+' (v14+ only).</div>') },
 { id:'p_stream_view', layer:'pack', kind:'code', tag:'fact', span:true, title:'pack.stream_view', path:'context.py ← retrieval.fetch_stream_view',
   from:['derivedmetric'],
-  body:()=> (P.stream_view ? jTallProv('stream_view') : '<div class="offbanner">Absent under '+D.meta.prompt_id+' (v10/v11 only).</div>') },
+  body:()=> (P.stream_view ? jTallProv('stream_view') : '<div class="data kv">Absent under '+D.meta.prompt_id+' (v10/v11 only).</div>') },
 { id:'p_block', layer:'pack', kind:'code', tag:'multi-member only', span:true, title:'pack.block', path:'context._build_block_context',
   from:['act_row'],
-  body:()=> (P.block ? jTallProv('block') : '<div class="offbanner">Absent for this capture — the subject is a block-of-one, so <code>pack.block</code> is dropped. Present (and fed to the model) whenever the run shares a block with sibling activities.</div>') },
+  body:()=> (P.block ? jTallProv('block') : '<div class="data kv">Absent for this capture — the subject is a block-of-one, so <code>pack.block</code> is dropped. Present (and fed to the model) whenever the run shares a block with sibling activities.</div>') },
 { id:'p_safety', layer:'pack', kind:'gate', tag:'safety', title:'pack.safety_rules', path:'context.py (constant)',
   from:[], body:()=> j(P.safety_rules) },
 
@@ -483,18 +492,17 @@ const NODES = [
 { id:'d_volume', layer:'deriv', kind:'code', tag:'read-time', title:'volume.build_training_volume (#400/#451)', path:'services/coach/volume.py',
   from:['act_row','derivedmetric'], body:()=> jp(P.training_volume,'d_volume') },
 { id:'d_recent_training', layer:'deriv', kind:'code', tag:'read-time', title:'recent_training.build_recent_training (#444)', path:'services/coach/recent_training.py',
-  from:['act_row','derivedmetric'], body:()=> (P.recent_training ? jp(P.recent_training,'d_recent_training',true) : '<div class="offbanner">Absent under '+D.meta.prompt_id+'.</div>') },
+  from:['act_row','derivedmetric'], body:()=> (P.recent_training ? jp(P.recent_training,'d_recent_training',true) : '<div class="data kv">Absent under '+D.meta.prompt_id+'.</div>') },
 { id:'d_training_history', layer:'deriv', kind:'code', tag:'read-time', title:'training_history.build_training_history (#561)', path:'services/coach/training_history.py',
-  from:['act_row','derivedmetric'], body:()=> (P.training_history ? jp(P.training_history,'d_training_history',true) : '<div class="offbanner">Absent under '+D.meta.prompt_id+' (v12+ only).</div>') },
+  from:['act_row','derivedmetric'], body:()=> (P.training_history ? jp(P.training_history,'d_training_history',true) : '<div class="data kv">Absent under '+D.meta.prompt_id+' (v12+ only).</div>') },
 { id:'d_intensity', layer:'deriv', kind:'code', tag:'read-time', title:'intensity.build_intensity (#578)', path:'services/coach/intensity.py',
-  from:['act_row','derivedmetric'], body:()=> (P.intensity ? jp(P.intensity,'d_intensity',true) : '<div class="offbanner">Absent under '+D.meta.prompt_id+' (v14+ only).</div>') },
+  from:['act_row','derivedmetric'], body:()=> (P.intensity ? jp(P.intensity,'d_intensity',true) : '<div class="data kv">Absent under '+D.meta.prompt_id+' (v14+ only).</div>') },
 { id:'d_readiness', layer:'deriv', kind:'code', tag:'read-time', title:'readiness.build_readiness (P3)', path:'services/readiness.py',
   from:['derivedmetric'],
   body:()=> jp(P.training_load,'d_readiness') },
 { id:'d_baseline', off:true, layer:'deriv', kind:'code', tag:'rolling norm', title:'baseline (RunnerBaseline, M2)', path:'services/analysis/baseline.py', badge:'disabled',
   from:['derivedmetric'],
-  body:()=> OFF_522('its only consumer, <code>pack.longitudinal.baseline_trend</code>, is dropped (<code>COACH_LONGITUDINAL_ENABLED=false</code>), so the baseline no longer reaches the coach.')
-    + (P.longitudinal && P.longitudinal.baseline_trend ? jp(P.longitudinal.baseline_trend,'d_baseline') : '<div class="data kv">not forwarded (longitudinal dropped)</div>') },
+  body:()=> (P.longitudinal && P.longitudinal.baseline_trend ? jp(P.longitudinal.baseline_trend,'d_baseline') : '<div class="data kv">not forwarded (longitudinal dropped)</div>') },
 { id:'d_calibration', layer:'deriv', kind:'code', tag:'read-time', title:'calibration (M9)', path:'context._build_calibration_context + calibration.py',
   from:['derivedmetric','checkin'],
   body:()=> jp(P.calibration,'d_calibration') },
@@ -502,23 +510,19 @@ const NODES = [
   from:['checkin','derivedmetric'],
   body:()=> jp(P.perceived_effort,'d_perceived') },
 { id:'d_salience', off:true, layer:'deriv', kind:'code', tag:'read-time', title:'salience · novelty', path:'salience.py + analysis/novelty.py', badge:'disabled',
-  from:['derivedmetric','checkin'], body:()=> OFF_522('its pack section <code>pack.salience</code> is dropped (<code>COACH_SALIENCE_ENABLED=false</code>); the safety-override scheduling still runs.')
-    + (P.salience ? jp(P.salience,'d_salience') : '<div class="data kv">not forwarded (salience dropped)</div>') },
+  from:['derivedmetric','checkin'], body:()=> (P.salience ? jp(P.salience,'d_salience') : '<div class="data kv">not forwarded (salience dropped)</div>') },
 { id:'d_memory', off:true, layer:'deriv', kind:'memory', tag:'prior-report scan', span:true, title:'prior-report read-time scan (M7 adherence)', path:'adherence.py (read-time)',
   from:['act_row'], badge:'disabled',
-  body:()=> OFF_522('<code>COACH_ADHERENCE_ENABLED=false</code> — the M7 adherence read-time scan is off (it replayed a rest-day fixation into every report, PR #418); its <code>adherence</code> section emits empty. Re-enable is a config flip (#402).')
-    + (P.adherence ? jp(P.adherence,'d_memory') : '<div class="data kv">not forwarded (adherence disabled)</div>') },
+  body:()=> (P.adherence ? jp(P.adherence,'d_memory') : '<div class="data kv">not forwarded (adherence disabled)</div>') },
 { id:'d_runner_memory', layer:'deriv', kind:'memory', tag:'rewritten profile', span:true, title:'runner memory (RunnerMemory.profile)', path:'memory_store.get_memory ← memory_update writer',
   from:['chat','checkin'],
   body:()=> (P.memory ? jp(P.memory,'d_runner_memory') : '<div class="data kv">no profile yet (cold start)</div>') },
 { id:'d_relationship', off:true, layer:'deriv', kind:'runner', tag:'runner-declared', title:'coaching_relationship', path:'app/models/coaching_relationship.py', badge:'disabled',
   from:[],
-  body:()=> OFF_522('<code>COACH_RELATIONSHIP_ENABLED=false</code> — the row is no longer read; Voice and Stance resolve to their defaults (and receipt voicing falls to the house floor).')
-    + '<div class="note">'+esc(D.relationship.note)+'</div>'
+  body:()=> '<div class="note">'+esc(D.relationship.note)+'</div>'
     + j(D.relationship) },
 { id:'d_corpus', off:true, layer:'deriv', kind:'runner', tag:'code-resident', title:'corpus.py (house schools)', path:'services/coach/corpus.py', badge:'disabled',
-  from:[], body:()=> OFF_522('<code>COACH_HOUSE_SCHOOLS_ENABLED=false</code> — the selected school is dropped from <code>pack.corpus</code>; HOUSE_CORE principles stay.')
-    + j({ school_id:(P.corpus && P.corpus.school ? P.corpus.school.id : '(dropped)'), house_principle_count:(P.corpus ? P.corpus.house_principles.length : 0) }) },
+  from:[], body:()=> j({ school_id:(P.corpus && P.corpus.school ? P.corpus.school.id : '(dropped)'), house_principle_count:(P.corpus ? P.corpus.house_principles.length : 0) }) },
 
 /* ===== LAYER: ANALYSIS PIPELINE ===== */
 { id:'smoothing', layer:'analysis', kind:'code', tag:'function · detail-view', title:'cadence smoothing', path:'services/analysis/smoothing.py \u2192 schemas/detail.py',
@@ -604,8 +608,7 @@ const NODES = [
   from:['strava'],
   body:()=> j(D.profile) },
 { id:'user_material', off:true, layer:'ingest', kind:'runner', tag:'runner upload · untrusted', title:'UserMaterial (distilled)', path:'app/models/user_material.py', badge:'disabled',
-  from:[], body:()=> OFF_522('<code>COACH_USER_MATERIALS_ENABLED=false</code> — materials are not read into <code>pack.corpus.user_materials</code>.')
-    + j({ note:'no active materials in this capture' }) },
+  from:[], body:()=> j({ note:'no active materials in this capture' }) },
 { id:'checkin', layer:'ingest', kind:'runner', tag:'runner input', title:'CheckIn', path:'app/models/checkin.py',
   from:[], body:()=> j(P.check_in) },
 { id:'chat', layer:'ingest', kind:'runner', tag:'runner input', title:'CoachChatMessage', path:'app/models/coach_chat_message.py',
