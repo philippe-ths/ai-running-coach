@@ -84,6 +84,16 @@ def test_recent_window_carries_capped_per_activity_list():
     assert ctx.previous_30d.activities == []
 
 
+def test_recent_window_activity_carries_distance_and_duration():
+    """#647: each recent session carries its own distance and duration, so the coach
+    can read per-run volume (a long run vs a short one) rather than only aggregates."""
+    facts = [_fact(1, type="Run", dist=15200, time=5400)]
+    ctx = build_recent_training(facts, _AS_OF)
+    item = ctx.last_7d.activities[0]
+    assert item.distance_m == 15200
+    assert item.moving_time_s == 5400
+
+
 # --- vs-prev ---------------------------------------------------------------
 
 def test_vs_prev_compares_equal_length_prior_window():
@@ -204,7 +214,12 @@ def test_recent_training_in_default_pack_only_under_v11(db):
 
     pack_v11 = build_context_pack(db, activity, prompt_id="coach_message_v11")
     assert pack_v11.recent_training is not None
-    assert "recent_training" in pack_v11.to_serializable_dict()
+    serialized = pack_v11.to_serializable_dict()
+    assert "recent_training" in serialized
+    # #647: the per-run distance/duration reach the serialized pack (not just the model).
+    session = serialized["recent_training"]["last_7d"]["activities"][0]
+    assert session["distance_m"] == 10000
+    assert session["moving_time_s"] == 3600
 
     pack_v10 = build_context_pack(db, activity, prompt_id="coach_message_v10")
     assert pack_v10.recent_training is None
@@ -287,3 +302,30 @@ def test_pre_trim_recent_training_pack_still_validates():
     # the pre-trim fields are preserved verbatim on the way in (no data loss on re-parse).
     assert ctx.last_7d.comparisons[0].current_all == 3
     assert ctx.last_7d.comparisons[0].prev_basis == "the 7 days immediately before this window"
+
+
+def test_pre_647_populated_activity_list_still_validates():
+    """#647: a pack stored BEFORE per-run distance/duration existed carries a POPULATED
+    per-session list whose entries lack distance_m/moving_time_s. The chat read path and
+    eval harness strict-parse old stored packs (extra='forbid'), so those entries must
+    still validate, with the missing fields resolving to None (no data loss)."""
+    old_window = {
+        "window": "last_7d", "days": 7, "activity_count": 1, "by_type": [],
+        "total_distance_m": 8000, "total_moving_time_s": 2400, "total_effort": 50.0,
+        "comparisons": [],
+        "activities": [
+            {"date": "2026-05-31", "type": "Run", "effort": "easy", "effort_score": 50.0}
+        ],
+    }
+    empty = {
+        "window": "x", "days": 30, "activity_count": 0, "by_type": [],
+        "total_distance_m": 0, "total_moving_time_s": 0, "total_effort": 0.0,
+        "comparisons": [], "activities": [],
+    }
+    ctx = RecentTrainingContext.model_validate(
+        {"last_7d": old_window, "last_30d": empty, "previous_30d": empty,
+         "has_baseline": False}
+    )
+    item = ctx.last_7d.activities[0]
+    assert item.effort_score == 50.0  # the pre-647 fields still land
+    assert item.distance_m is None and item.moving_time_s is None  # new fields absent -> None

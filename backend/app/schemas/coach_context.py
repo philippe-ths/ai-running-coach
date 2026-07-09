@@ -628,6 +628,11 @@ class RecentActivityItem(BaseModel):
     type: str
     effort: Optional[str]  # HR-derived intensity axis (recovery|easy|moderate|tempo|hard)
     effort_score: Optional[float]  # the TRIMP-like LOAD number (grows with duration)
+    # #647: per-run volume, so the coach can read a long run vs a short one rather than
+    # only aggregates. Optional so packs stored before #647 (a populated per-session list
+    # without these keys) still validate under extra="forbid" on strict re-parse.
+    distance_m: Optional[int] = None
+    moving_time_s: Optional[int] = None
 
 
 class RecentComparison(BaseModel):
