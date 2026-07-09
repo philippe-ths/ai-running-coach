@@ -430,8 +430,7 @@ const NODES = [
     // #522: with COACH_STOPS_ANALYSIS_ENABLED off, stops_analysis is null in the pack — dropped
     // for the coach (the pipeline still computes + stores it on the DerivedMetric for non-coach use).
     if('stops_analysis' in fate){ const d=off522Fate('COACH_STOPS_ANALYSIS_ENABLED','sent as null; still stored on the DerivedMetric for risk/flags + the detail view.'); if(d) fate.stops_analysis=d; }
-    return '<div class="fatebanner">Each field carries two chips: <span class="srctag" style="cursor:default">↤ where it was written</span> one stage earlier, and its <b>fate</b> on this last hop — <span class="fate-forwarded">forwarded → the model</span> (this pack <em>is</em> the model’s input). A field a #522 kill switch turned off is <span class="fate-dropped">dropped</span> (sent null, coach ignores it); the interval/workout group is <span class="fate-gated">gated</span>: collapsed to one row when no session was detected.</div>'
-      + renderTree(obj, true, src, fate); } },
+    return renderTree(obj, true, src, fate); } },
 { id:'p_check_in', layer:'pack', kind:'code', tag:'fact', title:'pack.check_in', path:'context.py',
   from:['checkin'], body:()=> jProvX('check_in', {sleep_quality: off522Fate('COACH_SLEEP_QUALITY_ENABLED','risk.py/flags.py keep their safe defaults.')}) },
 { id:'p_profile', layer:'pack', kind:'code', tag:'fact', title:'pack.profile', path:'context.py',
@@ -484,8 +483,7 @@ const NODES = [
 /* ===== LAYER: DERIVATION ===== */
 { id:'derivedmetric', layer:'deriv', kind:'store', span:true, tag:'table — keystone', title:'DerivedMetric (one row per activity)', path:'app/models/derived_metric.py',
   from:['a_metrics','a_effort','a_classifier','a_intervals','a_flags','a_discount','a_streamview','a_confidence','a_training_context'],
-  body:()=> (_ivPassed(DM) ? '' : '<div class="fatebanner">The <b>interval/workout</b> group (<code>interval_structure</code> · <code>workout_match</code> · <code>interval_kpis</code>) is <span class="fate-gated">gated on detection</span>. No session was detected on this run, so in the <b>real pack</b> all three collapse to one <code>pack.metrics.interval_workout = "none detected"</code> field (<span class="fate-gated-blocked">gated:blocked</span>) — the model reads one "no workout" fact, not three null fields.</div>')
-    + (()=>{ const [obj,ex]=_withIntervalGate(DM);
+  body:()=> (()=>{ const [obj,ex]=_withIntervalGate(DM);
         const src=Object.assign({}, FIELD_SOURCE), fate=Object.assign({}, FATE_DERIVED);
         for(const k in ex){ src[k]=ex[k].src; fate[k]=ex[k].fate; }
         return renderTree(obj, true, src, fate); })() },
@@ -570,8 +568,7 @@ const NODES = [
   from:['act_streams'],
   body:()=> {
     const sv=STREAM_VIEW;
-    return '<div class="fatebanner">Downsampled from <b>'+sv.source_n+'</b> raw samples to <b>'+sv.n_points+'</b> aligned points. Onward hop (v10/v11): <code>DerivedMetric.stream_view → fetch_stream_view → pack.stream_view → the model</code>.</div>'
-      + writes([['DerivedMetric.stream_view', sv.n_points+' points × (time_s + 4 channels), deferred JSON']])
+    return writes([['DerivedMetric.stream_view', sv.n_points+' points × (time_s + 4 channels), deferred JSON']])
       + jTall(sv); } },
 { id:'a_confidence', layer:'analysis', kind:'code', tag:'function', title:'confidence', path:'services/analysis/_orchestrator.compute_confidence',
   from:['act_streams','a_intervals','checkin'],
