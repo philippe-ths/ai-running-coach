@@ -110,6 +110,9 @@ def _recent_activities(window_facts: List[Any]) -> List[RecentActivityItem]:
             type=_unknown_type(f),
             effort=getattr(f, "effort", None),  # HR-derived intensity axis, may be None
             effort_score=round(f.effort_score, 1) if f.effort_score is not None else None,
+            # #647: per-run volume from the same fact; facts carry these (default 0).
+            distance_m=int(f.distance_m) if f.distance_m is not None else None,
+            moving_time_s=int(f.moving_time_s) if f.moving_time_s is not None else None,
         )
         for f in ordered
     ]
