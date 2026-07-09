@@ -191,6 +191,19 @@ def _ensure_block(db: Session, activity: Activity) -> Block:
     return assign_activity_to_block(db, activity)
 
 
+def _is_run_activity(activity: Activity) -> bool:
+    """Whether an activity counts as a run for AUTOMATIC coach-report gating (#643).
+
+    A coach report is only auto-generated for runs; every activity still gets its
+    receipt / check-in notification, and on-demand regeneration stays ungated. Uses
+    the coarse Strava `type` (ordinary, trail, and Strava-app treadmill runs all keep
+    `type == "Run"`, so they count), matching `blocks.pick_primary`'s own run test so
+    this gate agrees with which activity `pick_primary` anchors the report on. A
+    distinct Strava `type` such as "VirtualRun" is NOT auto-reported today; broadening
+    that requires changing `pick_primary` too (the report anchor) and is a follow-up."""
+    return (activity.type or "").lower() == "run"
+
+
 def _exchange_for_activity(db: Session, activity: Activity) -> Optional[Exchange]:
     """The exchange owning this activity's block, via lazy block assignment."""
     block = _ensure_block(db, activity)
@@ -299,6 +312,16 @@ async def _run_single_shot(
 ) -> Optional[Notification]:
     """The prior single-shot pipeline (coach_message_v1 / coach_report_v*): one
     report, one notification, gated by `coach_notification_sent_at`."""
+    # #643: auto-generate a coach report only for runs (the single-shot cadence has
+    # no receipt; a non-run is simply silent here). On-demand regeneration is a
+    # separate ungated path.
+    if not _is_run_activity(activity):
+        logger.info(
+            "Skipping single-shot report for activity %s: not a run (%s)",
+            strava_activity_id, activity.type,
+        )
+        return None
+
     report = await get_or_generate_coach_report(db, str(activity.id))
     if report is None:
         logger.info(
@@ -377,6 +400,19 @@ def _resolve_completed_block(
         db.commit()
 
     primary = db.query(Activity).filter(Activity.id == block.primary_activity_id).one()
+
+    # #643: auto-generate a coach report only when the block contains a run. Because
+    # `pick_primary` prefers a run, a non-run primary means the block has no run, so
+    # neither the block-complete timer nor a "done" tap (both routed here) produces a
+    # report. The receipt already fired on ingest, and on-demand regeneration is a
+    # separate ungated path.
+    if not _is_run_activity(primary):
+        logger.info(
+            "block_complete: block %s primary %s is not a run (%s); no auto coach report",
+            block_id, primary.strava_activity_id, primary.type,
+        )
+        return None
+
     return primary, exchange
 
 
