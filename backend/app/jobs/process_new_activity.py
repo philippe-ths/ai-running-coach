@@ -1,6 +1,7 @@
 """Pipeline job for a fresh activity.
 
-Both the Strava webhook (`aspect_type=create`) and the polling fallback enqueue
+Both the Strava webhook (`aspect_type=create`) and the user-triggered self-heal
+check (#123/ADR 0006, which replaced the removed polling fallback) enqueue
 `process_new_activity_job`. Under the two-stage prompt (coach_message_v2) it runs
 ingest -> analyze -> block assignment, then schedules a BLOCK-COMPLETE check at
 +BLOCK_GAP_SECONDS (A1, ADR 0011) instead of opening the exchange inline: the
@@ -66,7 +67,7 @@ from app.services.strava_ingestion import (
 logger = logging.getLogger(__name__)
 
 # #215: the recovery trigger for a worker crash mid-pipeline. Once ingest has
-# persisted the Activity row, polling treats it as known and never re-picks it,
+# persisted the Activity row, the self-heal check treats it as known and never re-picks it,
 # so without a retry a crash between ingest and the opener notify/schedule
 # permanently strands the exchange. Every stage is idempotent on re-entry
 # (opener row reuse, per-stage sentinels, fuller sentinel), so a re-run is safe.
