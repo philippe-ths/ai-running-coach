@@ -20,6 +20,15 @@ LIVE code:
      map (so it carries a fate chip). This is what hid efficiency_analysis / confidence /
      training_context.
 
+  3. KILL-SWITCH PARITY. The diagram's captured `D.flags` (the COACH_*_ENABLED values the
+     capture was generated under) must match the prod-parity values documented in
+     backend/.env.example. This pins the diagram to prod: it catches a capture regenerated
+     with the wrong local config (e.g. every switch left on while prod runs the lean pack —
+     the exact bug that made stops_analysis read as forwarded), and the reverse, a change to
+     .env.example that was not followed by a regenerate. It ties the diagram to the committed
+     prod-parity contract (.env.example), not to live Railway — keeping .env.example itself
+     current with prod stays a human step.
+
 It does NOT verify edge correctness (which upstream stage feeds which node) — that is harder
 to mechanise and still relies on the periodic human/agent audit. This guard's job is narrow
 and high-value: no pack section or metric column can ever again reach the model with no node.
@@ -39,6 +48,7 @@ _HERE = Path(__file__).resolve().parent
 _BACKEND = _HERE.parents[1] / "backend"
 _FLOW_NODES = _HERE / "flow-nodes.js"
 _GENERATOR = _HERE / "generate_flow_nodes_data.py"
+_ENV_EXAMPLE = _BACKEND / ".env.example"
 
 # CoachContextPack fields that intentionally have NO node in the diagram. Keep this list
 # tiny and documented — every entry is a field the model carries in the schema but that is
@@ -88,7 +98,9 @@ def _pack_keys_bound_by_nodes(src: str) -> set[str]:
         id_m = re.match(r"\{\s*id:'(p_\w+)'", chunk)
         if not id_m:
             continue
-        key_m = re.search(r"\bj(?:Tall)?Prov\('(\w+)'\)", chunk) or re.search(r"\bP\.(\w+)", chunk)
+        # jProv('k') / jTallProv('k') and their per-field-override variants jProvX('k',{...}) /
+        # jTallProvX('k',{...}); else fall back to the first P.<key> the node renders.
+        key_m = re.search(r"\bj(?:Tall)?ProvX?\('(\w+)'", chunk) or re.search(r"\bP\.(\w+)", chunk)
         if key_m:
             keys.add(key_m.group(1))
     return keys
@@ -107,6 +119,22 @@ def _fate_derived_keys(src: str) -> set[str]:
         keys |= set(re.findall(r"'(\w+)'", arr_m.group(1)))
     keys |= set(re.findall(r"\bm\.(\w+)\s*=", block))
     return keys
+
+
+def _diagram_captured_flags(flow_src: str) -> dict[str, bool]:
+    """The COACH_*_ENABLED values the capture was generated under, read from the DATA blob's
+    `flags` object. These `"COACH_X_ENABLED":true|false` pairs appear ONLY inside that object
+    (the JS logic references the flags as single-quoted string literals, never `"...":bool`)."""
+    return {k: v == "true" for k, v in
+            re.findall(r'"(COACH_[A-Z_]+_ENABLED)":(true|false)', flow_src)}
+
+
+def _env_example_flags() -> dict[str, bool]:
+    """The prod-parity COACH_*_ENABLED values documented in backend/.env.example."""
+    if not _ENV_EXAMPLE.is_file():
+        return {}
+    return {k: v == "true" for k, v in
+            re.findall(r'^(COACH_[A-Z_]+_ENABLED)=(true|false)', _ENV_EXAMPLE.read_text(), re.M)}
 
 
 def _generator_dm_fields(src: str) -> set[str]:
@@ -182,6 +210,31 @@ def check_drift() -> list[str]:
     if spurious_fate:
         problems.append(
             f"FATE_DERIVED maps keys that are not DerivedMetric columns: {sorted(spurious_fate)}. Remove them.")
+
+    # 3. Kill-switch parity: the captured D.flags must match .env.example's prod-parity block.
+    captured = _diagram_captured_flags(flow_src)
+    documented = _env_example_flags()
+    if not captured:
+        problems.append(
+            "The diagram carries NO captured COACH_*_ENABLED flags — regenerate it under the "
+            "prod-parity config (backend/.env mirroring .env.example) so the off-state chips are "
+            "capture-driven. See generate_flow_nodes_data.py.")
+    elif not documented:
+        problems.append(
+            "backend/.env.example documents no COACH_*_ENABLED prod-parity block, so the diagram's "
+            "kill-switch state cannot be verified against prod. Add the prod-parity flags to .env.example.")
+    else:
+        mismatched = sorted(
+            f"{k} (diagram={captured[k]}, .env.example={documented[k]})"
+            for k in captured.keys() & documented.keys()
+            if captured[k] != documented[k]
+        )
+        if mismatched:
+            problems.append(
+                "The diagram was generated under coach kill-switch flags that DISAGREE with the "
+                f"prod-parity set in backend/.env.example: {mismatched}. Regenerate flow-nodes.js "
+                "under prod-parity config (or update .env.example if prod itself changed), so the "
+                "diagram reflects what prod actually sends.")
 
     return problems
 
