@@ -121,6 +121,15 @@ def test_threshold_constant_is_two():
     assert GRADUATION_MIN_SOURCES == 2
 
 
+def test_live_plan_bar_default_is_one():
+    # #657: the wired default lowers ONLY the plan bar to 1; the general
+    # corroboration constant is untouched.
+    from app.core.config import settings
+
+    assert settings.COACH_MEMORY_PLAN_GRADUATION_MIN == 1
+    assert GRADUATION_MIN_SOURCES == 2
+
+
 # --- runner-stated graduates, coach-said (digests) does not (anti-coach-echo) --- #
 
 
@@ -152,3 +161,49 @@ def test_two_runner_statements_graduate_even_with_digests_present():
         durable_source_ids={"s1", "s2"},
     )
     assert profile.goals_and_plans == ["Targeting a sub-3 marathon"]
+
+
+# --- #657: goals_and_plans graduates on a single commitment at a lowered bar --- #
+
+
+def test_plan_graduates_on_single_source_at_bar_one():
+    # A single clear commitment ("I'll do 7x400m") becomes a durable plan when the
+    # plan bar is lowered to 1 (the writer now sees the dialogue and can tell a
+    # commitment from a question, so the crude second gate is not needed here).
+    profile = apply_graduation(
+        [_c("Plans to run 7x400m intervals", "goals_and_plans", ["s1"])],
+        KNOWN,
+        plan_min_sources=1,
+    )
+    assert profile.goals_and_plans == ["Plans to run 7x400m intervals"]
+
+
+def test_lowered_plan_bar_does_not_lower_other_durable_sections():
+    # Lowering the PLAN bar must not lower the corroboration bar for character,
+    # preferences, or firm limits — those keep >=2.
+    profile = apply_graduation(
+        [_c("Runs before work", "who_you_are", ["s1"])],
+        KNOWN,
+        plan_min_sources=1,
+    )
+    assert profile.who_you_are == []
+
+
+def test_coach_only_support_never_graduates_a_plan_even_at_bar_one():
+    # The anti-echo backstop HOLDS at the lowered bar: a plan citing only a
+    # non-durable (coach) source drops, so a coach's idea can never become the
+    # runner's durable plan even when a single runner source would now suffice.
+    profile = apply_graduation(
+        [_c("Plans 1k reps", "goals_and_plans", ["c1"])],
+        {"s1", "s2", "c1"},
+        durable_source_ids={"s1", "s2"},  # c1 is a KNOWN coach turn, but NOT durable
+        plan_min_sources=1,
+    )
+    assert profile.goals_and_plans == []
+
+
+def test_plan_bar_defaults_to_the_two_source_constant():
+    # Without the override the function keeps the historical >=2 default for plans,
+    # so the LIVE bar-of-1 is a wiring choice (update_memory), not baked into the gate.
+    profile = apply_graduation([_c("A goal", "goals_and_plans", ["s1"])], KNOWN)
+    assert profile.goals_and_plans == []
