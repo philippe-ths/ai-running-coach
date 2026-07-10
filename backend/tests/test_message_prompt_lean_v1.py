@@ -120,6 +120,26 @@ def test_lean_v1_keeps_the_load_bearing_surface():
     assert "zones_calibrated" in opener
 
 
+def test_lean_v1_carries_the_living_threads_discipline():
+    """#651: the coach resolves an open thread against the runner's actions + the run
+    data (closing a data-answered question rather than re-asking it), keeps asking only
+    what the data cannot settle, and HOLDS a date-tied thread rather than computing an
+    expiry it cannot ground. Fuller-only: thread-resolution is analytical work the
+    opener does not do."""
+    fuller = SYSTEM_PROMPT_MESSAGE_LEAN_V1.lower()
+    # the disposition: read a thread's state and close it from the data, not re-ask
+    assert "open threads" in fuller
+    assert "instead of re-asking" in fuller
+    # the over-correction guard: answer what you can, ask only what you can't
+    assert "ask only what it can't" in fuller
+    # the honest temporal limit: hold a date-tied thread, never compute the expiry
+    assert "a date i can't work out" in fuller
+    # demonstrate the hard case (the flagship interval re-ask, now answered)
+    assert "a thread the data has already closed" in fuller
+    # the disposition is fuller-only; the opener stays a brief reaction
+    assert "open threads" not in SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER.lower()
+
+
 def test_lean_v1_ships_inert():
     """Dormant until the runner flips COACH_PROMPT_ID locally; the config default is
     unchanged by this experiment."""
