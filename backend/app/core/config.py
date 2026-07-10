@@ -267,6 +267,16 @@ class Settings(BaseSettings):
     # is on the /api/coach/feature-flags map (added in M3 alongside the read path).
     COACH_MEMORY_ENABLED: bool = True
 
+    # #657: the minimum number of DISTINCT runner-authored (durable) sources needed
+    # to graduate a durable `goals_and_plans` line. Lowered to 1 so a single clear
+    # commitment ("I'll do 7x400m") becomes a durable plan immediately, now that the
+    # writer sees the full coach+runner dialogue and can tell a commitment from a
+    # question about a coach's suggestion. All OTHER durable sections keep the >=2
+    # corroboration bar (GRADUATION_MIN_SOURCES). Reversible to 2 if noise regresses.
+    # The anti-echo backstop is independent of this: a plan grounded only in a coach
+    # turn (non-durable) never graduates, at any bar.
+    COACH_MEMORY_PLAN_GRADUATION_MIN: int = 1
+
     # Two-stage Exchange cadence (A4, ADR 0010). The opener fires immediately on a
     # finished activity; the conditional fuller turn fires on the runner's reply or
     # this timer, whichever is first. Only the two-stage prompt (coach_message_v2)

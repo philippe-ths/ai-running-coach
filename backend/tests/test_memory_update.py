@@ -118,16 +118,25 @@ def test_gather_returns_stated_facts_as_durable_sources(db):
     _note(db, old, "Left knee niggle since February")
     recent = _activity(db, uid, when=datetime(2026, 6, 1, 7, 0, tzinfo=timezone.utc))
     _chat(db, recent, "user", "I'm aiming for the Valencia half in October")
-    _chat(db, recent, "assistant", "Great — let's build toward it")  # coach message, excluded
+    _chat(db, recent, "assistant", "Great — let's build toward it")  # coach turn: context, non-durable
 
     sources = gather_memory_sources(db, uid)
 
     texts = [s.text for s in sources.sources]
     assert "Left knee niggle since February" in texts  # long-ago fact still retrieved
     assert "I'm aiming for the Valencia half in October" in texts
-    assert "Great — let's build toward it" not in texts  # role=assistant excluded
-    # All runner-authored sources are durable (citable for graduation).
-    assert sources.durable_source_ids == sources.source_ids
+    # #657: the coach's turn is now INCLUDED as dialogue context, but as a
+    # non-durable source it can never ground a durable fact.
+    assert "Great — let's build toward it" in texts
+    coach_turn = next(s for s in sources.sources if s.text == "Great — let's build toward it")
+    assert coach_turn.durable is False
+    assert coach_turn.role == "coach"
+    assert coach_turn.id not in sources.durable_source_ids
+    # The runner's own words remain durable and citable for graduation.
+    runner_turn = next(s for s in sources.sources if s.text.startswith("I'm aiming for the Valencia"))
+    assert runner_turn.durable is True and runner_turn.id in sources.durable_source_ids
+    # Both chat turns share the activity thread, so the dialogue can be interleaved.
+    assert coach_turn.thread_id == runner_turn.thread_id is not None
 
 
 def test_gather_has_no_profile_field():
@@ -155,6 +164,24 @@ def test_writer_messages_never_contain_the_prior_profile(db):
     assert poison not in repr(sources)
 
 
+def test_writer_messages_render_the_dialogue_with_both_sides(db):
+    # #657: the coach's turn appears as CONTEXT alongside the runner's turn in the
+    # same conversation, so the writer can read an elliptical commitment against it.
+    uid = _user(db)
+    act = _activity(db, uid, when=datetime(2026, 6, 1, 7, 0, tzinfo=timezone.utc))
+    _chat(db, act, "assistant", "Want to do 4x1km on Tuesday?")
+    _chat(db, act, "user", "yeah lets do that")
+
+    sources = gather_memory_sources(db, uid)
+    _system, user = build_writer_messages(sources)
+
+    assert "CONVERSATIONS" in user
+    assert "Want to do 4x1km on Tuesday?" in user  # coach turn is present as context
+    assert "yeah lets do that" in user  # runner's elliptical commitment
+    # The coach turn is labelled as the coach speaking, so it is not read as the runner.
+    assert "(coach," in user and "(runner," in user
+
+
 # --------------------------------------------------------------------------- #
 # End-to-end through a stubbed writer: graduate-or-drop + provenance + idempotency
 # --------------------------------------------------------------------------- #
@@ -177,16 +204,32 @@ def test_two_distinct_check_ins_graduate_a_durable_fact(db):
     assert profile.goals_and_plans == ["Targeting a sub-3 marathon"]
 
 
-def test_single_check_in_does_not_graduate_end_to_end(db):
+def test_single_commitment_graduates_a_plan_end_to_end(db):
+    # #657: with the live plan bar at 1, a single clear runner commitment becomes a
+    # durable plan (no waiting for a second mention).
     uid = _user(db)
     a1 = _activity(db, uid)
-    _note(db, a1, "Mentioned wanting to try a 10k")
+    _note(db, a1, "Going to do a 10k next month")
 
-    stub = _StubClient([_cand("Wants to try a 10k", "goals_and_plans", ["note0"])])
+    stub = _StubClient([_cand("Plans to run a 10k next month", "goals_and_plans", ["note0"])])
     row = asyncio.run(update_memory(db, uid, client=stub))
 
     profile = RunnerMemoryProfile.model_validate(row.profile)
-    assert profile.goals_and_plans == []  # one source -> held out of the durable section
+    assert profile.goals_and_plans == ["Plans to run a 10k next month"]
+
+
+def test_single_source_still_does_not_graduate_a_non_plan_durable_section(db):
+    # The lowered PLAN bar does not lower the corroboration bar for the other durable
+    # sections; character still needs >=2 distinct sources.
+    uid = _user(db)
+    a1 = _activity(db, uid)
+    _note(db, a1, "Ran before work today")
+
+    stub = _StubClient([_cand("Runs before work", "who_you_are", ["note0"])])
+    row = asyncio.run(update_memory(db, uid, client=stub))
+
+    profile = RunnerMemoryProfile.model_validate(row.profile)
+    assert profile.who_you_are == []  # one source -> still held out of a >=2 section
 
 
 def test_writer_pass_is_idempotent_on_identical_sources(db):
