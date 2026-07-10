@@ -1,4 +1,4 @@
-.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local eval eval-selftest diagram-check verify-local deployed-handshake-smoke post-deploy-verify preflight-env-check
+.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local coach-review eval eval-selftest diagram-check verify-local deployed-handshake-smoke post-deploy-verify preflight-env-check
 
 # Prefer the project venv interpreter when it exists, fall back to bare python.
 # Path is relative to backend/ since the targets cd there first. CI has no
@@ -32,6 +32,21 @@ seed-local:
 	TOK="$$(tr -d '[:space:]' < $$HOME/.railway_token)" && \
 	SRC="$$(RAILWAY_TOKEN="$$TOK" railway variables --service Postgres --kv | grep '^DATABASE_PUBLIC_URL=' | cut -d= -f2-)" && \
 	SEED_SOURCE_URL="$$SRC" $(BACKEND_PY) scripts/seed_from_prod.py $(SEED_ARGS)
+
+# Coach feedback loop: pull the latest coach reports + conversations from prod
+# (READ-ONLY) and render a review HTML under docs/audit/. Same Railway-token
+# source as seed-local. Pass flags via REVIEW_ARGS, e.g.:
+#   make coach-review REVIEW_ARGS="--activities 40"
+# To re-render with reviewer notes baked in (no re-pull), point --from-json at the
+# snapshot and --notes at the notes file:
+#   make coach-review REVIEW_ARGS="--from-json docs/audit/coach-review-<date>.json \
+#       --notes docs/audit/coach-review-notes-<date>.json"
+# (paths relative to backend/, so prefix ../ for repo-root paths)
+coach-review:
+	cd backend && \
+	TOK="$$(tr -d '[:space:]' < $$HOME/.railway_token)" && \
+	SRC="$$(RAILWAY_TOKEN="$$TOK" railway variables --service Postgres --kv | grep '^DATABASE_PUBLIC_URL=' | cut -d= -f2-)" && \
+	SEED_SOURCE_URL="$$SRC" $(BACKEND_PY) scripts/coach_review_export.py $(REVIEW_ARGS)
 
 # Bring up the seeded local stack UNGATED for browser verification (#488), so an
 # agent or a quick local check can drive real read paths without a Clerk sign-in.
