@@ -105,6 +105,16 @@ class MessageResult:
     output_tokens: int = 0
 
 
+@dataclass
+class ChatTurnDelta:
+    """One item from a streamed, tool-aware chat turn (#648): a `text` delta while
+    the turn generates (so the caller can pace keepalive heartbeats during
+    buffering), or the terminal `final` MessageResult once the turn ends, carrying
+    the content blocks (text + any tool_use blocks) and the stop_reason."""
+    text: Optional[str] = None
+    final: Optional[MessageResult] = None
+
+
 class LLMClient(Protocol):
     """Protocol for LLM clients that return raw JSON strings."""
 
@@ -408,3 +418,50 @@ class AnthropicClient:
         ) as stream:
             async for text in stream.text_stream:
                 yield text
+
+    async def stream_chat_turn(
+        self,
+        *,
+        system: str,
+        messages: List[dict],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: int = 1024,
+    ) -> AsyncIterator["ChatTurnDelta"]:
+        """Stream one turn of a tool-aware chat conversation (#648).
+
+        Yields a ChatTurnDelta(text=...) for each text delta so the caller can pace
+        keepalive heartbeats while buffering, then a terminal ChatTurnDelta(final=...)
+        once the turn ends, carrying the content blocks (text + any tool_use blocks)
+        and the stop_reason for the tool loop to dispatch on.
+
+        When `tools` is falsy the call carries no tool surface, forcing a text answer
+        (the loop's tools-off final round). No 429 retry here: the chat path's
+        rate-limit resilience is tracked separately (#625); a transport error
+        propagates to the caller's safe-degrade path, exactly as `stream_chat` does.
+        """
+        stream_kwargs: Dict[str, Any] = dict(
+            model=self.model,
+            max_tokens=max_tokens,
+            temperature=0.3,
+            system=system,
+            messages=messages,
+            timeout=_MESSAGE_TIMEOUT_SECONDS,
+        )
+        if tools:
+            stream_kwargs["tools"] = tools
+            stream_kwargs["tool_choice"] = {"type": "auto"}
+
+        async with self.client.messages.stream(**stream_kwargs) as stream:
+            async for text in stream.text_stream:
+                yield ChatTurnDelta(text=text)
+            final = await stream.get_final_message()
+
+        usage = getattr(final, "usage", None)
+        yield ChatTurnDelta(
+            final=MessageResult(
+                content_blocks=list(final.content),
+                stop_reason=final.stop_reason,
+                input_tokens=getattr(usage, "input_tokens", 0) or 0,
+                output_tokens=getattr(usage, "output_tokens", 0) or 0,
+            )
+        )

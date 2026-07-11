@@ -143,7 +143,7 @@ async def test_chat_declines_over_budget_without_calling_llm(db, _capped_gate):
     _capped_gate.record(str(activity.user_id), "claude-opus-4-8", 1_000_000, 0)
 
     with patch.object(
-        AnthropicClient, "stream_chat", side_effect=AssertionError("LLM must not be called")
+        AnthropicClient, "stream_chat_turn", side_effect=AssertionError("LLM must not be called")
     ):
         events = [
             ev async for ev in stream_chat_response(db, str(activity.id), "How did I do?")

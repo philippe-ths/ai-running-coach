@@ -434,6 +434,12 @@ async def post_chat(
                     # alive during the buffer-then-validate gap (#375). The client
                     # ignores any line that does not start with `data: `.
                     yield ": hb\n\n"
+                elif event.status_label:
+                    # #648: an ephemeral "fetching data" affordance while a tool round
+                    # runs. A JSON OBJECT payload (vs the string payload of a content
+                    # frame), so the client renders it as status instead of appending
+                    # it to the reply.
+                    yield f"data: {json.dumps({'type': 'status', 'label': event.status_label})}\n\n"
                 else:
                     yield _sse_data(event.text)
         except Exception:

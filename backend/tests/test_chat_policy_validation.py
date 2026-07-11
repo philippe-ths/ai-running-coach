@@ -67,11 +67,12 @@ def _seed(db, *, context_pack=None) -> Activity:
 def _post_chat_with_chunks(client, activity, chunks):
     """POST a chat turn with the LLM stream mocked to emit `chunks` verbatim."""
 
-    async def fake_stream(self, system, messages, max_tokens=1024):
-        for chunk in chunks:
-            yield chunk
+    from tests._chat_stubs import chat_turn_stub
 
-    with patch("app.services.coach.llm.AnthropicClient.stream_chat", new=fake_stream):
+    with patch(
+        "app.services.coach.llm.AnthropicClient.stream_chat_turn",
+        new=chat_turn_stub(list(chunks)),
+    ):
         return client.post(
             f"/api/activities/{activity.id}/coach-chat",
             json={"message": "How did I do?"},
@@ -87,11 +88,12 @@ def _post_chat_with_reply(client, activity, reply_text: str):
 def _post_chat_raising(client, activity):
     """POST a chat turn whose LLM stream raises partway through."""
 
-    async def fake_stream(self, system, messages, max_tokens=1024):
-        yield "Let me think..."
-        raise RuntimeError("upstream blew up")
+    from tests._chat_stubs import chat_raising_stub
 
-    with patch("app.services.coach.llm.AnthropicClient.stream_chat", new=fake_stream):
+    with patch(
+        "app.services.coach.llm.AnthropicClient.stream_chat_turn",
+        new=chat_raising_stub(before="Let me think..."),
+    ):
         return client.post(
             f"/api/activities/{activity.id}/coach-chat",
             json={"message": "How did I do?"},

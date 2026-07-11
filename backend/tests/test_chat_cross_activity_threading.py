@@ -77,13 +77,14 @@ def _chat(db, activity, role, content):
 
 def _capture_system(client, activity) -> str:
     """POST a chat turn with a mocked LLM and return the system prompt it received."""
+    from tests._chat_stubs import chat_turn_stub
+
     captured = {}
 
-    async def fake_stream(self, system, messages, max_tokens=1024):
-        captured["system"] = system
-        yield "ok"
-
-    with patch("app.services.coach.llm.AnthropicClient.stream_chat", new=fake_stream):
+    with patch(
+        "app.services.coach.llm.AnthropicClient.stream_chat_turn",
+        new=chat_turn_stub(["ok"], capture=captured),
+    ):
         resp = client.post(
             f"/api/activities/{activity.id}/coach-chat",
             json={"message": "How did I do?"},

@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from app.models import Activity, DerivedMetric, StravaAccount, User, UserProfile
 from app.models.coach_report import CoachReport
+from tests._chat_stubs import chat_raising_stub, chat_turn_stub
 
 
 def _seed_activity_with_report(db) -> Activity:
@@ -66,13 +67,13 @@ def test_chat_stream_preserves_multiline_markdown(client, db):
     # streamed as deltas that straddle newlines (as the SDK actually does).
     reply = "Great run!\n\nHere's what stood out:\n\n- Steady pace\n- Strong finish"
 
-    async def fake_stream(self, system, messages, max_tokens=1024):
-        # The Anthropic SDK yields text deltas of arbitrary size, including ones
-        # that contain newlines.
-        for delta in ["Great run!\n\nHere's ", "what stood out:\n\n- Steady pace\n", "- Strong finish"]:
-            yield delta
+    # The Anthropic SDK yields text deltas of arbitrary size, including ones that
+    # contain newlines; the chat path re-streams the validated reply in slices.
+    stub = chat_turn_stub(
+        ["Great run!\n\nHere's ", "what stood out:\n\n- Steady pace\n", "- Strong finish"]
+    )
 
-    with patch("app.services.coach.llm.AnthropicClient.stream_chat", new=fake_stream):
+    with patch("app.services.coach.llm.AnthropicClient.stream_chat_turn", new=stub):
         resp = client.post(
             f"/api/activities/{activity.id}/coach-chat",
             json={"message": "How did I do?"},
@@ -100,11 +101,7 @@ def test_chat_stream_reports_error_without_breaking_connection(client, db):
     cleanly with the [DONE] sentinel (#223)."""
     activity = _seed_activity_with_report(db)
 
-    async def boom(self, system, messages, max_tokens=1024):
-        raise RuntimeError("upstream exploded")
-        yield  # pragma: no cover — makes this an async generator
-
-    with patch("app.services.coach.llm.AnthropicClient.stream_chat", new=boom):
+    with patch("app.services.coach.llm.AnthropicClient.stream_chat_turn", new=chat_raising_stub()):
         resp = client.post(
             f"/api/activities/{activity.id}/coach-chat",
             json={"message": "How did I do?"},

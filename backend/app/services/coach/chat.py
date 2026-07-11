@@ -29,6 +29,11 @@ from app.schemas.chat import ChatMessageRead
 from app.schemas.coach_context import CoachContextPack
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.prompts import render_voice_block
+from app.services.coach.query_tools import (
+    CHAT_TOOLS,
+    TOOL_STATUS_LABELS,
+    execute_chat_tool,
+)
 from app.services.coach.validator import (
     PolicyViolation,
     check_medical_overreach,
@@ -93,8 +98,10 @@ def _slice_for_stream(text: str) -> List[str]:
 
 @dataclass
 class ChatStreamEvent:
-    """One item the route renders to SSE: a content slice (a `data:` frame) or a
-    content-free heartbeat (an SSE comment frame the client ignores).
+    """One item the route renders to SSE: a content slice (a `data:` frame), a
+    content-free heartbeat (an SSE comment frame the client ignores), or an ephemeral
+    status affordance (#648: a JSON-object `data:` frame the client shows while a tool
+    round runs, distinct from the string content frames).
 
     #375: #340's buffer-then-validate left a long silent gap between the route's
     `: ok` frame and the post-generation content, where token streaming used to keep
@@ -102,6 +109,7 @@ class ChatStreamEvent:
     that byte-flow during buffering WITHOUT revealing unvalidated content."""
     text: str = ""
     is_heartbeat: bool = False
+    status_label: str = ""  # #648: ephemeral "fetching data" affordance
 
 
 # How often a keepalive heartbeat is emitted while the reply is being buffered
@@ -114,6 +122,45 @@ _HEARTBEAT_INTERVAL_SECONDS = 2.0
 
 def _heartbeat() -> ChatStreamEvent:
     return ChatStreamEvent(is_heartbeat=True)
+
+
+# #648: the agentic data-fetch loop. Each round is one model turn (which may emit
+# several parallel tool calls, executed together). Bounded so a chat turn cannot
+# loop or cost without limit; the final round runs tools-off so the model MUST
+# answer in text rather than loop forever.
+_MAX_TOOL_ROUNDS = 3
+
+
+def _block_attr(block, key):
+    """Read an attribute off a content block that may be an SDK object or a dict
+    (mirrors the dual-form handling in llm.generate_structured_with_usage)."""
+    return block.get(key) if isinstance(block, dict) else getattr(block, key, None)
+
+
+def _extract_block_text(blocks) -> str:
+    """Join the text blocks of a final message into the reply prose."""
+    return "".join(
+        _block_attr(b, "text") or "" for b in blocks if _block_attr(b, "type") == "text"
+    ).strip()
+
+
+def _blocks_to_message_params(blocks) -> list:
+    """Normalise a final message's content blocks to plain dicts for the assistant
+    turn we send back into the next round — the tool_use blocks must be echoed
+    verbatim so their ids match the tool_result blocks that follow."""
+    params = []
+    for b in blocks:
+        btype = _block_attr(b, "type")
+        if btype == "text":
+            params.append({"type": "text", "text": _block_attr(b, "text") or ""})
+        elif btype == "tool_use":
+            params.append({
+                "type": "tool_use",
+                "id": _block_attr(b, "id"),
+                "name": _block_attr(b, "name"),
+                "input": _block_attr(b, "input") or {},
+            })
+    return params
 
 
 CHAT_SYSTEM_TEMPLATE = """You are a running coach continuing a conversation with this runner. This is one touchpoint in an ongoing coaching relationship, not a standalone chatbot session: you are the SAME coach who wrote the analysis below and who remembers them between runs. The athlete has already received your initial analysis and may have follow-up questions.
@@ -134,12 +181,19 @@ PER-KM SPLITS:
 {splits_json}
 {voice_block}{cross_activity_block}
 
+YOUR TOOLS — LOOKING UP THEIR TRAINING:
+The context above is a snapshot covering recent windows. When a question turns on data that is not already in front of you — an earlier run, a specific past session, how something has trended, how much they have trained — LOOK IT UP with your tools instead of asking the runner for it. You have their whole training record:
+- list_activities_in_range: their past sessions (any activity type, newest first) over a named window, each with distance, pace, effort, and shape.
+- get_session_detail: one past session's full detail by its activity_id (pace, HR, cadence, HR drift, and whether its intervals came from the runner's own recorded laps).
+- get_training_summary: computed totals, a by-type breakdown, and a vs-typical read over a named window.
+Pick the window whose NAME matches how the runner spoke; never work out dates yourself — the tools resolve and report the exact range they used, so ground your answer in that.
+
 RULES:
-1. Answer based ONLY on the data provided above. Never invent facts.
+1. Ground every claim in the data — the analysis above AND anything you fetch with your tools. Never invent facts.
 2. NEVER diagnose injuries or medical conditions. If asked about pain, recommend professional assessment.
 3. Reference specific numbers from the data when relevant (pace, HR, effort score, splits, etc.).
 4. Keep answers conversational but grounded — you are a knowledgeable coach, not a chatbot.
-5. If the athlete asks about something not covered by the data, say so honestly.
+5. If the runner asks about training history you cannot see above, FETCH it with your tools before answering. Only say you cannot answer if the tools do not cover it either — never ask the runner for data you can look up yourself.
 6. ZONE LANGUAGE: If zones_calibrated is false in the metrics, NEVER reference specific HR zones (Z1-Z5). Use effort descriptions instead (easy, moderate, hard).
 7. Be concise. Most answers should be 2-4 sentences unless the athlete asks for detail.
 8. When discussing training recommendations, be conservative. Never recommend risky volume jumps.
@@ -488,21 +542,81 @@ async def stream_chat_response(
     # throughout buffering (an initial one for the model's time-to-first-token, then
     # throttled per-token) so the byte-flow cadence matches the pre-#340 streaming
     # path — without revealing any unvalidated content.
+    # #648: the coach can fetch this runner's training data on demand via a bounded
+    # agentic tool loop that lives INSIDE this buffering phase. Only the FINAL text
+    # reply is validated and re-streamed; intermediate tool rounds surface to the
+    # runner only as heartbeats plus an ephemeral "fetching" affordance, so the #340
+    # safety floor (gate the full assembled reply) and the #375 keepalive cadence are
+    # both preserved. Owner scoping is server-held: every tool call filters on this
+    # activity's user_id, never a model-supplied id.
+    owner_user_id = activity.user_id
+
     yield _heartbeat()
-    full_response = []
+    llm_messages = messages  # mutated across tool rounds (assistant + tool_result turns)
+    assistant_text = None
     stream_failed = False
     last_heartbeat = time.monotonic()
     try:
-        async for chunk in client.stream_chat(
-            system=system_prompt,
-            messages=messages,
-            max_tokens=1024,
-        ):
-            full_response.append(chunk)
-            now = time.monotonic()
-            if now - last_heartbeat >= _HEARTBEAT_INTERVAL_SECONDS:
-                last_heartbeat = now
-                yield _heartbeat()
+        for round_idx in range(_MAX_TOOL_ROUNDS):
+            # The final round runs tools-off, forcing a text answer rather than another
+            # fetch — the loop is guaranteed to terminate (#648, Q8).
+            tools_arg = CHAT_TOOLS if round_idx < _MAX_TOOL_ROUNDS - 1 else None
+            final_msg = None
+            async for delta in client.stream_chat_turn(
+                system=system_prompt,
+                messages=llm_messages,
+                tools=tools_arg,
+                max_tokens=1024,
+            ):
+                if delta.final is not None:
+                    final_msg = delta.final
+                else:
+                    now = time.monotonic()
+                    if now - last_heartbeat >= _HEARTBEAT_INTERVAL_SECONDS:
+                        last_heartbeat = now
+                        yield _heartbeat()
+
+            if final_msg is None:
+                stream_failed = True
+                break
+
+            if final_msg.stop_reason == "tool_use":
+                tool_uses = [
+                    b for b in final_msg.content_blocks
+                    if _block_attr(b, "type") == "tool_use"
+                ]
+                if not tool_uses:
+                    # tool_use stop with no block: nothing to fetch, take the text.
+                    assistant_text = _extract_block_text(final_msg.content_blocks)
+                    break
+                # Echo the assistant turn (carrying the tool_use blocks) so their ids
+                # match the tool_result blocks we append next.
+                llm_messages.append({
+                    "role": "assistant",
+                    "content": _blocks_to_message_params(final_msg.content_blocks),
+                })
+                tool_results = []
+                for blk in tool_uses:
+                    name = _block_attr(blk, "name")
+                    # Show the ephemeral affordance BEFORE the fetch runs (#648).
+                    yield ChatStreamEvent(
+                        status_label=TOOL_STATUS_LABELS.get(name, "Looking that up…")
+                    )
+                    last_heartbeat = time.monotonic()
+                    result = execute_chat_tool(
+                        db, owner_user_id, name, _block_attr(blk, "input") or {}
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": _block_attr(blk, "id"),
+                        "content": json.dumps(result, default=str),
+                    })
+                llm_messages.append({"role": "user", "content": tool_results})
+                continue
+
+            # A plain text answer (end_turn / max_tokens): this is the reply.
+            assistant_text = _extract_block_text(final_msg.content_blocks)
+            break
     except Exception as e:
         logger.error("Chat streaming error: %s", e)
         stream_failed = True
@@ -511,7 +625,9 @@ async def stream_chat_response(
         # A transport-level error message is safe by construction; no gating needed.
         assistant_text = "Sorry, I encountered an error. Please try again."
     else:
-        assistant_text = "".join(full_response)
+        # Defensive: the tools-off final round should always yield text; an empty
+        # reply still gates safely below.
+        assistant_text = assistant_text or ""
         # Deterministic policy gate over the assembled reply (#340). Medical
         # overreach is the hard floor: withhold the raw text and serve the safe
         # redirect (the chat analogue of the report path's forced fallback). Soft
