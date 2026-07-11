@@ -22,6 +22,9 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
+  // #648: an ephemeral "fetching your data" label shown while the coach runs a
+  // data-lookup tool round, before the reply itself starts streaming.
+  const [fetchingLabel, setFetchingLabel] = useState('');
   const [expanded, setExpanded] = useState(false);
   // I3: the coach's own next-steps, offered as one-tap conversation starters so
   // the chat reads as a continuation of the report rather than a blank box.
@@ -29,18 +32,20 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const scrollToBottom = useCallback(() => {
+  const scrollToBottom = useCallback((force = false) => {
     // Scroll the messages container itself — NOT scrollIntoView, which bubbles
     // up to every scrollable ancestor and on an iOS PWA yanks the whole page so
     // the input scrolls out of view (#223). Pin to the bottom only when the user
     // is already near it, so streaming tokens don't fight a user who scrolled up
     // to re-read. Instant (no smooth) so per-token updates don't pile up
-    // animations into perpetual jitter.
+    // animations into perpetual jitter. `force` overrides the near-bottom guard
+    // for the user's own send, so the streaming bubble (and its #648 "fetching"
+    // affordance) is guaranteed visible rather than stranded below the fold.
     const el = messagesContainerRef.current;
     if (!el) return;
     const nearBottom =
       el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
+    if (force || nearBottom) el.scrollTop = el.scrollHeight;
   }, []);
 
   // Load chat history on mount
@@ -89,8 +94,15 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
   }, [activityId]);
 
   useEffect(() => {
-    if (expanded) scrollToBottom();
-  }, [messages, streamingText, expanded, scrollToBottom]);
+    if (!expanded) return;
+    // #648: force to the bottom when the runner has just sent (their own action),
+    // so the streaming bubble and its "fetching your data" affordance are visible
+    // rather than stranded below the fold; otherwise only pin when already near the
+    // bottom, so streaming tokens don't fight a reader who scrolled up. fetchingLabel
+    // is a dep so the chip appearing keeps the view pinned.
+    const justSent = messages[messages.length - 1]?.role === 'user';
+    scrollToBottom(justSent);
+  }, [messages, streamingText, fetchingLabel, expanded, scrollToBottom]);
 
   const sendMessage = useCallback(async (textArg?: string) => {
     // textArg lets a tapped starter chip send without going through the input box.
@@ -100,6 +112,7 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
     if (textArg === undefined) setInput('');
     setStreaming(true);
     setStreamingText('');
+    setFetchingLabel('');
 
     // Optimistic user message
     const userMsg: ChatMessage = {
@@ -138,9 +151,17 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
           if (data === '[DONE]') continue;
           try {
             // The backend JSON-encodes each chunk so multi-line markdown
-            // survives the SSE protocol intact.
-            fullResponse += JSON.parse(data) as string;
-            setStreamingText(fullResponse);
+            // survives the SSE protocol intact. A content frame is a JSON string;
+            // a status frame (#648) is a JSON object {type:'status',label} shown
+            // as an ephemeral "fetching" affordance, not appended to the reply.
+            const parsed = JSON.parse(data);
+            if (parsed && typeof parsed === 'object' && parsed.type === 'status') {
+              setFetchingLabel(parsed.label ?? '');
+            } else if (typeof parsed === 'string') {
+              fullResponse += parsed;
+              setStreamingText(fullResponse);
+              setFetchingLabel(''); // the reply is streaming now: clear the affordance
+            }
           } catch {
             // Ignore a malformed frame rather than aborting the whole stream.
           }
@@ -182,6 +203,7 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
       setStreamingText('');
     } finally {
       setStreaming(false);
+      setFetchingLabel('');
     }
   }, [input, streaming, activityId]);
 
@@ -355,7 +377,7 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
           <div className="flex justify-start">
             <div className="rounded-lg px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 flex items-center gap-2">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Thinking...
+              {fetchingLabel || 'Thinking...'}
             </div>
           </div>
         )}

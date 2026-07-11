@@ -69,13 +69,14 @@ async def test_heartbeats_precede_content_during_buffering(db, monkeypatch):
 
     parts = ["Solid ", "easy ", "run ", "today, ", "well ", "controlled."]
 
-    async def slow_stream(self, system, messages, max_tokens=1024):
-        for part in parts:
-            await asyncio.sleep(0.02)  # simulate generation time
-            yield part
+    from tests._chat_stubs import chat_turn_stub
+
+    async def _sleep(_delta):
+        await asyncio.sleep(0.02)  # simulate generation time between deltas
 
     monkeypatch.setattr(
-        "app.services.coach.llm.AnthropicClient.stream_chat", slow_stream
+        "app.services.coach.llm.AnthropicClient.stream_chat_turn",
+        chat_turn_stub(parts, on_delta=_sleep),
     )
 
     activity = _seed(db)
