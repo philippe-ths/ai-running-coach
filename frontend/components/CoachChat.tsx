@@ -2,11 +2,44 @@
 
 import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { ChatMessage, CoachReport, isMessageReport } from '@/lib/types';
-import { MessageCircle, Send, Loader2, RotateCcw, Sparkles } from 'lucide-react';
+import { MessageCircle, Send, Loader2, RotateCcw, Sparkles, Search } from 'lucide-react';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface Props {
   activityId: string;
+}
+
+// #648 f/u: friendly past-tense labels for the persistent tool-use trace shown on
+// an assistant turn that fetched data. Keyed by the backend tool name carried on
+// each status frame (and persisted to CoachChatMessage.tools_used). An unknown key
+// falls back to a generic phrasing so a new tool never renders a raw identifier.
+const TOOL_TRACE_LABELS: Record<string, string> = {
+  list_activities_in_range: 'Looked up your training history',
+  get_session_detail: 'Pulled up a past session',
+  get_training_summary: 'Tallied your recent training',
+};
+
+const toolTraceLabel = (name: string): string =>
+  TOOL_TRACE_LABELS[name] ?? 'Looked up your training data';
+
+// The persistent "looked up …" trace rendered above an assistant turn that ran one
+// or more data tools. Survives a reload because tools_used is stored on the message.
+function ToolTrace({ tools }: { tools: string[] }) {
+  if (!tools.length) return null;
+  return (
+    <div className="mb-1.5 flex flex-wrap gap-1.5">
+      {tools.map((name, i) => (
+        <span
+          key={`${name}-${i}`}
+          className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-300"
+        >
+          <Search className="w-2.5 h-2.5 shrink-0" />
+          {toolTraceLabel(name)}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 // Imperative handle so a sibling (the report panel's question chips) can kick off
@@ -140,6 +173,10 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
 
       const decoder = new TextDecoder();
       let fullResponse = '';
+      // #648 f/u: accumulate the data tools the coach ran this turn (ordered,
+      // de-duplicated) so we can attach them to the finalized assistant message
+      // and render a persistent "looked up …" trace that survives a reload.
+      const toolsUsed: string[] = [];
       // SSE events are delimited by a blank line. Buffer across reads so an
       // event split over two network chunks is reassembled before parsing.
       let buffer = '';
@@ -152,11 +189,14 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
           try {
             // The backend JSON-encodes each chunk so multi-line markdown
             // survives the SSE protocol intact. A content frame is a JSON string;
-            // a status frame (#648) is a JSON object {type:'status',label} shown
-            // as an ephemeral "fetching" affordance, not appended to the reply.
+            // a status frame (#648) is a JSON object {type:'status',label,tool}
+            // shown as an ephemeral "fetching" affordance (label), whose tool name
+            // is banked for the persistent trace, not appended to the reply.
             const parsed = JSON.parse(data);
             if (parsed && typeof parsed === 'object' && parsed.type === 'status') {
               setFetchingLabel(parsed.label ?? '');
+              const tool = typeof parsed.tool === 'string' ? parsed.tool : '';
+              if (tool && !toolsUsed.includes(tool)) toolsUsed.push(tool);
             } else if (typeof parsed === 'string') {
               fullResponse += parsed;
               setStreamingText(fullResponse);
@@ -185,6 +225,7 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
         activity_id: activityId,
         role: 'assistant',
         content: fullResponse,
+        tools_used: toolsUsed.length ? toolsUsed : null,
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [...prev, assistantMsg]);
@@ -356,8 +397,9 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
               </div>
             ) : (
               <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
+                <ToolTrace tools={msg.tools_used ?? []} />
                 <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm">
-                  <Markdown>{msg.content}</Markdown>
+                  <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>
                 </div>
               </div>
             )}
@@ -367,7 +409,7 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
           <div className="flex justify-start">
             <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
               <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm">
-                <Markdown>{streamingText}</Markdown>
+                <Markdown remarkPlugins={[remarkGfm]}>{streamingText}</Markdown>
               </div>
               <span className="inline-block w-1.5 h-4 bg-gray-400 dark:bg-gray-500 ml-0.5 animate-pulse" />
             </div>

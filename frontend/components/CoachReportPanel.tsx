@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { CoachReport, CoachReportBody, isMessageReport, isOpenerOnly } from '@/lib/types';
 import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2, RefreshCw, Copy, Check } from 'lucide-react';
 
@@ -390,7 +391,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
                 {/* Opener turn (stage one) */}
                 {hasOpener && (
                   <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
-                    <Markdown>{body.opener_message as string}</Markdown>
+                    <Markdown remarkPlugins={[remarkGfm]}>{body.opener_message as string}</Markdown>
                   </div>
                 )}
 
@@ -410,7 +411,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
                       <h3 className="text-lg font-serif font-semibold text-gray-900 dark:text-gray-100 mb-2">{body.headline}</h3>
                     )}
                     <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
-                      <Markdown>{body.message}</Markdown>
+                      <Markdown remarkPlugins={[remarkGfm]}>{body.message}</Markdown>
                     </div>
                   </>
                 )}

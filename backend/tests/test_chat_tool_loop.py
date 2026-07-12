@@ -13,8 +13,12 @@ from uuid import uuid4
 
 import pytest
 
-from app.models import Activity, DerivedMetric
-from app.services.coach.chat import MEDICAL_REDIRECT_MESSAGE, stream_chat_response
+from app.models import Activity, CoachChatMessage, DerivedMetric
+from app.services.coach.chat import (
+    MEDICAL_REDIRECT_MESSAGE,
+    get_chat_history,
+    stream_chat_response,
+)
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.query_tools import CHAT_TOOLS
 from tests._chat_stubs import chat_tool_loop_stub
@@ -128,3 +132,54 @@ async def test_direct_answer_without_a_tool_call(db):
 
     assert not any(ev.status_label for ev in events)
     assert "Nice easy run today, well controlled." in "".join(ev.text for ev in events if ev.text)
+
+
+@pytest.mark.asyncio
+async def test_tools_used_persisted_and_returned_in_history(db):
+    """#648 f/u: a turn that runs data tools banks their names on the assistant
+    message and every status frame carries the tool name, so the UI can render a
+    persistent trace that survives a reload."""
+    activity = _seed_activity_with_report(db)
+    _past_run(db, activity.user_id, days_ago=5, distance_m=12000)
+
+    stub = chat_tool_loop_stub([
+        [{"name": "list_activities_in_range", "input": {"window": "last_30_days"}}],
+        "Your longest recent run was 12.0 km.",
+    ])
+    with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
+        events = await _drain(db, activity.id, "how far was my longest run?")
+
+    # the status frame carries the tool name for the live/persistent trace
+    assert any(ev.status_tool == "list_activities_in_range" for ev in events)
+
+    # the assistant row banked the tool it ran
+    saved = (
+        db.query(CoachChatMessage)
+        .filter(CoachChatMessage.activity_id == activity.id,
+                CoachChatMessage.role == "assistant")
+        .one()
+    )
+    assert saved.tools_used == ["list_activities_in_range"]
+
+    # and the history read surfaces it (from_attributes) for a reloaded UI
+    history = get_chat_history(db, str(activity.id))
+    assistant = [m for m in history if m.role == "assistant"][-1]
+    assert assistant.tools_used == ["list_activities_in_range"]
+
+
+@pytest.mark.asyncio
+async def test_tools_used_null_when_no_fetch(db):
+    """A no-tool turn stores tools_used as null, so the trace renders nothing rather
+    than an empty chip row."""
+    activity = _seed_activity_with_report(db)
+    stub = chat_tool_loop_stub(["Nice easy run, nothing to fetch."])
+    with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
+        await _drain(db, activity.id, "how did I do?")
+
+    saved = (
+        db.query(CoachChatMessage)
+        .filter(CoachChatMessage.activity_id == activity.id,
+                CoachChatMessage.role == "assistant")
+        .one()
+    )
+    assert saved.tools_used is None
