@@ -40,3 +40,28 @@ textarea,
 h1 {
   font-family: var(--font-fraunces), Georgia, serif;
 }
+
+/* Slim, unobtrusive scrollbar for scroll regions inside the app (e.g. the coach
+   chat transcript and composer). Replaces the chunky OS default with a thin,
+   rounded thumb that sits on a transparent track and only firms up on hover, so
+   the conversation reads clean like a document. */
+.chat-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.4) transparent; /* slate-400 @ 40% */
+}
+.chat-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.chat-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.chat-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.55);
+}

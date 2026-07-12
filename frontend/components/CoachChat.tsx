@@ -137,6 +137,26 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
     scrollToBottom(justSent);
   }, [messages, streamingText, fetchingLabel, expanded, scrollToBottom]);
 
+  // When the panel first opens (typically with loaded history), jump straight to
+  // the latest turn — like a chat app opening its transcript at the bottom rather
+  // than the top. The messages effect above won't do this on open because a fresh
+  // scroll position isn't "near bottom", so force it once here.
+  useEffect(() => {
+    if (expanded) scrollToBottom(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded]);
+
+  // Auto-grow the input as the runner types so a long message is never clipped
+  // inside a fixed one-row box. Cap the height (~160px, ~6 lines) so a very long
+  // draft scrolls internally instead of swallowing the chat; clearing the input
+  // (e.g. after send) resets it back to a single row.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [input]);
+
   const sendMessage = useCallback(async (textArg?: string) => {
     // textArg lets a tapped starter chip send without going through the input box.
     const text = (textArg ?? input).trim();
@@ -349,7 +369,7 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+      <div className="flex items-center justify-between px-4 py-3">
         <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2">
           <MessageCircle className="w-4 h-4 text-blue-600 dark:text-blue-400" />
           Chat with Coach
@@ -376,8 +396,10 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
         </div>
       </div>
 
-      {/* Messages */}
-      <div ref={messagesContainerRef} className="max-h-96 overflow-y-auto px-4 py-3 space-y-3">
+      {/* Messages. Coach turns render bare (prose on the surface, like a letter);
+          only the runner's own turns sit in a bubble, so the transcript reads as
+          a document being written to them rather than a chatbot log. */}
+      <div ref={messagesContainerRef} className="chat-scroll h-[min(60vh,34rem)] overflow-y-auto px-4 py-4 space-y-5">
         {messages.length === 0 && !streaming && (
           <div className="py-2 space-y-3">
             <p className="text-sm text-gray-400 dark:text-gray-500 text-center">
@@ -387,47 +409,42 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
           </div>
         )}
         {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            {msg.role === 'user' ? (
-              <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap bg-blue-600 text-white">
+          msg.role === 'user' ? (
+            <div key={msg.id} className="flex justify-end">
+              <div className="max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words bg-blue-600 text-white">
                 {msg.content}
               </div>
-            ) : (
-              <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
-                <ToolTrace tools={msg.tools_used ?? []} />
-                <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm">
-                  <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>
-                </div>
+            </div>
+          ) : (
+            <div key={msg.id} className="text-[15px] text-gray-800 dark:text-gray-100">
+              <ToolTrace tools={msg.tools_used ?? []} />
+              <div className="prose prose-sm prose-gray dark:prose-invert max-w-none leading-relaxed prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm">
+                <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>
               </div>
-            )}
-          </div>
+            </div>
+          )
         ))}
         {streaming && streamingText && (
-          <div className="flex justify-start">
-            <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
-              <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm">
-                <Markdown remarkPlugins={[remarkGfm]}>{streamingText}</Markdown>
-              </div>
-              <span className="inline-block w-1.5 h-4 bg-gray-400 dark:bg-gray-500 ml-0.5 animate-pulse" />
+          <div className="text-[15px] text-gray-800 dark:text-gray-100">
+            <div className="prose prose-sm prose-gray dark:prose-invert max-w-none leading-relaxed prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm">
+              <Markdown remarkPlugins={[remarkGfm]}>{streamingText}</Markdown>
             </div>
+            <span className="inline-block w-1.5 h-4 align-middle bg-gray-400 dark:bg-gray-500 ml-0.5 animate-pulse" />
           </div>
         )}
         {streaming && !streamingText && (
-          <div className="flex justify-start">
-            <div className="rounded-lg px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 flex items-center gap-2">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              {fetchingLabel || 'Thinking...'}
-            </div>
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            {fetchingLabel || 'Thinking...'}
           </div>
         )}
       </div>
 
-      {/* Input */}
-      <div className="border-t border-gray-100 dark:border-gray-700 p-3">
-        <div className="flex gap-2">
+      {/* Input. A single soft, borderless field (the whole row is one rounded
+          surface that lights a focus ring), with the send button tucked inside —
+          no outline, no attach/mic/model chrome. */}
+      <div className="p-3">
+        <div className="flex items-end gap-1.5 rounded-2xl bg-gray-100 dark:bg-gray-900/70 px-2 py-1.5 transition-shadow focus-within:ring-2 focus-within:ring-blue-500/40">
           {/* text-base (16px) keeps iOS Safari from auto-zooming the field on focus (#227). */}
           <textarea
             ref={inputRef}
@@ -436,13 +453,14 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
             onKeyDown={handleKeyDown}
             placeholder="Ask your coach..."
             rows={1}
-            className="flex-1 resize-none rounded-lg border border-gray-200 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="chat-scroll flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-base text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-0"
             disabled={streaming}
           />
           <button
             onClick={() => sendMessage()}
             disabled={!input.trim() || streaming}
-            className="rounded-lg bg-blue-600 px-3 py-2 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            aria-label="Send message"
+            className="shrink-0 rounded-xl bg-blue-600 p-2 text-white transition-colors hover:bg-blue-700 disabled:bg-transparent disabled:text-gray-400 dark:disabled:text-gray-600 disabled:cursor-not-allowed"
           >
             <Send className="w-4 h-4" />
           </button>
