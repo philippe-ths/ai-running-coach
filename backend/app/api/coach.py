@@ -439,7 +439,7 @@ async def post_chat(
                     # runs. A JSON OBJECT payload (vs the string payload of a content
                     # frame), so the client renders it as status instead of appending
                     # it to the reply.
-                    yield f"data: {json.dumps({'type': 'status', 'label': event.status_label})}\n\n"
+                    yield f"data: {json.dumps({'type': 'status', 'label': event.status_label, 'tool': event.status_tool})}\n\n"
                 else:
                     yield _sse_data(event.text)
         except Exception:

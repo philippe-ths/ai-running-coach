@@ -110,6 +110,7 @@ class ChatStreamEvent:
     text: str = ""
     is_heartbeat: bool = False
     status_label: str = ""  # #648: ephemeral "fetching data" affordance
+    status_tool: str = ""   # the tool name behind that affordance (for the persistent trace)
 
 
 # How often a keepalive heartbeat is emitted while the reply is being buffered
@@ -555,6 +556,7 @@ async def stream_chat_response(
     llm_messages = messages  # mutated across tool rounds (assistant + tool_result turns)
     assistant_text = None
     stream_failed = False
+    tools_used: List[str] = []  # ordered, de-duped tool names, persisted for the trace
     last_heartbeat = time.monotonic()
     try:
         for round_idx in range(_MAX_TOOL_ROUNDS):
@@ -598,9 +600,13 @@ async def stream_chat_response(
                 tool_results = []
                 for blk in tool_uses:
                     name = _block_attr(blk, "name")
-                    # Show the ephemeral affordance BEFORE the fetch runs (#648).
+                    if name and name not in tools_used:
+                        tools_used.append(name)
+                    # Show the ephemeral affordance BEFORE the fetch runs (#648). Carry
+                    # the tool name so the client can build the persistent trace too.
                     yield ChatStreamEvent(
-                        status_label=TOOL_STATUS_LABELS.get(name, "Looking that up…")
+                        status_label=TOOL_STATUS_LABELS.get(name, "Looking that up…"),
+                        status_tool=name or "",
                     )
                     last_heartbeat = time.monotonic()
                     result = execute_chat_tool(
@@ -653,11 +659,13 @@ async def stream_chat_response(
     for piece in _slice_for_stream(assistant_text):
         yield ChatStreamEvent(text=piece)
 
-    # Save the validated assistant response (never the raw gated text).
+    # Save the validated assistant response (never the raw gated text), tagged with
+    # the data tools this turn ran so the UI can show a persistent trace (#648 f/u).
     assistant_msg = CoachChatMessage(
         activity_id=activity_id,
         role="assistant",
         content=assistant_text,
+        tools_used=tools_used or None,
     )
     db.add(assistant_msg)
     db.commit()
