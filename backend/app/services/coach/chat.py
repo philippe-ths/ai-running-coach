@@ -28,7 +28,6 @@ from app.models.coaching_relationship import CoachingRelationship
 from app.schemas.chat import ChatMessageRead
 from app.schemas.coach_context import CoachContextPack
 from app.services.coach.llm import AnthropicClient
-from app.services.coach.prompt_features import PromptFeature, has_feature
 from app.services.coach.prompts import render_voice_block
 from app.services.coach.query_tools import (
     CHAT_TOOLS,
@@ -205,14 +204,16 @@ RULES:
 
 
 # --- authority-tiering block (#667) ----------------------------------------------
-# The RELATIONSHIP MEMORY & AUTHORITY TIERING block briefs the coach on each
-# capability-dependent tier the context pack can carry. Chat is NOT version-gated
-# like the report prompt, so if it briefs a tier unconditionally it will keep
-# advertising a section a COACH_PROMPT_ID rollback has dropped from the pack. Each
-# tier bullet below is therefore gated on the same PromptFeature the report side uses
-# (exactly as the voice BLOCK is gated by `render_voice_block`), so chat tracks the
-# active prompt with no parallel chat-version chain. The bullet texts are byte-verbatim
-# from the prior static block, so under a full-feature prompt the render is identical.
+# The RELATIONSHIP MEMORY & AUTHORITY TIERING block briefs the coach on each tier the
+# context pack can carry. Chat replays the report's STORED pack, and a section gated
+# off — by a COACH_PROMPT_ID rollback OR a COACH_*_ENABLED kill switch — drops its key
+# from that pack byte-stably (#493). So each tier below is gated on the pack's OWN
+# contents (mirroring how the report gates its addenda, prompts._gate_optional_addenda),
+# which makes chat honour prompt version, kill switches, and the frozen-pack reality in
+# one move. Voice is not a pack section, so its tier follows the rendered voice block
+# (itself kill-switched inside render_voice_block); the cross-activity note follows the
+# digest. The bullet texts are byte-verbatim, so with every section present the render
+# is identical to the prior static block.
 _TIERING_HEADER = "\n\nRELATIONSHIP MEMORY & AUTHORITY TIERING:\nThe context above can carry the relationship's memory. Honour its authority tiering: the measured data (this activity's metrics and analysis) and the safety floor (rule 2) ALWAYS win, and nothing below ever lowers them. Where a lower tier and today's data disagree, today's data wins, silently."
 
 _VOICE_TIER = '- VOICE (the "YOUR VOICE FOR THIS RUNNER" block, when present below): the runner\'s own choice of how they want to be coached. It sets your tone, register, and delivery ONLY. A blunt voice and a warm voice say the SAME things, differently — never soften, omit, sharpen, or alter a data-warranted point, a safety message, or a fact to fit the voice.'
@@ -232,31 +233,39 @@ _TRAINING_LOAD_TIER = '- TRAINING LOAD (the "training_load" section): a determin
 _RELATIONSHIP_CONVERSATION_TIER = '- RELATIONSHIP CONVERSATION (the "RELATIONSHIP CONVERSATION" block, when present): recent chat turns from the runner\'s OTHER runs, for continuity ONLY — use them so you sound like the same coach who remembers what you discussed, but never treat a past chat line as fact about THIS run, and never let them override this activity\'s measured data or the safety floor.'
 
 
-def _render_authority_tiering(prompt_id: Optional[str]) -> str:
-    """Compose the authority-tiering block, briefing only the tiers the ACTIVE coach
-    prompt actually carries (#667).
+def _render_authority_tiering(
+    context_pack: dict,
+    *,
+    voice_present: bool,
+    cross_activity_present: bool,
+) -> str:
+    """Compose the authority-tiering block, briefing ONLY the tiers whose data is
+    actually in front of the coach.
 
-    Each capability-dependent tier (voice, memory, corpus + user-materials, training
-    load) is included iff `prompt_id` carries the matching PromptFeature, exactly as
-    the voice BLOCK is gated by `render_voice_block`. So a COACH_PROMPT_ID rollback to
-    a prompt whose pack dropped a section stops chat advertising it, with no parallel
-    chat-version chain. The always-on floor (measured data + safety win, lower tiers
-    yield) and the RELATIONSHIP CONVERSATION continuity note stay unconditional. Under
-    the live full-feature prompt every tier renders, byte-identical to the prior
+    Each pack-section tier (memory, corpus + user-materials, training-load) is briefed
+    iff that key is present in the stored `context_pack`; because a gated-off section
+    drops its key byte-stably (#493), this honours prompt version AND kill switches AND
+    the frozen pack in one gate, mirroring the report's `_gate_optional_addenda`. Voice
+    is not a pack section, so its tier follows the rendered `voice_present` block (which
+    is itself kill-switched inside `render_voice_block`); the cross-activity note
+    follows the digest's presence. The floor header (measured data + safety win) is
+    always emitted. With every section present the render is byte-identical to the prior
     static block.
     """
     bullets = []
-    if has_feature(prompt_id, PromptFeature.VOICE):
+    if voice_present:
         bullets.append(_VOICE_TIER)
-    if has_feature(prompt_id, PromptFeature.MEMORY):
+    if context_pack.get("memory"):
         bullets.append(_MEMORY_TIER)
-    if has_feature(prompt_id, PromptFeature.USER_MATERIALS):
-        bullets.append(_CORPUS_TIER)
-    elif has_feature(prompt_id, PromptFeature.CORPUS):
-        bullets.append(_CORPUS_ONLY_TIER)
-    if has_feature(prompt_id, PromptFeature.TRAINING_LOAD):
+    corpus = context_pack.get("corpus")
+    if corpus:
+        bullets.append(_CORPUS_TIER if corpus.get("user_materials") else _CORPUS_ONLY_TIER)
+    if context_pack.get("training_load"):
         bullets.append(_TRAINING_LOAD_TIER)
-    bullets.append(_RELATIONSHIP_CONVERSATION_TIER)
+    if cross_activity_present:
+        bullets.append(_RELATIONSHIP_CONVERSATION_TIER)
+    if not bullets:
+        return _TIERING_HEADER
     return _TIERING_HEADER + "\n" + "\n".join(bullets)
 
 
@@ -340,15 +349,20 @@ def _build_chat_system_prompt(
 ) -> str:
     """Assemble the chat system prompt from all context sources.
 
-    `voice_block` is the rendered per-runner VOICE block (or "" when the active
-    prompt is not voice-aware). `tiering_block` is the authority-tiering disciplines
-    briefing only the tiers the active prompt carries (#667); when None it is composed
-    for `settings.COACH_PROMPT_ID`, so chat tracks the report prompt like voice does.
-    `cross_activity_block` (#339) is the bounded cross-activity conversation digest, or
-    "" when the runner has no other-activity chat (keeping the prompt byte-stable).
+    `voice_block` is the rendered per-runner VOICE block (or "" when voice is not
+    active for this runner). `tiering_block` is the authority-tiering disciplines
+    briefing only the tiers whose data is present (#667); when None it is composed from
+    the `context_pack`'s own contents plus the voice/cross-activity blocks' presence, so
+    a section gated off anywhere is also un-briefed here. `cross_activity_block` (#339)
+    is the bounded cross-activity conversation digest, or "" when the runner has no
+    other-activity chat.
     """
     if tiering_block is None:
-        tiering_block = _render_authority_tiering(settings.COACH_PROMPT_ID)
+        tiering_block = _render_authority_tiering(
+            context_pack,
+            voice_present=bool(voice_block),
+            cross_activity_present=bool(cross_activity_block),
+        )
     return CHAT_SYSTEM_TEMPLATE.format(
         context_pack_json=json.dumps(context_pack, default=str),
         report_json=json.dumps(report, default=str),
@@ -365,9 +379,10 @@ def _resolve_voice_block(db: Session, activity: Activity) -> str:
 
     Resolves the activity owner's CoachingRelationship (the row may not exist yet —
     an undeclared runner resolves to the moderate default) and renders the voice
-    block under the ACTIVE coach prompt. `render_voice_block` returns "" whenever
-    that prompt is not voice-aware, so chat voicing tracks the report's voicing: a
-    rollback to a non-voice prompt de-voices chat too, with zero extra gating here."""
+    block under the ACTIVE coach prompt. `render_voice_block` returns "" whenever the
+    prompt is not voice-aware OR `COACH_VOICE_BLOCK_ENABLED` is off (the switch is
+    enforced inside that shared render, #522), so chat voicing tracks the report's
+    voicing on every path with zero extra gating here."""
     relationship = (
         db.query(CoachingRelationship)
         .filter(CoachingRelationship.user_id == activity.user_id)

@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.models import Activity, DerivedMetric, StravaAccount, User, UserProfile
 from app.models.coach_report import CoachReport
 from app.models.coaching_relationship import CoachingRelationship
-from app.services.coach.chat import _build_chat_system_prompt, _render_authority_tiering
+from app.services.coach.chat import _build_chat_system_prompt
 
 VOICE_AWARE_PROMPT = "coach_message_v7"
 NON_VOICE_PROMPT = "coach_report_v10"
@@ -79,13 +79,17 @@ def _capture_system(client, db, activity):
 
 
 def test_chat_prompt_carries_relationship_memory_disciplines():
-    """Under a feature-bearing prompt the chat prompt carries the authority-tiering
-    disciplines, so the chat coach treats every relationship-memory section exactly as
-    the report coach does. #667 gates each tier on the active prompt's features, so the
-    render is done under the full-feature prompt the report side carries."""
+    """When the pack carries the relationship-memory sections, the chat prompt carries
+    their authority-tiering disciplines, so the chat coach treats each section exactly as
+    the report coach does. #667 gates each tier on the pack's OWN contents, so the render
+    is done against a pack that carries every section."""
+    full_pack = {
+        "memory": {"who_you_are": ["x"]},
+        "corpus": {"user_materials": [{"x": 1}]},
+        "training_load": {"fitness": 1.0},
+    }
     prompt = _build_chat_system_prompt(
-        context_pack={}, report={}, profile={}, splits=[], voice_block="",
-        tiering_block=_render_authority_tiering("coach_message_lean_v1"),
+        context_pack=full_pack, report={}, profile={}, splits=[], voice_block="",
     )
     assert "AUTHORITY TIERING" in prompt
     # each relationship-memory section the stored pack can carry is disciplined
@@ -133,17 +137,28 @@ def test_chat_uses_default_voice_when_undeclared_under_voice_aware_prompt(client
 
 def test_chat_omits_voice_block_under_non_voice_prompt(client, db, monkeypatch):
     """Voice gating mirrors the report: no voice-aware active prompt, no voice block.
-    #667: the capability-dependent tiers drop too, so a rollback to a feature-poor
-    prompt stops chat advertising sections the pack no longer carries; only the
-    always-on floor (the header + measured-data-wins ordering + the cross-activity
-    continuity note) survives."""
+    #667: the tiers drop too, because they gate on the stored pack's contents (here the
+    seeded pack is empty), so chat never advertises a section that is not in front of it;
+    only the always-on floor header survives."""
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", NON_VOICE_PROMPT)
     activity = _seed(db, voice_preset="cornerman")
     system = _capture_system(client, db, activity)
     assert "## YOUR VOICE FOR THIS RUNNER" not in system  # rendered block absent
     assert "AUTHORITY TIERING" in system  # the floor header stays
-    # the capability tiers dropped with the rollback
+    # the capability tiers dropped (empty pack, non-voice prompt)
     assert "- VOICE (" not in system
     assert "- MEMORY (" not in system
     assert "- COACHING CORPUS" not in system
     assert "- TRAINING LOAD" not in system
+
+
+def test_chat_drops_voice_when_kill_switch_off(client, db, monkeypatch):
+    """The bug this closes: with COACH_VOICE_BLOCK_ENABLED off, the report drops the
+    voice block but chat used to keep it, because the switch lived only in the report
+    builder and chat's voice path bypassed it. The switch now lives inside the shared
+    render_voice_block, so a disabled voice is off on the chat path too."""
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", VOICE_AWARE_PROMPT)
+    monkeypatch.setattr(settings, "COACH_VOICE_BLOCK_ENABLED", False)
+    activity = _seed(db, voice_preset="cornerman")
+    system = _capture_system(client, db, activity)
+    assert "## YOUR VOICE FOR THIS RUNNER" not in system  # off everywhere, chat included

@@ -12,10 +12,16 @@ from app.services.coach.chat import (
     _render_authority_tiering,
 )
 
-# A prompt carrying the FULL capability set (prod runs it) — every tier renders.
-FULL_FEATURE_PROMPT = "coach_message_lean_v1"
-# A prompt carrying NO runner-facing capability — every gated tier must drop.
-FEATURE_POOR_PROMPT = "coach_report_v10"
+# A pack with every relationship-memory section present (prod's full-feature pack).
+FULL_PACK = {
+    "memory": {"who_you_are": ["marathoner"]},
+    "corpus": {"school": {"stance": "aerobic"}, "user_materials": [{"stance": "x"}]},
+    "training_load": {"fitness": 40.0},
+}
+
+
+def _full_tiering():
+    return _render_authority_tiering(FULL_PACK, voice_present=True, cross_activity_present=True)
 
 
 def test_chat_template_renders_without_brace_errors():
@@ -45,10 +51,10 @@ def test_chat_carries_the_week_frame_mirroring_discipline():
 
 def test_chat_tiering_cites_memory_not_the_retired_sections():
     """ADR 0025 retired the narrative + believed_facts sections (now null stubs); the
-    runner `memory` profile replaced them. Under a memory-aware prompt the chat
-    authority-tiering must brief the live `memory` tier as the citable Stated-memory
+    runner `memory` profile replaced them. When the pack carries a `memory` section the
+    chat authority-tiering must brief the live `memory` tier as the citable Stated-memory
     tier and must NOT re-brief the dead ones, matching the report/lean prompt."""
-    t = _render_authority_tiering(FULL_FEATURE_PROMPT).lower()
+    t = _full_tiering().lower()
     assert "memory" in t
     assert "the one tier you may cite as fact" in t
     assert "yields to this run's measured data" in t
@@ -56,38 +62,61 @@ def test_chat_tiering_cites_memory_not_the_retired_sections():
     assert "narrative" not in t
 
 
-def test_chat_tiering_gated_on_active_prompt_features():
-    """#667: chat is NOT version-gated like the report, so it must brief only the tiers
-    the ACTIVE prompt carries — otherwise a COACH_PROMPT_ID rollback leaves chat
-    advertising a section the pack has dropped (the drift #653 fixed for the retired
-    tiers). Each capability tier gates on the same PromptFeature the report side uses,
-    exactly as the voice block already does."""
-    full = _render_authority_tiering(FULL_FEATURE_PROMPT)
-    poor = _render_authority_tiering(FEATURE_POOR_PROMPT)
+def test_chat_tiering_gated_on_pack_contents():
+    """#667: chat replays the report's STORED pack, so it must brief only the tiers whose
+    section is actually IN that pack. A section dropped by a COACH_PROMPT_ID rollback OR a
+    kill switch drops its key byte-stably (#493), so gating on the pack contents un-briefs
+    it everywhere at once — the fix for chat advertising sections the pack no longer has."""
+    full = _full_tiering()
+    # empty pack, no voice, no cross-activity: only the floor header survives.
+    bare = _render_authority_tiering({}, voice_present=False, cross_activity_present=False)
 
-    # The always-on floor survives in both: the header, the measured-data-wins ordering,
-    # and the cross-activity continuity note (gated on the block, not the prompt).
-    for text in (full, poor):
+    # The floor header (measured data + safety win) is always emitted.
+    for text in (full, bare):
         assert "RELATIONSHIP MEMORY & AUTHORITY TIERING:" in text
         assert "the safety floor (rule 2) ALWAYS win" in text
-        assert "- RELATIONSHIP CONVERSATION" in text
 
-    # Under the full-feature prompt every capability tier is briefed.
+    # With every section present each tier is briefed.
     for tier in ("- VOICE", "- MEMORY", "- COACHING CORPUS & USER MATERIALS", "- TRAINING LOAD"):
-        assert tier in full, f"full-feature prompt should brief {tier}"
+        assert tier in full, f"full pack should brief {tier}"
+    assert "- RELATIONSHIP CONVERSATION" in full  # cross-activity digest present
 
-    # Under the feature-poor prompt every capability tier is dropped.
-    for tier in ("- VOICE", "- MEMORY", "- COACHING CORPUS", "- TRAINING LOAD"):
-        assert tier not in poor, f"feature-poor prompt must NOT brief {tier}"
+    # With an empty pack (nothing in front of the coach) every tier is dropped.
+    for tier in ("- VOICE", "- MEMORY", "- COACHING CORPUS", "- TRAINING LOAD", "- RELATIONSHIP CONVERSATION"):
+        assert tier not in bare, f"empty pack must NOT brief {tier}"
+
+
+def test_chat_tiering_drops_tier_gated_off_even_when_prompt_would_carry_it():
+    """The kill-switch / frozen-pack case: the memory tier is briefed off the pack's OWN
+    `memory` key, not the prompt version — so a pack whose memory section was dropped
+    (COACH_MEMORY_ENABLED off, or a stale pre-memory report) is NOT briefed on memory,
+    while the sections it DOES carry still are."""
+    pack = {"corpus": {"user_materials": [{"x": 1}]}, "training_load": {"fitness": 1.0}}
+    t = _render_authority_tiering(pack, voice_present=True, cross_activity_present=False)
+    assert "- MEMORY" not in t                          # dropped: no memory in the pack
+    assert "- COACHING CORPUS & USER MATERIALS" in t     # kept: present
+    assert "- TRAINING LOAD" in t                        # kept: present
+    assert "- RELATIONSHIP CONVERSATION" not in t        # no cross-activity digest
 
 
 def test_chat_tiering_corpus_without_user_materials():
-    """A CORPUS-but-not-USER_MATERIALS rollback target (v4/v5/v6) briefs the corpus tier
-    without claiming uploaded materials the pack does not carry."""
-    t = _render_authority_tiering("coach_message_v4")
+    """A pack carrying the corpus school but no uploaded materials briefs the corpus tier
+    without claiming materials the pack does not carry."""
+    t = _render_authority_tiering(
+        {"corpus": {"school": {"stance": "x"}}}, voice_present=False, cross_activity_present=False
+    )
     assert "- COACHING CORPUS (" in t  # corpus-only variant
     assert "USER MATERIALS" not in t
-    assert "- MEMORY" not in t  # v4 predates memory
+    assert "- MEMORY" not in t
+
+
+def test_chat_voice_tier_follows_the_voice_block_presence():
+    """Voice is not a pack section, so its tier follows the rendered voice block. When the
+    block is absent (voice not active / kill-switched), the voice tier drops too."""
+    off = _render_authority_tiering(FULL_PACK, voice_present=False, cross_activity_present=True)
+    assert "- VOICE" not in off
+    on = _render_authority_tiering(FULL_PACK, voice_present=True, cross_activity_present=True)
+    assert "- VOICE" in on
 
 
 def test_chat_keeps_the_load_bearing_safety_surface():
