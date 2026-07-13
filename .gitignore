@@ -49,19 +49,22 @@ frontend/tsconfig.tsbuildinfo
 
 # AI workflow and skills (tooling config, not product code)
 .agents/
-.codex/
 .gemini/
 .github/*
 !.github/workflows/
-.vscode/
-AGENTS.md
 claude.md
+CLAUDE.md
+.claude/
+.codex/
+AGENTS.md
 .vercel
 .env*
 # >>> ai-workflow (vendored, managed by installer) >>>
 ai-workflow.md
 .ai-policy/
 .githooks/
-CLAUDE.md
-.claude/
+.github/copilot-instructions.md
+.github/hooks/
+.vscode/
+.agents/skills/
 # <<< ai-workflow <<<
