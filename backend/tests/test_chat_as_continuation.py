@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.models import Activity, DerivedMetric, StravaAccount, User, UserProfile
 from app.models.coach_report import CoachReport
 from app.models.coaching_relationship import CoachingRelationship
-from app.services.coach.chat import _build_chat_system_prompt
+from app.services.coach.chat import _build_chat_system_prompt, _render_authority_tiering
 
 VOICE_AWARE_PROMPT = "coach_message_v7"
 NON_VOICE_PROMPT = "coach_report_v10"
@@ -79,10 +79,13 @@ def _capture_system(client, db, activity):
 
 
 def test_chat_prompt_carries_relationship_memory_disciplines():
-    """The chat prompt always carries the authority-tiering disciplines, so the chat
-    coach treats every relationship-memory section exactly as the report coach does."""
+    """Under a feature-bearing prompt the chat prompt carries the authority-tiering
+    disciplines, so the chat coach treats every relationship-memory section exactly as
+    the report coach does. #667 gates each tier on the active prompt's features, so the
+    render is done under the full-feature prompt the report side carries."""
     prompt = _build_chat_system_prompt(
         context_pack={}, report={}, profile={}, splits=[], voice_block="",
+        tiering_block=_render_authority_tiering("coach_message_lean_v1"),
     )
     assert "AUTHORITY TIERING" in prompt
     # each relationship-memory section the stored pack can carry is disciplined
@@ -130,10 +133,17 @@ def test_chat_uses_default_voice_when_undeclared_under_voice_aware_prompt(client
 
 def test_chat_omits_voice_block_under_non_voice_prompt(client, db, monkeypatch):
     """Voice gating mirrors the report: no voice-aware active prompt, no voice block.
-    The relationship-memory disciplines stay (they are always-on, harmless when a
-    section is absent)."""
+    #667: the capability-dependent tiers drop too, so a rollback to a feature-poor
+    prompt stops chat advertising sections the pack no longer carries; only the
+    always-on floor (the header + measured-data-wins ordering + the cross-activity
+    continuity note) survives."""
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", NON_VOICE_PROMPT)
     activity = _seed(db, voice_preset="cornerman")
     system = _capture_system(client, db, activity)
     assert "## YOUR VOICE FOR THIS RUNNER" not in system  # rendered block absent
-    assert "AUTHORITY TIERING" in system
+    assert "AUTHORITY TIERING" in system  # the floor header stays
+    # the capability tiers dropped with the rollback
+    assert "- VOICE (" not in system
+    assert "- MEMORY (" not in system
+    assert "- COACHING CORPUS" not in system
+    assert "- TRAINING LOAD" not in system
