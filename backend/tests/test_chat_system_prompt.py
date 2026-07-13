@@ -15,7 +15,6 @@ def test_chat_template_renders_without_brace_errors():
         context_pack={"training_volume": {"calendar_week": {}}},
         report={},
         profile={},
-        trends={},
         splits=[],
         voice_block="",
         cross_activity_block="",

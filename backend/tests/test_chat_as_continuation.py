@@ -82,7 +82,7 @@ def test_chat_prompt_carries_relationship_memory_disciplines():
     """The chat prompt always carries the authority-tiering disciplines, so the chat
     coach treats every relationship-memory section exactly as the report coach does."""
     prompt = _build_chat_system_prompt(
-        context_pack={}, report={}, profile={}, trends={}, splits=[], voice_block="",
+        context_pack={}, report={}, profile={}, splits=[], voice_block="",
     )
     assert "AUTHORITY TIERING" in prompt
     # each relationship-memory section the stored pack can carry is disciplined
@@ -101,7 +101,7 @@ def test_chat_prompt_carries_relationship_memory_disciplines():
 def test_chat_prompt_embeds_voice_block_when_present():
     block = "\n\n## YOUR VOICE FOR THIS RUNNER\nDIALS (1 = low pole, 5 = high pole):"
     prompt = _build_chat_system_prompt(
-        context_pack={}, report={}, profile={}, trends={}, splits=[], voice_block=block,
+        context_pack={}, report={}, profile={}, splits=[], voice_block=block,
     )
     assert "## YOUR VOICE FOR THIS RUNNER" in prompt
 
