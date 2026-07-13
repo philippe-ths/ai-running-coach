@@ -212,6 +212,17 @@ def test_voice_block_present_by_default_absent_when_disabled(monkeypatch):
     assert "## YOUR VOICE FOR THIS RUNNER" not in build_system_prompt(V11, voice=voice)
 
 
+def test_voice_switch_enforced_inside_shared_render(monkeypatch):
+    """The switch lives inside render_voice_block, the ONE render both the report and
+    chat go through, so no call site can bypass it (chat's voice path previously did)."""
+    from app.services.coach.prompts import render_voice_block
+
+    voice = resolve_voice(None)
+    assert render_voice_block(V11, voice) != ""  # on by default
+    monkeypatch.setattr(settings, "COACH_VOICE_BLOCK_ENABLED", False)
+    assert render_voice_block(V11, voice) == ""  # off at the source, every caller
+
+
 # --- coaching_relationship: voice + stance resolve to defaults when off --------
 
 
