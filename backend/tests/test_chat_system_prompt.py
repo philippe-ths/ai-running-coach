@@ -35,6 +35,19 @@ def test_chat_carries_the_week_frame_mirroring_discipline():
     assert "not their week" in t
 
 
+def test_chat_tiering_cites_memory_not_the_retired_sections():
+    """ADR 0025 retired the narrative + believed_facts sections (now null stubs); the
+    runner `memory` profile replaced them. The chat authority-tiering must brief the
+    live `memory` tier as the citable Stated-memory tier and must NOT re-brief the dead
+    ones, matching the report/lean prompt."""
+    t = CHAT_SYSTEM_TEMPLATE.lower()
+    assert "memory" in t
+    assert 'the one tier you may cite as fact' in t
+    assert "yields to this run's measured data" in t
+    assert "believed_facts" not in t
+    assert "narrative" not in t
+
+
 def test_chat_keeps_the_load_bearing_safety_surface():
     """The week-frame addition did not disturb the floor: no-diagnose, zone language,
     ground-every-claim, and conservative volume all still present."""
