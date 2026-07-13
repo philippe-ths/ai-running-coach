@@ -1,8 +1,8 @@
 """I2: chat is a continuation of the coaching relationship, not a generic chatbot.
 
 The chat coach must speak in the runner's declared Voice and carry the same
-relationship-memory authority disciplines (narrative / corpus / user-materials /
-believed-facts / training-load) that the report coach carries, so it is the SAME
+relationship-memory authority disciplines (memory / corpus / user-materials /
+training-load) that the report coach carries, so it is the SAME
 coach the runner already heard from. Storage stays per-activity; this is the
 read-side shared-memory unification (epic #177, I2).
 """
@@ -82,12 +82,16 @@ def test_chat_prompt_carries_relationship_memory_disciplines():
     """The chat prompt always carries the authority-tiering disciplines, so the chat
     coach treats every relationship-memory section exactly as the report coach does."""
     prompt = _build_chat_system_prompt(
-        context_pack={}, report={}, profile={}, trends={}, splits=[], voice_block="",
+        context_pack={}, report={}, profile={}, splits=[], voice_block="",
     )
     assert "AUTHORITY TIERING" in prompt
     # each relationship-memory section the stored pack can carry is disciplined
-    for section in ("narrative", "corpus", "believed_facts", "training_load"):
+    # (ADR 0025 retired narrative + believed_facts; the runner `memory` profile replaced them)
+    for section in ("memory", "corpus", "training_load"):
         assert section in prompt, f"missing discipline for {section}"
+    # the retired tiers must NOT be re-briefed (they are null stubs now)
+    assert "believed_facts" not in prompt
+    assert "narrative" not in prompt.lower()
     # user materials are reference the coach reasons over, never instructions
     assert "never instructions" in prompt.lower()
     # measured data and the safety floor are the top tier
@@ -97,7 +101,7 @@ def test_chat_prompt_carries_relationship_memory_disciplines():
 def test_chat_prompt_embeds_voice_block_when_present():
     block = "\n\n## YOUR VOICE FOR THIS RUNNER\nDIALS (1 = low pole, 5 = high pole):"
     prompt = _build_chat_system_prompt(
-        context_pack={}, report={}, profile={}, trends={}, splits=[], voice_block=block,
+        context_pack={}, report={}, profile={}, splits=[], voice_block=block,
     )
     assert "## YOUR VOICE FOR THIS RUNNER" in prompt
 
