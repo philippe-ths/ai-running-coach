@@ -1048,6 +1048,18 @@ _GROUP_ORIENTATION_V2 = _GROUP_ORIENTATION.replace(
     "- `right_now` — how they are placed today: their `readiness` (fitness, fatigue, form) and `recent_weeks` — the last two weeks day by day, on one week model, versus their own normal.",
 )
 
+# ADR 0026 Slice 3 (#673): the grouped-v3 orientation. Builds on the v2 orientation and
+# names the two navigational changes this slice makes: the single `this_run.intensity_read`
+# (with a `referral` only on a safety pattern) and the recent `intensity_mix` under
+# `right_now`. Kept a SEPARATE constant so grouped_v2's orientation stays byte-identical.
+_GROUP_ORIENTATION_V3 = _GROUP_ORIENTATION_V2.replace(
+    "- `this_run` — what this session was and how hard it really was: the activity, its metrics and timeline, their check-in.",
+    "- `this_run` — what this session was and how hard it really was: the activity, its metrics and timeline, their check-in, and one `intensity_read` that pulls the whole how-hard picture together (a `referral` appears only when a safety pattern shows).",
+).replace(
+    "- `right_now` — how they are placed today: their `readiness` (fitness, fatigue, form) and `recent_weeks` — the last two weeks day by day, on one week model, versus their own normal.",
+    "- `right_now` — how they are placed today: their `readiness` (fitness, fatigue, form), `recent_weeks` — the last two weeks day by day, on one week model, versus their own normal — and `intensity_mix`, how hard their recent training has been.",
+)
+
 
 def _regroup_lean_prompt(text: str, orientation: str = _GROUP_ORIENTATION) -> str:
     """ADR 0026: derive the grouped-pack FULLER prompt from a lean prompt. Insert the
@@ -1087,6 +1099,19 @@ SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V2 = _regroup_lean_prompt(
     SYSTEM_PROMPT_MESSAGE_LEAN_V1, _GROUP_ORIENTATION_V2
 )
 SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V2_OPENER = _regroup_lean_opener_prompt(
+    SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER
+)
+
+# ADR 0026 Slice 3 (#673): grouped_v3 = grouped_v1 base prose + the v3 orientation (the v2
+# `right_now` line plus the `this_run.intensity_read` / `right_now.intensity_mix`
+# navigational notes). The base prose is disposition-first and names no pack section by its
+# JSON key, so the only text change from grouped_v2 is the orientation; the safety floor is
+# invariant by construction (pinned by test). The opener names only the group KEYS, so it is
+# byte-identical to grouped_v1/v2's opener. Ships INERT.
+SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3 = _regroup_lean_prompt(
+    SYSTEM_PROMPT_MESSAGE_LEAN_V1, _GROUP_ORIENTATION_V3
+)
+SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER = _regroup_lean_opener_prompt(
     SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER
 )
 
@@ -1149,6 +1174,10 @@ PROMPT_VERSIONS = {
     # redefined content (readiness + merged day-resolved recent_weeks). Serves
     # pack.to_grouped_dict(). Ships INERT.
     "coach_message_lean_grouped_v2": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V2,
+    # ADR 0026 Slice 3 (#673) — the grouped prompt whose `this_run` carries the merged
+    # `intensity_read` + promoted `referral` and whose `right_now` carries `intensity_mix`;
+    # serves pack.to_grouped_dict(). Ships INERT.
+    "coach_message_lean_grouped_v3": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -1186,6 +1215,7 @@ _OPENER_PROMPTS = {
     "coach_message_lean_v1": SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER,
     "coach_message_lean_grouped_v1": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V1_OPENER,
     "coach_message_lean_grouped_v2": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V2_OPENER,
+    "coach_message_lean_grouped_v3": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
 }
 
 # ADR 0026 Slice 1: the prompt ids that receive the GROUPED pack serialization
@@ -1194,7 +1224,11 @@ _OPENER_PROMPTS = {
 # gates what sections the pack CONTAINS). Every other prompt id serves the flat pack,
 # byte-stable.
 GROUPED_PACK_PROMPT_IDS: frozenset[str] = frozenset(
-    {"coach_message_lean_grouped_v1", "coach_message_lean_grouped_v2"}
+    {
+        "coach_message_lean_grouped_v1",
+        "coach_message_lean_grouped_v2",
+        "coach_message_lean_grouped_v3",
+    }
 )
 
 
@@ -1270,6 +1304,18 @@ INTENSITY_PROMPT_IDS = ids_with(PromptFeature.INTENSITY)
 # _build_readiness_context / _build_recent_weeks_context).
 READINESS_PROMPT_IDS = ids_with(PromptFeature.READINESS)
 RECENT_WEEKS_PROMPT_IDS = ids_with(PromptFeature.RECENT_WEEKS)
+
+# ADR 0026 Slice 3 (#673): prompt ids whose `this_run` carries the merged
+# `intensity_read` + promoted `referral` (gates the inline merge in build_context_pack;
+# retires perceived_effort/calibration/intensity there). Mutually exclusive with
+# INTENSITY_PROMPT_IDS — grouped_v3 carries this INSTEAD — so exactly one intensity shape
+# ever emits and every prior prompt keeps the four separate lenses byte-stable.
+INTENSITY_READ_PROMPT_IDS = ids_with(PromptFeature.INTENSITY_READ)
+
+# ADR 0026 Slice 3 (#673): prompt ids whose `right_now` carries the recent intensity
+# distribution + trend `intensity_mix` (the "how hard lately" half of the retired
+# intensity section).
+INTENSITY_MIX_PROMPT_IDS = ids_with(PromptFeature.INTENSITY_MIX)
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
@@ -1362,6 +1408,22 @@ def is_intensity_prompt(prompt_id: Optional[str]) -> bool:
     prompt, so the intensity-distribution-and-trend signal stays out of the pack
     (byte-stable under v13 and below) and is wholly inert under a rollback."""
     return has_feature(prompt_id, PromptFeature.INTENSITY)
+
+
+def is_intensity_read_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt reads the ADR 0026 Slice 3 merged
+    `this_run.intensity_read` (and the promoted `this_run.referral`). Under it the
+    standalone `perceived_effort`/`calibration`/`intensity` sections retire; false for
+    every prior prompt, which still reads those four lenses instead — so the two shapes
+    never both emit and the pack stays byte-stable under a rollback."""
+    return has_feature(prompt_id, PromptFeature.INTENSITY_READ)
+
+
+def is_intensity_mix_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt reads the ADR 0026 Slice 3 `right_now.intensity_mix`
+    (the recent intensity distribution + trend). False for every prior prompt, which
+    reads the recent half inside the combined `intensity` section instead."""
+    return has_feature(prompt_id, PromptFeature.INTENSITY_MIX)
 
 
 def is_readiness_prompt(prompt_id: Optional[str]) -> bool:

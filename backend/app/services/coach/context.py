@@ -41,6 +41,8 @@ from app.services.coach.prompt_features import PromptFeature
 from app.services.coach.prompts import (
     _describe_dial,
     is_corpus_prompt,
+    is_intensity_mix_prompt,
+    is_intensity_read_prompt,
     is_stance_prompt,
     is_stream_view_prompt,
     is_user_materials_prompt,
@@ -52,6 +54,7 @@ from app.services.coach.recent_training import build_recent_training
 from app.services.coach.recent_weeks import CheckInFacts, build_recent_weeks
 from app.services.coach.training_history import build_training_history
 from app.services.coach.intensity import build_intensity
+from app.services.coach.intensity_read import build_intensity_mix, build_intensity_read
 from app.services.readiness import build_readiness
 from app.services.coach.retrieval import (
     fetch_corpus,
@@ -81,6 +84,7 @@ from app.schemas.coach_context import (
     RecentWeeksContext,
     TrainingHistoryContext,
     IntensityContext,
+    IntensitySession,
     LongitudinalContext,
     MemoryContext,
     MetricsContext,
@@ -224,6 +228,40 @@ def build_context_pack(
     # training-load/volume/recent-training signals key on it (each derives the exact
     # flavour it needs — start_date for readiness, the local calendar day for volume).
     as_of = activity.start_date
+    # #578 combined intensity section (distribution + trend + this-run), gated to
+    # INTENSITY prompts. Under an intensity-read prompt (Slice 3) this abstains (None) and
+    # the merged reads below take over instead.
+    intensity = gather(_INTENSITY_SIGNAL, db, activity, prompt_id, as_of)
+    # ADR 0026 Slice 3 (#673): under an intensity-read prompt the four this-run intensity
+    # lenses collapse into `intensity_read` (+ the promoted safety `referral`) and the
+    # recent distribution moves to `intensity_mix`; the standalone perceived_effort /
+    # calibration / intensity sections retire (None, dropped from serialization). Under
+    # every prior prompt this block is inert and those three sections emit byte-identically.
+    perceived_effort = b.perceived_effort
+    calibration = b.calibration
+    intensity_read = None
+    intensity_mix = None
+    referral = None
+    if is_intensity_read_prompt(prompt_id):
+        # The intensity scan feeds BOTH new reads (this run's band/split + the recent
+        # distribution). Computed directly since the INTENSITY gate does not carry this
+        # prompt; the merge reshapes it, never re-scans.
+        ictx = _build_intensity_context(db, activity, as_of)
+        ds = f.metrics.discount_signals if f.metrics else None
+        confounders = list(ds.get("likely_inflated_by") or []) if isinstance(ds, dict) else []
+        intensity_read = build_intensity_read(
+            this_session=ictx.this_session if ictx is not None else IntensitySession(),
+            distribution_adjusted=ictx.distribution_adjusted if ictx is not None else None,
+            perceived_effort=b.perceived_effort,
+            calibration_hr_drift=b.calibration.hr_drift if b.calibration else None,
+            confounders=confounders,
+        )
+        if is_intensity_mix_prompt(prompt_id):
+            intensity_mix = build_intensity_mix(ictx)
+        ref = b.calibration.referral if b.calibration else None
+        referral = ref.get("nudge") if isinstance(ref, dict) else None
+        perceived_effort = None
+        calibration = None
     # ADR 0026: build the grouped pack from flat section objects. from_sections wraps
     # each section into its coaching-question group (this_run/right_now/…); the flat
     # kwargs below are unchanged, so the gathering logic is untouched.
@@ -233,9 +271,12 @@ def build_context_pack(
         check_in=f.check_in,
         profile=b.profile,
         longitudinal=b.longitudinal,
-        perceived_effort=b.perceived_effort,
+        perceived_effort=perceived_effort,
         adherence=b.adherence,
-        calibration=b.calibration,
+        calibration=calibration,
+        intensity_read=intensity_read,
+        referral=referral,
+        intensity_mix=intensity_mix,
         salience=b.salience,
         # #522: COACH_CONTINUITY_ENABLED drops the fuller-turn continuity section.
         continuity=(
@@ -287,8 +328,10 @@ def build_context_pack(
         ),
         # ADR 0025 runner memory profile (stored-artifact read, memory-aware prompt only).
         memory=gather(_MEMORY_SIGNAL, db, activity, prompt_id, as_of),
-        # #578 intensity distribution + trend (read-time scan, intensity-aware prompt only).
-        intensity=gather(_INTENSITY_SIGNAL, db, activity, prompt_id, as_of),
+        # #578 intensity distribution + trend (read-time scan, intensity-aware prompt only);
+        # None under an intensity-read prompt (Slice 3 splits it into intensity_read +
+        # intensity_mix, computed above).
+        intensity=intensity,
         safety_rules=b.safety_rules,
     )
 

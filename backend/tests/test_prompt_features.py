@@ -172,6 +172,24 @@ EXPECTED_CAPABILITIES = {
         F.MEMORY,
         F.INTENSITY,
     },
+    # ADR 0026 Slice 3 (#673) — grouped_v3 collapses the four this-run intensity lenses:
+    # it REPLACES INTENSITY -> INTENSITY_READ (this-run merge, retiring perceived_effort/
+    # calibration) + INTENSITY_MIX (recent half). It keeps every other grouped_v2
+    # capability, so it is an alternative shape (not a superset); it carries 12 features.
+    "coach_message_lean_grouped_v3": {
+        F.TWO_STAGE,
+        F.VOICE,
+        F.CORPUS,
+        F.STANCE,
+        F.READINESS,
+        F.USER_MATERIALS,
+        F.RECENT_WEEKS,
+        F.STREAM_VIEW,
+        F.TRAINING_HISTORY_2WK,
+        F.MEMORY,
+        F.INTENSITY_READ,
+        F.INTENSITY_MIX,
+    },
 }
 
 # Ids that must carry NO capabilities (the inert-under-rollback set).
@@ -220,6 +238,7 @@ def test_memory_feature_is_active_on_v13():
     assert prompts.MEMORY_PROMPT_IDS == {
         "coach_message_v13", "coach_message_v14", "coach_message_lean_v1",
         "coach_message_lean_grouped_v1", "coach_message_lean_grouped_v2",
+        "coach_message_lean_grouped_v3",
     }
     assert prompts.is_memory_prompt("coach_message_v13") is True
     assert prompts.is_memory_prompt("coach_message_v12") is False
@@ -235,30 +254,36 @@ def test_derived_sets_match_captured_membership():
     LEAN = "coach_message_lean_v1"
     GROUPED = "coach_message_lean_grouped_v1"
     GROUPED2 = "coach_message_lean_grouped_v2"
+    # ADR 0026 Slice 3 (#673): grouped_v3 keeps every grouped_v2 capability except it
+    # REPLACES INTENSITY with INTENSITY_READ + INTENSITY_MIX, so it joins the shared
+    # additive sets (two-stage/voice/corpus/stance/user-materials/stream-view/memory) and
+    # the Slice-2 alternative sets (readiness/recent_weeks/training_history_2wk), and is
+    # the sole member of the two new Slice-3 sets — while dropping OUT of INTENSITY.
+    GROUPED3 = "coach_message_lean_grouped_v3"
     assert prompts.TWO_STAGE_PROMPT_IDS == {
         "coach_message_v2", "coach_message_v3", "coach_message_v4",
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2,
+        "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3,
     }
     assert prompts.VOICE_PROMPT_IDS == {
         "coach_message_v3", "coach_message_v4", "coach_message_v5",
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14", LEAN, GROUPED, GROUPED2,
+        "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3,
     }
     assert prompts.CORPUS_PROMPT_IDS == {
         "coach_message_v4", "coach_message_v5", "coach_message_v6",
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
-        LEAN, GROUPED, GROUPED2,
+        LEAN, GROUPED, GROUPED2, GROUPED3,
     }
     assert prompts.STANCE_PROMPT_IDS == {
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2,
+        "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3,
     }
-    # Slice 2: grouped_v2 REPLACES training_load with readiness, so it is NOT here.
+    # Slice 2: grouped_v2/v3 REPLACE training_load with readiness, so they are NOT here.
     assert prompts.TRAINING_LOAD_PROMPT_IDS == {
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
@@ -267,35 +292,39 @@ def test_derived_sets_match_captured_membership():
     assert prompts.USER_MATERIALS_PROMPT_IDS == {
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
-        LEAN, GROUPED, GROUPED2,
+        LEAN, GROUPED, GROUPED2, GROUPED3,
     }
-    # Slice 2: grouped_v2 REPLACES volume + recent_training with recent_weeks, so it is
-    # absent from both of these sets.
+    # Slice 2: grouped_v2/v3 REPLACE volume + recent_training with recent_weeks, so they
+    # are absent from both of these sets.
     assert prompts.VOLUME_PROMPT_IDS == {
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
         "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
     }
     assert prompts.STREAM_VIEW_PROMPT_IDS == {
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14", LEAN, GROUPED, GROUPED2,
+        "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3,
     }
     assert prompts.RECENT_TRAINING_PROMPT_IDS == {
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
         LEAN, GROUPED,
     }
-    # Slice 2 PR 2: grouped_v2 REBASES training_history (carries TRAINING_HISTORY_2WK
-    # instead), so it drops OUT of the original-ladder set and is the sole member of the new.
+    # Slice 2 PR 2: grouped_v2/v3 REBASE training_history (carry TRAINING_HISTORY_2WK
+    # instead), so they drop OUT of the original-ladder set and are the members of the new.
     assert prompts.TRAINING_HISTORY_PROMPT_IDS == {
         "coach_message_v12", "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
     }
-    assert prompts.TRAINING_HISTORY_2WK_PROMPT_IDS == {GROUPED2}
+    assert prompts.TRAINING_HISTORY_2WK_PROMPT_IDS == {GROUPED2, GROUPED3}
     assert prompts.MEMORY_PROMPT_IDS == {
-        "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2,
+        "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3,
     }
+    # Slice 3: grouped_v3 REPLACES INTENSITY with INTENSITY_READ + INTENSITY_MIX, so it
+    # drops OUT of the intensity set and is the sole member of the two new ones.
     assert prompts.INTENSITY_PROMPT_IDS == {"coach_message_v14", LEAN, GROUPED, GROUPED2}
-    # Slice 2's two new sets: grouped_v2 is their sole member.
-    assert prompts.READINESS_PROMPT_IDS == {GROUPED2}
-    assert prompts.RECENT_WEEKS_PROMPT_IDS == {GROUPED2}
+    assert prompts.INTENSITY_READ_PROMPT_IDS == {GROUPED3}
+    assert prompts.INTENSITY_MIX_PROMPT_IDS == {GROUPED3}
+    # Slice 2's two sets: grouped_v2 and grouped_v3 are the members.
+    assert prompts.READINESS_PROMPT_IDS == {GROUPED2, GROUPED3}
+    assert prompts.RECENT_WEEKS_PROMPT_IDS == {GROUPED2, GROUPED3}
 
 
 def test_predicates_agree_with_has_feature():
@@ -312,6 +341,8 @@ def test_predicates_agree_with_has_feature():
         assert prompts.is_training_history_prompt(pid) == has_feature(pid, F.TRAINING_HISTORY)
         assert prompts.is_training_history_2wk_prompt(pid) == has_feature(pid, F.TRAINING_HISTORY_2WK)
         assert prompts.is_memory_prompt(pid) == has_feature(pid, F.MEMORY)
+        assert prompts.is_intensity_read_prompt(pid) == has_feature(pid, F.INTENSITY_READ)
+        assert prompts.is_intensity_mix_prompt(pid) == has_feature(pid, F.INTENSITY_MIX)
 
 
 def test_opener_prompts_cover_exactly_two_stage_ids():
@@ -334,7 +365,12 @@ def test_fullest_message_prompt_is_the_max_capability_id():
     # fullest carries the pre-Slice-2 (larger) side of each swap. The redefined sections
     # are guarded by their own Slice-2 tests. PR 2 adds TRAINING_HISTORY_2WK as a third
     # alternative (grouped_v2 carries it INSTEAD of TRAINING_HISTORY).
-    ALTERNATIVE_FEATURES = {F.READINESS, F.RECENT_WEEKS, F.TRAINING_HISTORY_2WK}
+    # Slice 3 (#673) adds INTENSITY_READ + INTENSITY_MIX as two more alternatives (they
+    # REPLACE perceived_effort/calibration/intensity under the grouped_v3 prompt).
+    ALTERNATIVE_FEATURES = {
+        F.READINESS, F.RECENT_WEEKS, F.TRAINING_HISTORY_2WK,
+        F.INTENSITY_READ, F.INTENSITY_MIX,
+    }
     every_feature = set().union(*PROMPT_FEATURES.values())
     assert set(PROMPT_FEATURES[fullest]) == every_feature - ALTERNATIVE_FEATURES
 
