@@ -1184,6 +1184,11 @@ PROMPT_VERSIONS = {
     # change, via coach_framing.frame_pack gated on METRICS_COACH_FRAMED), so it reuses
     # grouped_v3's system prompt. The A/B is the framed pack shape alone. Ships INERT.
     "coach_message_lean_grouped_v4": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3,
+    # ADR 0026 Slice 5 (#682) — the flip target. The FULLER prose is byte-identical to
+    # grouped_v3/v4 (the salience drop is a fuller-view change, not a prose change; the
+    # fuller prose never named salience), so it reuses grouped_v3's system prompt. The
+    # disposition-first prose tune lands as a later commit on this id. Ships INERT.
+    "coach_message_lean_grouped_v5": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -1225,6 +1230,10 @@ _OPENER_PROMPTS = {
     # ADR 0026 Slice 4 (#680): identical opener prose to grouped_v3 (framing is a pack-view
     # change, not a prose change).
     "coach_message_lean_grouped_v4": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
+    # ADR 0026 Slice 5 (#682): the salience drop is FULLER-ONLY, so the opener view still
+    # carries salience.novelty and the opener prose (which reads it) stays byte-identical to
+    # grouped_v3. Prod never runs the opener (receipt cadence), so this path is defensive.
+    "coach_message_lean_grouped_v5": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
 }
 
 # ADR 0026 Slice 1: the prompt ids that receive the GROUPED pack serialization
@@ -1238,6 +1247,7 @@ GROUPED_PACK_PROMPT_IDS: frozenset[str] = frozenset(
         "coach_message_lean_grouped_v2",
         "coach_message_lean_grouped_v3",
         "coach_message_lean_grouped_v4",
+        "coach_message_lean_grouped_v5",
     }
 )
 
@@ -1331,6 +1341,18 @@ INTENSITY_MIX_PROMPT_IDS = ids_with(PromptFeature.INTENSITY_MIX)
 # coach-native units/precision (coach_framing.frame_pack). A presentation-only flag over
 # the grouped pack; the stored/canonical pack, validator, tiering, and eval are unchanged.
 METRICS_COACH_FRAMED_PROMPT_IDS = ids_with(PromptFeature.METRICS_COACH_FRAMED)
+
+# ADR 0026 Slice 5 (#682): prompt ids whose FULLER LLM view drops the `salience` routing
+# section. A view-only flag over the grouped pack; the stored/canonical pack (and so the
+# deterministic safety force `salience.safety_override`, the validator, tiering, and eval)
+# is unchanged. Salience steered only the LLM opener, which prod's receipt cadence never runs.
+SALIENCE_DROPPED_PROMPT_IDS = ids_with(PromptFeature.SALIENCE_DROPPED)
+
+# ADR 0026 Slice 5 (#682): prompt ids whose outgoing LLM view gets the COMPLETED coach
+# reshape (readiness verdict-only, recent_weeks bpm, one `interval_read`, plan-less
+# workout_match/hr_drift/training-history dupes/empty our_thread cleaned). A view-only flag
+# over the grouped pack; the stored/canonical pack, validator, tiering, and eval are unchanged.
+PACK_COACH_VIEW_PROMPT_IDS = ids_with(PromptFeature.PACK_COACH_VIEW)
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
@@ -1449,6 +1471,25 @@ def is_metrics_coach_framed_prompt(prompt_id: Optional[str]) -> bool:
     stored pack, validator, tiering, and eval are unchanged; false for every prior prompt,
     which reads the raw-unit leaves byte-stably under a rollback."""
     return has_feature(prompt_id, PromptFeature.METRICS_COACH_FRAMED)
+
+
+def is_salience_dropped_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt drops the `salience` routing section from its FULLER LLM
+    view (ADR 0026 Slice 5, #682). Salience only ever steered the LLM opener's depth +
+    fuller-scheduling; the deterministic safety force reads the CANONICAL pack object, which
+    is unchanged, so the fuller loses only dead weight. A view-only flag (like metrics-coach-
+    framing); false for every prior prompt, which keeps salience in the pack byte-stably."""
+    return has_feature(prompt_id, PromptFeature.SALIENCE_DROPPED)
+
+
+def is_pack_coach_view_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt's outgoing LLM view gets the ADR 0026 Slice 5 (#682)
+    COMPLETED coach reshape: readiness reduced to its verdict, recent_weeks HRs as plain bpm,
+    the four overlapping interval blocks collapsed to one `interval_read`, the plan-less
+    `workout_match` and the duplicated `hr_drift` dropped, the training-history sentinel/dupes
+    cleaned, and an empty `our_thread` removed. A one-way view over the canonical pack (like
+    metrics-coach-framing); false for every prior prompt, which reads the raw shape byte-stably."""
+    return has_feature(prompt_id, PromptFeature.PACK_COACH_VIEW)
 
 
 def is_readiness_prompt(prompt_id: Optional[str]) -> bool:

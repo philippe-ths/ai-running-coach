@@ -28,9 +28,9 @@ from app.models.coaching_relationship import CoachingRelationship
 from app.schemas.chat import ChatMessageRead
 from app.schemas.coach_context import CoachContextPack, unnest_pack
 from app.services.coach import coach_units
-from app.services.coach.coach_framing import frame_pack
+from app.services.coach.coach_framing import coach_llm_view
 from app.services.coach.llm import AnthropicClient
-from app.services.coach.prompts import is_metrics_coach_framed_prompt, render_voice_block
+from app.services.coach.prompts import render_voice_block
 from app.services.coach.query_tools import (
     CHAT_TOOLS,
     TOOL_STATUS_LABELS,
@@ -367,11 +367,11 @@ def _build_chat_system_prompt(
     is the bounded cross-activity conversation digest, or "" when the runner has no
     other-activity chat.
 
-    `prompt_id` is the STORED report's prompt id: under a metrics-coach-framed prompt
-    (ADR 0026 Slice 4, #680) the pack sent to the chat LLM is reframed to coach-native
-    units so the chat reads the SAME framed facts the report did. The tiering read below
-    stays on the canonical `context_pack` (it needs typed facts), so only the outgoing
-    `context_pack_json` is framed; framing is byte-stable for every prior prompt.
+    `prompt_id` is the STORED report's prompt id: `coach_llm_view` applies the SAME one-way
+    coach view the report LLM saw (ADR 0026 Slice 4 framing + Slice 5 reshape), so the chat
+    reads identical facts. The tiering read below stays on the canonical `context_pack` (it
+    needs typed facts), so only the outgoing `context_pack_json` is transformed; the view is
+    byte-stable for every prior prompt.
     """
     if tiering_block is None:
         tiering_block = _render_authority_tiering(
@@ -379,7 +379,7 @@ def _build_chat_system_prompt(
             voice_present=bool(voice_block),
             cross_activity_present=bool(cross_activity_block),
         )
-    llm_pack = frame_pack(context_pack) if is_metrics_coach_framed_prompt(prompt_id) else context_pack
+    llm_pack = coach_llm_view(context_pack, prompt_id)
     return CHAT_SYSTEM_TEMPLATE.format(
         context_pack_json=json.dumps(llm_pack, default=str),
         report_json=json.dumps(report, default=str),

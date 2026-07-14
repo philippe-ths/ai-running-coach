@@ -33,7 +33,7 @@ from app.schemas.coach_context import CoachContextPack, ContinuityContext
 from app.services.coach.budget import over_budget as budget_over, record as budget_record
 from app.services.coach.memory_update import enqueue_memory_update
 from app.services.coach.context import build_context_pack
-from app.services.coach.coach_framing import frame_pack
+from app.services.coach.coach_framing import coach_llm_view
 from app.services.coach.digest import build_report_digest
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.output_contract import (
@@ -52,7 +52,6 @@ from app.services.coach.prompts import (
     TWO_STAGE_PROMPT_IDS,
     build_system_prompt,
     is_grouped_pack_prompt,
-    is_metrics_coach_framed_prompt,
 )
 from app.services.coach.prompt_features import PromptFeature, has_feature
 from app.services.coach.receipt_voice import voice_fingerprint
@@ -134,14 +133,20 @@ _FALLBACK_OPENER_MESSAGE = (
 )
 
 
-def _llm_pack_message(pack_dict: dict, prompt_id: Optional[str]) -> str:
-    """Serialize the pack for the outgoing LLM message. Under a metrics-coach-framed
-    prompt (ADR 0026 Slice 4, #680) the leaf VALUES are reframed to coach-native units
-    for the LLM view; the caller still STORES the canonical `pack_dict` (framing is a
-    one-way, lossy view, so the stored/re-parsed pack stays typed). Byte-identical to the
-    prior `json.dumps(pack_dict, default=str)` for every non-framed prompt."""
-    view = frame_pack(pack_dict) if is_metrics_coach_framed_prompt(prompt_id) else pack_dict
-    return json.dumps(view, default=str)
+def _llm_pack_message(pack_dict: dict, prompt_id: Optional[str], *, mode: str = "fuller") -> str:
+    """Serialize the pack for the outgoing LLM message. Two one-way VIEW transforms ride
+    here, both gated on the prompt and both leaving the caller's STORED canonical `pack_dict`
+    untouched (so the stored/re-parsed pack stays typed and every non-flagged prompt is
+    byte-identical to the prior `json.dumps(pack_dict, default=str)`):
+
+    - metrics-coach-framing (ADR 0026 Slice 4, #680): leaf VALUES reframed to coach-native
+      units (km / min:sec/km / MM:SS / % of max).
+    - salience drop (ADR 0026 Slice 5, #682): the `salience` routing section is removed from
+      the FULLER view (`mode != "opener"`). Salience steers only the opener; the deterministic
+      safety force reads the canonical object, so the fuller loses only dead weight. Fuller-
+      only so the opener view (which the opener prose reads) stays intact under a two-stage
+      cadence; prod's receipt cadence runs no opener, so in prod salience is gone entirely."""
+    return json.dumps(coach_llm_view(pack_dict, prompt_id, mode=mode), default=str)
 
 
 def is_two_stage_prompt(prompt_id: str) -> bool:
@@ -500,7 +505,9 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     # voice.
     voice = _resolve_voice_for_activity(db, activity)
     system_prompt = build_system_prompt(prompt_id, mode="opener", voice=voice, pack=pack)
-    user_message = _llm_pack_message(pack_dict, prompt_id)
+    # mode="opener": the opener view KEEPS salience (the opener reads salience.novelty); the
+    # fuller drop (ADR 0026 Slice 5) applies only to the two fuller-mode call sites.
+    user_message = _llm_pack_message(pack_dict, prompt_id, mode="opener")
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
     )

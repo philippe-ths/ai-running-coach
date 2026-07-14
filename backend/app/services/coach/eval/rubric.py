@@ -351,7 +351,9 @@ def _forward_words(content: ReportLike) -> set:
 
 
 def assert_advanced_not_parroted(content: CoachReportContent, pack: CoachContextPack) -> AssertionResult:
-    priors = pack.longitudinal.prior_reports
+    # `longitudinal` is None when COACH_LONGITUDINAL_ENABLED is off (the prod config) or
+    # under any pack that gated the section out; treat it as "no priors" and abstain.
+    priors = pack.longitudinal.prior_reports if pack.longitudinal else None
     if not priors:
         return AssertionResult(
             "advanced_not_parroted", AssertionStatus.NOT_APPLICABLE,
@@ -403,7 +405,9 @@ def _has_trend_claim(text: str) -> List[str]:
 
 
 def assert_abstained_on_thin_trend(content: CoachReportContent, pack: CoachContextPack) -> AssertionResult:
-    trend = pack.longitudinal.baseline_trend
+    # `longitudinal` is None when the section is gated off (the prod config); no baseline
+    # trend then, so an abstain is trivially correct.
+    trend = pack.longitudinal.baseline_trend if pack.longitudinal else None
     # Scan asserted claims only: a comparative QUESTION is not a trend claim.
     text = _assertive_text(content)
     matched = _has_trend_claim(text)
