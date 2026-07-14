@@ -725,19 +725,38 @@ class RecentTrainingContext(BaseModel):
     has_baseline: bool
 
 
+class TrainingHistoryTypeShare(BaseModel):
+    """ADR 0026 Slice 2 (#670): one activity type's weekly rate + session share within a
+    training-history bucket. Present only on the recent-weeks-bounded (grouped_v2) ladder,
+    so the coach never reads a blended distance total as running mileage (a 171 km ski week
+    is a `BackcountrySki` row, not run distance)."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    avg_weekly_distance_m: int
+    avg_weekly_sessions: float
+    share_pct: float  # share of the bucket's sessions that are this type
+
+
 class TrainingHistoryBucket(BaseModel):
     """#561: one coarse, far-horizon volume bucket in the level-of-detail ladder.
 
-    The deep history reaches the coach at DECAYING resolution: `recent_training`
-    owns the detailed last ~60 days in full (its last_7d/last_30d/previous_30d
-    windows all live within 0-60d), so this ladder starts AFTER that and widens as it
-    goes back (2-6 months, 6-12 months, 1-2 years, 2-5 years, 5+ years), each bucket
-    reporting an AVERAGE WEEKLY rate so buckets of unequal width stay directly
-    comparable (the runner's own "20 km/week" read). The weekly average divides by
-    the weeks the bucket actually spans WITHIN the runner's history (so a
-    partially-covered bucket is not deflated), mirroring the volume.py clamp. A
-    bucket is emitted only when it holds real data, so the ladder self-sizes to how
-    far the history reaches."""
+    The deep history reaches the coach at DECAYING resolution: the recent window owns
+    the detailed near term in full (under the original ladder `recent_training`'s
+    last_7d/last_30d/previous_30d all live within 0-60d; under the ADR 0026 Slice 2
+    grouped_v2 ladder `recent_weeks` owns the last ~2 weeks day by day), so this ladder
+    starts AFTER that and widens as it goes back, each bucket reporting an AVERAGE WEEKLY
+    rate so buckets of unequal width stay directly comparable (the runner's own
+    "20 km/week" read). The weekly average divides by the weeks the bucket actually spans
+    WITHIN the runner's history (so a partially-covered bucket is not deflated), mirroring
+    the volume.py clamp. A bucket is emitted only when it holds real data, so the ladder
+    self-sizes to how far the history reaches.
+
+    The four `*_load`/`by_type`/`from_date`/`to_date` fields ride ONLY the grouped_v2
+    ladder (Optional-None on the original 60d ladder and surgically dropped there, so every
+    prior prompt is byte-identical): a modality-agnostic weekly LOAD rate, the per-type
+    split (so cross-training is never read as running), and explicit calendar bounds for
+    the relative label."""
     model_config = ConfigDict(extra="forbid")
 
     label: str            # human horizon, e.g. "2-6 months ago"
@@ -747,6 +766,11 @@ class TrainingHistoryBucket(BaseModel):
     avg_weekly_distance_m: int
     avg_weekly_sessions: float
     run_share_pct: float  # share of this bucket's sessions that are runs (modality mix)
+    # ADR 0026 Slice 2 (#670): grouped_v2-only enrichments (dropped when None, byte-stable).
+    from_date: Optional[str] = None   # oldest calendar edge, month-year e.g. "Jul 2025"
+    to_date: Optional[str] = None      # newest calendar edge, month-year e.g. "Jan 2026"
+    avg_weekly_load: Optional[int] = None  # effort_score/week (modality-agnostic training load)
+    by_type: Optional[List["TrainingHistoryTypeShare"]] = None  # per-type split, most-frequent-first
 
 
 class TrainingHistoryTraits(BaseModel):
@@ -769,6 +793,12 @@ class TrainingHistoryTraits(BaseModel):
     trajectory_direction: str                        # up | in_line | down | no_norm (recent 12mo vs prior 12mo)
     trajectory_pct: Optional[float] = None           # recent-12mo vs prior-12mo weekly rate
     time_at_current_load_years: Optional[float] = None  # span the trailing-4wk rate stayed within a band of current
+    # ADR 0026 Slice 2 (#670): the modality-agnostic LOAD durability read, riding ONLY the
+    # grouped_v2 ladder (Optional-None + surgically dropped on the original ladder, so every
+    # prior prompt is byte-identical). effort_score is comparable across modalities, so a
+    # ski/bike block still counts as sustained training even when running distance is low.
+    peak_sustained_weekly_load: Optional[int] = None      # highest rolling 4-week avg weekly effort_score
+    current_vs_peak_load_pct: Optional[float] = None      # last-4wk load rate / peak load * 100; None when peak load is 0
 
 
 class TrainingHistoryContext(BaseModel):
@@ -1700,6 +1730,27 @@ def _strip_nulls_in_place(obj: Any) -> None:
             _strip_nulls_in_place(v)
 
 
+def _drop_training_history_v2_fields(th: Dict[str, Any], _data: Dict[str, Any]) -> None:
+    """ADR 0026 Slice 2 (#670): the grouped_v2-only training-history enrichments
+    (per-bucket `by_type`/`avg_weekly_load`/`from_date`/`to_date` + the trait
+    `peak_sustained_weekly_load`/`current_vs_peak_load_pct`) ride the SAME schema as the
+    original 60d ladder. On the original ladder they are unset (None); pop exactly those
+    keys so every prior prompt's section is BYTE-IDENTICAL to its pre-Slice-2 shape. The
+    grouped_v2 ladder always populates them (a bucket's `by_type` is a non-empty list, the
+    traits' `peak_sustained_weekly_load` is a set int), so this is a no-op there — and it
+    deliberately does NOT touch the pre-existing Optional trait nulls (`current_vs_peak_pct`
+    etc.), which still serialize as null exactly as today. Re-parse stays safe: every popped
+    field defaults to None when absent."""
+    traits = th.get("traits")
+    if isinstance(traits, dict) and traits.get("peak_sustained_weekly_load") is None:
+        traits.pop("peak_sustained_weekly_load", None)
+        traits.pop("current_vs_peak_load_pct", None)
+    for bucket in th.get("timeline", []) or []:
+        if isinstance(bucket, dict) and bucket.get("by_type") is None:
+            for key in ("from_date", "to_date", "avg_weekly_load", "by_type"):
+                bucket.pop(key, None)
+
+
 def _drop_recent_weeks_nulls(rw: Dict[str, Any], _data: Dict[str, Any]) -> None:
     """ADR 0026 Slice 2 (#670): make the recent_weeks section's sparse per-activity/day/
     verdict fields cost nothing when absent. Every leaf that does not apply (a no-HR
@@ -1745,7 +1796,16 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
         PromptFeature.RECENT_WEEKS,
         nested_drop=_drop_recent_weeks_nulls,
     ),
-    PackSection("training_history", PromptFeature.TRAINING_HISTORY),  # #561
+    # #561, redefined ADR 0026 Slice 2 (#670): populated by EITHER the original
+    # TRAINING_HISTORY signal (60d ladder, every prior prompt) or the TRAINING_HISTORY_2WK
+    # signal (14d-bounded, enriched ladder, grouped_v2) — mutually exclusive, so this ONE
+    # descriptor drops the field only when both abstain. The nested_drop surgically strips
+    # the grouped_v2-only enrichment keys on the original ladder, keeping it byte-identical.
+    PackSection(
+        "training_history",
+        PromptFeature.TRAINING_HISTORY,
+        nested_drop=_drop_training_history_v2_fields,
+    ),
     PackSection("memory", PromptFeature.MEMORY),  # ADR 0025 runner memory profile
     PackSection("intensity", PromptFeature.INTENSITY),  # #578 intensity distribution + trend
     # #451: the retired legacy summary — droppable but NOT prompt-gated (no longer

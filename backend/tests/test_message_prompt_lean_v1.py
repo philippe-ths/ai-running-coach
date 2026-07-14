@@ -65,11 +65,14 @@ def test_lean_v1_has_full_capability_parity_with_v14():
     """The experiment receives the IDENTICAL context pack as v14 (same gated sections),
     so the A/B isolates the system-prompt text. That parity is the whole design."""
     assert features_for(LEAN) == features_for(V14)
-    # ADR 0026 Slice 2 (#670) added the mutually-exclusive READINESS/RECENT_WEEKS
-    # alternatives (they REPLACE training_load/volume/recent_training under grouped_v2),
-    # so no single prompt carries the full union; lean_v1 carries every ADDITIVE feature.
+    # ADR 0026 Slice 2 (#670) added the mutually-exclusive READINESS/RECENT_WEEKS and (PR 2)
+    # TRAINING_HISTORY_2WK alternatives (they REPLACE training_load/volume/recent_training/
+    # training_history under grouped_v2), so no single prompt carries the full union;
+    # lean_v1 carries every ADDITIVE feature.
     from app.services.coach.prompt_features import PromptFeature as _F
-    every_additive = set().union(*PROMPT_FEATURES.values()) - {_F.READINESS, _F.RECENT_WEEKS}
+    every_additive = set().union(*PROMPT_FEATURES.values()) - {
+        _F.READINESS, _F.RECENT_WEEKS, _F.TRAINING_HISTORY_2WK
+    }
     assert features_for(LEAN) == every_additive
 
 

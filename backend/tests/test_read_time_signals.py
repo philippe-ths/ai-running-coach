@@ -47,10 +47,12 @@ def test_all_signals_registered_under_one_interface():
         "training_load",
         "training_volume",
         "recent_training",
-        # ADR 0026 Slice 2 (#670): the redefined right_now content signals.
+        # ADR 0026 Slice 2 (#670): the redefined right_now content signals + the rebased
+        # training-history ladder (PR 2), which coexists with the original for byte-stability.
         "readiness",
         "recent_weeks",
         "training_history",
+        "training_history_2wk",
         "memory",
         "intensity",
     }

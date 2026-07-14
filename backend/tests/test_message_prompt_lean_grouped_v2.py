@@ -37,13 +37,15 @@ def test_grouped_v2_registered_and_flagged_grouped():
     assert is_grouped_pack_prompt(GROUPED2)
 
 
-def test_grouped_v2_swaps_only_the_right_now_features():
-    """It carries every lean_v1 capability EXCEPT training_load/volume/recent_training,
-    which it REPLACES with readiness/recent_weeks — a deliberate non-superset."""
+def test_grouped_v2_swaps_the_redefined_features():
+    """It carries every lean_v1 capability EXCEPT the ones ADR 0026 Slice 2 redefines:
+    right_now's training_load/volume/recent_training -> readiness/recent_weeks, and (PR 2)
+    the_runner's training_history -> training_history_2wk (the rebased/enriched ladder). A
+    deliberate non-superset — the redefined sections carry their new features INSTEAD."""
     expected = (
         features_for(LEAN)
-        - {F.TRAINING_LOAD, F.VOLUME, F.RECENT_TRAINING}
-    ) | {F.READINESS, F.RECENT_WEEKS}
+        - {F.TRAINING_LOAD, F.VOLUME, F.RECENT_TRAINING, F.TRAINING_HISTORY}
+    ) | {F.READINESS, F.RECENT_WEEKS, F.TRAINING_HISTORY_2WK}
     assert features_for(GROUPED2) == expected
 
 

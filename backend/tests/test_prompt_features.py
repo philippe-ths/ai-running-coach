@@ -154,9 +154,11 @@ EXPECTED_CAPABILITIES = {
         F.INTENSITY,
     },
     # ADR 0026 Slice 2 (#670) — grouped_v2 redefines the `right_now` content: it REPLACES
-    # TRAINING_LOAD -> READINESS and VOLUME + RECENT_TRAINING -> RECENT_WEEKS, keeping
-    # every other grouped_v1 capability. It is deliberately NOT a superset of grouped_v1
-    # (the two overlap swamps move), so it carries 11 features, not 12.
+    # TRAINING_LOAD -> READINESS and VOLUME + RECENT_TRAINING -> RECENT_WEEKS. PR 2 also
+    # REBASES the_runner.training_history: TRAINING_HISTORY -> TRAINING_HISTORY_2WK (the same
+    # section, ladder rebased after the 2-week recent_weeks window + enriched). It keeps
+    # every other grouped_v1 capability, so it is deliberately NOT a superset of grouped_v1
+    # (the overlap swamps + the training-history boundary move); it carries 11 features.
     "coach_message_lean_grouped_v2": {
         F.TWO_STAGE,
         F.VOICE,
@@ -166,7 +168,7 @@ EXPECTED_CAPABILITIES = {
         F.USER_MATERIALS,
         F.RECENT_WEEKS,
         F.STREAM_VIEW,
-        F.TRAINING_HISTORY,
+        F.TRAINING_HISTORY_2WK,
         F.MEMORY,
         F.INTENSITY,
     },
@@ -205,6 +207,7 @@ def test_derived_sets_equal_manifest_views():
     assert prompts.STREAM_VIEW_PROMPT_IDS == ids_with(F.STREAM_VIEW)
     assert prompts.RECENT_TRAINING_PROMPT_IDS == ids_with(F.RECENT_TRAINING)
     assert prompts.TRAINING_HISTORY_PROMPT_IDS == ids_with(F.TRAINING_HISTORY)
+    assert prompts.TRAINING_HISTORY_2WK_PROMPT_IDS == ids_with(F.TRAINING_HISTORY_2WK)
     assert prompts.MEMORY_PROMPT_IDS == ids_with(F.MEMORY)
 
 
@@ -280,9 +283,12 @@ def test_derived_sets_match_captured_membership():
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
         LEAN, GROUPED,
     }
+    # Slice 2 PR 2: grouped_v2 REBASES training_history (carries TRAINING_HISTORY_2WK
+    # instead), so it drops OUT of the original-ladder set and is the sole member of the new.
     assert prompts.TRAINING_HISTORY_PROMPT_IDS == {
-        "coach_message_v12", "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2,
+        "coach_message_v12", "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
     }
+    assert prompts.TRAINING_HISTORY_2WK_PROMPT_IDS == {GROUPED2}
     assert prompts.MEMORY_PROMPT_IDS == {
         "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2,
     }
@@ -304,6 +310,7 @@ def test_predicates_agree_with_has_feature():
         assert prompts.is_stream_view_prompt(pid) == has_feature(pid, F.STREAM_VIEW)
         assert prompts.is_recent_training_prompt(pid) == has_feature(pid, F.RECENT_TRAINING)
         assert prompts.is_training_history_prompt(pid) == has_feature(pid, F.TRAINING_HISTORY)
+        assert prompts.is_training_history_2wk_prompt(pid) == has_feature(pid, F.TRAINING_HISTORY_2WK)
         assert prompts.is_memory_prompt(pid) == has_feature(pid, F.MEMORY)
 
 
@@ -325,8 +332,9 @@ def test_fullest_message_prompt_is_the_max_capability_id():
     # alternatives — READINESS/RECENT_WEEKS REPLACE TRAINING_LOAD/VOLUME/RECENT_TRAINING
     # under the grouped_v2 prompt — so no single prompt carries the full union; the
     # fullest carries the pre-Slice-2 (larger) side of each swap. The redefined sections
-    # are guarded by their own Slice-2 tests.
-    ALTERNATIVE_FEATURES = {F.READINESS, F.RECENT_WEEKS}
+    # are guarded by their own Slice-2 tests. PR 2 adds TRAINING_HISTORY_2WK as a third
+    # alternative (grouped_v2 carries it INSTEAD of TRAINING_HISTORY).
+    ALTERNATIVE_FEATURES = {F.READINESS, F.RECENT_WEEKS, F.TRAINING_HISTORY_2WK}
     every_feature = set().union(*PROMPT_FEATURES.values())
     assert set(PROMPT_FEATURES[fullest]) == every_feature - ALTERNATIVE_FEATURES
 

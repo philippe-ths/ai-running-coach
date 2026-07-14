@@ -189,3 +189,93 @@ def test_single_stray_old_activity_does_not_paint_a_deep_bucket():
     ctx = build_training_history(facts, AS_OF)
     labels = {b.label for b in ctx.timeline}
     assert "5+ years ago" not in labels
+
+
+# --------------------------------------------------------------------------- #
+# ADR 0026 Slice 2 PR 2 (#670): the recent-weeks-bounded (grouped_v2) ladder    #
+# --------------------------------------------------------------------------- #
+
+
+class _LoadFact(_Fact):
+    """A fact carrying an effort_score, for the load-aware grouped_v2 ladder."""
+
+    def __init__(self, local_date, *, activity_type="Run", distance_m=0.0, effort_score=0.0):
+        super().__init__(local_date, activity_type=activity_type, distance_m=distance_m)
+        self.effort_score = effort_score
+
+
+def test_bound_ladder_starts_at_two_weeks_default_starts_at_sixty():
+    """The rebased ladder adds the 14-60d bridging bucket that the 60d ladder omits, so the
+    training-response window is no longer a blind spot beside the 2-week recent_weeks read."""
+    facts = _weekly(60, lambda w: 30_000)  # ~14 months
+    default = build_training_history(facts, AS_OF)
+    bound = build_training_history(facts, AS_OF, recent_weeks_bound=True)
+    assert "2 weeks - 2 months ago" not in {b.label for b in default.timeline}
+    bridge = next(b for b in bound.timeline if b.label == "2 weeks - 2 months ago")
+    assert bridge.start_days_ago == 14 and bridge.end_days_ago == 60
+    # Everything else in the ladder is unchanged: same coarse buckets beyond 60d.
+    assert {b.label for b in default.timeline} <= {b.label for b in bound.timeline}
+
+
+def test_default_ladder_carries_no_enrichment_fields():
+    """Byte-stability guard: the original path leaves every grouped_v2-only field unset, so
+    the surgical drop can strip them and every prior prompt stays byte-identical."""
+    facts = _weekly(60, lambda w: 30_000)
+    ctx = build_training_history(facts, AS_OF)
+    for b in ctx.timeline:
+        assert b.from_date is None and b.to_date is None
+        assert b.avg_weekly_load is None and b.by_type is None
+    assert ctx.traits.peak_sustained_weekly_load is None
+    assert ctx.traits.current_vs_peak_load_pct is None
+
+
+def test_bound_ladder_enriches_each_bucket():
+    facts = [
+        _LoadFact(AS_OF - timedelta(days=7 * w), distance_m=30_000, effort_score=250.0)
+        for w in range(60)
+    ]
+    ctx = build_training_history(facts, AS_OF, recent_weeks_bound=True)
+    for b in ctx.timeline:
+        assert b.from_date is not None and b.to_date is not None
+        assert b.avg_weekly_load is not None and b.avg_weekly_load > 0
+        assert b.by_type and b.by_type[0].type == "Run"
+
+
+def test_by_type_keeps_cross_training_out_of_running_mileage():
+    """The ski example: a block of high-distance non-run activity must read as its own type,
+    never inflating the bucket's running mileage."""
+    facts = []
+    for w in range(30):  # ~7 months, runs
+        facts.append(_LoadFact(AS_OF - timedelta(days=7 * w), distance_m=10_000, effort_score=120.0))
+    # A ski week deep in the 2-6 month bucket: huge distance, one session.
+    facts.append(
+        _LoadFact(AS_OF - timedelta(days=100), activity_type="BackcountrySki",
+                  distance_m=171_000, effort_score=600.0)
+    )
+    ctx = build_training_history(facts, AS_OF, recent_weeks_bound=True)
+    bucket = next(b for b in ctx.timeline if b.start_days_ago == 60)  # "2-6 months ago"
+    by_type = {t.type: t for t in bucket.by_type}
+    assert "BackcountrySki" in by_type
+    run = by_type["Run"]
+    # Run weekly distance reflects only the ~10 km/week runs, never the 171 km ski.
+    assert run.avg_weekly_distance_m < 20_000
+
+
+def test_bound_ladder_populates_load_traits():
+    facts = [
+        _LoadFact(AS_OF - timedelta(days=7 * w), distance_m=30_000, effort_score=300.0)
+        for w in range(60)
+    ]
+    ctx = build_training_history(facts, AS_OF, recent_weeks_bound=True)
+    assert ctx.traits.peak_sustained_weekly_load is not None
+    assert ctx.traits.peak_sustained_weekly_load > 0
+    # Flat load throughout -> current sits at the peak.
+    assert ctx.traits.current_vs_peak_load_pct == 100.0
+
+
+def test_bound_ladder_still_respects_min_history():
+    """The emit threshold is unchanged (owner call): a runner under the 42-day floor gets
+    no section even on the rebased ladder, so a near-new runner is not handed a near-empty
+    history story."""
+    facts = [_Fact(AS_OF - timedelta(days=d), distance_m=8_000) for d in range(0, 35, 2)]
+    assert build_training_history(facts, AS_OF, recent_weeks_bound=True) is None
