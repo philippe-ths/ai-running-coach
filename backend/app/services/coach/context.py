@@ -49,6 +49,7 @@ from app.services.coach.read_time_signals import ReadTimeSignal, gather
 from app.services.coach.stance import StanceProfile, resolve_stance
 from app.services.coach.volume import build_training_volume
 from app.services.coach.recent_training import build_recent_training
+from app.services.coach.recent_weeks import CheckInFacts, build_recent_weeks
 from app.services.coach.training_history import build_training_history
 from app.services.coach.intensity import build_intensity
 from app.services.readiness import build_readiness
@@ -76,6 +77,8 @@ from app.schemas.coach_context import (
     TrainingLoadContext,
     TrainingVolumeContext,
     RecentTrainingContext,
+    ReadinessContext,
+    RecentWeeksContext,
     TrainingHistoryContext,
     IntensityContext,
     LongitudinalContext,
@@ -267,6 +270,12 @@ def build_context_pack(
         # history-scan signal — it rides the focus payload via the deep flag above.)
         stream_view=f.stream_view,
         recent_training=gather(_RECENT_TRAINING_SIGNAL, db, activity, prompt_id, as_of),
+        # ADR 0026 Slice 2 (#670): the redefined right_now content — readiness (renamed
+        # training_load) and the merged day-resolved recent_weeks. Gated to the new
+        # grouped prompt, so under every prior prompt these are None (dropped) and the old
+        # three sections above still emit, byte-stable.
+        readiness=gather(_READINESS_SIGNAL, db, activity, prompt_id, as_of),
+        recent_weeks=gather(_RECENT_WEEKS_SIGNAL, db, activity, prompt_id, as_of),
         # #561 multi-year training-history picture (LOD volume ladder + durability traits).
         training_history=gather(_TRAINING_HISTORY_SIGNAL, db, activity, prompt_id, as_of),
         # ADR 0025 runner memory profile (stored-artifact read, memory-aware prompt only).
@@ -453,6 +462,86 @@ def _build_recent_training_context(
     return build_recent_training(
         facts, local_day, include_previous_30d=settings.COACH_PREVIOUS_30D_ENABLED
     )
+
+
+def _build_readiness_context(
+    db: Session, activity: Activity, as_of: datetime
+) -> Optional[ReadinessContext]:
+    """ADR 0026 Slice 2 (#670): the `right_now.readiness` pack section, or None.
+
+    The renamed successor to `training_load` (identical content, coaching-question key),
+    behind the shared `ReadTimeSignal` seam gated on `READINESS` — reached ONLY under a
+    readiness-aware prompt (the new grouped prompt), so it is dropped from serialization
+    (byte-stable) under every prior prompt that still reads `training_load`. Same read as
+    `_build_training_load_context`: the runner's condition as of this run's LOCAL day, so
+    the run is in the acute load. A deterministic FACT the coach may cite; never overrides
+    the run's re-derived DerivedMetric or the safety floor. Degrades to None when no
+    history is available (build_readiness guards)."""
+    model = build_readiness(db, activity.user_id, activity.local_start)
+    if model is None:
+        return None
+    return ReadinessContext(
+        fitness=model.fitness,
+        fatigue=model.fatigue,
+        form=model.form,
+        ramp_rate=model.ramp_rate,
+        condition=model.condition,
+        trend=model.trend,
+        ramp_aggressive=model.ramp_aggressive,
+        warming_up=model.warming_up,
+        sample_count=model.sample_count,
+    )
+
+
+def _query_recent_checkins(db: Session, activity_ids: list) -> dict:
+    """Narrow supplementary read: the per-activity check-in facts (rpe/pain/notes) for
+    the recent_weeks per-session read, keyed by activity_id. Sourced separately from
+    `_query_activity_facts` (a CheckIn LEFT join risks double-counting an activity's
+    volume if two check-in rows ever exist) — mirroring `_query_confounded_activity_ids`.
+    write_checkin upserts one row per activity, so `.first()`-style collapse is safe; the
+    dict keeps the last row per id defensively."""
+    if not activity_ids:
+        return {}
+    rows = db.execute(
+        select(
+            CheckIn.activity_id, CheckIn.rpe, CheckIn.pain_score, CheckIn.notes
+        ).where(CheckIn.activity_id.in_(activity_ids))
+    ).all()
+    return {
+        aid: CheckInFacts(rpe=rpe, pain_score=pain, notes=notes)
+        for aid, rpe, pain, notes in rows
+    }
+
+
+def _build_recent_weeks_context(
+    db: Session, activity: Activity, as_of: datetime
+) -> Optional[RecentWeeksContext]:
+    """ADR 0026 Slice 2 (#670): the merged day-resolved `right_now.recent_weeks` section,
+    or None.
+
+    The single recent-training read that replaces `training_volume` + `recent_training`,
+    behind the shared `ReadTimeSignal` seam gated on `RECENT_WEEKS` — reached ONLY under a
+    recent-weeks-aware prompt (the new grouped prompt), so it is dropped from
+    serialization (byte-stable) under every prior prompt that still reads the old two
+    sections. Computed read-time as of this activity's LOCAL day over a 91-day fact span
+    (the two weeks of structure plus the ~12-week norm baseline), reusing the volume core
+    so "typical" has one meaning across the product. A deterministic FACT the coach may
+    cite; never overrides the run's re-derived DerivedMetric or the safety floor."""
+    local_day = activity.local_start.date()
+    facts = _query_activity_facts(
+        db, local_day - timedelta(days=91), local_day + timedelta(days=1),
+        user_id=activity.user_id,
+        include_session_shape=True,  # per-session structure/rep-shape + hr_drift
+    )
+    # Per-activity check-ins only for the two weeks the day-resolved log covers (rolling
+    # 7d and this/last calendar week all fall within the trailing ~14 days).
+    recent_ids = [
+        f.activity_id
+        for f in facts
+        if f.local_date >= local_day - timedelta(days=14)
+    ]
+    checkins = _query_recent_checkins(db, recent_ids)
+    return build_recent_weeks(facts, checkins, local_day)
 
 
 # The wide fetch span for the multi-year history scan: ~10 years, so the deep ladder
@@ -1344,6 +1433,14 @@ _TRAINING_VOLUME_SIGNAL = ReadTimeSignal(
 _RECENT_TRAINING_SIGNAL = ReadTimeSignal(
     "recent_training", _build_recent_training_context, PromptFeature.RECENT_TRAINING
 )
+# ADR 0026 Slice 2 (#670): the redefined right_now content, gated to the new grouped
+# prompt — readiness (renamed training_load) and recent_weeks (merged volume+recent).
+_READINESS_SIGNAL = ReadTimeSignal(
+    "readiness", _build_readiness_context, PromptFeature.READINESS
+)
+_RECENT_WEEKS_SIGNAL = ReadTimeSignal(
+    "recent_weeks", _build_recent_weeks_context, PromptFeature.RECENT_WEEKS
+)
 _TRAINING_HISTORY_SIGNAL = ReadTimeSignal(
     "training_history", _build_training_history_context, PromptFeature.TRAINING_HISTORY
 )
@@ -1364,6 +1461,8 @@ READ_TIME_SIGNALS: Dict[str, ReadTimeSignal] = {
         _TRAINING_LOAD_SIGNAL,
         _TRAINING_VOLUME_SIGNAL,
         _RECENT_TRAINING_SIGNAL,
+        _READINESS_SIGNAL,
+        _RECENT_WEEKS_SIGNAL,
         _TRAINING_HISTORY_SIGNAL,
         _MEMORY_SIGNAL,
         _INTENSITY_SIGNAL,

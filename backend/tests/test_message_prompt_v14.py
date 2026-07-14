@@ -34,7 +34,10 @@ def test_v14_registered_carries_every_v13_capability_plus_intensity():
     assert V14 in MEMORY_PROMPT_IDS  # inherits v13's capabilities
     assert V14 in INTENSITY_PROMPT_IDS  # ...plus the new INTENSITY capability
     # v14 and the lean experiment (full-capability parity) are the INTENSITY-aware ids.
-    assert INTENSITY_PROMPT_IDS == {V14, "coach_message_lean_v1", "coach_message_lean_grouped_v1"}
+    assert INTENSITY_PROMPT_IDS == {
+        V14, "coach_message_lean_v1", "coach_message_lean_grouped_v1",
+        "coach_message_lean_grouped_v2",  # ADR 0026 Slice 2 keeps INTENSITY
+    }
     assert V14 in _OPENER_PROMPTS  # has a distinct opener form (two-stage)
     # same schema family as v13 (so v14 reports regenerate, prior history retained).
     assert active_schema_version(V14) == active_schema_version(V13)

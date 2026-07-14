@@ -47,6 +47,9 @@ def test_all_signals_registered_under_one_interface():
         "training_load",
         "training_volume",
         "recent_training",
+        # ADR 0026 Slice 2 (#670): the redefined right_now content signals.
+        "readiness",
+        "recent_weeks",
         "training_history",
         "memory",
         "intensity",

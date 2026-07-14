@@ -1038,18 +1038,30 @@ _GROUP_ORIENTATION_OPENER = (
     "`right_now`, `the_runner`, `our_thread`, `how_to_coach` — plus a top-level safety floor.\n\n"
 )
 
+# ADR 0026 Slice 2 (#670): the grouped-v2 orientation. Identical to _GROUP_ORIENTATION
+# except the `right_now` line, whose content is REDEFINED — `readiness` (renamed from
+# training load) plus the merged, day-resolved `recent_weeks` read replace the three old
+# overlapping sections. Kept a SEPARATE constant so grouped_v1's orientation stays
+# byte-identical (its pin holds).
+_GROUP_ORIENTATION_V2 = _GROUP_ORIENTATION.replace(
+    "- `right_now` — how they are placed today: recent training load and readiness, and how these last weeks compare to their own normal.",
+    "- `right_now` — how they are placed today: their `readiness` (fitness, fatigue, form) and `recent_weeks` — the last two weeks day by day, on one week model, versus their own normal.",
+)
 
-def _regroup_lean_prompt(text: str) -> str:
+
+def _regroup_lean_prompt(text: str, orientation: str = _GROUP_ORIENTATION) -> str:
     """ADR 0026: derive the grouped-pack FULLER prompt from a lean prompt. Insert the
     group orientation before the truth rule, and re-anchor the only two dotted paths
     that move under grouping (continuity -> our_thread.continuity; salience stays
     top-level). Pure, so the grouped prompt is provably lean_v1 plus these two
-    navigational changes and the safety prose is byte-identical (pinned by test)."""
+    navigational changes and the safety prose is byte-identical (pinned by test).
+    `orientation` selects the group-orientation block (Slice 2 passes the v2 variant
+    whose `right_now` line names readiness + recent_weeks)."""
     out = text.replace(
         "continuity.opener_message", "our_thread.continuity.opener_message"
     ).replace("continuity.reply", "our_thread.continuity.reply")
     anchor = "# The one rule about what is true"
-    return out.replace(anchor, _GROUP_ORIENTATION + anchor, 1)
+    return out.replace(anchor, orientation + anchor, 1)
 
 
 def _regroup_lean_opener_prompt(text: str) -> str:
@@ -1062,6 +1074,19 @@ def _regroup_lean_opener_prompt(text: str) -> str:
 
 SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V1 = _regroup_lean_prompt(SYSTEM_PROMPT_MESSAGE_LEAN_V1)
 SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V1_OPENER = _regroup_lean_opener_prompt(
+    SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER
+)
+
+# ADR 0026 Slice 2 (#670): grouped_v2 = grouped_v1 with the v2 `right_now` orientation
+# (naming readiness + recent_weeks). The base prose is disposition-first and names no
+# pack section by its JSON key, so the only text change from grouped_v1 is the
+# `right_now` orientation line; the safety floor is invariant by construction (pinned by
+# test). The opener names only the group KEYS (no right_now detail), so it is byte-
+# identical to grouped_v1's opener. Ships INERT.
+SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V2 = _regroup_lean_prompt(
+    SYSTEM_PROMPT_MESSAGE_LEAN_V1, _GROUP_ORIENTATION_V2
+)
+SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V2_OPENER = _regroup_lean_opener_prompt(
     SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER
 )
 
@@ -1120,6 +1145,10 @@ PROMPT_VERSIONS = {
     # into the five coaching-question groups + a group orientation). Feature parity
     # with lean_v1; serves pack.to_grouped_dict(). Ships INERT.
     "coach_message_lean_grouped_v1": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V1,
+    # ADR 0026 Slice 2 (#670) — the grouped prompt whose `right_now` group carries the
+    # redefined content (readiness + merged day-resolved recent_weeks). Serves
+    # pack.to_grouped_dict(). Ships INERT.
+    "coach_message_lean_grouped_v2": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V2,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -1156,6 +1185,7 @@ _OPENER_PROMPTS = {
     "coach_message_v14": SYSTEM_PROMPT_MESSAGE_V14_OPENER,
     "coach_message_lean_v1": SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER,
     "coach_message_lean_grouped_v1": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V1_OPENER,
+    "coach_message_lean_grouped_v2": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V2_OPENER,
 }
 
 # ADR 0026 Slice 1: the prompt ids that receive the GROUPED pack serialization
@@ -1163,7 +1193,9 @@ _OPENER_PROMPTS = {
 # pack-section capability, so it is a plain set here rather than a PromptFeature (which
 # gates what sections the pack CONTAINS). Every other prompt id serves the flat pack,
 # byte-stable.
-GROUPED_PACK_PROMPT_IDS: frozenset[str] = frozenset({"coach_message_lean_grouped_v1"})
+GROUPED_PACK_PROMPT_IDS: frozenset[str] = frozenset(
+    {"coach_message_lean_grouped_v1", "coach_message_lean_grouped_v2"}
+)
 
 
 def is_grouped_pack_prompt(prompt_id: Optional[str]) -> bool:
@@ -1226,6 +1258,12 @@ MEMORY_PROMPT_IDS = ids_with(PromptFeature.MEMORY)
 # Prompt ids that carry the #578 intensity addendum AND the `intensity` context-pack
 # section (gates _build_intensity_context).
 INTENSITY_PROMPT_IDS = ids_with(PromptFeature.INTENSITY)
+
+# ADR 0026 Slice 2 (#670): prompt ids whose pack carries the redefined `right_now`
+# content — `readiness` (renamed training_load) and the merged `recent_weeks` (gates
+# _build_readiness_context / _build_recent_weeks_context).
+READINESS_PROMPT_IDS = ids_with(PromptFeature.READINESS)
+RECENT_WEEKS_PROMPT_IDS = ids_with(PromptFeature.RECENT_WEEKS)
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
@@ -1309,6 +1347,22 @@ def is_intensity_prompt(prompt_id: Optional[str]) -> bool:
     prompt, so the intensity-distribution-and-trend signal stays out of the pack
     (byte-stable under v13 and below) and is wholly inert under a rollback."""
     return has_feature(prompt_id, PromptFeature.INTENSITY)
+
+
+def is_readiness_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt reads the ADR 0026 Slice 2 `right_now.readiness`
+    section (the renamed training_load). False for every prior prompt, which still reads
+    `training_load` instead — so the two shapes never both emit and the pack stays
+    byte-stable under a rollback."""
+    return has_feature(prompt_id, PromptFeature.READINESS)
+
+
+def is_recent_weeks_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt reads the ADR 0026 Slice 2 merged day-resolved
+    `right_now.recent_weeks` section. False for every prior prompt, which still reads
+    `training_volume` + `recent_training` instead — so the two shapes never both emit and
+    the pack stays byte-stable under a rollback."""
+    return has_feature(prompt_id, PromptFeature.RECENT_WEEKS)
 
 # ---------------------------------------------------------------------------
 # Activity-type playbooks — appended to the system prompt based on the playbook
