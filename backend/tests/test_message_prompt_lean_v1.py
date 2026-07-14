@@ -70,10 +70,11 @@ def test_lean_v1_has_full_capability_parity_with_v14():
     # (they REPLACE training_load/volume/recent_training/training_history and
     # perceived_effort/calibration/intensity under the grouped prompts), so no single prompt
     # carries the full union; lean_v1 carries every ADDITIVE feature.
+    # Slice 4 (#680) adds METRICS_COACH_FRAMED, a presentation-only view flag on grouped_v4.
     from app.services.coach.prompt_features import PromptFeature as _F
     every_additive = set().union(*PROMPT_FEATURES.values()) - {
         _F.READINESS, _F.RECENT_WEEKS, _F.TRAINING_HISTORY_2WK,
-        _F.INTENSITY_READ, _F.INTENSITY_MIX,
+        _F.INTENSITY_READ, _F.INTENSITY_MIX, _F.METRICS_COACH_FRAMED,
     }
     assert features_for(LEAN) == every_additive
 

@@ -27,8 +27,10 @@ from app.models.coach_report import CoachReport
 from app.models.coaching_relationship import CoachingRelationship
 from app.schemas.chat import ChatMessageRead
 from app.schemas.coach_context import CoachContextPack, unnest_pack
+from app.services.coach import coach_units
+from app.services.coach.coach_framing import frame_pack
 from app.services.coach.llm import AnthropicClient
-from app.services.coach.prompts import render_voice_block
+from app.services.coach.prompts import is_metrics_coach_framed_prompt, render_voice_block
 from app.services.coach.query_tools import (
     CHAT_TOOLS,
     TOOL_STATUS_LABELS,
@@ -353,6 +355,7 @@ def _build_chat_system_prompt(
     voice_block: str = "",
     cross_activity_block: str = "",
     tiering_block: Optional[str] = None,
+    prompt_id: Optional[str] = None,
 ) -> str:
     """Assemble the chat system prompt from all context sources.
 
@@ -363,6 +366,12 @@ def _build_chat_system_prompt(
     a section gated off anywhere is also un-briefed here. `cross_activity_block` (#339)
     is the bounded cross-activity conversation digest, or "" when the runner has no
     other-activity chat.
+
+    `prompt_id` is the STORED report's prompt id: under a metrics-coach-framed prompt
+    (ADR 0026 Slice 4, #680) the pack sent to the chat LLM is reframed to coach-native
+    units so the chat reads the SAME framed facts the report did. The tiering read below
+    stays on the canonical `context_pack` (it needs typed facts), so only the outgoing
+    `context_pack_json` is framed; framing is byte-stable for every prior prompt.
     """
     if tiering_block is None:
         tiering_block = _render_authority_tiering(
@@ -370,8 +379,9 @@ def _build_chat_system_prompt(
             voice_present=bool(voice_block),
             cross_activity_present=bool(cross_activity_block),
         )
+    llm_pack = frame_pack(context_pack) if is_metrics_coach_framed_prompt(prompt_id) else context_pack
     return CHAT_SYSTEM_TEMPLATE.format(
-        context_pack_json=json.dumps(context_pack, default=str),
+        context_pack_json=json.dumps(llm_pack, default=str),
         report_json=json.dumps(report, default=str),
         profile_json=json.dumps(profile, default=str),
         splits_json=json.dumps(splits, default=str),
@@ -488,12 +498,11 @@ async def stream_chat_response(
             "avg_cadence_spm": round(s["avg_cadence"]) if s.get("avg_cadence") else None,
             "avg_watts": round(s["avg_watts"]) if s.get("avg_watts") else None,
         }
-        # Format pace as min:sec/km
-        pace = s.get("pace")
-        if pace and pace > 0:
-            mins = int(pace // 60)
-            secs = int(pace % 60)
-            entry["pace_per_km"] = f"{mins}:{secs:02d}"
+        # Format pace as min:sec/km via the shared coach-units formatter, so the chat
+        # splits render pace the same way as the framed pack and the query tools (#680).
+        pace_str = coach_units.pace_from_sec_per_km(s.get("pace"))
+        if pace_str:
+            entry["pace_per_km"] = pace_str
         splits_formatted.append(entry)
 
     # Get athlete profile
@@ -529,6 +538,7 @@ async def stream_chat_response(
     system_prompt = _build_chat_system_prompt(
         context_pack, report_content, profile_dict, splits_formatted,
         voice_block, cross_activity_block,
+        prompt_id=report_row.prompt_id,
     )
 
     # Save the user message

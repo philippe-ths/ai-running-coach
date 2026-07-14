@@ -51,6 +51,7 @@ class PromptFeature(Enum):
     TRAINING_HISTORY_2WK = "training_history_2wk"  # ADR 0026 Slice 2 (#670): `training_history` ladder rebased after the 2-week recent_weeks window (enriched: by_type + load + dates)
     INTENSITY_READ = "intensity_read"  # ADR 0026 Slice 3 (#673): merged this-run `this_run.intensity_read` + promoted `this_run.referral` (retires perceived_effort/calibration/intensity)
     INTENSITY_MIX = "intensity_mix"    # ADR 0026 Slice 3 (#673): recent intensity distribution + trend `right_now.intensity_mix` (the "how hard lately" half of the retired intensity section)
+    METRICS_COACH_FRAMED = "metrics_coach_framed"  # ADR 0026 Slice 4 (#680): reframe the pack's numeric leaves to coach-native units/precision for the LLM view (km/pace/%max/MM:SS); presentation only, no new section
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -283,6 +284,31 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.INTENSITY_MIX,
         }
     ),
+    # ADR 0026 Slice 4 (#680) — coach_message_lean_grouped_v4 reframes the pack's numeric
+    # leaves to coach-native units and precision for the outgoing LLM view (km not metres,
+    # min:sec/km not m/s, minute-granularity session durations + second-resolution interval/
+    # zone times, bpm with a % of max supplement on the two headline HRs, dropped efficiency
+    # curve + per-rep offsets, trimmed decimals). It carries every grouped_v3 capability plus
+    # METRICS_COACH_FRAMED; the reframing is a one-way serialization VIEW (report + chat pack)
+    # over the canonical unframed pack, so re-parse/validator/eval are untouched and every
+    # prior prompt is byte-identical. Ships INERT.
+    "coach_message_lean_grouped_v4": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.READINESS,
+            _F.USER_MATERIALS,
+            _F.RECENT_WEEKS,
+            _F.STREAM_VIEW,
+            _F.TRAINING_HISTORY_2WK,
+            _F.MEMORY,
+            _F.INTENSITY_READ,
+            _F.INTENSITY_MIX,
+            _F.METRICS_COACH_FRAMED,
+        }
+    ),
 }
 
 
@@ -349,6 +375,9 @@ ALTERNATIVE_FEATURES: frozenset[PromptFeature] = frozenset(
         PromptFeature.TRAINING_HISTORY_2WK,
         PromptFeature.INTENSITY_READ,
         PromptFeature.INTENSITY_MIX,
+        # ADR 0026 Slice 4 (#680): a presentation-only leaf reframing, not a new pack
+        # section, so it must not count toward "the fullest pack" additive ranking.
+        PromptFeature.METRICS_COACH_FRAMED,
     }
 )
 

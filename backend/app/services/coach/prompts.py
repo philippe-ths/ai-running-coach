@@ -1178,6 +1178,12 @@ PROMPT_VERSIONS = {
     # `intensity_read` + promoted `referral` and whose `right_now` carries `intensity_mix`;
     # serves pack.to_grouped_dict(). Ships INERT.
     "coach_message_lean_grouped_v3": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3,
+    # ADR 0026 Slice 4 (#680) — the grouped prompt whose numeric leaves are reframed to
+    # coach-native units/precision for the LLM view. The PROSE is byte-identical to
+    # grouped_v3 (the group structure is unchanged; only the leaf VALUES the coach reads
+    # change, via coach_framing.frame_pack gated on METRICS_COACH_FRAMED), so it reuses
+    # grouped_v3's system prompt. The A/B is the framed pack shape alone. Ships INERT.
+    "coach_message_lean_grouped_v4": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -1216,6 +1222,9 @@ _OPENER_PROMPTS = {
     "coach_message_lean_grouped_v1": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V1_OPENER,
     "coach_message_lean_grouped_v2": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V2_OPENER,
     "coach_message_lean_grouped_v3": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
+    # ADR 0026 Slice 4 (#680): identical opener prose to grouped_v3 (framing is a pack-view
+    # change, not a prose change).
+    "coach_message_lean_grouped_v4": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
 }
 
 # ADR 0026 Slice 1: the prompt ids that receive the GROUPED pack serialization
@@ -1228,6 +1237,7 @@ GROUPED_PACK_PROMPT_IDS: frozenset[str] = frozenset(
         "coach_message_lean_grouped_v1",
         "coach_message_lean_grouped_v2",
         "coach_message_lean_grouped_v3",
+        "coach_message_lean_grouped_v4",
     }
 )
 
@@ -1316,6 +1326,11 @@ INTENSITY_READ_PROMPT_IDS = ids_with(PromptFeature.INTENSITY_READ)
 # distribution + trend `intensity_mix` (the "how hard lately" half of the retired
 # intensity section).
 INTENSITY_MIX_PROMPT_IDS = ids_with(PromptFeature.INTENSITY_MIX)
+
+# ADR 0026 Slice 4 (#680): prompt ids whose OUTGOING LLM pack view is reframed to
+# coach-native units/precision (coach_framing.frame_pack). A presentation-only flag over
+# the grouped pack; the stored/canonical pack, validator, tiering, and eval are unchanged.
+METRICS_COACH_FRAMED_PROMPT_IDS = ids_with(PromptFeature.METRICS_COACH_FRAMED)
 
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
@@ -1424,6 +1439,16 @@ def is_intensity_mix_prompt(prompt_id: Optional[str]) -> bool:
     (the recent intensity distribution + trend). False for every prior prompt, which
     reads the recent half inside the combined `intensity` section instead."""
     return has_feature(prompt_id, PromptFeature.INTENSITY_MIX)
+
+
+def is_metrics_coach_framed_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt's OUTGOING LLM pack is reframed to coach-native units
+    and precision (ADR 0026 Slice 4, #680): km not metres, min:sec/km not m/s, MM:SS
+    durations, bpm + % of max on the two headline HRs, dropped efficiency curve/offsets,
+    trimmed decimals. A one-way view over the canonical pack (report + chat), so the
+    stored pack, validator, tiering, and eval are unchanged; false for every prior prompt,
+    which reads the raw-unit leaves byte-stably under a rollback."""
+    return has_feature(prompt_id, PromptFeature.METRICS_COACH_FRAMED)
 
 
 def is_readiness_prompt(prompt_id: Optional[str]) -> bool:

@@ -143,7 +143,7 @@ def test_list_entries_are_coach_framed(db):
     out = qt.list_activities_in_range(db, u.id, window="last_7_days", type_filter=None, today=TODAY)
     entry = out["activities"][0]
     assert entry["distance_km"] == 8.0
-    assert entry["pace_per_km"] == "5:00"   # 2400s / 8km = 300s/km
+    assert entry["pace_per_km"] == "5:00/km"   # 2400s / 8km = 300s/km
     assert entry["duration"] == "40m"
     assert entry["long_run"] is True
     assert entry["weekday"]  # a given day, not a computed one
