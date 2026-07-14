@@ -867,6 +867,84 @@ class IntensityContext(BaseModel):
     has_distribution: bool = False
 
 
+# --- ADR 0026 Slice 3 (#673): the merged this-run intensity read -------------
+# "How hard was this run, really?" was answered in four sibling sections
+# (`metrics.effort`, `perceived_effort`, `calibration.hr_drift`, `intensity.this_session`
+# + `metrics.discount_signals`), inviting the model to narrate each in isolation (the
+# #636 misread). Slice 3 collapses the THIS-RUN lenses into one `this_run.intensity_read`
+# and moves the RECENT distribution/trend half to `right_now.intensity_mix` (a runner-
+# state fact, not a this-run fact). Both ride the pack as NEW gated sections behind new
+# PromptFeatures (INTENSITY_READ / INTENSITY_MIX), so under every prior prompt the old
+# `perceived_effort`/`calibration`/`intensity` sections still emit byte-identically; the
+# new grouped prompt carries the two new features INSTEAD of INTENSITY and retires those
+# three (perceived_effort/calibration drop to None; the combined intensity section drops
+# with its feature). The confounder LEADS the read and links to the drift, so an elevated
+# drift on a hot day is never narrated as fatigue.
+
+
+class IntensityFeltVsMeasured(BaseModel):
+    """The RPE-vs-HR read (M6), reframed as a comparison. `read` is the signed 1-5-band
+    divergence direction; `trust` is which signal to weight (RPE survives HR distortion
+    under a confounder). Omitted from the read entirely when there is no check-in (no RPE
+    to compare)."""
+    model_config = ConfigDict(extra="forbid")
+
+    read: str                                 # aligned | felt_harder | felt_easier
+    trust: str                                # rpe_over_hr | balanced
+
+
+class IntensityDriftRead(BaseModel):
+    """This run's HR drift read against the runner's OWN typical for these conditions (M9).
+    `personal_norm` is False when there are too few comparable runs (`typical_pct` is then
+    null and `read` compares against the general ~5% guideline). `confounded` is set only
+    when a discount signal fired, so the coach reads an elevated drift as likely inflated
+    by the conditions rather than as fatigue. Omitted when no drift was measured."""
+    model_config = ConfigDict(extra="forbid")
+
+    observed_pct: float
+    typical_pct: Optional[float] = None       # your norm for these conditions; null when < 4 comparable runs
+    read: str                                 # above | below | in_line
+    personal_norm: bool                       # True = your own norm; False = the general ~5% rule of thumb
+    confounded: Optional[bool] = None         # True when a confounder likely inflated it; dropped when None
+    basis: str
+
+
+class IntensityRead(BaseModel):
+    """ADR 0026 Slice 3 (#673): the single "how hard was this run, really" read, merging
+    the HR intensity band, the within-run time split, the felt-vs-measured (RPE) gap, the
+    drift-vs-your-typical comparison, and the confounders that fired. `confounders` LEADS
+    the block (heat/hills/stimulant), so the coach reads the HR-derived facts below through
+    that frame; `vs_recent` is this run against the runner's recent 4-week intensity norm,
+    computed confounder-SYMMETRICALLY (this run's own band is exculpated the same way the
+    recent baseline is). Every sparse field is Optional and dropped from serialization when
+    it does not apply, so a bare indoor run stays lean. Emitted ONLY under an
+    intensity-read-aware prompt id, so the pack stays byte-stable otherwise."""
+    model_config = ConfigDict(extra="forbid")
+
+    confounders: List[str] = Field(default_factory=list)  # heat | hills | stimulant; dropped when empty
+    band: Optional[str] = None                            # easy | moderate | hard (collapsed HR effort axis)
+    within_run: Optional[IntensityBandShare] = None       # time-in-zone split; None without zone data
+    felt_vs_measured: Optional[IntensityFeltVsMeasured] = None  # None without a check-in
+    drift_vs_typical: Optional[IntensityDriftRead] = None       # None when no drift measured
+    vs_recent: str                                        # easier | in_line | harder | no_norm
+
+
+class IntensityMix(BaseModel):
+    """ADR 0026 Slice 3 (#673): the RECENT intensity distribution + trend — the "how hard
+    has this runner been training lately" half, a runner-state fact that sits with the
+    other `right_now` reads. The distribution is the confounder-EXCULPATED session-count
+    share over the recent window (a hot week is not misread as genuine hard volume). The
+    builder returns None (section dropped) when history is too thin for a distribution, so
+    the section appears only when there is a real recent read. Emitted ONLY under an
+    intensity-mix-aware prompt id, so the pack stays byte-stable otherwise."""
+    model_config = ConfigDict(extra="forbid")
+
+    window_days: int
+    sessions: int                             # comparable recent sessions (excl. this run, races, no-HR)
+    distribution: IntensityBandShare          # confounder-exculpated easy/moderate/hard share
+    trend: str                                # easier | in_line | harder | no_norm (recent vs prior window)
+
+
 class MemoryContext(BaseModel):
     """ADR 0025: the runner memory profile surfaced WHOLE — the five capped sections
     of the runner's STATED facts + soft character, plus provenance so the coach can
@@ -1097,17 +1175,34 @@ class RecentWeeksContext(BaseModel):
 
 
 class ThisRun(BaseModel):
-    """ADR 0026: what was this session, and how hard was it really?"""
+    """ADR 0026: what was this session, and how hard was it really?
+
+    Slice 3 (#673) merges the this-run intensity lenses into `intensity_read` and
+    promotes the safety `referral` to its own key, both under a new grouped prompt. The
+    pre-slice-3 `perceived_effort`/`calibration`/`intensity` fields stay for every prior
+    prompt (byte-stable); exactly one shape is populated per prompt (gated by
+    PromptFeature) — under an intensity-read prompt `perceived_effort`/`calibration` are
+    None (dropped) and `intensity_read`/`referral` appear, the combined `intensity`
+    section drops with its feature, and `intensity.distribution` moves to
+    `right_now.intensity_mix`."""
     model_config = ConfigDict(extra="forbid")
 
     activity: ActivityContext
     metrics: MetricsContext
     check_in: CheckInContext
-    perceived_effort: PerceivedEffortContext
-    calibration: CalibrationContext
+    # Optional (#673): retired to None under an intensity-read prompt, populated on every
+    # prior prompt (dropped from serialization when None via PACK_SECTIONS). Still declared
+    # so a pre-slice-3 stored pack strict-parses.
+    perceived_effort: Optional[PerceivedEffortContext] = None
+    calibration: Optional[CalibrationContext] = None
     stream_view: Optional[Dict[str, Any]] = None
     block: Optional[BlockContext] = None
     intensity: Optional["IntensityContext"] = None
+    # ADR 0026 Slice 3 (#673): the merged this-run intensity read + the promoted safety
+    # nudge (a plain nudge string, not the machine `pattern`). Gated to the new grouped
+    # prompt; None (dropped) elsewhere.
+    intensity_read: Optional["IntensityRead"] = None
+    referral: Optional[str] = None
 
 
 class RightNow(BaseModel):
@@ -1127,6 +1222,9 @@ class RightNow(BaseModel):
     # ADR 0026 Slice 2 (#670): the redefined content, gated to a new grouped prompt.
     readiness: Optional["ReadinessContext"] = None
     recent_weeks: Optional["RecentWeeksContext"] = None
+    # ADR 0026 Slice 3 (#673): the recent intensity distribution + trend (the "how hard
+    # lately" half of the retired intensity section), gated to the new grouped prompt.
+    intensity_mix: Optional["IntensityMix"] = None
 
 
 class TheRunner(BaseModel):
@@ -1170,11 +1268,14 @@ _SECTION_GROUP: Dict[str, str] = {
     "stream_view": "this_run",
     "block": "this_run",
     "intensity": "this_run",
+    "intensity_read": "this_run",
+    "referral": "this_run",
     "training_load": "right_now",
     "training_volume": "right_now",
     "recent_training": "right_now",
     "readiness": "right_now",
     "recent_weeks": "right_now",
+    "intensity_mix": "right_now",
     "profile": "the_runner",
     "memory": "the_runner",
     "training_history": "the_runner",
@@ -1227,6 +1328,9 @@ _FLAT_ORDER: tuple[str, ...] = (
     "training_history",
     "memory",
     "intensity",
+    "intensity_read",
+    "referral",
+    "intensity_mix",
     "safety_rules",
 )
 
@@ -1348,6 +1452,18 @@ class CoachContextPack(BaseModel):
         return self.this_run.intensity
 
     @property
+    def intensity_read(self) -> Optional["IntensityRead"]:
+        return self.this_run.intensity_read
+
+    @property
+    def referral(self) -> Optional[str]:
+        return self.this_run.referral
+
+    @property
+    def intensity_mix(self) -> Optional["IntensityMix"]:
+        return self.right_now.intensity_mix
+
+    @property
     def training_load(self) -> Optional["TrainingLoadContext"]:
         return self.right_now.training_load
 
@@ -1407,10 +1523,13 @@ class CoachContextPack(BaseModel):
         metrics: MetricsContext,
         check_in: CheckInContext,
         profile: ProfileContext,
-        perceived_effort: PerceivedEffortContext,
         adherence: AdherenceContext,
-        calibration: CalibrationContext,
         safety_rules: SafetyRules,
+        perceived_effort: Optional[PerceivedEffortContext] = None,
+        calibration: Optional[CalibrationContext] = None,
+        intensity_read: Optional["IntensityRead"] = None,
+        referral: Optional[str] = None,
+        intensity_mix: Optional["IntensityMix"] = None,
         longitudinal: Optional[LongitudinalContext] = None,
         salience: Optional[SalienceContext] = _UNSET,
         continuity: Optional[ContinuityContext] = _UNSET,
@@ -1445,6 +1564,8 @@ class CoachContextPack(BaseModel):
                 stream_view=stream_view,
                 block=block,
                 intensity=intensity,
+                intensity_read=intensity_read,
+                referral=referral,
             ),
             right_now=RightNow(
                 training_load=training_load,
@@ -1452,6 +1573,7 @@ class CoachContextPack(BaseModel):
                 recent_training=recent_training,
                 readiness=readiness,
                 recent_weeks=recent_weeks,
+                intensity_mix=intensity_mix,
             ),
             the_runner=TheRunner(
                 profile=profile,
@@ -1762,6 +1884,19 @@ def _drop_recent_weeks_nulls(rw: Dict[str, Any], _data: Dict[str, Any]) -> None:
     _strip_nulls_in_place(rw)
 
 
+def _drop_intensity_read_nulls(ir: Dict[str, Any], _data: Dict[str, Any]) -> None:
+    """ADR 0026 Slice 3 (#673): make the intensity_read section's sparse fields cost
+    nothing when absent. Drop the null leaves (a no-HR run's `band`, a no-zone run's
+    `within_run`, a no-check-in run's `felt_vs_measured`, a no-drift run's
+    `drift_vs_typical`, a clean run's `drift_vs_typical.confounded`) recursively, and
+    drop the `confounders` list when empty so it only appears — leading the block — when
+    a confounder actually fired. Re-parse stays safe: every dropped field defaults to
+    None/empty when absent."""
+    if ir.get("confounders") == []:
+        ir.pop("confounders", None)
+    _strip_nulls_in_place(ir)
+
+
 # One descriptor per droppable Optional section. Order matches the historical
 # branch order in to_serializable_dict so the serialized dict's key order — and
 # therefore (post sort_keys, but kept tidy for diffs) the output — is unchanged.
@@ -1808,6 +1943,20 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
     ),
     PackSection("memory", PromptFeature.MEMORY),  # ADR 0025 runner memory profile
     PackSection("intensity", PromptFeature.INTENSITY),  # #578 intensity distribution + trend
+    # ADR 0026 Slice 3 (#673): the merged this-run intensity read + the promoted safety
+    # referral + the recent intensity mix, gated to the new grouped prompt. perceived_effort
+    # and calibration (always-present under every prior prompt) are RETIRED to None under an
+    # intensity-read prompt; their descriptors below drop them then, byte-stable elsewhere
+    # (non-None under every prior prompt, so the drop never fires there).
+    PackSection(
+        "intensity_read",
+        PromptFeature.INTENSITY_READ,
+        nested_drop=_drop_intensity_read_nulls,
+    ),
+    PackSection("referral", PromptFeature.INTENSITY_READ),
+    PackSection("intensity_mix", PromptFeature.INTENSITY_MIX),
+    PackSection("perceived_effort"),  # retired to None under an intensity-read prompt
+    PackSection("calibration"),       # retired to None under an intensity-read prompt
     # #451: the retired legacy summary — droppable but NOT prompt-gated (no longer
     # populated; a pre-#451 stored pack still round-trips its real object unchanged).
     PackSection("recent_training_summary"),

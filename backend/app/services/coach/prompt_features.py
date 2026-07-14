@@ -49,6 +49,8 @@ class PromptFeature(Enum):
     READINESS = "readiness"            # ADR 0026 Slice 2 (#670): `right_now.readiness` (renamed training_load)
     RECENT_WEEKS = "recent_weeks"      # ADR 0026 Slice 2 (#670): merged day-resolved `right_now.recent_weeks`
     TRAINING_HISTORY_2WK = "training_history_2wk"  # ADR 0026 Slice 2 (#670): `training_history` ladder rebased after the 2-week recent_weeks window (enriched: by_type + load + dates)
+    INTENSITY_READ = "intensity_read"  # ADR 0026 Slice 3 (#673): merged this-run `this_run.intensity_read` + promoted `this_run.referral` (retires perceived_effort/calibration/intensity)
+    INTENSITY_MIX = "intensity_mix"    # ADR 0026 Slice 3 (#673): recent intensity distribution + trend `right_now.intensity_mix` (the "how hard lately" half of the retired intensity section)
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -258,6 +260,29 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.INTENSITY,
         }
     ),
+    # ADR 0026 Slice 3 (#673) — coach_message_lean_grouped_v3 collapses the four this-run
+    # intensity lenses into `this_run.intensity_read`, promotes the safety nudge to
+    # `this_run.referral`, and moves the recent intensity distribution to
+    # `right_now.intensity_mix`. It carries INTENSITY_READ + INTENSITY_MIX INSTEAD of
+    # INTENSITY; under it the standalone perceived_effort/calibration/intensity sections
+    # retire and the two new reads appear. Every OTHER grouped_v2 capability is unchanged.
+    # Every prior prompt keeps the originals (byte-stable). Ships INERT.
+    "coach_message_lean_grouped_v3": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.READINESS,
+            _F.USER_MATERIALS,
+            _F.RECENT_WEEKS,
+            _F.STREAM_VIEW,
+            _F.TRAINING_HISTORY_2WK,
+            _F.MEMORY,
+            _F.INTENSITY_READ,
+            _F.INTENSITY_MIX,
+        }
+    ),
 }
 
 
@@ -308,22 +333,47 @@ def ids_with(feature: PromptFeature) -> frozenset[str]:
     return frozenset(pid for pid, feats in PROMPT_FEATURES.items() if feature in feats)
 
 
+# Features that REPLACE an earlier additive capability rather than ADD a new pack
+# section (ADR 0026): a grouped prompt carries these INSTEAD of the section(s) they
+# supersede (READINESS replaces training_load; RECENT_WEEKS replaces volume +
+# recent_training; TRAINING_HISTORY_2WK rebases training_history; INTENSITY_READ /
+# INTENSITY_MIX replace perceived_effort/calibration/intensity). A prompt bearing them
+# is an ALTERNATIVE SHAPE, not a fuller superset, so raw feature count no longer tracks
+# "the fullest pack" (the chain stopped being monotonic at Slice 2). `fullest_message_
+# prompt_id` ranks by ADDITIVE features so it always resolves to a genuine full-superset
+# prompt whose pack turns on every original gated section.
+ALTERNATIVE_FEATURES: frozenset[PromptFeature] = frozenset(
+    {
+        PromptFeature.READINESS,
+        PromptFeature.RECENT_WEEKS,
+        PromptFeature.TRAINING_HISTORY_2WK,
+        PromptFeature.INTENSITY_READ,
+        PromptFeature.INTENSITY_MIX,
+    }
+)
+
+
 def fullest_message_prompt_id() -> str:
-    """The ``coach_message`` prompt id carrying the MOST capabilities — the prompt
-    that turns on every gated pack section, so its serialized pack is the FULLEST and
-    its duplication/byte-stability surface the LARGEST.
+    """The ``coach_message`` prompt id whose pack turns on every ORIGINAL gated section,
+    so its serialized pack is the FULLEST and its duplication/byte-stability surface the
+    LARGEST.
 
     Derived from the manifest so structural pack guards (the no-duplicate-content and
     single-home-facts tests) auto-track the newest gated section instead of pinning a
     hardcoded version that silently goes stale the next time a section is added — the
-    exact gap that let a new section's overlap ship unseen. Ties resolve to the
-    newest (last-declared) id: each ``coach_message`` version is a superset of the
-    prior, so the last one reaching the max is the newest fullest prompt.
+    exact gap that let a new section's overlap ship unseen. Ranked by ADDITIVE feature
+    count (``ALTERNATIVE_FEATURES`` excluded), because the ADR 0026 grouped prompts carry
+    alternative features that REPLACE original sections rather than add them — a raw count
+    would pick such an alternative, whose pack is NOT a superset. Ties resolve to the
+    newest (last-declared) id.
     """
     best: Optional[str] = None
     best_n = -1
     for pid, feats in PROMPT_FEATURES.items():
-        if pid.startswith("coach_message") and len(feats) >= best_n:
-            best, best_n = pid, len(feats)
+        if not pid.startswith("coach_message"):
+            continue
+        additive_n = len(feats - ALTERNATIVE_FEATURES)
+        if additive_n >= best_n:
+            best, best_n = pid, additive_n
     assert best is not None  # PROMPT_FEATURES is never empty
     return best
