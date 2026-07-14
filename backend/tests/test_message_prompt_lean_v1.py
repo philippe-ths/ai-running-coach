@@ -77,6 +77,7 @@ def test_lean_v1_has_full_capability_parity_with_v14():
     every_additive = set().union(*PROMPT_FEATURES.values()) - {
         _F.READINESS, _F.RECENT_WEEKS, _F.TRAINING_HISTORY_2WK,
         _F.INTENSITY_READ, _F.INTENSITY_MIX, _F.METRICS_COACH_FRAMED, _F.SALIENCE_DROPPED,
+        _F.PACK_COACH_VIEW,
     }
     assert features_for(LEAN) == every_additive
 

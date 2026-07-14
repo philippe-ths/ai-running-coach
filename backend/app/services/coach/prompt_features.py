@@ -53,6 +53,7 @@ class PromptFeature(Enum):
     INTENSITY_MIX = "intensity_mix"    # ADR 0026 Slice 3 (#673): recent intensity distribution + trend `right_now.intensity_mix` (the "how hard lately" half of the retired intensity section)
     METRICS_COACH_FRAMED = "metrics_coach_framed"  # ADR 0026 Slice 4 (#680): reframe the pack's numeric leaves to coach-native units/precision for the LLM view (km/pace/%max/MM:SS); presentation only, no new section
     SALIENCE_DROPPED = "salience_dropped"  # ADR 0026 Slice 5 (#682): drop the `salience` routing section from the FULLER LLM view (it steers only the opener's depth + scheduling, which prod's receipt cadence never runs); the canonical pack keeps it so the deterministic safety force is unchanged; view-only, no new section
+    PACK_COACH_VIEW = "pack_coach_view"  # ADR 0026 Slice 5 (#682): the COMPLETED coach LLM view — readiness verdict-only, recent_weeks per-session bpm, the four interval blocks collapsed to one `interval_read`, plan-less `workout_match` dropped, `hr_drift` deduped, training-history sentinel/dupes cleaned, empty `our_thread` dropped; a one-way view over the canonical grouped pack (like METRICS_COACH_FRAMED), no section added to the store
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -334,6 +335,7 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.INTENSITY_MIX,
             _F.METRICS_COACH_FRAMED,
             _F.SALIENCE_DROPPED,
+            _F.PACK_COACH_VIEW,
         }
     ),
 }
@@ -408,6 +410,9 @@ ALTERNATIVE_FEATURES: frozenset[PromptFeature] = frozenset(
         # ADR 0026 Slice 5 (#682): a view-only section REMOVAL, the opposite of additive, so
         # it likewise must not count toward "the fullest pack" additive ranking.
         PromptFeature.SALIENCE_DROPPED,
+        # ADR 0026 Slice 5 (#682): a view-only reshape (reframe + collapse), no stored
+        # section, so it likewise must not count toward the additive ranking.
+        PromptFeature.PACK_COACH_VIEW,
     }
 )
 

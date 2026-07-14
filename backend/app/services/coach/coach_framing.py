@@ -1,17 +1,27 @@
-"""Coach-native reframing of the context pack's numeric leaves (ADR 0026 Slice 4, #680).
+"""Coach-native reframing of the context pack for the outgoing LLM view (ADR 0026).
 
-`frame_pack` takes the GROUPED serialized pack (`CoachContextPack.to_grouped_dict`)
-and returns a copy whose leaf VALUES are in coach-native units and precision: km not
-metres, min:sec/km not m/s, minute-granularity session durations and second-resolution
-interval/zone times, bpm with a light % of max supplement on the two headline HRs, and
-no over-precise decimals, dropped efficiency curve, or per-rep start offsets.
+Two Slice-scoped transforms live here, composed by `coach_llm_view` and applied at BOTH
+LLM seams (the report pack in `service._llm_pack_message` and the chat pack in `chat.py`)
+so the report and chat coaches read an IDENTICAL pack:
 
-This is a ONE-WAY view for the outgoing LLM message only (report pack + chat pack): the
-values are strings/rounded numbers that cannot round-trip to typed facts, so the canonical
-unframed pack stays what is stored and what the validator, tiering, eval, and re-parse read.
-It is applied ONLY under a metrics-coach-framed prompt (`PromptFeature.METRICS_COACH_FRAMED`),
-so every prior prompt is byte-identical. Formatting delegates to `coach_units` so the report
-pack and the chat `query_tools` render every fact identically.
+- `frame_pack` (Slice 4, #680) — reframe the numeric LEAVES to coach-native units and
+  precision: km not metres, min:sec/km not m/s, minute-granularity session durations and
+  second-resolution interval/zone times, bpm with a light % of max supplement on the two
+  headline HRs, and no over-precise decimals, dropped efficiency curve, or per-rep offsets.
+  Gated on `PromptFeature.METRICS_COACH_FRAMED` (grouped_v4+).
+
+- `refine_coach_view` (Slice 5, #682) — the COMPLETED coach view: reframe the sections
+  Slice 4 left raw (readiness verdict-only, recent_weeks per-session HR), and collapse the
+  duplicated / misleading blocks a good coach would misread (the four overlapping interval
+  representations into one `interval_read`, the plan-less `workout_match`, the twice-stated
+  `hr_drift`, the training-history sentinel/dupes, and an empty `our_thread`). Gated on
+  `PromptFeature.PACK_COACH_VIEW` (grouped_v5).
+
+Both are ONE-WAY views for the outgoing LLM message only: the values are strings / reshaped
+structures that cannot round-trip to typed facts, so the canonical grouped pack stays what
+is STORED and what the validator, tiering, eval, and re-parse read (byte-identical to
+grouped_v4). Every non-flagged prompt is byte-identical. Formatting delegates to
+`coach_units` so the report pack and the chat `query_tools` render every fact identically.
 
 Pure: no I/O, no DB. Missing/None leaves are skipped, never fabricated.
 """
@@ -19,9 +29,14 @@ Pure: no I/O, no DB. Missing/None leaves are skipped, never fabricated.
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.services.coach import coach_units as u
+from app.services.coach.prompts import (
+    is_metrics_coach_framed_prompt,
+    is_pack_coach_view_prompt,
+    is_salience_dropped_prompt,
+)
 
 
 def frame_pack(grouped: Dict[str, Any]) -> Dict[str, Any]:
@@ -245,3 +260,186 @@ def _round(value: Any, ndigits: int) -> Any:
 def _plain_bpm(d: Dict[str, Any], key: str) -> None:
     if d.get(key) is not None:
         d[key] = u.bpm(d[key])
+
+
+# ===========================================================================
+# ADR 0026 Slice 5 (#682): the COMPLETED coach view.
+# refine_coach_view runs AFTER frame_pack, so it reads already-framed leaves
+# (durations "M:SS", distances km, etc.). It reshapes what a good coach would
+# otherwise misread; every drop is drop-when-present, never fabricated.
+# ===========================================================================
+
+def refine_coach_view(grouped: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of the (framed) grouped view with the Slice-5 refinements applied."""
+    if not isinstance(grouped, dict):
+        return grouped
+    pack = copy.deepcopy(grouped)
+    max_hr = _runner_max_hr(pack)
+
+    this_run = pack.get("this_run")
+    if isinstance(this_run, dict):
+        _refine_metrics(this_run.get("metrics"))
+
+    right_now = pack.get("right_now")
+    if isinstance(right_now, dict):
+        _refine_readiness(right_now)
+        _refine_recent_weeks(right_now.get("recent_weeks"))
+
+    the_runner = pack.get("the_runner")
+    if isinstance(the_runner, dict):
+        _refine_training_history(the_runner.get("training_history"))
+
+    _drop_empty_our_thread(pack)
+    return pack
+
+
+def _refine_metrics(metrics: Optional[Dict[str, Any]]) -> None:
+    if not isinstance(metrics, dict):
+        return
+    # hr_drift is stated twice: this_run.intensity_read.drift_vs_typical.observed_pct
+    # already carries it WITH the confound flag and the runner's typical, so it is the
+    # single home. Drop the bare metrics copy.
+    metrics.pop("hr_drift", None)
+    # workout_match is meaningless without a plan (match_score is a de-facto 1.0), and the
+    # runner has no planned-workout capture yet — it only invites "you nailed your plan".
+    wm = metrics.get("workout_match")
+    if isinstance(wm, dict) and "no_planned_workout" in (wm.get("confidence_reasons") or []):
+        metrics.pop("workout_match", None)
+    # Collapse the four overlapping interval representations into one read.
+    _merge_interval_read(metrics)
+
+
+def _merge_interval_read(metrics: Dict[str, Any]) -> None:
+    istruct = metrics.get("interval_structure")
+    if not isinstance(istruct, dict):
+        return
+    summary = istruct.get("summary") or {}
+    kpis = metrics.get("interval_kpis") or {}
+    rest_by_num = {
+        r.get("segment_number"): r
+        for r in (istruct.get("rest_segments") or [])
+        if isinstance(r, dict)
+    }
+    reps: List[Dict[str, Any]] = []
+    for w in istruct.get("work_segments") or []:
+        if not isinstance(w, dict):
+            continue
+        n = w.get("segment_number")
+        rep = {
+            "n": n,
+            "distance_m": w.get("distance_m"),
+            "duration": w.get("duration"),
+            "avg_hr": w.get("avg_hr"),
+            "peak_hr": w.get("peak_hr"),
+        }
+        rest = rest_by_num.get(n)
+        if isinstance(rest, dict):
+            rep["recovery"] = rest.get("duration")
+            rep["recovery_drop_bpm"] = rest.get("hr_recovery_bpm")
+        reps.append({k: v for k, v in rep.items() if v is not None})
+
+    interval_read = {
+        "source": istruct.get("source"),
+        "rep_count": summary.get("rep_count"),
+        "warmup": istruct.get("warmup"),
+        "cooldown": istruct.get("cooldown"),
+        "reps": reps or None,
+        "avg_work_pace": summary.get("avg_work_pace"),
+        "avg_work_duration": summary.get("avg_work_duration"),
+        "avg_rest_duration": summary.get("avg_rest_duration"),
+        "work_to_rest_ratio": summary.get("work_to_rest_ratio"),
+        "consistency": summary.get("consistency_score"),
+        # rep_pace_consistency_cv == work_speed_cv == work_duration_cv: keep one.
+        "rep_variation_cv": summary.get("work_speed_cv"),
+        "first_vs_last_fade": kpis.get("first_vs_last_fade"),
+        "avg_hr_recovery_bpm": summary.get("avg_hr_recovery_bpm"),
+        "recovery_quality_per_60s": kpis.get("recovery_quality_per_60s"),
+        "total_work_time": summary.get("total_work_time"),
+        "total_rest_time": summary.get("total_rest_time"),
+        "total_z4_plus": kpis.get("total_z4_plus"),
+    }
+    metrics.pop("interval_structure", None)
+    metrics.pop("interval_kpis", None)
+    metrics["interval_read"] = {k: v for k, v in interval_read.items() if v is not None}
+
+
+def _refine_readiness(right_now: Dict[str, Any]) -> None:
+    """Keep the readiness VERDICT (condition/trend + a ramp flag only when aggressive) and
+    drop the arbitrary-scale EWMA numbers (fitness/fatigue/form/ramp_rate/sample_count) that
+    a coach can only narrate wrongly. The verdict strings are passed through verbatim."""
+    r = right_now.get("readiness")
+    if not isinstance(r, dict):
+        return
+    kept: Dict[str, Any] = {}
+    for key in ("condition", "trend"):
+        if r.get(key) is not None:
+            kept[key] = r[key]
+    if r.get("ramp_aggressive"):
+        kept["ramp_aggressive"] = True
+    right_now["readiness"] = kept
+
+
+def _refine_recent_weeks(recent_weeks: Any) -> None:
+    """Per-session `avg_hr` inside recent_weeks arrives as a raw bpm float ("115.1");
+    render it as plain bpm for consistency with the rest of the pack (the per-session
+    `intensity` label already carries the effort read, so no % of max is needed here)."""
+    if not isinstance(recent_weeks, dict):
+        return
+    for window in ("this_week", "last_week"):
+        w = recent_weeks.get(window)
+        if not isinstance(w, dict):
+            continue
+        for day in w.get("days") or []:
+            for act in (day.get("activities") if isinstance(day, dict) else None) or []:
+                if isinstance(act, dict) and act.get("avg_hr") is not None:
+                    act["avg_hr"] = u.bpm(act["avg_hr"])
+
+
+def _refine_training_history(th: Any) -> None:
+    if not isinstance(th, dict):
+        return
+    traits = th.get("traits")
+    if isinstance(traits, dict):
+        # Two "current vs peak" numbers (distance + load) are confusable; name the
+        # distance one so it cannot be read as the load one.
+        if "current_vs_peak_pct" in traits:
+            traits["current_vs_peak_distance_pct"] = traits.pop("current_vs_peak_pct")
+        # `no_norm` is an internal sentinel; show nothing rather than an opaque token.
+        if traits.get("trajectory_direction") == "no_norm":
+            traits.pop("trajectory_direction", None)
+            traits.pop("trajectory_pct", None)
+    for period in th.get("timeline") or []:
+        if isinstance(period, dict):
+            # run_share_pct duplicates by_type[type=Run].share_pct.
+            period.pop("run_share_pct", None)
+
+
+def _drop_empty_our_thread(pack: Dict[str, Any]) -> None:
+    """our_thread holds only an empty adherence when the relationship inputs are gated off
+    (prod: longitudinal/continuity). The real open threads live in the_runner.memory.lately,
+    so an empty our_thread just sends the coach to an empty room — drop the whole group."""
+    ot = pack.get("our_thread")
+    if not isinstance(ot, dict):
+        return
+    adh = ot.get("adherence")
+    adh_empty = adh is None or (
+        isinstance(adh, dict) and not adh.get("outcomes") and not adh.get("prior_report_date")
+    )
+    others = any(k != "adherence" for k in ot)
+    if adh_empty and not others:
+        pack.pop("our_thread", None)
+
+
+def coach_llm_view(pack_dict: Dict[str, Any], prompt_id: Optional[str], *, mode: str = "fuller") -> Dict[str, Any]:
+    """The single outgoing-LLM view of the pack, shared by the report and chat seams.
+
+    Composes the gated one-way transforms in order: frame the leaves (Slice 4), apply the
+    completed coach view (Slice 5), then drop the fuller-only `salience` routing section.
+    Every step is a no-op for a prompt that does not carry its gate, so the flat/prior packs
+    are byte-identical. Never mutates `pack_dict`."""
+    view = frame_pack(pack_dict) if is_metrics_coach_framed_prompt(prompt_id) else pack_dict
+    if is_pack_coach_view_prompt(prompt_id):
+        view = refine_coach_view(view)
+    if mode != "opener" and is_salience_dropped_prompt(prompt_id) and "salience" in view:
+        view = {k: v for k, v in view.items() if k != "salience"}
+    return view

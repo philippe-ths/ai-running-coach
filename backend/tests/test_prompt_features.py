@@ -225,6 +225,7 @@ EXPECTED_CAPABILITIES = {
         F.INTENSITY_MIX,
         F.METRICS_COACH_FRAMED,
         F.SALIENCE_DROPPED,
+        F.PACK_COACH_VIEW,
     },
 }
 
@@ -265,6 +266,7 @@ def test_derived_sets_equal_manifest_views():
     assert prompts.MEMORY_PROMPT_IDS == ids_with(F.MEMORY)
     assert prompts.METRICS_COACH_FRAMED_PROMPT_IDS == ids_with(F.METRICS_COACH_FRAMED)
     assert prompts.SALIENCE_DROPPED_PROMPT_IDS == ids_with(F.SALIENCE_DROPPED)
+    assert prompts.PACK_COACH_VIEW_PROMPT_IDS == ids_with(F.PACK_COACH_VIEW)
 
 
 def test_memory_feature_is_active_on_v13():
@@ -377,8 +379,9 @@ def test_derived_sets_match_captured_membership():
     assert prompts.RECENT_WEEKS_PROMPT_IDS == {GROUPED2, GROUPED3, GROUPED4, GROUPED5}
     # Slice 4: grouped_v4/v5 carry the metrics-coach-framed view flag.
     assert prompts.METRICS_COACH_FRAMED_PROMPT_IDS == {GROUPED4, GROUPED5}
-    # Slice 5: grouped_v5 is the sole carrier of the salience-dropped view flag (the flip target).
+    # Slice 5: grouped_v5 is the sole carrier of the salience-dropped + coach-view flags (the flip target).
     assert prompts.SALIENCE_DROPPED_PROMPT_IDS == {GROUPED5}
+    assert prompts.PACK_COACH_VIEW_PROMPT_IDS == {GROUPED5}
 
 
 def test_predicates_agree_with_has_feature():
@@ -399,6 +402,7 @@ def test_predicates_agree_with_has_feature():
         assert prompts.is_intensity_mix_prompt(pid) == has_feature(pid, F.INTENSITY_MIX)
         assert prompts.is_metrics_coach_framed_prompt(pid) == has_feature(pid, F.METRICS_COACH_FRAMED)
         assert prompts.is_salience_dropped_prompt(pid) == has_feature(pid, F.SALIENCE_DROPPED)
+        assert prompts.is_pack_coach_view_prompt(pid) == has_feature(pid, F.PACK_COACH_VIEW)
 
 
 def test_opener_prompts_cover_exactly_two_stage_ids():
@@ -428,6 +432,7 @@ def test_fullest_message_prompt_is_the_max_capability_id():
     ALTERNATIVE_FEATURES = {
         F.READINESS, F.RECENT_WEEKS, F.TRAINING_HISTORY_2WK,
         F.INTENSITY_READ, F.INTENSITY_MIX, F.METRICS_COACH_FRAMED, F.SALIENCE_DROPPED,
+        F.PACK_COACH_VIEW,
     }
     max_additive = max(len(set(f) - ALTERNATIVE_FEATURES) for f in PROMPT_FEATURES.values())
     assert len(set(PROMPT_FEATURES[fullest]) - ALTERNATIVE_FEATURES) == max_additive

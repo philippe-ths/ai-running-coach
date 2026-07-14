@@ -33,7 +33,7 @@ from app.schemas.coach_context import CoachContextPack, ContinuityContext
 from app.services.coach.budget import over_budget as budget_over, record as budget_record
 from app.services.coach.memory_update import enqueue_memory_update
 from app.services.coach.context import build_context_pack
-from app.services.coach.coach_framing import frame_pack
+from app.services.coach.coach_framing import coach_llm_view
 from app.services.coach.digest import build_report_digest
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.output_contract import (
@@ -52,8 +52,6 @@ from app.services.coach.prompts import (
     TWO_STAGE_PROMPT_IDS,
     build_system_prompt,
     is_grouped_pack_prompt,
-    is_metrics_coach_framed_prompt,
-    is_salience_dropped_prompt,
 )
 from app.services.coach.prompt_features import PromptFeature, has_feature
 from app.services.coach.receipt_voice import voice_fingerprint
@@ -148,11 +146,7 @@ def _llm_pack_message(pack_dict: dict, prompt_id: Optional[str], *, mode: str = 
       safety force reads the canonical object, so the fuller loses only dead weight. Fuller-
       only so the opener view (which the opener prose reads) stays intact under a two-stage
       cadence; prod's receipt cadence runs no opener, so in prod salience is gone entirely."""
-    view = frame_pack(pack_dict) if is_metrics_coach_framed_prompt(prompt_id) else pack_dict
-    if mode != "opener" and is_salience_dropped_prompt(prompt_id) and "salience" in view:
-        # Shallow copy without the top-level `salience` key; never mutate the stored dict.
-        view = {k: v for k, v in view.items() if k != "salience"}
-    return json.dumps(view, default=str)
+    return json.dumps(coach_llm_view(pack_dict, prompt_id, mode=mode), default=str)
 
 
 def is_two_stage_prompt(prompt_id: str) -> bool:

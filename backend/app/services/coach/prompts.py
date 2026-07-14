@@ -1348,6 +1348,12 @@ METRICS_COACH_FRAMED_PROMPT_IDS = ids_with(PromptFeature.METRICS_COACH_FRAMED)
 # is unchanged. Salience steered only the LLM opener, which prod's receipt cadence never runs.
 SALIENCE_DROPPED_PROMPT_IDS = ids_with(PromptFeature.SALIENCE_DROPPED)
 
+# ADR 0026 Slice 5 (#682): prompt ids whose outgoing LLM view gets the COMPLETED coach
+# reshape (readiness verdict-only, recent_weeks bpm, one `interval_read`, plan-less
+# workout_match/hr_drift/training-history dupes/empty our_thread cleaned). A view-only flag
+# over the grouped pack; the stored/canonical pack, validator, tiering, and eval are unchanged.
+PACK_COACH_VIEW_PROMPT_IDS = ids_with(PromptFeature.PACK_COACH_VIEW)
+
 
 def is_corpus_prompt(prompt_id: Optional[str]) -> bool:
     """True when the active prompt is corpus-aware (P1.2+): it carries the corpus
@@ -1474,6 +1480,16 @@ def is_salience_dropped_prompt(prompt_id: Optional[str]) -> bool:
     is unchanged, so the fuller loses only dead weight. A view-only flag (like metrics-coach-
     framing); false for every prior prompt, which keeps salience in the pack byte-stably."""
     return has_feature(prompt_id, PromptFeature.SALIENCE_DROPPED)
+
+
+def is_pack_coach_view_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt's outgoing LLM view gets the ADR 0026 Slice 5 (#682)
+    COMPLETED coach reshape: readiness reduced to its verdict, recent_weeks HRs as plain bpm,
+    the four overlapping interval blocks collapsed to one `interval_read`, the plan-less
+    `workout_match` and the duplicated `hr_drift` dropped, the training-history sentinel/dupes
+    cleaned, and an empty `our_thread` removed. A one-way view over the canonical pack (like
+    metrics-coach-framing); false for every prior prompt, which reads the raw shape byte-stably."""
+    return has_feature(prompt_id, PromptFeature.PACK_COACH_VIEW)
 
 
 def is_readiness_prompt(prompt_id: Optional[str]) -> bool:
