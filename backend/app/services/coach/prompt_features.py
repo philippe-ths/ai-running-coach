@@ -48,6 +48,7 @@ class PromptFeature(Enum):
     INTENSITY = "intensity"            # #578 deterministic intensity-distribution-and-trend section
     READINESS = "readiness"            # ADR 0026 Slice 2 (#670): `right_now.readiness` (renamed training_load)
     RECENT_WEEKS = "recent_weeks"      # ADR 0026 Slice 2 (#670): merged day-resolved `right_now.recent_weeks`
+    TRAINING_HISTORY_2WK = "training_history_2wk"  # ADR 0026 Slice 2 (#670): `training_history` ladder rebased after the 2-week recent_weeks window (enriched: by_type + load + dates)
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -236,9 +237,12 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
     # ADR 0026 Slice 2 (#670) — coach_message_lean_grouped_v2 is the grouped prompt whose
     # `right_now` group carries the REDEFINED content: TRAINING_LOAD -> READINESS (a keyed
     # rename) and VOLUME + RECENT_TRAINING -> RECENT_WEEKS (the merged day-resolved read).
-    # It carries every OTHER grouped_v1 capability unchanged, so only the two overlap
-    # swamps move; under it the three old `right_now` sections drop and the two new ones
-    # appear. Every prior prompt keeps the old three (byte-stable). Ships INERT.
+    # PR 2 additionally redefines `the_runner.training_history`: TRAINING_HISTORY ->
+    # TRAINING_HISTORY_2WK (the SAME section, its ladder rebased to begin after the 2-week
+    # recent_weeks window instead of the retired 60d recent_training window, and enriched).
+    # It carries every OTHER grouped_v1 capability unchanged; under it the three old
+    # `right_now` sections + the 60d training-history ladder drop and their redefined
+    # replacements appear. Every prior prompt keeps the originals (byte-stable). Ships INERT.
     "coach_message_lean_grouped_v2": frozenset(
         {
             _F.TWO_STAGE,
@@ -249,7 +253,7 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.USER_MATERIALS,
             _F.RECENT_WEEKS,
             _F.STREAM_VIEW,
-            _F.TRAINING_HISTORY,
+            _F.TRAINING_HISTORY_2WK,
             _F.MEMORY,
             _F.INTENSITY,
         }

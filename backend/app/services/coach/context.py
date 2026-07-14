@@ -277,7 +277,14 @@ def build_context_pack(
         readiness=gather(_READINESS_SIGNAL, db, activity, prompt_id, as_of),
         recent_weeks=gather(_RECENT_WEEKS_SIGNAL, db, activity, prompt_id, as_of),
         # #561 multi-year training-history picture (LOD volume ladder + durability traits).
-        training_history=gather(_TRAINING_HISTORY_SIGNAL, db, activity, prompt_id, as_of),
+        # ADR 0026 Slice 2 (#670): EITHER the original 60d ladder (every prior prompt) OR
+        # the rebased-after-recent_weeks 14d ladder (grouped_v2), never both — the two
+        # signals are mutually exclusive by prompt feature, so one abstains (None) and the
+        # `or` selects the other into the ONE `training_history` pack key.
+        training_history=(
+            gather(_TRAINING_HISTORY_SIGNAL, db, activity, prompt_id, as_of)
+            or gather(_TRAINING_HISTORY_2WK_SIGNAL, db, activity, prompt_id, as_of)
+        ),
         # ADR 0025 runner memory profile (stored-artifact read, memory-aware prompt only).
         memory=gather(_MEMORY_SIGNAL, db, activity, prompt_id, as_of),
         # #578 intensity distribution + trend (read-time scan, intensity-aware prompt only).
@@ -569,6 +576,29 @@ def _build_training_history_context(
 
     `COACH_TRAINING_HISTORY_ENABLED` (#561) is an independent operator off-switch:
     when False the section is dropped without a full prompt rollback."""
+    return _training_history_section(db, activity, recent_weeks_bound=False)
+
+
+def _build_training_history_2wk_context(
+    db: Session, activity: Activity, as_of: datetime
+) -> Optional[TrainingHistoryContext]:
+    """ADR 0026 Slice 2 (#670): the REBASED `training_history` pack section, or None.
+
+    Identical to `_build_training_history_context` (same wide fetch, same abstention, same
+    `COACH_TRAINING_HISTORY_ENABLED` off-switch) except the ladder begins after the 2-week
+    `recent_weeks` window instead of the retired 60d `recent_training` window, and each
+    bucket is enriched with a modality-agnostic weekly LOAD rate, a per-type split, and
+    calendar bounds. Gated on `TRAINING_HISTORY_2WK` via the seam, carried ONLY by the
+    grouped_v2 prompt (INSTEAD of `TRAINING_HISTORY`), so exactly one training-history
+    signal ever fires and every prior prompt keeps the 60d ladder byte-identically."""
+    return _training_history_section(db, activity, recent_weeks_bound=True)
+
+
+def _training_history_section(
+    db: Session, activity: Activity, *, recent_weeks_bound: bool
+) -> Optional[TrainingHistoryContext]:
+    """Shared body for the two training-history signals: the wide summary-only history
+    fetch + off-switch, dispatching to the original or the rebased/enriched ladder."""
     if not settings.COACH_TRAINING_HISTORY_ENABLED:
         return None
     local_day = activity.local_start.date()
@@ -578,7 +608,7 @@ def _build_training_history_context(
         local_day + timedelta(days=1),
         user_id=activity.user_id,
     )
-    return build_training_history(facts, local_day)
+    return build_training_history(facts, local_day, recent_weeks_bound=recent_weeks_bound)
 
 
 # The fetch span for the intensity scan: the 28-day recent window plus its equal prior
@@ -1444,6 +1474,14 @@ _RECENT_WEEKS_SIGNAL = ReadTimeSignal(
 _TRAINING_HISTORY_SIGNAL = ReadTimeSignal(
     "training_history", _build_training_history_context, PromptFeature.TRAINING_HISTORY
 )
+# ADR 0026 Slice 2 (#670): the rebased/enriched training-history ladder for grouped_v2.
+# Mutually exclusive with _TRAINING_HISTORY_SIGNAL by prompt feature; the assembler `or`s
+# the two into the ONE `training_history` pack key.
+_TRAINING_HISTORY_2WK_SIGNAL = ReadTimeSignal(
+    "training_history_2wk",
+    _build_training_history_2wk_context,
+    PromptFeature.TRAINING_HISTORY_2WK,
+)
 _MEMORY_SIGNAL = ReadTimeSignal("memory", _build_memory_context, PromptFeature.MEMORY)
 _INTENSITY_SIGNAL = ReadTimeSignal(
     "intensity", _build_intensity_context, PromptFeature.INTENSITY
@@ -1464,6 +1502,7 @@ READ_TIME_SIGNALS: Dict[str, ReadTimeSignal] = {
         _READINESS_SIGNAL,
         _RECENT_WEEKS_SIGNAL,
         _TRAINING_HISTORY_SIGNAL,
+        _TRAINING_HISTORY_2WK_SIGNAL,
         _MEMORY_SIGNAL,
         _INTENSITY_SIGNAL,
     )

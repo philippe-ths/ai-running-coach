@@ -1246,9 +1246,15 @@ STREAM_VIEW_PROMPT_IDS = ids_with(PromptFeature.STREAM_VIEW)
 # context-pack section (gates _build_recent_training_context).
 RECENT_TRAINING_PROMPT_IDS = ids_with(PromptFeature.RECENT_TRAINING)
 
-# Prompt ids that carry the #561 training-history addendum AND the `training_history`
-# context-pack section (gates _build_training_history_context).
+# Prompt ids that carry the #561 training-history addendum AND the ORIGINAL 60d-bounded
+# `training_history` ladder (gates _build_training_history_context).
 TRAINING_HISTORY_PROMPT_IDS = ids_with(PromptFeature.TRAINING_HISTORY)
+
+# ADR 0026 Slice 2 (#670): prompt ids whose `training_history` ladder is REBASED to begin
+# after the 2-week recent_weeks window (and enriched with by_type/load/dates) — gates
+# _build_training_history_2wk_context. Mutually exclusive with TRAINING_HISTORY_PROMPT_IDS
+# (grouped_v2 carries this one INSTEAD), so exactly one training-history signal ever fires.
+TRAINING_HISTORY_2WK_PROMPT_IDS = ids_with(PromptFeature.TRAINING_HISTORY_2WK)
 
 # Prompt ids that carry the runner-memory addendum AND the `memory` context-pack
 # section (ADR 0025). Empty until M3 attaches PromptFeature.MEMORY to
@@ -1330,6 +1336,15 @@ def is_training_history_prompt(prompt_id: Optional[str]) -> bool:
     durability traits stay out of the pack (byte-stable under v11 and below) and the
     signal is wholly inert under a rollback."""
     return has_feature(prompt_id, PromptFeature.TRAINING_HISTORY)
+
+
+def is_training_history_2wk_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt carries the ADR 0026 Slice 2 rebased `training_history`
+    ladder (grouped_v2): the coarse ladder begins after the 2-week recent_weeks window and
+    each bucket is enriched (by_type + load + calendar bounds). Mutually exclusive with
+    `is_training_history_prompt` — grouped_v2 carries this INSTEAD — so exactly one
+    training-history signal fires and every prior prompt keeps the 60d ladder byte-stable."""
+    return has_feature(prompt_id, PromptFeature.TRAINING_HISTORY_2WK)
 
 
 def is_memory_prompt(prompt_id: Optional[str]) -> bool:
