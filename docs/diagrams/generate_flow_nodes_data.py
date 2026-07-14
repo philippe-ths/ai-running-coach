@@ -39,21 +39,29 @@ from app.models import Activity, CoachReport, ActivityStream, UserProfile  # noq
 from app.models import CoachingRelationship, Block  # noqa: E402
 from app.services.analysis.classifier import Classification, playbook_key  # noqa: E402
 from app.services.analysis.smoothing import smooth_cadence  # noqa: E402
+from app.services.coach.coach_framing import coach_llm_view  # noqa: E402
 from app.services.coach.context import build_context_pack  # noqa: E402
-from app.services.coach.prompts import build_system_prompt  # noqa: E402
+from app.services.coach.prompts import build_system_prompt, is_grouped_pack_prompt  # noqa: E402
 from app.services.coach.service import (  # noqa: E402
     _resolve_stance_for_activity,
     _resolve_voice_for_activity,
 )
 
 # Default to the live prod prompt so the diagram is a one-to-one picture of what the
-# coach actually receives in production. Prod flipped to coach_message_lean_v1 on
-# 2026-07-07 (the disposition-first ground-up rewrite): it carries the SAME twelve
-# capabilities as coach_message_v14 (prompt-feature parity), so it receives the
-# IDENTICAL context pack — only the SYSTEM_PROMPT text differs (radically shorter).
-# pack.memory is absent only when the runner has no graduated runner_memory profile
-# yet (cold start drops the section).
-PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_lean_v1")
+# coach actually receives in production. Prod flipped to coach_message_lean_grouped_v5
+# on 2026-07-14 (the ADR 0026 finale): the SAME canonical pack as lean_v1, but served
+# GROUPED into the five coaching-question groups through the completed coach-native LLM
+# view (coach units, one merged intensity_read + interval_read, readiness verdict-only,
+# salience dropped from the fuller view). So DATA.pack captures the flat canonical
+# SUBSTRATE (to_serializable_dict — what the read-time builders compute and store, and
+# what the flat pack nodes render), while DATA.llm_view captures the ACTUAL grouped
+# message the model receives (coach_llm_view over to_grouped_dict), shown at the llm
+# node. Under grouped_v5 the flat substrate itself already carries the grouped-era
+# sections (readiness / recent_weeks / intensity_read / intensity_mix) and drops the
+# flat originals they replace (training_load / training_volume / recent_training /
+# perceived_effort / calibration / intensity). pack.memory is absent only when the
+# runner has no graduated runner_memory profile yet (cold start drops the section).
+PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_lean_grouped_v5")
 TARGET = Path(__file__).parent / "flow-nodes.js"
 
 # DerivedMetric columns the diagram shows (order = render order; excludes id / fks /
@@ -194,6 +202,17 @@ def build_data(db):
     except Exception:
         stance_note = "resolved at generation time"
     pack = build_context_pack(db, activity, prompt_id=PROMPT_ID, stance=stance)
+    # The ACTUAL message the model receives: for a grouped prompt (prod's grouped_v5)
+    # this is the five-group envelope passed through the completed coach-native view
+    # (coach units + interval_read/intensity merges + readiness verdict-only + the
+    # fuller salience drop); for a flat prompt it is the flat coach view. Mirrors the
+    # service seam service._llm_pack_message so the diagram's llm node is byte-faithful
+    # to production, distinct from DATA.pack (the flat canonical substrate).
+    llm_pack_dict = (
+        pack.to_grouped_dict() if is_grouped_pack_prompt(PROMPT_ID)
+        else pack.to_serializable_dict()
+    )
+    llm_view = coach_llm_view(llm_pack_dict, PROMPT_ID)
     classification = Classification.from_metrics(metrics)
     system_prompt = build_system_prompt(PROMPT_ID, playbook_key(activity, classification), voice=voice)
 
@@ -220,6 +239,8 @@ def build_data(db):
             "captured": date.today().isoformat(),
         },
         "pack": pack.to_serializable_dict(),
+        "llm_view": llm_view,
+        "grouped": is_grouped_pack_prompt(PROMPT_ID),
         "derived": _derived(metrics),
         "report": rep.report if rep else None,
         "streams": _streams(db, activity.id),
@@ -289,9 +310,11 @@ def main():
     print(f"regenerated flow-nodes.js from activity {activity.id} ({activity.name})")
     def _has(k):
         return "YES" if k in pack_sections else "no"
-    print(f"  prompt_id={PROMPT_ID}  pack sections={len(pack_sections)}  "
-          f"training_volume={_has('training_volume')}  "
-          f"stream_view={_has('stream_view')}  recent_training={_has('recent_training')}")
+    llm_sections = list(data["llm_view"].keys())
+    print(f"  prompt_id={PROMPT_ID}  grouped={data['grouped']}  flat pack sections={len(pack_sections)}  "
+          f"readiness={_has('readiness')} recent_weeks={_has('recent_weeks')} "
+          f"intensity_read={_has('intensity_read')} stream_view={_has('stream_view')}")
+    print(f"  llm_view top-level keys ({len(llm_sections)}): {llm_sections}")
     print(f"  system prompt: {len(system_prompt):,} chars")
 
 

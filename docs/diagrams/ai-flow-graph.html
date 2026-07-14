@@ -408,6 +408,22 @@ const NODE_ACTIVE = {
   p_adherence:    () => !!(P.adherence && _len(P.adherence.outcomes)),
   p_salience:     () => !!(P.salience && (_len(P.salience.novelty && P.salience.novelty.first_of_kind) || (P.salience.safety_override && P.salience.safety_override.force_fuller))),
   p_continuity:   () => !!(P.continuity && (P.continuity.opener_message || P.continuity.reply)),
+  // ADR 0026: the OLD flat sections a grouped-pack prompt REPLACES with merged reads —
+  // active only in a flat-prompt capture (present); greyed under a grouped capture where
+  // they are dropped in favour of readiness / recent_weeks / intensity_read / intensity_mix.
+  p_training_load:   () => !!P.training_load,
+  p_training_volume: () => !!P.training_volume,
+  p_recent_training: () => !!P.recent_training,
+  p_perceived:       () => !!P.perceived_effort,
+  p_calibration:     () => !!P.calibration,
+  p_intensity:       () => !!P.intensity,
+  // ...and the grouped-era sections themselves — active only when present (a grouped
+  // capture); p_referral is present only when a red-flag pattern fires, so it greys otherwise.
+  p_readiness:       () => !!P.readiness,
+  p_recent_weeks:    () => !!P.recent_weeks,
+  p_intensity_read:  () => !!P.intensity_read,
+  p_intensity_mix:   () => !!P.intensity_mix,
+  p_referral:        () => !!P.referral,
   // system-prompt injections — active when the block is actually present in SYSTEM_PROMPT
   playbook:       () => /\n[A-Z][A-Z ]+FOCUS:/.test(SYSTEM_PROMPT),
   voice_block:    () => SYSTEM_PROMPT.indexOf('YOUR VOICE FOR THIS RUNNER') !== -1,
