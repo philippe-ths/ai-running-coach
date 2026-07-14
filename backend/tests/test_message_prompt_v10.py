@@ -40,6 +40,7 @@ def test_v10_registered_carries_every_v9_capability_plus_stream_view():
         "coach_message_lean_grouped_v1",
         "coach_message_lean_grouped_v2",  # ADR 0026 Slice 2 keeps STREAM_VIEW
         "coach_message_lean_grouped_v3",  # ADR 0026 Slice 3 keeps STREAM_VIEW
+        "coach_message_lean_grouped_v4",  # ADR 0026 Slice 4 keeps STREAM_VIEW
     }
     assert V10 in _OPENER_PROMPTS  # has a distinct opener form (two-stage)
     # same schema family as v9 (so v10 reports regenerate, prior history retained).

@@ -33,6 +33,7 @@ from app.schemas.coach_context import CoachContextPack, ContinuityContext
 from app.services.coach.budget import over_budget as budget_over, record as budget_record
 from app.services.coach.memory_update import enqueue_memory_update
 from app.services.coach.context import build_context_pack
+from app.services.coach.coach_framing import frame_pack
 from app.services.coach.digest import build_report_digest
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.output_contract import (
@@ -51,6 +52,7 @@ from app.services.coach.prompts import (
     TWO_STAGE_PROMPT_IDS,
     build_system_prompt,
     is_grouped_pack_prompt,
+    is_metrics_coach_framed_prompt,
 )
 from app.services.coach.prompt_features import PromptFeature, has_feature
 from app.services.coach.receipt_voice import voice_fingerprint
@@ -130,6 +132,16 @@ _FALLBACK_MESSAGE = (
 _FALLBACK_OPENER_MESSAGE = (
     "Nice work getting that run in. I'll take a proper look and follow up shortly."
 )
+
+
+def _llm_pack_message(pack_dict: dict, prompt_id: Optional[str]) -> str:
+    """Serialize the pack for the outgoing LLM message. Under a metrics-coach-framed
+    prompt (ADR 0026 Slice 4, #680) the leaf VALUES are reframed to coach-native units
+    for the LLM view; the caller still STORES the canonical `pack_dict` (framing is a
+    one-way, lossy view, so the stored/re-parsed pack stays typed). Byte-identical to the
+    prior `json.dumps(pack_dict, default=str)` for every non-framed prompt."""
+    view = frame_pack(pack_dict) if is_metrics_coach_framed_prompt(prompt_id) else pack_dict
+    return json.dumps(view, default=str)
 
 
 def is_two_stage_prompt(prompt_id: str) -> bool:
@@ -382,7 +394,7 @@ async def get_or_generate_coach_report(
     system_prompt = build_system_prompt(
         prompt_id, playbook_key(activity, classification), voice=voice, pack=pack
     )
-    user_message = json.dumps(pack_dict, default=str)
+    user_message = _llm_pack_message(pack_dict, prompt_id)
 
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY,
@@ -488,7 +500,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     # voice.
     voice = _resolve_voice_for_activity(db, activity)
     system_prompt = build_system_prompt(prompt_id, mode="opener", voice=voice, pack=pack)
-    user_message = json.dumps(pack_dict, default=str)
+    user_message = _llm_pack_message(pack_dict, prompt_id)
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
     )
@@ -595,7 +607,7 @@ async def generate_fuller(
     system_prompt = build_system_prompt(
         prompt_id, playbook_key(activity, classification), mode="fuller", voice=voice, pack=pack
     )
-    user_message = json.dumps(pack_dict, default=str)
+    user_message = _llm_pack_message(pack_dict, prompt_id)
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
     )

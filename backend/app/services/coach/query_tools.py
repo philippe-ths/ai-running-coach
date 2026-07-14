@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models import Activity
 from app.models.derived_metric import DerivedMetric
+from app.services.coach import coach_units
 from app.services.analysis.splits import calculate_splits
 from app.services.coach.recent_training import _interval_shape
 from app.services.coach.volume import build_volume_report
@@ -168,27 +169,20 @@ def _resolve_type_filter(type_filter: Optional[str], db: Session, owner_user_id)
 
 # --- coach-framing helpers ---------------------------------------------------
 
+# The coach-framing conventions live in the shared `coach_units` module (ADR 0026
+# Slice 4, #680) so these tools and the report context pack (`coach_framing`) render
+# every fact identically. These thin wrappers keep the local call sites readable.
 def _km(distance_m: Optional[float]) -> Optional[float]:
-    return round(distance_m / 1000, 2) if distance_m else None
+    return coach_units.km(distance_m)
 
 
 def _duration(seconds: Optional[float]) -> Optional[str]:
-    if not seconds:
-        return None
-    s = int(seconds)
-    h, rem = divmod(s, 3600)
-    m, _ = divmod(rem, 60)
-    return f"{h}h{m:02d}m" if h else f"{m}m"
+    return coach_units.duration(seconds)
 
 
 def _pace(distance_m: Optional[float], moving_time_s: Optional[float]) -> Optional[str]:
-    """Average pace as min:sec/km, or None when it cannot be computed."""
-    if not distance_m or not moving_time_s or distance_m <= 0:
-        return None
-    sec_per_km = moving_time_s / (distance_m / 1000)
-    mins = int(sec_per_km // 60)
-    secs = int(sec_per_km % 60)
-    return f"{mins}:{secs:02d}"
+    """Average pace as 'm:ss/km', or None when it cannot be computed."""
+    return coach_units.pace(distance_m, moving_time_s)
 
 
 def _as_uuid(value) -> Optional[uuid.UUID]:
@@ -333,7 +327,7 @@ def get_session_detail(db: Session, owner_user_id, *, activity_id: str, today: d
         "avg_pace_per_km": _pace(activity.distance_m, activity.moving_time_s),
         "effort": m.effort if m else None,
         "effort_score": round(m.effort_score, 1) if m and m.effort_score is not None else None,
-        "avg_hr": activity.avg_hr,
+        "avg_hr": coach_units.bpm(activity.avg_hr),
         "avg_cadence_spm": round(activity.avg_cadence) if activity.avg_cadence else None,
         "hr_drift_pct": round(m.hr_drift, 1) if m and m.hr_drift is not None else None,
         "structure": m.structure if m else None,
@@ -343,11 +337,7 @@ def get_session_detail(db: Session, owner_user_id, *, activity_id: str, today: d
 
 
 def _fmt_seconds_per_km(sec_per_km: Optional[float]) -> Optional[str]:
-    if not sec_per_km or sec_per_km <= 0:
-        return None
-    mins = int(sec_per_km // 60)
-    secs = int(sec_per_km % 60)
-    return f"{mins}:{secs:02d}"
+    return coach_units.pace_from_sec_per_km(sec_per_km)
 
 
 def get_training_summary(
