@@ -54,6 +54,9 @@ class ActivityFact:
         # #650: session shape, projected ONLY when a caller opts in
         # (include_session_shape); None otherwise, so the wide/10-year scans stay lean.
         "structure", "interval_structure", "duration_class",
+        # ADR 0026 Slice 2 (#670): within-run cardiac drift for the recent_weeks per-
+        # session read, projected under the same opt-in; None on the lean scans.
+        "hr_drift",
     )
 
     def __init__(self, activity: Activity):
@@ -91,6 +94,9 @@ class ActivityFact:
         self.duration_class: Optional[str] = (
             activity.metrics.duration_class if activity.metrics else None
         )
+        self.hr_drift: Optional[float] = (
+            activity.metrics.hr_drift if activity.metrics else None
+        )
 
     @classmethod
     def from_row(cls, row) -> "ActivityFact":
@@ -123,6 +129,7 @@ class ActivityFact:
         self.structure = getattr(row, "structure", None)
         self.interval_structure = getattr(row, "interval_structure", None)
         self.duration_class = getattr(row, "duration_class", None)
+        self.hr_drift = getattr(row, "hr_drift", None)
         return self
 
     @property
@@ -489,6 +496,7 @@ def _query_activity_facts(
                     DerivedMetric.structure,
                     DerivedMetric.interval_structure,
                     DerivedMetric.duration_class,
+                    DerivedMetric.hr_drift,
                 )
                 if include_session_shape
                 else ()

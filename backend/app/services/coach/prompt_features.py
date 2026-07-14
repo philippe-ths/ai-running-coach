@@ -46,6 +46,8 @@ class PromptFeature(Enum):
     TRAINING_HISTORY = "training_history"  # #561 multi-year LOD volume ladder + durability traits
     MEMORY = "memory"                  # runner memory profile section (ADR 0025); attached to coach_message_v13 in M3
     INTENSITY = "intensity"            # #578 deterministic intensity-distribution-and-trend section
+    READINESS = "readiness"            # ADR 0026 Slice 2 (#670): `right_now.readiness` (renamed training_load)
+    RECENT_WEEKS = "recent_weeks"      # ADR 0026 Slice 2 (#670): merged day-resolved `right_now.recent_weeks`
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -231,6 +233,27 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.INTENSITY,
         }
     ),
+    # ADR 0026 Slice 2 (#670) — coach_message_lean_grouped_v2 is the grouped prompt whose
+    # `right_now` group carries the REDEFINED content: TRAINING_LOAD -> READINESS (a keyed
+    # rename) and VOLUME + RECENT_TRAINING -> RECENT_WEEKS (the merged day-resolved read).
+    # It carries every OTHER grouped_v1 capability unchanged, so only the two overlap
+    # swamps move; under it the three old `right_now` sections drop and the two new ones
+    # appear. Every prior prompt keeps the old three (byte-stable). Ships INERT.
+    "coach_message_lean_grouped_v2": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.READINESS,
+            _F.USER_MATERIALS,
+            _F.RECENT_WEEKS,
+            _F.STREAM_VIEW,
+            _F.TRAINING_HISTORY,
+            _F.MEMORY,
+            _F.INTENSITY,
+        }
+    ),
 }
 
 
@@ -247,6 +270,10 @@ RUNNER_FACING_FEATURES: frozenset[PromptFeature] = frozenset(
         PromptFeature.TRAINING_LOAD,
         PromptFeature.USER_MATERIALS,
         PromptFeature.VOLUME,
+        # ADR 0026 Slice 2 (#670): the redefined right_now content is runner-facing too —
+        # readiness replaces training_load, recent_weeks replaces volume.
+        PromptFeature.READINESS,
+        PromptFeature.RECENT_WEEKS,
     }
 )
 

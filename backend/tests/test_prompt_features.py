@@ -153,6 +153,23 @@ EXPECTED_CAPABILITIES = {
         F.MEMORY,
         F.INTENSITY,
     },
+    # ADR 0026 Slice 2 (#670) — grouped_v2 redefines the `right_now` content: it REPLACES
+    # TRAINING_LOAD -> READINESS and VOLUME + RECENT_TRAINING -> RECENT_WEEKS, keeping
+    # every other grouped_v1 capability. It is deliberately NOT a superset of grouped_v1
+    # (the two overlap swamps move), so it carries 11 features, not 12.
+    "coach_message_lean_grouped_v2": {
+        F.TWO_STAGE,
+        F.VOICE,
+        F.CORPUS,
+        F.STANCE,
+        F.READINESS,
+        F.USER_MATERIALS,
+        F.RECENT_WEEKS,
+        F.STREAM_VIEW,
+        F.TRAINING_HISTORY,
+        F.MEMORY,
+        F.INTENSITY,
+    },
 }
 
 # Ids that must carry NO capabilities (the inert-under-rollback set).
@@ -199,7 +216,7 @@ def test_memory_feature_is_active_on_v13():
     supersets and carry MEMORY too, #578.)"""
     assert prompts.MEMORY_PROMPT_IDS == {
         "coach_message_v13", "coach_message_v14", "coach_message_lean_v1",
-        "coach_message_lean_grouped_v1",
+        "coach_message_lean_grouped_v1", "coach_message_lean_grouped_v2",
     }
     assert prompts.is_memory_prompt("coach_message_v13") is True
     assert prompts.is_memory_prompt("coach_message_v12") is False
@@ -207,33 +224,38 @@ def test_memory_feature_is_active_on_v13():
 
 def test_derived_sets_match_captured_membership():
     """Belt-and-suspenders: the derived sets equal the explicit captured membership."""
-    # coach_message_lean_v1 (the experiment) and coach_message_lean_grouped_v1 (ADR 0026)
-    # both carry the FULL capability set, so both join every derived set below.
+    # coach_message_lean_v1 (the experiment) and coach_message_lean_grouped_v1 (ADR 0026
+    # Slice 1) both carry the FULL capability set, so both join every derived set below.
+    # coach_message_lean_grouped_v2 (Slice 2, #670) joins only the ADDITIVE sets — it
+    # REPLACES training_load/volume/recent_training with readiness/recent_weeks, so it is
+    # absent from those three sets and is the sole member of the two new ones.
     LEAN = "coach_message_lean_v1"
     GROUPED = "coach_message_lean_grouped_v1"
+    GROUPED2 = "coach_message_lean_grouped_v2"
     assert prompts.TWO_STAGE_PROMPT_IDS == {
         "coach_message_v2", "coach_message_v3", "coach_message_v4",
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
+        "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2,
     }
     assert prompts.VOICE_PROMPT_IDS == {
         "coach_message_v3", "coach_message_v4", "coach_message_v5",
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14", LEAN, GROUPED,
+        "coach_message_v14", LEAN, GROUPED, GROUPED2,
     }
     assert prompts.CORPUS_PROMPT_IDS == {
         "coach_message_v4", "coach_message_v5", "coach_message_v6",
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
-        LEAN, GROUPED,
+        LEAN, GROUPED, GROUPED2,
     }
     assert prompts.STANCE_PROMPT_IDS == {
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
+        "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2,
     }
+    # Slice 2: grouped_v2 REPLACES training_load with readiness, so it is NOT here.
     assert prompts.TRAINING_LOAD_PROMPT_IDS == {
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
@@ -242,25 +264,32 @@ def test_derived_sets_match_captured_membership():
     assert prompts.USER_MATERIALS_PROMPT_IDS == {
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
-        LEAN, GROUPED,
+        LEAN, GROUPED, GROUPED2,
     }
+    # Slice 2: grouped_v2 REPLACES volume + recent_training with recent_weeks, so it is
+    # absent from both of these sets.
     assert prompts.VOLUME_PROMPT_IDS == {
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
         "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
     }
     assert prompts.STREAM_VIEW_PROMPT_IDS == {
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14", LEAN, GROUPED,
+        "coach_message_v14", LEAN, GROUPED, GROUPED2,
     }
     assert prompts.RECENT_TRAINING_PROMPT_IDS == {
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
         LEAN, GROUPED,
     }
     assert prompts.TRAINING_HISTORY_PROMPT_IDS == {
-        "coach_message_v12", "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
+        "coach_message_v12", "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2,
     }
-    assert prompts.MEMORY_PROMPT_IDS == {"coach_message_v13", "coach_message_v14", LEAN, GROUPED}
-    assert prompts.INTENSITY_PROMPT_IDS == {"coach_message_v14", LEAN, GROUPED}
+    assert prompts.MEMORY_PROMPT_IDS == {
+        "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2,
+    }
+    assert prompts.INTENSITY_PROMPT_IDS == {"coach_message_v14", LEAN, GROUPED, GROUPED2}
+    # Slice 2's two new sets: grouped_v2 is their sole member.
+    assert prompts.READINESS_PROMPT_IDS == {GROUPED2}
+    assert prompts.RECENT_WEEKS_PROMPT_IDS == {GROUPED2}
 
 
 def test_predicates_agree_with_has_feature():
@@ -291,10 +320,15 @@ def test_fullest_message_prompt_is_the_max_capability_id():
     max_n = max(len(f) for f in PROMPT_FEATURES.values())
     assert len(PROMPT_FEATURES[fullest]) == max_n
     assert fullest.startswith("coach_message")
-    # It carries EVERY feature any prompt carries (the union), so no gated section is
-    # missed by a guard built under it.
+    # It carries every ADDITIVE feature any prompt carries, so no gated section is missed
+    # by a guard built under it. ADR 0026 Slice 2 (#670) introduces MUTUALLY-EXCLUSIVE
+    # alternatives — READINESS/RECENT_WEEKS REPLACE TRAINING_LOAD/VOLUME/RECENT_TRAINING
+    # under the grouped_v2 prompt — so no single prompt carries the full union; the
+    # fullest carries the pre-Slice-2 (larger) side of each swap. The redefined sections
+    # are guarded by their own Slice-2 tests.
+    ALTERNATIVE_FEATURES = {F.READINESS, F.RECENT_WEEKS}
     every_feature = set().union(*PROMPT_FEATURES.values())
-    assert set(PROMPT_FEATURES[fullest]) == every_feature
+    assert set(PROMPT_FEATURES[fullest]) == every_feature - ALTERNATIVE_FEATURES
 
 
 def test_manifest_ids_are_registered_prompts():

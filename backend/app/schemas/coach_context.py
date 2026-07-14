@@ -858,6 +858,199 @@ class MemoryContext(BaseModel):
     source_report_count: Optional[int] = None
 
 
+# --- ADR 0026 Slice 2 (#670): readiness + recent_weeks ----------------------
+# The `right_now` group's content redesign: `training_load` is renamed `readiness`
+# (identical content, coaching-question name) and `training_volume` + `recent_training`
+# MERGE into one day-resolved `recent_weeks` read on one week model. Both ride the pack
+# as NEW gated sections behind new PromptFeatures (READINESS / RECENT_WEEKS), so under
+# every prior prompt (prod lean_v1, grouped_v1) the old three sections still emit,
+# byte-identically; a new grouped prompt carries the two new features INSTEAD of the
+# three old ones. The two shapes coexist in `RightNow`; only one set serializes per
+# prompt (the Optional-and-drop idiom).
+
+
+class ReadinessContext(BaseModel):
+    """ADR 0026 Slice 2: the runner's current-condition readiness read, RENAMED from
+    `training_load` to the coaching-question key `right_now.readiness`. Byte-for-byte the
+    same content as TrainingLoadContext — our own deterministic EWMA fitness/fatigue/form
+    model computed as of THIS run (so the run is in the acute load). A tier-3
+    deterministic FACT the coach may cite, but it never overrides the run's re-derived
+    DerivedMetric or the safety floor. Emitted ONLY under a readiness-aware prompt id, so
+    the pack stays byte-stable otherwise."""
+    model_config = ConfigDict(extra="forbid")
+
+    fitness: float
+    fatigue: float
+    form: float
+    ramp_rate: float
+    condition: str          # fresh | balanced | fatigued | overreaching | building_baseline
+    trend: str              # building | steady | detraining
+    ramp_aggressive: bool
+    warming_up: bool
+    sample_count: int
+
+
+class RecentWeeksActivity(BaseModel):
+    """ADR 0026 Slice 2: one session inside a recent-weeks day. Carries the SHAPE of the
+    session (type/distance/duration/intensity/structure) plus the honest felt-vs-measured
+    signals the coach reads together — `intensity` is the HR-derived effort axis, `rpe`
+    is how it actually felt (the corrective to an HR band that a stimulant/heat can
+    inflate), `avg_hr` is the raw HR, `load` is the TRIMP-like effort_score. Every field
+    but `type` is Optional and DROPPED from serialization when it does not apply (a
+    no-HR/indoor session, a non-run, a run without a check-in), so a rich outdoor run and
+    a bare indoor ride both stay lean."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    distance_km: Optional[float] = None
+    duration: Optional[str] = None        # H:MM:SS moving time
+    intensity: Optional[str] = None       # HR-derived effort axis (recovery|easy|moderate|tempo|hard)
+    avg_hr: Optional[float] = None
+    rpe: Optional[int] = None             # felt effort, from the check-in
+    load: Optional[float] = None          # == effort_score (TRIMP-like load)
+    elev_gain_m: Optional[float] = None
+    hr_drift: Optional[float] = None      # within-run cardiac drift, HR-bearing runs/rides only
+    structure: Optional[str] = None       # continuous | intervals (runs only)
+    shape: Optional[str] = None           # e.g. "6x800m" (interval runs only)
+    long_run: Optional[bool] = None       # runner-relative long-run verdict, surfaced only when long
+    pain: Optional[int] = None            # check-in pain score, surfaced only when present
+    notes: Optional[str] = None           # bounded check-in notes, surfaced only when present
+
+
+class RecentWeeksDayTotals(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    distance_km: float
+    duration: str
+    load: float
+
+
+class RecentWeeksDay(BaseModel):
+    """ADR 0026 Slice 2: one calendar day of a recent week — rest days INCLUDED (the
+    coach reads the recovery structure, not only the sessions). `rest` marks a day with
+    no activities (and it then carries no `day_totals`); an active day carries its
+    `activities` list and the summed `day_totals`. Both `rest` and `day_totals` drop from
+    serialization when they do not apply."""
+    model_config = ConfigDict(extra="forbid")
+
+    weekday: str                          # Mon .. Sun
+    date: str                             # DD-MM-YY
+    rest: Optional[bool] = None
+    activities: List[RecentWeeksActivity] = []
+    day_totals: Optional[RecentWeeksDayTotals] = None
+
+
+class RecentWeeksTypeTotal(BaseModel):
+    """One activity-type's contribution to a window's totals (the modality mix, so a
+    walk is never counted as a run)."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    sessions: int
+    distance_km: float
+    duration: str
+    load: float
+    share_pct: float
+
+
+class RecentWeeksAllTotal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessions: int
+    distance_km: float
+    duration: str
+    load: float
+
+
+class RecentWeeksTotals(BaseModel):
+    """A window roll-up: the all-activities total plus a per-activity-TYPE breakdown."""
+    model_config = ConfigDict(extra="forbid")
+
+    all: RecentWeeksAllTotal
+    by_type: List[RecentWeeksTypeTotal]
+
+
+class RecentWeeksEndpoint(BaseModel):
+    """A dated window bound (weekday + DD-MM-YY), so a window states its actual span and
+    the coach never infers the range."""
+    model_config = ConfigDict(extra="forbid")
+
+    weekday: str
+    date: str
+
+
+class RecentWeeksVsTypicalMetric(BaseModel):
+    """One metric's current-vs-typical read: the current value and the runner's OWN
+    typical for a comparable window, plus a deadband `direction` and signed `pct`.
+    `current`/`typical` are numbers for sessions/distance/load and an H:MM:SS string for
+    duration. `typical`/`pct` drop (None) when the norm did not resolve."""
+    model_config = ConfigDict(extra="forbid")
+
+    current: Union[int, float, str]
+    typical: Optional[Union[int, float, str]] = None
+    direction: str                        # up | in_line | down | no_norm
+    pct: Optional[float] = None
+
+
+class RecentWeeksVsTypical(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessions: RecentWeeksVsTypicalMetric
+    distance: RecentWeeksVsTypicalMetric
+    duration: RecentWeeksVsTypicalMetric
+    load: RecentWeeksVsTypicalMetric
+
+
+class RecentWeeksRolling(BaseModel):
+    """The trailing-7-days LOAD-VERDICT lane: a FULL 7 days ending on this run, so it
+    compares directly to the runner's weekly norm with no pro-rating. Dated bounds +
+    totals + the vs-your-typical verdict; it carries no day list (the calendar weeks own
+    the day-resolved structure). This is the #653 fix — the firm verdict lives on the
+    always-full window, not on a fudged partial calendar week."""
+    model_config = ConfigDict(extra="forbid")
+
+    start: RecentWeeksEndpoint
+    end: RecentWeeksEndpoint
+    label: str
+    totals: RecentWeeksTotals
+    vs_your_typical: Optional[RecentWeeksVsTypical] = None
+
+
+class RecentWeeksCalendar(BaseModel):
+    """One calendar week, day-resolved — the STRUCTURE lane. `this_week` is partial and
+    carries NO vs-typical verdict (the #653 fix: no fudged partial-week verdict); the
+    complete `last_week` carries `vs_your_typical`."""
+    model_config = ConfigDict(extra="forbid")
+
+    start: RecentWeeksEndpoint
+    end: RecentWeeksEndpoint
+    label: str
+    complete: bool
+    days_elapsed: int
+    days: List[RecentWeeksDay]
+    week_totals: RecentWeeksTotals
+    vs_your_typical: Optional[RecentWeeksVsTypical] = None
+
+
+class RecentWeeksContext(BaseModel):
+    """ADR 0026 Slice 2 (#670): the single recent-training read that MERGES the retired
+    `training_volume` + `recent_training` sections into one day-resolved picture on one
+    week model. `rolling_7d` is the load-verdict lane (trailing 7 days vs the runner's
+    weekly norm); `this_week`/`last_week` are the structure lane (day-resolved, rest days
+    included). The day rows are the single source; the window totals and the rolling
+    totals are sums over them, so nothing is duplicated. A deterministic FACT the coach
+    may cite, but it never overrides the run's re-derived DerivedMetric or the safety
+    floor. Emitted ONLY under a recent-weeks-aware prompt id, so the pack stays
+    byte-stable otherwise. `has_baseline` is False when history is too thin for any
+    vs-typical norm."""
+    model_config = ConfigDict(extra="forbid")
+
+    rolling_7d: RecentWeeksRolling
+    this_week: RecentWeeksCalendar
+    last_week: RecentWeeksCalendar
+    has_baseline: bool
+
+
 # --- ADR 0026: the five coaching-question groups ---------------------------
 # Slice 1 (#672) reorganizes the pack from ~20 flat, milestone-named sections into
 # five groups named for the coaching question they answer, plus the top-level
@@ -888,13 +1081,22 @@ class ThisRun(BaseModel):
 
 
 class RightNow(BaseModel):
-    """ADR 0026: how is the runner currently? (slice 2 merges volume+recent into
-    recent_weeks and renames training_load -> readiness)."""
+    """ADR 0026: how is the runner currently?
+
+    Slice 2 (#670) redefines the CONTENT: `readiness` (renamed from `training_load`) and
+    the merged day-resolved `recent_weeks` are the new shape, carried under a new grouped
+    prompt. The pre-slice-2 `training_load`/`training_volume`/`recent_training` fields
+    stay for every prior prompt (prod lean_v1, grouped_v1) so their pack is byte-stable;
+    exactly one set is populated per prompt (gated by PromptFeature), the other is None
+    and dropped."""
     model_config = ConfigDict(extra="forbid")
 
     training_load: Optional["TrainingLoadContext"] = None
     training_volume: Optional["TrainingVolumeContext"] = None
     recent_training: Optional["RecentTrainingContext"] = None
+    # ADR 0026 Slice 2 (#670): the redefined content, gated to a new grouped prompt.
+    readiness: Optional["ReadinessContext"] = None
+    recent_weeks: Optional["RecentWeeksContext"] = None
 
 
 class TheRunner(BaseModel):
@@ -941,6 +1143,8 @@ _SECTION_GROUP: Dict[str, str] = {
     "training_load": "right_now",
     "training_volume": "right_now",
     "recent_training": "right_now",
+    "readiness": "right_now",
+    "recent_weeks": "right_now",
     "profile": "the_runner",
     "memory": "the_runner",
     "training_history": "the_runner",
@@ -988,6 +1192,8 @@ _FLAT_ORDER: tuple[str, ...] = (
     "training_volume",
     "stream_view",
     "recent_training",
+    "readiness",
+    "recent_weeks",
     "training_history",
     "memory",
     "intensity",
@@ -1124,6 +1330,14 @@ class CoachContextPack(BaseModel):
         return self.right_now.recent_training
 
     @property
+    def readiness(self) -> Optional["ReadinessContext"]:
+        return self.right_now.readiness
+
+    @property
+    def recent_weeks(self) -> Optional["RecentWeeksContext"]:
+        return self.right_now.recent_weeks
+
+    @property
     def profile(self) -> ProfileContext:
         return self.the_runner.profile
 
@@ -1177,6 +1391,8 @@ class CoachContextPack(BaseModel):
         training_volume: Optional["TrainingVolumeContext"] = None,
         stream_view: Optional[Dict[str, Any]] = None,
         recent_training: Optional["RecentTrainingContext"] = None,
+        readiness: Optional["ReadinessContext"] = None,
+        recent_weeks: Optional["RecentWeeksContext"] = None,
         training_history: Optional["TrainingHistoryContext"] = None,
         memory: Optional["MemoryContext"] = None,
         intensity: Optional["IntensityContext"] = None,
@@ -1204,6 +1420,8 @@ class CoachContextPack(BaseModel):
                 training_load=training_load,
                 training_volume=training_volume,
                 recent_training=recent_training,
+                readiness=readiness,
+                recent_weeks=recent_weeks,
             ),
             the_runner=TheRunner(
                 profile=profile,
@@ -1470,6 +1688,29 @@ def _drop_recent_training_dedup(rt: Dict[str, Any], _data: Dict[str, Any]) -> No
                     act.pop(k, None)
 
 
+def _strip_nulls_in_place(obj: Any) -> None:
+    """Recursively remove None-valued keys from a nested dict/list structure."""
+    if isinstance(obj, dict):
+        for k in [k for k, v in obj.items() if v is None]:
+            obj.pop(k)
+        for v in obj.values():
+            _strip_nulls_in_place(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            _strip_nulls_in_place(v)
+
+
+def _drop_recent_weeks_nulls(rw: Dict[str, Any], _data: Dict[str, Any]) -> None:
+    """ADR 0026 Slice 2 (#670): make the recent_weeks section's sparse per-activity/day/
+    verdict fields cost nothing when absent. Every leaf that does not apply (a no-HR
+    session's `avg_hr`/`hr_drift`, a non-run's `structure`/`shape`, a run without a
+    check-in's `rpe`/`pain`/`notes`, a rest day's `day_totals`, a `no_norm` metric's
+    `typical`/`pct`) is Optional-None on the model; drop it recursively so the section
+    carries only present facts. Re-parse stays safe — every dropped field defaults to
+    None when absent."""
+    _strip_nulls_in_place(rw)
+
+
 # One descriptor per droppable Optional section. Order matches the historical
 # branch order in to_serializable_dict so the serialized dict's key order — and
 # therefore (post sort_keys, but kept tidy for diffs) the output — is unchanged.
@@ -1495,6 +1736,15 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
         PromptFeature.RECENT_TRAINING,
         nested_drop=_drop_recent_training_dedup,
     ),  # #444
+    # ADR 0026 Slice 2 (#670): the redefined right_now content, gated to the new grouped
+    # prompt. readiness is a keyed rename (drops like training_load); recent_weeks is the
+    # merged day-resolved read (its sparse per-activity/day/verdict nulls are stripped).
+    PackSection("readiness", PromptFeature.READINESS),
+    PackSection(
+        "recent_weeks",
+        PromptFeature.RECENT_WEEKS,
+        nested_drop=_drop_recent_weeks_nulls,
+    ),
     PackSection("training_history", PromptFeature.TRAINING_HISTORY),  # #561
     PackSection("memory", PromptFeature.MEMORY),  # ADR 0025 runner memory profile
     PackSection("intensity", PromptFeature.INTENSITY),  # #578 intensity distribution + trend
