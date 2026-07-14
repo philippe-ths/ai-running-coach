@@ -221,7 +221,10 @@ def build_context_pack(
     # training-load/volume/recent-training signals key on it (each derives the exact
     # flavour it needs — start_date for readiness, the local calendar day for volume).
     as_of = activity.start_date
-    return CoachContextPack(
+    # ADR 0026: build the grouped pack from flat section objects. from_sections wraps
+    # each section into its coaching-question group (this_run/right_now/…); the flat
+    # kwargs below are unchanged, so the gathering logic is untouched.
+    return CoachContextPack.from_sections(
         activity=f.activity,
         metrics=f.metrics,
         check_in=f.check_in,

@@ -150,7 +150,12 @@ _NEGATION_PATTERN = re.compile(
 # ONLY the corpus path, never legitimate evidence or framing that merely DRAWS on
 # the corpus without citing it — so it can never cause a false-positive fallback.
 # This is the code half of the authority boundary that prompt rule 25 states.
-_CORPUS_FIELD_PATTERN = re.compile(r"^\s*corpus(?:\.|\[|\s*$)", re.IGNORECASE)
+# ADR 0026: under a grouped-pack prompt the corpus rides `how_to_coach.corpus`, so the
+# LLM cites it at that path; the optional `how_to_coach.` prefix matches both the flat
+# and grouped locations, still ONLY the corpus path (no false positives).
+_CORPUS_FIELD_PATTERN = re.compile(
+    r"^\s*(?:how_to_coach\.)?corpus(?:\.|\[|\s*$)", re.IGNORECASE
+)
 
 
 # --- Rule 8: user-materials-is-not-evidence boundary (P4, #286, ADR 0017) ---
@@ -164,7 +169,7 @@ _CORPUS_FIELD_PATTERN = re.compile(r"^\s*corpus(?:\.|\[|\s*$)", re.IGNORECASE)
 # (Rule 7's broader `corpus`-prefix pattern already catches these paths too; rule 8
 # is the materials-specific, clearer-message subset, the code half of prompt rule 28.)
 _USER_MATERIALS_FIELD_PATTERN = re.compile(
-    r"^\s*corpus\.user_materials(?:\.|\[|\s*$)", re.IGNORECASE
+    r"^\s*(?:how_to_coach\.)?corpus\.user_materials(?:\.|\[|\s*$)", re.IGNORECASE
 )
 
 

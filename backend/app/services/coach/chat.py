@@ -26,7 +26,7 @@ from app.models.coach_chat_message import CoachChatMessage
 from app.models.coach_report import CoachReport
 from app.models.coaching_relationship import CoachingRelationship
 from app.schemas.chat import ChatMessageRead
-from app.schemas.coach_context import CoachContextPack
+from app.schemas.coach_context import CoachContextPack, unnest_pack
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.prompts import render_voice_block
 from app.services.coach.query_tools import (
@@ -82,7 +82,7 @@ def _validate_chat_text(text: str, context_pack: dict) -> List[PolicyViolation]:
     violations: List[PolicyViolation] = []
     violations += check_medical_overreach(text)
     try:
-        pack = CoachContextPack.model_validate(context_pack)
+        pack = CoachContextPack.load(context_pack)
     except Exception:
         return violations
     violations += check_uncalibrated_zones(pack.metrics.zones_calibrated, text)
@@ -252,15 +252,20 @@ def _render_authority_tiering(
     always emitted. With every section present the render is byte-identical to the prior
     static block.
     """
+    # ADR 0026: a grouped stored pack nests these sections under their groups
+    # (the_runner.memory, how_to_coach.corpus, right_now.training_load), so flatten to
+    # a top-level view first. `unnest_pack` is tolerant of a flat or empty pack, so the
+    # presence gate reads identically for both shapes.
+    flat_pack = unnest_pack(context_pack)
     bullets = []
     if voice_present:
         bullets.append(_VOICE_TIER)
-    if context_pack.get("memory"):
+    if flat_pack.get("memory"):
         bullets.append(_MEMORY_TIER)
-    corpus = context_pack.get("corpus")
+    corpus = flat_pack.get("corpus")
     if corpus:
         bullets.append(_CORPUS_TIER if corpus.get("user_materials") else _CORPUS_ONLY_TIER)
-    if context_pack.get("training_load"):
+    if flat_pack.get("training_load"):
         bullets.append(_TRAINING_LOAD_TIER)
     if cross_activity_present:
         bullets.append(_RELATIONSHIP_CONVERSATION_TIER)

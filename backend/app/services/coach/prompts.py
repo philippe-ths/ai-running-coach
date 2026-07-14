@@ -1006,6 +1006,66 @@ Anchor everything to the run's real data — invent no number, confound, or tren
 Write your opener now, then call record_coach_tail once."""
 
 
+# ===========================================================================
+# coach_message_lean_grouped_v1 — ADR 0026 Slice 1 (#672). The grouped-pack variant
+# of lean_v1. It receives the SAME pack CONTENT re-nested into the five coaching-
+# question groups (service serves pack.to_grouped_dict()), so the prompt is lean_v1
+# with exactly two navigational changes: (a) a "# How your context is organized"
+# orientation that names the five groups by the question each answers, and (b) the
+# only two dotted paths that MOVE under grouping (continuity.* is now under our_thread;
+# salience stays top-level, so salience.novelty is untouched). Everything else — the
+# identity, the one-rule-about-truth, the misread-numbers, the lane, the delivery
+# protocol, the worked examples — is BYTE-IDENTICAL to lean_v1, so the safety floor is
+# invariant by construction (pinned by test_message_prompt_lean_grouped). Feature
+# parity with lean_v1: the SAME twelve capabilities, so the A/B is grouped-vs-flat
+# pack SHAPE (+ the orientation) on the same disposition-first prose. Ships INERT.
+# ===========================================================================
+
+_GROUP_ORIENTATION = """# How your context is organized
+
+Everything I give you is grouped by the question it answers — read it the way you would think it through:
+- `this_run` — what this session was and how hard it really was: the activity, its metrics and timeline, their check-in.
+- `right_now` — how they are placed today: recent training load and readiness, and how these last weeks compare to their own normal.
+- `the_runner` — who they are and where they are going: their profile, their stated memory, their training history.
+- `our_thread` — what we have already said: recent reports, whether past advice landed, and any opener I have just sent with their reply.
+- `how_to_coach` — their chosen coaching school and emphasis (this shapes framing, never facts).
+Plus a top-level safety floor. A field lives inside the group whose question it answers; if a group or field is not there, it does not apply.
+
+"""
+
+_GROUP_ORIENTATION_OPENER = (
+    "Your context is grouped by the question it answers — `this_run` (today's session), "
+    "`right_now`, `the_runner`, `our_thread`, `how_to_coach` — plus a top-level safety floor.\n\n"
+)
+
+
+def _regroup_lean_prompt(text: str) -> str:
+    """ADR 0026: derive the grouped-pack FULLER prompt from a lean prompt. Insert the
+    group orientation before the truth rule, and re-anchor the only two dotted paths
+    that move under grouping (continuity -> our_thread.continuity; salience stays
+    top-level). Pure, so the grouped prompt is provably lean_v1 plus these two
+    navigational changes and the safety prose is byte-identical (pinned by test)."""
+    out = text.replace(
+        "continuity.opener_message", "our_thread.continuity.opener_message"
+    ).replace("continuity.reply", "our_thread.continuity.reply")
+    anchor = "# The one rule about what is true"
+    return out.replace(anchor, _GROUP_ORIENTATION + anchor, 1)
+
+
+def _regroup_lean_opener_prompt(text: str) -> str:
+    """ADR 0026: the grouped-pack OPENER prompt. The opener reads salience.novelty
+    (top-level, unchanged) and no continuity path, so it needs only the short group
+    orientation, inserted before the invariants section."""
+    anchor = "# What stays true, even here"
+    return text.replace(anchor, _GROUP_ORIENTATION_OPENER + anchor, 1)
+
+
+SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V1 = _regroup_lean_prompt(SYSTEM_PROMPT_MESSAGE_LEAN_V1)
+SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V1_OPENER = _regroup_lean_opener_prompt(
+    SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER
+)
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -1056,6 +1116,10 @@ PROMPT_VERSIONS = {
     # Same twelve capabilities as v14 (identical pack), radically shorter prose. Ships
     # INERT; run locally with COACH_PROMPT_ID=coach_message_lean_v1.
     "coach_message_lean_v1": SYSTEM_PROMPT_MESSAGE_LEAN_V1,
+    # ADR 0026 Slice 1 — the grouped-pack variant of lean_v1 (same content, re-nested
+    # into the five coaching-question groups + a group orientation). Feature parity
+    # with lean_v1; serves pack.to_grouped_dict(). Ships INERT.
+    "coach_message_lean_grouped_v1": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V1,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -1091,7 +1155,20 @@ _OPENER_PROMPTS = {
     "coach_message_v13": SYSTEM_PROMPT_MESSAGE_V13_OPENER,
     "coach_message_v14": SYSTEM_PROMPT_MESSAGE_V14_OPENER,
     "coach_message_lean_v1": SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER,
+    "coach_message_lean_grouped_v1": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V1_OPENER,
 }
+
+# ADR 0026 Slice 1: the prompt ids that receive the GROUPED pack serialization
+# (pack.to_grouped_dict()) instead of the flat one. This is a PRESENTATION flag, not a
+# pack-section capability, so it is a plain set here rather than a PromptFeature (which
+# gates what sections the pack CONTAINS). Every other prompt id serves the flat pack,
+# byte-stable.
+GROUPED_PACK_PROMPT_IDS: frozenset[str] = frozenset({"coach_message_lean_grouped_v1"})
+
+
+def is_grouped_pack_prompt(prompt_id: Optional[str]) -> bool:
+    """True when ``prompt_id`` receives the ADR 0026 grouped pack serialization."""
+    return prompt_id in GROUPED_PACK_PROMPT_IDS
 
 # The capability-gated prompt-id sets and predicates below are DERIVED VIEWS over
 # the prompt-feature manifest (prompt_features.PROMPT_FEATURES), the single source of

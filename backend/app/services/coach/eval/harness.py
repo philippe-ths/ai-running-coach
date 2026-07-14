@@ -178,7 +178,7 @@ def score_db_reports(
             # Parse (drifted/corrupt pack) and score (a pathological assertion)
             # both guarded: one bad report becomes an error, never a crashed run.
             content = _validate_report(row.schema_version, row.report)
-            pack = CoachContextPack.model_validate(row.context_pack)
+            pack = CoachContextPack.load(row.context_pack)
             score = score_report(
                 content, pack,
                 report_id=str(row.id),
@@ -249,7 +249,7 @@ async def judge_db_reports(
             continue
         try:
             content = _validate_report(row.schema_version, row.report)
-            pack = CoachContextPack.model_validate(row.context_pack)
+            pack = CoachContextPack.load(row.context_pack)
             verdict = await judge_report(client, content, pack)
         except Exception as exc:
             summary = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
