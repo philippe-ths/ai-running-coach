@@ -45,6 +45,7 @@ def test_v9_registered_in_message_family_and_gate_sets():
     assert VOLUME_PROMPT_IDS == {
         V9, "coach_message_v10", "coach_message_v11", "coach_message_v12",
         "coach_message_v13", "coach_message_v14", "coach_message_lean_v1",
+        "coach_message_lean_grouped_v1",
     }
     # same schema family as v8 (so v9 reports regenerate, prior history retained).
     assert active_schema_version(V9) == active_schema_version(V8)

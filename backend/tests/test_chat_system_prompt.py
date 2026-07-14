@@ -24,6 +24,26 @@ def _full_tiering():
     return _render_authority_tiering(FULL_PACK, voice_present=True, cross_activity_present=True)
 
 
+# The SAME pack, ADR 0026-grouped: memory under the_runner, corpus under how_to_coach,
+# training_load under right_now. The chat tiering gate must read it identically.
+GROUPED_FULL_PACK = {
+    "the_runner": {"memory": {"who_you_are": ["marathoner"]}},
+    "how_to_coach": {"corpus": {"school": {"stance": "aerobic"}, "user_materials": [{"stance": "x"}]}},
+    "right_now": {"training_load": {"fitness": 40.0}},
+}
+
+
+def test_chat_tiering_reads_grouped_and_flat_packs_identically():
+    """ADR 0026: a grouped stored pack nests the tiered sections under their groups.
+    The gate (via unnest_pack) must brief the same tiers for both shapes, so a
+    grouped-prompt report's chat carries the same authority-tiering as a flat one."""
+    flat = _render_authority_tiering(FULL_PACK, voice_present=True, cross_activity_present=True)
+    grouped = _render_authority_tiering(
+        GROUPED_FULL_PACK, voice_present=True, cross_activity_present=True
+    )
+    assert grouped == flat
+
+
 def test_chat_template_renders_without_brace_errors():
     """`.format()` must survive — a literal `{`/`}` in the template would raise here."""
     rendered = _build_chat_system_prompt(

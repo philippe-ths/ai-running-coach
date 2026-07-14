@@ -137,6 +137,22 @@ EXPECTED_CAPABILITIES = {
         F.MEMORY,
         F.INTENSITY,
     },
+    # ADR 0026 Slice 1 — the grouped-pack variant of lean_v1: full capability parity
+    # (same pack CONTENT), differing only in the pack SHAPE it is served.
+    "coach_message_lean_grouped_v1": {
+        F.TWO_STAGE,
+        F.VOICE,
+        F.CORPUS,
+        F.STANCE,
+        F.TRAINING_LOAD,
+        F.USER_MATERIALS,
+        F.VOLUME,
+        F.STREAM_VIEW,
+        F.RECENT_TRAINING,
+        F.TRAINING_HISTORY,
+        F.MEMORY,
+        F.INTENSITY,
+    },
 }
 
 # Ids that must carry NO capabilities (the inert-under-rollback set).
@@ -183,6 +199,7 @@ def test_memory_feature_is_active_on_v13():
     supersets and carry MEMORY too, #578.)"""
     assert prompts.MEMORY_PROMPT_IDS == {
         "coach_message_v13", "coach_message_v14", "coach_message_lean_v1",
+        "coach_message_lean_grouped_v1",
     }
     assert prompts.is_memory_prompt("coach_message_v13") is True
     assert prompts.is_memory_prompt("coach_message_v12") is False
@@ -190,59 +207,60 @@ def test_memory_feature_is_active_on_v13():
 
 def test_derived_sets_match_captured_membership():
     """Belt-and-suspenders: the derived sets equal the explicit captured membership."""
-    # coach_message_lean_v1 (the experiment) carries the FULL capability set, so it joins
-    # every derived set below alongside the vN ids it shares that feature with.
+    # coach_message_lean_v1 (the experiment) and coach_message_lean_grouped_v1 (ADR 0026)
+    # both carry the FULL capability set, so both join every derived set below.
     LEAN = "coach_message_lean_v1"
+    GROUPED = "coach_message_lean_grouped_v1"
     assert prompts.TWO_STAGE_PROMPT_IDS == {
         "coach_message_v2", "coach_message_v3", "coach_message_v4",
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14", LEAN,
+        "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
     }
     assert prompts.VOICE_PROMPT_IDS == {
         "coach_message_v3", "coach_message_v4", "coach_message_v5",
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14", LEAN,
+        "coach_message_v14", LEAN, GROUPED,
     }
     assert prompts.CORPUS_PROMPT_IDS == {
         "coach_message_v4", "coach_message_v5", "coach_message_v6",
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
-        LEAN,
+        LEAN, GROUPED,
     }
     assert prompts.STANCE_PROMPT_IDS == {
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14", LEAN,
+        "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
     }
     assert prompts.TRAINING_LOAD_PROMPT_IDS == {
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14", LEAN,
+        "coach_message_v14", LEAN, GROUPED,
     }
     assert prompts.USER_MATERIALS_PROMPT_IDS == {
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
-        LEAN,
+        LEAN, GROUPED,
     }
     assert prompts.VOLUME_PROMPT_IDS == {
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14", LEAN,
+        "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
     }
     assert prompts.STREAM_VIEW_PROMPT_IDS == {
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14", LEAN,
+        "coach_message_v14", LEAN, GROUPED,
     }
     assert prompts.RECENT_TRAINING_PROMPT_IDS == {
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
-        LEAN,
+        LEAN, GROUPED,
     }
     assert prompts.TRAINING_HISTORY_PROMPT_IDS == {
-        "coach_message_v12", "coach_message_v13", "coach_message_v14", LEAN,
+        "coach_message_v12", "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
     }
-    assert prompts.MEMORY_PROMPT_IDS == {"coach_message_v13", "coach_message_v14", LEAN}
-    assert prompts.INTENSITY_PROMPT_IDS == {"coach_message_v14", LEAN}
+    assert prompts.MEMORY_PROMPT_IDS == {"coach_message_v13", "coach_message_v14", LEAN, GROUPED}
+    assert prompts.INTENSITY_PROMPT_IDS == {"coach_message_v14", LEAN, GROUPED}
 
 
 def test_predicates_agree_with_has_feature():

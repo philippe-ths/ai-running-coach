@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.material import DistilledMaterial
 from app.services.coach.prompt_features import PromptFeature
@@ -858,106 +858,405 @@ class MemoryContext(BaseModel):
     source_report_count: Optional[int] = None
 
 
-class CoachContextPack(BaseModel):
+# --- ADR 0026: the five coaching-question groups ---------------------------
+# Slice 1 (#672) reorganizes the pack from ~20 flat, milestone-named sections into
+# five groups named for the coaching question they answer, plus the top-level
+# safety floor. This slice is a PURE RELOCATION: each existing section moves under
+# its group INTACT (no merges — intensity_read/recent_weeks are slices 3/2 — and no
+# splits — longitudinal/calibration split in later slices). Each section keeps its
+# exact Optionality, so the grouped shape carries the identical leaf facts.
+#
+# The grouped model is the CANONICAL shape (build_context_pack returns it; slices
+# 2-5 add sections INTO these group models). Serialization derives the grouped dict
+# from the existing flat fold pipeline (`to_grouped_dict` == `_nest(to_serializable_
+# dict())`), so the flat pack stays byte-identical for prod (`coach_message_lean_v1`)
+# and every historical prompt, and `flatten(grouped) == flat` holds by construction.
+
+
+class ThisRun(BaseModel):
+    """ADR 0026: what was this session, and how hard was it really?"""
     model_config = ConfigDict(extra="forbid")
 
     activity: ActivityContext
     metrics: MetricsContext
     check_in: CheckInContext
-    profile: ProfileContext
-    # #451: the legacy coarse recent-volume summary, RETIRED. No longer populated —
-    # the rich `recent_training` section plus the `training_volume` vs-norm verdict
-    # supersede it (the three-way overlap is gone). Kept as an Optional field so
-    # STORED pre-#451 packs (which carry it) still validate under extra="forbid" — the
-    # chat read path and eval harness both strict-parse historical packs — and dropped
-    # from serialization when None so new packs never carry it.
-    recent_training_summary: Optional[RecentTrainingSummary] = None
-    # M4 longitudinal contrast. Normally always present; Optional so the #522
-    # COACH_LONGITUDINAL_ENABLED kill switch can drop the whole section (the builder
-    # returns None when disabled, the PACK_SECTIONS registry pops it). Every normal
-    # construction still passes the real object, so the default path is byte-stable.
-    longitudinal: Optional[LongitudinalContext] = None
     perceived_effort: PerceivedEffortContext
-    adherence: AdherenceContext
     calibration: CalibrationContext
-    # M4 (ADR 0025) retired the belief loop + A2c narrative + M10 preference.
-    # These three fields are kept as never-populated Optional deprecated STUBS so a
-    # historical stored pack carrying them still strict-parses under extra="forbid"
-    # (the chat read path + eval harness load old packs); they are never set by the
-    # builder and drop from serialization when None via the PACK_SECTIONS registry.
+    stream_view: Optional[Dict[str, Any]] = None
+    block: Optional[BlockContext] = None
+    intensity: Optional["IntensityContext"] = None
+
+
+class RightNow(BaseModel):
+    """ADR 0026: how is the runner currently? (slice 2 merges volume+recent into
+    recent_weeks and renames training_load -> readiness)."""
+    model_config = ConfigDict(extra="forbid")
+
+    training_load: Optional["TrainingLoadContext"] = None
+    training_volume: Optional["TrainingVolumeContext"] = None
+    recent_training: Optional["RecentTrainingContext"] = None
+
+
+class TheRunner(BaseModel):
+    """ADR 0026: who is this runner, and where are they going?"""
+    model_config = ConfigDict(extra="forbid")
+
+    profile: ProfileContext
+    memory: Optional["MemoryContext"] = None
+    training_history: Optional["TrainingHistoryContext"] = None
+
+
+class OurThread(BaseModel):
+    """ADR 0026: what did I say last time, and did it land? (slice 3 splits
+    longitudinal.baseline_trend out to the_runner.typical_trend)."""
+    model_config = ConfigDict(extra="forbid")
+
+    adherence: AdherenceContext
+    continuity: Optional[ContinuityContext] = Field(default_factory=ContinuityContext)
+    longitudinal: Optional[LongitudinalContext] = None
+
+
+class HowToCoach(BaseModel):
+    """ADR 0026: delivery and philosophy, NEVER facts (voice lives in the system
+    prompt, not the pack)."""
+    model_config = ConfigDict(extra="forbid")
+
+    corpus: Optional["CorpusContext"] = None
+    stance: Optional["StanceContext"] = None
+
+
+# The section -> group relocation map. Every flat section name maps to the group
+# attribute it now lives under; a name absent here is a top-level meta field
+# (salience, safety_rules, the retired stubs). This one table drives un-grouping
+# (`_flat_data`), nesting (`_nest_flat`), and the legacy-flat loader (`load`).
+_SECTION_GROUP: Dict[str, str] = {
+    "activity": "this_run",
+    "metrics": "this_run",
+    "check_in": "this_run",
+    "perceived_effort": "this_run",
+    "calibration": "this_run",
+    "stream_view": "this_run",
+    "block": "this_run",
+    "intensity": "this_run",
+    "training_load": "right_now",
+    "training_volume": "right_now",
+    "recent_training": "right_now",
+    "profile": "the_runner",
+    "memory": "the_runner",
+    "training_history": "the_runner",
+    "adherence": "our_thread",
+    "continuity": "our_thread",
+    "longitudinal": "our_thread",
+    "corpus": "how_to_coach",
+    "stance": "how_to_coach",
+}
+
+_GROUP_NAMES: tuple[str, ...] = (
+    "this_run",
+    "right_now",
+    "the_runner",
+    "our_thread",
+    "how_to_coach",
+)
+
+# Sentinel so `from_sections` can tell an OMITTED salience/continuity (→ present empty
+# object, the old default_factory behaviour) from an explicit None (→ the #522
+# kill-switch drop). A plain `None` default could not distinguish the two.
+_UNSET: Any = object()
+
+# Flat section order preserved from the pre-ADR-0026 field declaration, so the flat
+# serialized dict's key order is unchanged (tidy diffs; the hash uses sort_keys).
+_FLAT_ORDER: tuple[str, ...] = (
+    "activity",
+    "metrics",
+    "check_in",
+    "profile",
+    "recent_training_summary",
+    "longitudinal",
+    "perceived_effort",
+    "adherence",
+    "calibration",
+    "believed_facts",
+    "preference_profile",
+    "narrative",
+    "salience",
+    "continuity",
+    "block",
+    "corpus",
+    "stance",
+    "training_load",
+    "training_volume",
+    "stream_view",
+    "recent_training",
+    "training_history",
+    "memory",
+    "intensity",
+    "safety_rules",
+)
+
+
+def _nest_flat(flat: Dict[str, Any]) -> Dict[str, Any]:
+    """Relocate a FLAT serialized pack dict into the five groups (ADR 0026).
+
+    Pure key relocation: each section key present in `flat` moves under its group
+    per `_SECTION_GROUP`; unmapped keys (salience/safety_rules/retired stubs) stay
+    top-level. Empty groups are dropped, so `flatten(nest(flat)) == flat`. Used for
+    both grouped serialization (`to_grouped_dict`) and the legacy-flat loader."""
+    groups: Dict[str, Dict[str, Any]] = {g: {} for g in _GROUP_NAMES}
+    out: Dict[str, Any] = {}
+    for key, value in flat.items():
+        group = _SECTION_GROUP.get(key)
+        if group is not None:
+            groups[group][key] = value
+        else:
+            out[key] = value
+    for group in _GROUP_NAMES:
+        if groups[group]:
+            out[group] = groups[group]
+    return out
+
+
+def unnest_pack(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Hoist the ADR 0026 group sections back to the top level (inverse of `_nest_flat`).
+
+    Tolerant, read-only, NON-validating: a flat dict (no group keys) is returned
+    unchanged, a partial or empty dict is fine. For call sites that need to READ a
+    section's presence from a stored pack of EITHER shape (e.g. the chat authority-
+    tiering gate) without paying a full `load` + re-serialize (which would reject an
+    empty `{}`)."""
+    if not isinstance(data, dict):
+        return data
+    out: Dict[str, Any] = {}
+    for key, value in data.items():
+        if key in _GROUP_NAMES and isinstance(value, dict):
+            out.update(value)
+        else:
+            out[key] = value
+    return out
+
+
+class CoachContextPack(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # ADR 0026: the five coaching-question groups + the top-level safety floor.
+    this_run: ThisRun
+    right_now: RightNow = Field(default_factory=RightNow)
+    the_runner: TheRunner
+    our_thread: OurThread
+    how_to_coach: HowToCoach = Field(default_factory=HowToCoach)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_flat_shape(cls, data: Any) -> Any:
+        """ADR 0026: make `model_validate` tolerant of BOTH pack shapes. A grouped dict
+        (or a kwargs dict from `from_sections`, which carries the group keys) validates
+        as-is; a legacy FLAT dict — every historical stored pack, and any caller that
+        still hands a flat dict — is relocated into the five groups via `_nest_flat`
+        first. This is the ONE place the flat->grouped adaptation lives, so every
+        `model_validate` call site (chat, eval harness/fixtures, tests) keeps working."""
+        if isinstance(data, dict) and not any(g in data for g in _GROUP_NAMES):
+            return _nest_flat(data)
+        return data
+    # A4 salience substrate (novelty + safety override): a routing signal for the
+    # opener, not a coaching-question fact, so it stays top-level meta (ADR 0026 slice
+    # 5 drops it from the fuller pack). Optional (#522) so COACH_SALIENCE_ENABLED can
+    # drop it; default_factory keeps it a present empty object otherwise (byte-stable).
+    salience: Optional[SalienceContext] = Field(default_factory=SalienceContext)
+    safety_rules: SafetyRules
+    # Retired-section stubs (kept top-level, NEVER populated, dropped when None) so a
+    # historical stored FLAT pack carrying them still strict-parses under extra="forbid"
+    # after `_nest_flat` relocates the live sections: #451 recent_training_summary and
+    # the M4/ADR 0025 belief/preference/narrative loop. Only the retired-summary and
+    # stub fields; the live sections all live under their groups now.
+    recent_training_summary: Optional[RecentTrainingSummary] = None
     believed_facts: Optional[BelievedFactsContext] = None
     preference_profile: Optional[PreferenceProfile] = None
     narrative: Optional[NarrativeContext] = None
-    # A4 salience substrate: novelty + safety override. Defaulted (empty) so every
-    # pre-A4 fixture and the legacy/single-shot paths stay valid; the opener and
-    # fuller builders populate it. Adding it changes the pack fingerprint, so v2
-    # reports regenerate — the same intentional shape-change A2c made for narrative.
-    # Optional (#522) so COACH_SALIENCE_ENABLED can drop the section; the
-    # default_factory keeps it an empty object (present, byte-stable) for every
-    # construction that does not explicitly pass None.
-    salience: Optional[SalienceContext] = Field(default_factory=SalienceContext)
-    # A4 fuller-turn continuity (opener prose + any reply). Defaulted (empty) for
-    # the opener stage and single-shot exchanges; only the fuller path populates it.
-    # Optional (#522) so COACH_CONTINUITY_ENABLED can drop the section; the
-    # default_factory keeps it an empty object (present, byte-stable) otherwise.
-    continuity: Optional[ContinuityContext] = Field(default_factory=ContinuityContext)
-    # A1 multi-member block aggregate. None for a block-of-one and OMITTED from
-    # serialization entirely (AC8: the solo-run pack stays byte-stable pre/post A1).
-    block: Optional[BlockContext] = None
-    # P1.2 coaching corpus (ADR 0014). None under every non-corpus prompt and OMITTED
-    # from serialization entirely, exactly like `block`, so the pack stays byte-stable
-    # pre/post P1.2 (AC1/AC7); populated only under a corpus-aware prompt id.
-    corpus: Optional["CorpusContext"] = None
-    # P1.3 coaching stance — emphasis axes (ADR 0015). None under every non-stance
-    # prompt and OMITTED from serialization entirely, exactly like `corpus`/`block`,
-    # so the pack stays byte-stable pre/post P1.3 (AC1/AC7); populated only under a
-    # stance-aware prompt id.
-    stance: Optional["StanceContext"] = None
-    # P3 training-load readiness (ADR 0016). None under every non-training-load
-    # prompt and OMITTED from serialization entirely, exactly like `corpus`/`stance`/
-    # `block`, so the pack stays byte-stable pre/post P3 (AC1/AC7); populated only
-    # under a training-load-aware prompt id.
-    training_load: Optional["TrainingLoadContext"] = None
-    # #400 frequency-/volume-vs-norm. None under every non-volume prompt and OMITTED
-    # from serialization entirely, exactly like `training_load`/`corpus`/`block`, so
-    # the pack stays byte-stable pre/post #400; populated only under a volume-aware
-    # prompt id.
-    training_volume: Optional["TrainingVolumeContext"] = None
-    # #443 consolidated stream view (A2a): the <=60-pt aligned HR/pace/grade/cadence
-    # downsample, carried in the DEFAULT pack so the coach reads the run's shape on
-    # every report. None under every non-stream-view prompt and OMITTED from
-    # serialization entirely, exactly like `training_volume`/`training_load`/`corpus`/
-    # `block`, so the pack stays byte-stable pre/post #443; populated only under a
-    # stream-view-aware prompt id. It is a downsampled VIEW, never a measurement, and
-    # never overrides the re-derived metrics (prompt addendum).
-    stream_view: Optional[Dict[str, Any]] = None
-    # #444 modality-aware recent-training picture (per-type breakdown + per-activity
-    # detail + vs-typical/vs-prev with basis). None under every non-recent-training
-    # prompt and OMITTED from serialization entirely, exactly like the other gated
-    # sections, so the pack stays byte-stable pre/post #444; populated only under a
-    # recent-training-aware prompt id.
-    recent_training: Optional["RecentTrainingContext"] = None
-    # #561 multi-year training-history picture (the LOD volume ladder + durability
-    # traits). None under every non-training-history prompt and OMITTED from
-    # serialization entirely, exactly like the other gated sections, so the pack
-    # stays byte-stable pre/post #561; populated only under a training-history-aware
-    # prompt id, and only when history beyond the recent window exists to describe.
-    training_history: Optional["TrainingHistoryContext"] = None
-    # ADR 0025 runner memory profile, surfaced whole. None under every non-memory
-    # prompt and OMITTED from serialization (the gated-section idiom), so the pack
-    # stays byte-stable pre/post v13; populated only under a memory-aware prompt id,
-    # and only when a profile row exists for the runner.
-    memory: Optional["MemoryContext"] = None
-    # #578 intensity-distribution-and-trend signal. None under every non-intensity prompt
-    # and OMITTED from serialization (the gated-section idiom), so the pack stays
-    # byte-stable pre/post v14; populated only under an intensity-aware prompt id, and
-    # only when there is something to say (the builder returns None otherwise).
-    intensity: Optional["IntensityContext"] = None
-    safety_rules: SafetyRules
+
+    # --- Flat accessor properties (ADR 0026) --------------------------------
+    # Read-only flat views over the canonical grouped model, so the ~150 existing
+    # `pack.<section>` typed reads (validator, eval, chat, tests) keep working without
+    # churn. NEW code (slices 2-5) reads the grouped path directly; these accessors
+    # are the compat layer, not the interface. The LLM-facing string paths (prompt +
+    # validator evidence regexes) move to the grouped paths independently.
+    @property
+    def activity(self) -> ActivityContext:
+        return self.this_run.activity
+
+    @property
+    def metrics(self) -> MetricsContext:
+        return self.this_run.metrics
+
+    @property
+    def check_in(self) -> CheckInContext:
+        return self.this_run.check_in
+
+    @property
+    def perceived_effort(self) -> PerceivedEffortContext:
+        return self.this_run.perceived_effort
+
+    @property
+    def calibration(self) -> CalibrationContext:
+        return self.this_run.calibration
+
+    @property
+    def stream_view(self) -> Optional[Dict[str, Any]]:
+        return self.this_run.stream_view
+
+    @property
+    def block(self) -> Optional[BlockContext]:
+        return self.this_run.block
+
+    @property
+    def intensity(self) -> Optional["IntensityContext"]:
+        return self.this_run.intensity
+
+    @property
+    def training_load(self) -> Optional["TrainingLoadContext"]:
+        return self.right_now.training_load
+
+    @property
+    def training_volume(self) -> Optional["TrainingVolumeContext"]:
+        return self.right_now.training_volume
+
+    @property
+    def recent_training(self) -> Optional["RecentTrainingContext"]:
+        return self.right_now.recent_training
+
+    @property
+    def profile(self) -> ProfileContext:
+        return self.the_runner.profile
+
+    @property
+    def memory(self) -> Optional["MemoryContext"]:
+        return self.the_runner.memory
+
+    @property
+    def training_history(self) -> Optional["TrainingHistoryContext"]:
+        return self.the_runner.training_history
+
+    @property
+    def adherence(self) -> AdherenceContext:
+        return self.our_thread.adherence
+
+    @property
+    def continuity(self) -> Optional[ContinuityContext]:
+        return self.our_thread.continuity
+
+    @property
+    def longitudinal(self) -> Optional[LongitudinalContext]:
+        return self.our_thread.longitudinal
+
+    @property
+    def corpus(self) -> Optional["CorpusContext"]:
+        return self.how_to_coach.corpus
+
+    @property
+    def stance(self) -> Optional["StanceContext"]:
+        return self.how_to_coach.stance
+
+    @classmethod
+    def from_sections(
+        cls,
+        *,
+        activity: ActivityContext,
+        metrics: MetricsContext,
+        check_in: CheckInContext,
+        profile: ProfileContext,
+        perceived_effort: PerceivedEffortContext,
+        adherence: AdherenceContext,
+        calibration: CalibrationContext,
+        safety_rules: SafetyRules,
+        longitudinal: Optional[LongitudinalContext] = None,
+        salience: Optional[SalienceContext] = _UNSET,
+        continuity: Optional[ContinuityContext] = _UNSET,
+        block: Optional[BlockContext] = None,
+        corpus: Optional["CorpusContext"] = None,
+        stance: Optional["StanceContext"] = None,
+        training_load: Optional["TrainingLoadContext"] = None,
+        training_volume: Optional["TrainingVolumeContext"] = None,
+        stream_view: Optional[Dict[str, Any]] = None,
+        recent_training: Optional["RecentTrainingContext"] = None,
+        training_history: Optional["TrainingHistoryContext"] = None,
+        memory: Optional["MemoryContext"] = None,
+        intensity: Optional["IntensityContext"] = None,
+        recent_training_summary: Optional[RecentTrainingSummary] = None,
+        believed_facts: Optional[BelievedFactsContext] = None,
+        preference_profile: Optional[PreferenceProfile] = None,
+        narrative: Optional[NarrativeContext] = None,
+    ) -> "CoachContextPack":
+        """Build the grouped pack from the flat section objects the builder produces
+        (ADR 0026). Slices 2-5 that add a section wire it here and on its group model.
+        `salience`/`continuity` default to a present empty object (byte-stable) unless
+        the caller explicitly passes None (the #522 kill-switch drop)."""
+        return cls(
+            this_run=ThisRun(
+                activity=activity,
+                metrics=metrics,
+                check_in=check_in,
+                perceived_effort=perceived_effort,
+                calibration=calibration,
+                stream_view=stream_view,
+                block=block,
+                intensity=intensity,
+            ),
+            right_now=RightNow(
+                training_load=training_load,
+                training_volume=training_volume,
+                recent_training=recent_training,
+            ),
+            the_runner=TheRunner(
+                profile=profile,
+                memory=memory,
+                training_history=training_history,
+            ),
+            our_thread=OurThread(
+                adherence=adherence,
+                continuity=(ContinuityContext() if continuity is _UNSET else continuity),
+                longitudinal=longitudinal,
+            ),
+            how_to_coach=HowToCoach(corpus=corpus, stance=stance),
+            salience=(SalienceContext() if salience is _UNSET else salience),
+            safety_rules=safety_rules,
+            recent_training_summary=recent_training_summary,
+            believed_facts=believed_facts,
+            preference_profile=preference_profile,
+            narrative=narrative,
+        )
+
+    @classmethod
+    def load(cls, data: Any) -> "CoachContextPack":
+        """Parse a stored pack dict of EITHER shape (ADR 0026). A thin, self-documenting
+        alias for `model_validate` (the `_accept_flat_shape` before-validator does the
+        flat->grouped relocation), so the intent at the historical-pack load sites (chat,
+        eval harness/fixtures) reads clearly."""
+        return cls.model_validate(data)
+
+    def _flat_data(self) -> Dict[str, Any]:
+        """Un-group into the flat `{section: dict|None}` shape the pre-ADR-0026 model
+        produced from `model_dump`, in the original field order. The flat fold
+        pipeline in `to_serializable_dict` then runs UNCHANGED over it, so the flat
+        serialized pack (prod + historical prompts) stays byte-identical."""
+        groups = {
+            "this_run": self.this_run,
+            "right_now": self.right_now,
+            "the_runner": self.the_runner,
+            "our_thread": self.our_thread,
+            "how_to_coach": self.how_to_coach,
+        }
+        data: Dict[str, Any] = {}
+        for name in _FLAT_ORDER:
+            group = _SECTION_GROUP.get(name)
+            value = getattr(groups[group], name) if group is not None else getattr(self, name)
+            data[name] = (
+                value.model_dump(mode="python") if isinstance(value, BaseModel) else value
+            )
+        return data
 
     def to_serializable_dict(self) -> Dict[str, Any]:
-        """Serialise to the JSON-primitive dict shape the LLM input and DB column expect."""
-        data = self.model_dump(mode="python")
+        """Serialise to the FLAT JSON-primitive dict (prod + historical prompts).
+        Byte-identical to the pre-ADR-0026 output. `to_grouped_dict` re-nests this."""
+        data = self._flat_data()
         # The byte-stable-drop invariant lives in ONE place: every gated/optional
         # pack section that must vanish (not appear as a null key) when absent is a
         # PACK_SECTIONS descriptor, and this loop applies the drop uniformly. A
@@ -1031,6 +1330,13 @@ class CoachContextPack(BaseModel):
         if isinstance(cal, dict) and isinstance(cal.get("hr_drift"), dict):
             cal["hr_drift"].pop("observed_drift_pct", None)
         return data
+
+    def to_grouped_dict(self) -> Dict[str, Any]:
+        """Serialise to the GROUPED JSON dict the ADR 0026 grouped prompt reads: the
+        flat serialization re-nested into the five coaching-question groups. Derived
+        from `to_serializable_dict`, so `flatten(to_grouped_dict()) == to_serializable_
+        dict()` holds by construction and every flat-side fold/drop is inherited."""
+        return _nest_flat(self.to_serializable_dict())
 
     def fingerprint(self) -> str:
         """Deterministic SHA-256 cache key. Byte-identical to the legacy hash_context_pack output."""
@@ -1213,13 +1519,15 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
 def _assert_descriptors_match_fields() -> None:
     """Fail loudly AT IMPORT on a descriptor/field mismatch.
 
-    Every ``PackSection.field`` MUST name a declared Optional field on
-    ``CoachContextPack`` whose default is ``None`` (so the drop-when-None contract
-    holds). A typo or a renamed field turns from a silent byte-stability break into
-    a startup ``RuntimeError``. This is the import-time guard the #493 constraint
-    requires, pairing with the #328 prompt-feature manifest: the field stays
-    statically declared, the registry asserts it exists."""
-    model_fields = CoachContextPack.model_fields
+    Every ``PackSection.field`` MUST name a FLAT section that the drop loop can pop
+    from the un-grouped ``_flat_data`` dict — i.e. a section relocated into a group
+    (``_SECTION_GROUP``) or a top-level meta field on ``CoachContextPack`` (ADR 0026;
+    the group container fields ``this_run``/… are not flat sections). A typo or a
+    renamed field turns from a silent byte-stability break into a startup
+    ``RuntimeError``, pairing with the #328 prompt-feature manifest."""
+    flat_universe = set(_SECTION_GROUP) | (
+        set(CoachContextPack.model_fields) - set(_GROUP_NAMES)
+    )
     seen: set[str] = set()
     for section in PACK_SECTIONS:
         if section.field in seen:
@@ -1228,11 +1536,11 @@ def _assert_descriptors_match_fields() -> None:
                 f"{section.field!r}."
             )
         seen.add(section.field)
-        if section.field not in model_fields:
+        if section.field not in flat_universe:
             raise RuntimeError(
                 f"PackSection registry: descriptor names field {section.field!r}, "
-                f"which is not declared on CoachContextPack. Declare the Optional "
-                f"field on the model or fix the descriptor."
+                f"which is not a flat section (grouped section or top-level meta). "
+                f"Fix the descriptor or declare the field."
             )
 
 

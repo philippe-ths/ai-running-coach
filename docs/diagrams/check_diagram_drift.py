@@ -70,10 +70,24 @@ _DM_NON_DATA = {"id", "activity_id", "created_at", "updated_at"}
 
 
 def _canonical_pack_sections() -> set[str]:
-    """The pack sections the live CoachContextPack schema can emit to the LLM."""
-    from app.schemas.coach_context import CoachContextPack  # lazy: needs the app importable
+    """The FLAT pack sections the live CoachContextPack schema can emit to the LLM.
 
-    return set(CoachContextPack.model_fields.keys())
+    ADR 0026 grouped the schema's top-level fields into five coaching-question groups
+    (this_run/right_now/…), but the SERIALIZED pack the LLM receives still carries the
+    flat sections (to_serializable_dict), and the diagram depicts that flat data flow.
+    So the drift guard enumerates the flat section universe — every section relocated
+    into a group (_SECTION_GROUP) plus the top-level meta fields (salience/safety_rules/
+    retired stubs), excluding the group container fields — not the grouped top level. A
+    genuinely new pack section still trips the guard: it is declared on a group model
+    and wired into _SECTION_GROUP, so it appears here with no p_* node."""
+    from app.schemas.coach_context import (  # lazy: needs the app importable
+        CoachContextPack,
+        _GROUP_NAMES,
+        _SECTION_GROUP,
+    )
+
+    top_level_meta = set(CoachContextPack.model_fields.keys()) - set(_GROUP_NAMES)
+    return set(_SECTION_GROUP) | top_level_meta
 
 
 def _canonical_derived_columns() -> set[str]:

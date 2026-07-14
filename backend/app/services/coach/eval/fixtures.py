@@ -96,7 +96,7 @@ def _pack(**section_overrides) -> CoachContextPack:
     pack = {k: dict(v) if isinstance(v, dict) else v for k, v in _BASE_PACK.items()}
     for section, override in section_overrides.items():
         pack[section] = {**pack[section], **override}
-    return CoachContextPack.model_validate(pack)
+    return CoachContextPack.load(pack)
 
 
 def known_good_report() -> Tuple[CoachReportContent, CoachContextPack]:

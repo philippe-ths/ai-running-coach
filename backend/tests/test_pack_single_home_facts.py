@@ -132,9 +132,11 @@ def _build_fully_populated_pack(db):
 def test_folded_facts_each_have_exactly_one_home(db):
     pack = _build_fully_populated_pack(db)
 
-    # Precondition: the un-dropped MODEL dump still carries every copy (the fold is
+    # Precondition: the un-dropped FLAT data still carries every copy (the fold is
     # serialization-only; the derived reads compute from them). Guards a vacuous pass.
-    model = pack.model_dump(mode="python")
+    # ADR 0026: `_flat_data` is the un-grouped, pre-fold flat shape the old model_dump
+    # produced, so the flat copy paths (perceived_effort.rpe, …) resolve.
+    model = pack._flat_data()
     for label, copy_path, _home_path in SINGLE_HOME_FACTS:
         targets = list(_iter_targets(model, copy_path))
         assert targets and all(c.get(k) is not None for c, k in targets), (

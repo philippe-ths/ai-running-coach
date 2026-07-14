@@ -50,6 +50,7 @@ from app.services.coach.prompts import (
     TWO_STAGE_PROMPT_ID,
     TWO_STAGE_PROMPT_IDS,
     build_system_prompt,
+    is_grouped_pack_prompt,
 )
 from app.services.coach.prompt_features import PromptFeature, has_feature
 from app.services.coach.receipt_voice import voice_fingerprint
@@ -365,7 +366,15 @@ async def get_or_generate_coach_report(
     stance = _resolve_stance_for_activity(db, activity)
     pack = build_context_pack(db, activity, prompt_id=prompt_id, stance=stance)
     input_hash = pack.fingerprint()
-    pack_dict = pack.to_serializable_dict()
+    # ADR 0026: serve the grouped pack under a grouped-pack prompt id, the flat pack
+    # otherwise. The stored context_pack matches what the LLM saw; loaders (chat, eval)
+    # are shape-tolerant via CoachContextPack.load. The fingerprint stays flat-based, so
+    # the cache identity is unchanged.
+    pack_dict = (
+        pack.to_grouped_dict()
+        if is_grouped_pack_prompt(prompt_id)
+        else pack.to_serializable_dict()
+    )
 
     # Build prompt with activity-type playbook, selected from the axes (ADR 0007)
     classification = Classification.from_metrics(activity.metrics)
@@ -464,7 +473,15 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
         )
 
     input_hash = pack.fingerprint()
-    pack_dict = pack.to_serializable_dict()
+    # ADR 0026: serve the grouped pack under a grouped-pack prompt id, the flat pack
+    # otherwise. The stored context_pack matches what the LLM saw; loaders (chat, eval)
+    # are shape-tolerant via CoachContextPack.load. The fingerprint stays flat-based, so
+    # the cache identity is unchanged.
+    pack_dict = (
+        pack.to_grouped_dict()
+        if is_grouped_pack_prompt(prompt_id)
+        else pack.to_serializable_dict()
+    )
     # The opener is a brief reaction, not a playbook-driven analysis (mode="opener"
     # ignores the playbook), so the system prompt is the lean opener form. The voice
     # block (P1.1) rides both stages, so the opener already speaks in the declared
@@ -564,7 +581,15 @@ async def generate_fuller(
     stance = _resolve_stance_for_activity(db, activity)
     pack = build_context_pack(db, activity, continuity=continuity, prompt_id=prompt_id, stance=stance)
     input_hash = pack.fingerprint()
-    pack_dict = pack.to_serializable_dict()
+    # ADR 0026: serve the grouped pack under a grouped-pack prompt id, the flat pack
+    # otherwise. The stored context_pack matches what the LLM saw; loaders (chat, eval)
+    # are shape-tolerant via CoachContextPack.load. The fingerprint stays flat-based, so
+    # the cache identity is unchanged.
+    pack_dict = (
+        pack.to_grouped_dict()
+        if is_grouped_pack_prompt(prompt_id)
+        else pack.to_serializable_dict()
+    )
     classification = Classification.from_metrics(activity.metrics)
     voice = _resolve_voice_for_activity(db, activity)
     system_prompt = build_system_prompt(

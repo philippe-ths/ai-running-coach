@@ -305,13 +305,13 @@ def _legacy_sparse_pack() -> dict:
 
 def test_roundtrip_preserves_full_dict_shape():
     pack_dict = _legacy_full_pack()
-    pack = CoachContextPack.model_validate(pack_dict)
+    pack = CoachContextPack.load(pack_dict)
     assert pack.to_serializable_dict() == pack_dict
 
 
 def test_roundtrip_preserves_sparse_dict_shape():
     pack_dict = _legacy_sparse_pack()
-    pack = CoachContextPack.model_validate(pack_dict)
+    pack = CoachContextPack.load(pack_dict)
     assert pack.to_serializable_dict() == pack_dict
 
 
@@ -325,7 +325,7 @@ def test_no_session_collapses_interval_group_to_one_signal():
         "match_score": None, "detection_confidence": "low",
         "confidence_reasons": ["no_intervals_detected"], "detected_workout": None,
     }
-    out = CoachContextPack.model_validate(pack_dict).to_serializable_dict()["metrics"]
+    out = CoachContextPack.load(pack_dict).to_serializable_dict()["metrics"]
     assert out["interval_workout"] == "none detected"
     assert "interval_structure" not in out
     assert "workout_match" not in out
@@ -342,7 +342,7 @@ def test_detected_session_keeps_structured_interval_group():
         "summary": {"rep_count": 6},
     }
     pack_dict["metrics"]["workout_match"] = {"detection_confidence": "high", "match_score": 0.9}
-    out = CoachContextPack.model_validate(pack_dict).to_serializable_dict()["metrics"]
+    out = CoachContextPack.load(pack_dict).to_serializable_dict()["metrics"]
     assert out["interval_structure"]["summary"]["rep_count"] == 6
     assert out["workout_match"]["detection_confidence"] == "high"
     assert "interval_workout" not in out
@@ -363,7 +363,7 @@ def test_coach_view_drops_avg_speed_mps_from_work_segments():
         "summary": {"rep_count": 6},
     }
     pack_dict["metrics"]["workout_match"] = {"detection_confidence": "high", "match_score": 0.9}
-    pack = CoachContextPack.model_validate(pack_dict)
+    pack = CoachContextPack.load(pack_dict)
     seg = pack.to_serializable_dict()["metrics"]["interval_structure"]["work_segments"][0]
     assert "avg_speed_mps" not in seg          # dropped from the coach view
     assert seg["pace_s_per_km"] == 225         # coach reads pace instead
@@ -381,7 +381,7 @@ def test_old_verbose_no_session_pack_still_validates_and_collapses():
     old["metrics"]["workout_match"] = None
     old["metrics"]["interval_kpis"] = None
     old["metrics"].pop("interval_workout", None)
-    pack = CoachContextPack.model_validate(old)  # must not raise
+    pack = CoachContextPack.load(old)  # must not raise
     out = pack.to_serializable_dict()["metrics"]
     assert out["interval_workout"] == "none detected"
 
@@ -400,7 +400,7 @@ def test_folds_redundant_scalar_copies_out_of_serialization():
     old["calibration"]["hr_drift"]["observed_drift_pct"] = 9.0
     old["metrics"]["discount_signals"] = {"likely_inflated_by": ["heat"], "hr_drift_pct": 4.2}
 
-    out = CoachContextPack.model_validate(old).to_serializable_dict()  # must not raise
+    out = CoachContextPack.load(old).to_serializable_dict()  # must not raise
 
     assert "rpe" not in out["perceived_effort"]
     assert "effort_score" not in out["perceived_effort"]
@@ -416,17 +416,83 @@ def test_folds_redundant_scalar_copies_out_of_serialization():
     assert out["metrics"]["discount_signals"]["likely_inflated_by"] == ["heat"]
 
 
+# --- ADR 0026: the grouped envelope (flatten(grouped) == flat) -----------------
+
+
+def _flatten_grouped(grouped: dict) -> dict:
+    """Inverse of `_nest_flat`: hoist every group's sections back to the top level,
+    preserving the top-level meta keys, so a grouped pack can be compared leaf-for-leaf
+    against the flat serialization."""
+    from app.schemas.coach_context import _GROUP_NAMES
+
+    flat: dict = {}
+    for key, value in grouped.items():
+        if key in _GROUP_NAMES:
+            flat.update(value)
+        else:
+            flat[key] = value
+    return flat
+
+
+def test_grouped_dict_flattens_back_to_flat_full():
+    """The grouped serialization carries the IDENTICAL leaf facts as the flat one —
+    only the nesting differs (ADR 0026 content-preserving invariant)."""
+    pack = CoachContextPack.load(_legacy_full_pack())
+    grouped = pack.to_grouped_dict()
+    assert set(grouped) & {"this_run", "right_now", "the_runner", "our_thread"}
+    assert _flatten_grouped(grouped) == pack.to_serializable_dict()
+
+
+def test_grouped_dict_flattens_back_to_flat_sparse():
+    pack = CoachContextPack.load(_legacy_sparse_pack())
+    grouped = pack.to_grouped_dict()
+    assert _flatten_grouped(grouped) == pack.to_serializable_dict()
+
+
+def test_grouped_dict_places_sections_under_their_coaching_question_group():
+    """Slice 1 relocation is exact: each section sits under the group whose question
+    it answers, so slices 2-3 (recent_weeks / intensity_read) merge in place."""
+    pack = CoachContextPack.load(_legacy_full_pack())
+    grouped = pack.to_grouped_dict()
+    assert "metrics" in grouped["this_run"] and "calibration" in grouped["this_run"]
+    assert "perceived_effort" in grouped["this_run"]
+    assert "profile" in grouped["the_runner"]
+    assert "adherence" in grouped["our_thread"] and "longitudinal" in grouped["our_thread"]
+    # Top-level meta stays top-level, never grouped.
+    assert "safety_rules" in grouped and "salience" in grouped
+    assert "safety_rules" not in grouped.get("this_run", {})
+
+
+def test_empty_groups_are_dropped_from_grouped_serialization():
+    """A group whose sections are all gated-off/absent emits no key (byte-stable-drop
+    generalised to nested groups). The sparse pack carries no how_to_coach section."""
+    pack = CoachContextPack.load(_legacy_sparse_pack())
+    grouped = pack.to_grouped_dict()
+    # how_to_coach (corpus/stance) is absent in the sparse flat pack -> group dropped.
+    assert "how_to_coach" not in grouped
+
+
+def test_load_accepts_both_flat_and_grouped_shapes():
+    """`load`/`model_validate` are shape-tolerant: a legacy FLAT stored pack and the
+    grouped serialization of the same pack both parse to an equal flat serialization."""
+    flat = _legacy_full_pack()
+    from_flat = CoachContextPack.load(flat)
+    from_grouped = CoachContextPack.load(from_flat.to_grouped_dict())
+    assert from_flat.to_serializable_dict() == from_grouped.to_serializable_dict()
+    assert from_flat.fingerprint() == from_grouped.fingerprint()
+
+
 def test_fingerprint_matches_legacy_hash_full():
     pack_dict = _legacy_full_pack()
     expected = hash_context_pack(pack_dict)
-    pack = CoachContextPack.model_validate(pack_dict)
+    pack = CoachContextPack.load(pack_dict)
     assert pack.fingerprint() == expected
 
 
 def test_fingerprint_matches_legacy_hash_sparse():
     pack_dict = _legacy_sparse_pack()
     expected = hash_context_pack(pack_dict)
-    pack = CoachContextPack.model_validate(pack_dict)
+    pack = CoachContextPack.load(pack_dict)
     assert pack.fingerprint() == expected
 
 
@@ -490,7 +556,7 @@ def test_real_fixture_pack_roundtrips_through_typed_schema(db):
     pack_dict = pack.to_serializable_dict()
 
     # Round-trip through model_validate preserves the dict shape.
-    assert CoachContextPack.model_validate(pack_dict).to_serializable_dict() == pack_dict
+    assert CoachContextPack.load(pack_dict).to_serializable_dict() == pack_dict
     # The typed fingerprint matches the legacy dict-based hash byte-for-byte.
     assert pack.fingerprint() == hash_context_pack(pack_dict)
 
@@ -502,11 +568,20 @@ def test_pack_section_registry_covers_every_droppable_field():
     """Every Optional-and-dropped section is a PACK_SECTIONS descriptor, and every
     descriptor names a real declared field. This is the structural invariant the
     registry replaces seven hand-copied drop branches with."""
-    from app.schemas.coach_context import CoachContextPack, PACK_SECTIONS
+    from app.schemas.coach_context import (
+        CoachContextPack,
+        PACK_SECTIONS,
+        _GROUP_NAMES,
+        _SECTION_GROUP,
+    )
 
-    model_fields = CoachContextPack.model_fields
+    # ADR 0026: a droppable section is a flat section (relocated into a group) or a
+    # top-level meta field — not one of the group container fields.
+    flat_universe = set(_SECTION_GROUP) | (
+        set(CoachContextPack.model_fields) - set(_GROUP_NAMES)
+    )
     for section in PACK_SECTIONS:
-        assert section.field in model_fields, section.field
+        assert section.field in flat_universe, section.field
     # The seven prompt-gated sections named by #493 are all present.
     fields = {s.field for s in PACK_SECTIONS}
     assert {
@@ -531,7 +606,7 @@ def test_pack_section_descriptor_naming_unknown_field_fails_at_import_check():
     original = m.PACK_SECTIONS
     try:
         m.PACK_SECTIONS = original + (PackSection("this_field_does_not_exist"),)
-        with pytest.raises(RuntimeError, match="not declared on CoachContextPack"):
+        with pytest.raises(RuntimeError, match="not a flat section"):
             m._assert_descriptors_match_fields()
     finally:
         m.PACK_SECTIONS = original

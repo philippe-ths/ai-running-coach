@@ -209,6 +209,28 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.INTENSITY,
         }
     ),
+    # ADR 0026 Slice 1 — coach_message_lean_grouped_v1 is lean_v1 served the GROUPED
+    # pack (the same content re-nested into the five coaching-question groups). It
+    # carries the IDENTICAL twelve capabilities as lean_v1 (feature parity), so it
+    # receives the same pack CONTENT; only the SHAPE differs (prompts.is_grouped_pack_
+    # prompt drives to_grouped_dict serving). The A/B is grouped-vs-flat shape on the
+    # same disposition-first prose. Ships INERT.
+    "coach_message_lean_grouped_v1": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.TRAINING_LOAD,
+            _F.USER_MATERIALS,
+            _F.VOLUME,
+            _F.STREAM_VIEW,
+            _F.RECENT_TRAINING,
+            _F.TRAINING_HISTORY,
+            _F.MEMORY,
+            _F.INTENSITY,
+        }
+    ),
 }
 
 
