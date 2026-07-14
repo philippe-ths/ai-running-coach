@@ -52,6 +52,7 @@ class PromptFeature(Enum):
     INTENSITY_READ = "intensity_read"  # ADR 0026 Slice 3 (#673): merged this-run `this_run.intensity_read` + promoted `this_run.referral` (retires perceived_effort/calibration/intensity)
     INTENSITY_MIX = "intensity_mix"    # ADR 0026 Slice 3 (#673): recent intensity distribution + trend `right_now.intensity_mix` (the "how hard lately" half of the retired intensity section)
     METRICS_COACH_FRAMED = "metrics_coach_framed"  # ADR 0026 Slice 4 (#680): reframe the pack's numeric leaves to coach-native units/precision for the LLM view (km/pace/%max/MM:SS); presentation only, no new section
+    SALIENCE_DROPPED = "salience_dropped"  # ADR 0026 Slice 5 (#682): drop the `salience` routing section from the FULLER LLM view (it steers only the opener's depth + scheduling, which prod's receipt cadence never runs); the canonical pack keeps it so the deterministic safety force is unchanged; view-only, no new section
 
 
 # One row per prompt id, listing its FULL capability set. Read a row to know
@@ -309,6 +310,32 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.METRICS_COACH_FRAMED,
         }
     ),
+    # ADR 0026 Slice 5 (#682) — coach_message_lean_grouped_v5 is the FLIP TARGET: it carries
+    # every grouped_v4 capability plus SALIENCE_DROPPED, which removes the `salience` routing
+    # section from the FULLER LLM view. Salience only ever steered the LLM opener's depth +
+    # fuller-scheduling; prod's receipt cadence runs no opener, and the deterministic safety
+    # force reads the CANONICAL pack object (unchanged), so the fuller loses only dead weight.
+    # View-only over the canonical pack (like METRICS_COACH_FRAMED), so re-parse/validator/eval
+    # are untouched and every prior prompt is byte-identical. Ships INERT; the owner flip
+    # (COACH_PROMPT_ID -> this id, receipt cadence staying on) makes the grouped pack live.
+    "coach_message_lean_grouped_v5": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.READINESS,
+            _F.USER_MATERIALS,
+            _F.RECENT_WEEKS,
+            _F.STREAM_VIEW,
+            _F.TRAINING_HISTORY_2WK,
+            _F.MEMORY,
+            _F.INTENSITY_READ,
+            _F.INTENSITY_MIX,
+            _F.METRICS_COACH_FRAMED,
+            _F.SALIENCE_DROPPED,
+        }
+    ),
 }
 
 
@@ -378,6 +405,9 @@ ALTERNATIVE_FEATURES: frozenset[PromptFeature] = frozenset(
         # ADR 0026 Slice 4 (#680): a presentation-only leaf reframing, not a new pack
         # section, so it must not count toward "the fullest pack" additive ranking.
         PromptFeature.METRICS_COACH_FRAMED,
+        # ADR 0026 Slice 5 (#682): a view-only section REMOVAL, the opposite of additive, so
+        # it likewise must not count toward "the fullest pack" additive ranking.
+        PromptFeature.SALIENCE_DROPPED,
     }
 )
 
