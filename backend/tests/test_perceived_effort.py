@@ -48,13 +48,22 @@ class TestComputeDivergence:
 
 class TestRecommendWeighting:
     def test_hr_only_when_no_rpe(self):
-        assert recommend_weighting(rpe=None, hr_confounded=True) == "hr_only"
+        assert recommend_weighting(rpe=None, divergence_direction=None) == "hr_only"
 
-    def test_rpe_over_hr_when_confounded(self):
-        assert recommend_weighting(rpe=8, hr_confounded=True) == "rpe_over_hr"
+    def test_lead_with_felt_when_felt_harder(self):
+        # The runner felt it much harder than HR showed: lead with the felt read.
+        assert recommend_weighting(rpe=8, divergence_direction="felt_harder") == "lead_with_felt"
 
-    def test_balanced_when_clean(self):
-        assert recommend_weighting(rpe=8, hr_confounded=False) == "balanced"
+    def test_dont_dismiss_hr_when_felt_easier(self):
+        # The mirror (#654): felt easy but real HR work — hold both, don't call it easy.
+        assert recommend_weighting(rpe=3, divergence_direction="felt_easier") == "dont_dismiss_hr"
+
+    def test_balanced_when_aligned(self):
+        assert recommend_weighting(rpe=5, divergence_direction="aligned") == "balanced"
+
+    def test_balanced_when_direction_unknown(self):
+        # No effort axis to compare against -> no divergence direction -> balanced.
+        assert recommend_weighting(rpe=5, divergence_direction=None) == "balanced"
 
 
 class TestComputePainTrend:
@@ -87,8 +96,8 @@ class TestComputePainTrend:
 
 
 class TestBuildPerceivedEffort:
-    def test_heat_suppressed_hard_run_weights_rpe(self):
-        # The brief's canonical case.
+    def test_heat_suppressed_hard_run_leads_with_felt(self):
+        # The runner felt it hard while HR read easy: lead with their felt read.
         ctx = build_perceived_effort(
             rpe=8,
             effort_axis="easy",
@@ -102,8 +111,25 @@ class TestBuildPerceivedEffort:
         assert ctx.divergence == 2
         assert ctx.divergence_direction == "felt_harder"
         assert ctx.hr_confounded is True
-        assert ctx.recommended_weighting == "rpe_over_hr"
+        assert ctx.recommended_weighting == "lead_with_felt"
         assert ctx.pain_trend is None
+
+    def test_easy_rpe_with_real_hr_work_does_not_dismiss_hr(self):
+        # #654: an easy RPE on a run with real Z3-Z4 HR time, even with an HR
+        # confounder, must NOT resolve to 'trust RPE, genuinely easy'. It holds both.
+        ctx = build_perceived_effort(
+            rpe=3,
+            effort_axis="tempo",  # HR-derived intensity band 4
+            effort_score=45.0,
+            discount_signals={"likely_inflated_by": ["stimulant_use"], "confidence": "high"},
+            pain_scores=[],
+        )
+        assert ctx.rpe == 3
+        assert ctx.divergence == -2  # RPE band 2 - HR band 4
+        assert ctx.divergence_direction == "felt_easier"
+        assert ctx.hr_confounded is True
+        # The fix: not a wholesale substitution toward RPE, but hold both reads.
+        assert ctx.recommended_weighting == "dont_dismiss_hr"
 
     def test_no_checkin_degrades_safely(self):
         ctx = build_perceived_effort(
@@ -127,14 +153,17 @@ class TestBuildPerceivedEffort:
         assert ctx.pain_trend["abstained"] is False
 
     def test_empty_inflators_not_confounded(self):
-        # discount_signals present but no concrete confound (temp-unknown case).
+        # discount_signals present but no concrete confound (temp-unknown case): the
+        # confounder does not fire. Weighting is now direction-driven (#654), so this
+        # felt-harder run leads with the felt read regardless of the (absent) confound.
         ctx = build_perceived_effort(
             rpe=8, effort_axis="easy", effort_score=4.0,
             discount_signals={"likely_inflated_by": [], "confidence": "low"},
             pain_scores=[],
         )
         assert ctx.hr_confounded is False
-        assert ctx.recommended_weighting == "balanced"
+        assert ctx.divergence_direction == "felt_harder"
+        assert ctx.recommended_weighting == "lead_with_felt"
 
     def test_min_pain_samples_is_four(self):
         assert MIN_PAIN_SAMPLES == 4

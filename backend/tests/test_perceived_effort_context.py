@@ -75,7 +75,7 @@ class TestPerceivedEffortInPack:
         assert pe.divergence == 2
         assert pe.divergence_direction == "felt_harder"
         assert pe.hr_confounded is True
-        assert pe.recommended_weighting == "rpe_over_hr"
+        assert pe.recommended_weighting == "lead_with_felt"
 
     def test_serialization_folds_out_duplicate_scalars(self, db):
         """One-fact-one-place: the builder populates perceived_effort.rpe/effort_score
@@ -103,7 +103,7 @@ class TestPerceivedEffortInPack:
         assert out["metrics"]["hr_drift"] == 9.0
         # The derived read the section exists for survives.
         assert out["perceived_effort"]["divergence"] == 2
-        assert out["perceived_effort"]["recommended_weighting"] == "rpe_over_hr"
+        assert out["perceived_effort"]["recommended_weighting"] == "lead_with_felt"
 
     def test_no_checkin_degrades_safely(self, db):
         user_id = _user(db)
