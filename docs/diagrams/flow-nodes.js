@@ -674,3 +674,40 @@ function chainOf(id){ // upstream (from) + downstream (consumers), transitively
   (function fall(x){ (consumers[x]||[]).forEach(c=>{ if(!down.has(c)){down.add(c); fall(c);} }); })(id);
   return new Set([id, ...up, ...down]);
 }
+
+/* ---------- ADR 0026: the five coaching-question groups (the grouped pack envelope) ----------
+   Each pack (p_*) node's coaching-question group, so the diagram can render the five grouped
+   clusters the LLM actually receives under the live grouped prompt (plus the top-level safety
+   surface). Mirrors _SECTION_GROUP in app/schemas/coach_context.py; the OLD flat sections a
+   grouped prompt replaces are mapped to the group their merged successor lives in, so a rollback
+   capture still colours them coherently. Rendered as a group-coloured top bar on each pack node
+   (ai-flow-graph.html) with the legend in the Key panel — a purely cosmetic overlay; it does not
+   move nodes (they stay in their kind swimlane) or touch the data flow. */
+const GROUP_META = {
+  this_run:     {label:'This run',     color:'#38bdf8', q:'what happened in the session I just did'},
+  right_now:    {label:'Right now',    color:'#fbbf24', q:'how the runner is placed at this moment'},
+  the_runner:   {label:'The runner',   color:'#c084fc', q:'who this person is as an athlete'},
+  our_thread:   {label:'Our thread',   color:'#34d399', q:'where our ongoing conversation stands'},
+  how_to_coach: {label:'How to coach', color:'#f472b6', q:'the voice + philosophy to coach in'},
+  safety:       {label:'Safety',       color:'#f87171', q:'the top-level floor + salience routing'},
+};
+const _GROUP_ORDER = ['this_run','right_now','the_runner','our_thread','how_to_coach','safety'];
+const PACK_GROUP = {
+  // this_run — the session just finished (grouped-era intensity_read/referral + the flat
+  // perceived_effort/calibration/intensity they merge from map here too).
+  p_activity:'this_run', p_metrics:'this_run', p_stream_view:'this_run', p_check_in:'this_run',
+  p_perceived:'this_run', p_calibration:'this_run', p_intensity_read:'this_run',
+  p_referral:'this_run', p_intensity:'this_run', p_block:'this_run',
+  // right_now — current placement (grouped readiness/recent_weeks/intensity_mix + the flat
+  // training_load/training_volume/recent_training they replace).
+  p_readiness:'right_now', p_recent_weeks:'right_now', p_intensity_mix:'right_now',
+  p_training_load:'right_now', p_training_volume:'right_now', p_recent_training:'right_now',
+  // the_runner — durable athlete identity.
+  p_profile:'the_runner', p_memory:'the_runner', p_training_history:'the_runner',
+  // our_thread — the ongoing relationship state.
+  p_adherence:'our_thread', p_longitudinal:'our_thread', p_continuity:'our_thread',
+  // how_to_coach — voice + coaching philosophy.
+  p_corpus:'how_to_coach', p_stance:'how_to_coach',
+  // safety — the top-level surface (the floor + the salience routing signal).
+  p_safety:'safety', p_salience:'safety',
+};

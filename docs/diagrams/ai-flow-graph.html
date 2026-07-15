@@ -127,6 +127,8 @@
   .ns .step b { color:var(--ink); } .ns .step .why { color:var(--muted); font-size:11.5px; } .ns .step .ev{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:#7dd3fc;margin-top:3px;}
   .offpill { font-size:8.5px; letter-spacing:.5px; text-transform:uppercase; font-weight:700; color:#fca5a5;
     background:rgba(239,68,68,.16); border:1px solid rgba(239,68,68,.4); border-radius:4px; padding:1px 5px; margin-left:6px; }
+  .grouppill { font-size:8.5px; letter-spacing:.4px; text-transform:uppercase; font-weight:700;
+    border-radius:4px; padding:1px 6px; margin-left:6px; vertical-align:middle; white-space:nowrap; }
 
   .hintbar { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); z-index:15;
     background:#11141aee; border:1px solid var(--line); border-radius:10px; padding:7px 14px; font-size:12px; color:var(--muted); }
@@ -231,6 +233,10 @@
   <button class="kclose" id="keyClose" title="close">✕</button>
   <h3>Key</h3>
   <p class="ksub">How to read the graph. Each node is a stage in the data flow from Strava to the coach report; click any node to trace its lineage and open its real data on the right.</p>
+
+  <div class="kgrp">Pack groups — the coaching question each answers (ADR 0026)</div>
+  <p class="ksub">The context-pack nodes carry a coloured top bar for the grouped-pack cluster they belong to. Under the live grouped prompt the model receives these five groups (plus the top-level safety surface); the bar shows the group even though nodes sit in their kind swimlane.</p>
+  <div id="groupLegend"></div>
 
   <div class="kgrp">Node colour — what a node IS</div>
   <div class="krow"><span class="kmark"><span class="sw" style="background:var(--source)"></span></span><div class="ktext"><b>Raw</b> — an external input the pipeline starts from (the Strava API).</div></div>
@@ -455,6 +461,17 @@ NODES.forEach(n=>{
   const t=document.createElementNS(SVGNS,'text'); t.setAttribute('x',13); t.setAttribute('y',NH/2+4);
   let lbl=shortLabel(n); if(lbl.length>20) lbl=lbl.slice(0,19)+'…'; t.textContent=lbl;
   g.appendChild(r); g.appendChild(acc); g.appendChild(t);
+  // ADR 0026: a group-coloured top bar marking the pack node's coaching-question group, so the
+  // five grouped clusters the LLM receives read at a glance (legend in the Key panel). Cosmetic
+  // overlay only — the node keeps its kind-swimlane position; nothing about the flow changes.
+  const grp = (typeof PACK_GROUP!=='undefined') ? PACK_GROUP[n.id] : null;
+  if(grp && typeof GROUP_META!=='undefined' && GROUP_META[grp]){
+    g.dataset.group=grp;
+    const gb=document.createElementNS(SVGNS,'rect'); gb.setAttribute('class','groupbar');
+    gb.setAttribute('x',10); gb.setAttribute('y',-3); gb.setAttribute('width',NW-14);
+    gb.setAttribute('height',3); gb.setAttribute('rx',1.5); gb.setAttribute('fill',GROUP_META[grp].color);
+    g.appendChild(gb);
+  }
   if(isOrigin(n)){  // a left-pointing cap that reads "the chain starts here"
     const cap=document.createElementNS(SVGNS,'path'); cap.setAttribute('class','startcap');
     cap.setAttribute('d',`M-12,${NH/2} L-4,${NH/2-6} L-4,${NH/2+6} Z`); g.appendChild(cap);
@@ -519,7 +536,10 @@ function relGroup(ids, cls){ // live chips first, empty-for-this-run ones broken
 function openDrawer(id, up, down){
   const n=byId[id];
   document.getElementById('dTag').textContent=n.tag; document.getElementById('dTag').className='tag '+n.kind;
-  document.getElementById('dTitle').innerHTML=esc(n.title)+(nodeOff(n)?' <span class="offpill">empty this run</span>':'');
+  const _grp=(typeof PACK_GROUP!=='undefined')?PACK_GROUP[id]:null;
+  const _grpPill=(_grp && typeof GROUP_META!=='undefined' && GROUP_META[_grp])
+    ? ' <span class="grouppill" style="background:'+GROUP_META[_grp].color+'22;color:'+GROUP_META[_grp].color+';border:1px solid '+GROUP_META[_grp].color+'55">'+esc(GROUP_META[_grp].label)+'</span>' : '';
+  document.getElementById('dTitle').innerHTML=esc(n.title)+_grpPill+(nodeOff(n)?' <span class="offpill">empty this run</span>':'');
   document.getElementById('dPath').textContent=n.path||'';
   const froms=(n.from||[]), feeds=(consumers[id]||[]);
   document.getElementById('dRel').innerHTML=
@@ -573,6 +593,16 @@ stage.addEventListener('wheel', e=>{
   view.x=mx-(mx-view.x)*(nk/view.k); view.y=my-(my-view.y)*(nk/view.k); view.k=nk; apply();
 }, {passive:false});
 document.getElementById('fit').addEventListener('click', fit);
+// ADR 0026 group legend — built from GROUP_META so the swatch colours can never drift from
+// the node top bars (one source of truth in flow-nodes.js).
+(function buildGroupLegend(){
+  const host=document.getElementById('groupLegend');
+  if(!host || typeof GROUP_META==='undefined') return;
+  const order=(typeof _GROUP_ORDER!=='undefined')?_GROUP_ORDER:Object.keys(GROUP_META);
+  host.innerHTML=order.map(k=>{ const g=GROUP_META[k]; if(!g) return '';
+    return '<div class="krow"><span class="kmark"><span class="sw" style="background:'+g.color+'"></span></span>'
+      +'<div class="ktext"><b>'+esc(g.label)+'</b> — '+esc(g.q)+'</div></div>'; }).join('');
+})();
 const keyPanel=document.getElementById('keyPanel');
 document.getElementById('keyToggle').addEventListener('click', ()=> keyPanel.classList.toggle('open'));
 document.getElementById('keyClose').addEventListener('click', ()=> keyPanel.classList.remove('open'));
