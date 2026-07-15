@@ -88,6 +88,22 @@ def test_activity_within_gap_joins_and_run_becomes_primary(db):
     assert db.query(Exchange).filter(Exchange.block_id == block.id).count() == 1
 
 
+def test_virtual_run_becomes_primary_over_a_longer_non_run(db):
+    """A connected-platform run (Zwift/Peloton) surfaces as `type == "VirtualRun"`;
+    it is still a run, so it wins the block primary over a longer walk (#644),
+    keeping "block contains a run" == "primary is a run"."""
+    user = _make_user(db)
+    walk = _make_activity(db, user, start=T0, elapsed=3600, type="Walk")  # longer
+    block = assign_activity_to_block(db, walk, gap_seconds=GAP)
+
+    vrun_start = T0 + timedelta(seconds=3600 + 600)  # 10 min after the walk ends
+    vrun = _make_activity(db, user, start=vrun_start, elapsed=1200, type="VirtualRun")
+    joined = assign_activity_to_block(db, vrun, gap_seconds=GAP)
+
+    assert joined.id == block.id
+    assert joined.primary_activity_id == vrun.id  # the virtual run wins over the longer walk
+
+
 def test_activity_past_gap_starts_a_new_block(db):
     user = _make_user(db)
     first = _make_activity(db, user, start=T0, elapsed=1500)

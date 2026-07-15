@@ -435,10 +435,18 @@ class AnthropicClient:
         and the stop_reason for the tool loop to dispatch on.
 
         When `tools` is falsy the call carries no tool surface, forcing a text answer
-        (the loop's tools-off final round). No 429 retry here: the chat path's
-        rate-limit resilience is tracked separately (#625); a transport error
-        propagates to the caller's safe-degrade path, exactly as `stream_chat` does.
+        (the loop's tools-off final round).
+
+        429 resilience (#625): a rate limit is admission-time capacity, raised when
+        the request is issued — BEFORE the first token — so a bounded retry honoring
+        Retry-After (the same `_MAX_RATE_LIMIT_RETRIES` budget and backoff as the
+        report path, #603) re-issues the request with no duplicate output. If any
+        token has already streamed, we do NOT re-run (that would duplicate the
+        buffered reply); the 429 then propagates to the caller's safe-degrade path,
+        exactly as any other transport error does.
         """
+        import anthropic
+
         stream_kwargs: Dict[str, Any] = dict(
             model=self.model,
             max_tokens=max_tokens,
@@ -451,10 +459,29 @@ class AnthropicClient:
             stream_kwargs["tools"] = tools
             stream_kwargs["tool_choice"] = {"type": "auto"}
 
-        async with self.client.messages.stream(**stream_kwargs) as stream:
-            async for text in stream.text_stream:
-                yield ChatTurnDelta(text=text)
-            final = await stream.get_final_message()
+        rate_limit_retries = 0
+        while True:
+            started = False
+            try:
+                async with self.client.messages.stream(**stream_kwargs) as stream:
+                    async for text in stream.text_stream:
+                        started = True
+                        yield ChatTurnDelta(text=text)
+                    final = await stream.get_final_message()
+                break
+            except anthropic.RateLimitError as exc:
+                # Only retriable before the first token; once tokens have streamed a
+                # re-run would duplicate the buffered reply, so propagate instead.
+                if not started and rate_limit_retries < _MAX_RATE_LIMIT_RETRIES:
+                    delay = _rate_limit_backoff_seconds(exc, rate_limit_retries)
+                    rate_limit_retries += 1
+                    logger.warning(
+                        "anthropic_chat_rate_limit_retry",
+                        extra={"attempt": rate_limit_retries, "sleep": delay},
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
 
         usage = getattr(final, "usage", None)
         yield ChatTurnDelta(

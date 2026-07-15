@@ -249,8 +249,15 @@ def build_intensity(
         mean_ordinal = (
             sum(adj[b] * _BAND_ORDINAL[b] for b in _BANDS) / n if n else 0.0
         )
+        # Symmetric confounder exculpation (#679): the recent mean is computed on the
+        # exculpated view (`adj`), so exculpate THIS run's own band the same way before
+        # comparing. Otherwise a hot/hilly/stimulant run's inflated raw band is judged
+        # against a baseline that WAS corrected for the same effect, and the verdict
+        # over-reports "harder than recent". `this_session.band` still reports the raw
+        # measured band; only this comparison is exculpated (mirrors intensity_read._vs_recent).
+        this_effective_band = _effective_band(this_fact, confounded_ids)
         this_run_vs_recent = _direction(
-            _BAND_ORDINAL[this_band] - mean_ordinal,
+            _BAND_ORDINAL[this_effective_band] - mean_ordinal,
             _VS_RECENT_DEADBAND,
             "harder",
             "easier",

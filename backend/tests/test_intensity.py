@@ -108,6 +108,28 @@ def test_this_run_vs_recent_in_line():
     assert ctx.this_run_vs_recent == "in_line"
 
 
+def test_this_run_vs_recent_exculpates_this_runs_own_confounded_band():
+    # #679: this run reads "hard" on HR but a confounder fired (heat/hills/stimulant),
+    # against an all-easy recent window that is ALREADY exculpated. Symmetrically
+    # exculpating this run's own band makes the comparison fair, so the confounded hard
+    # run reads in_line rather than over-reporting "harder than recent".
+    facts = [_Fact("this", 0, effort="hard")]
+    facts += _window("easy", start_id=10, days_base=2, n=6)
+    ctx = build_intensity(facts, {"this"}, "this", AS_OF)
+    assert ctx.this_session.band == "hard"  # the reported band stays the raw measured one
+    assert ctx.this_session.hr_confounded is True
+    assert ctx.this_run_vs_recent == "in_line"  # symmetric: not over-reported as harder
+
+
+def test_this_run_vs_recent_still_harder_when_this_run_not_confounded():
+    # The guard against over-correction: a genuinely hard run (no confounder) against an
+    # all-easy window still reads "harder" — exculpation only applies when a signal fired.
+    facts = [_Fact("this", 0, effort="hard")]
+    facts += _window("easy", start_id=10, days_base=2, n=6)
+    ctx = build_intensity(facts, set(), "this", AS_OF)
+    assert ctx.this_run_vs_recent == "harder"
+
+
 # --------------------------------------------------------------------------- #
 # Confounder exculpation                                                       #
 # --------------------------------------------------------------------------- #
