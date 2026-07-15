@@ -183,8 +183,11 @@ class PerceivedEffortContext(BaseModel):
     (RPE) and what HR showed, plus a pain-score trend.
 
     `divergence` is a signed 1-5-band gap (positive = felt harder than HR
-    showed); `recommended_weighting` is "rpe_over_hr" when an HR confounder fired
-    (RPE survives HR distortion), else "balanced", or "hr_only" with no RPE.
+    showed); `recommended_weighting` is a symmetric, direction-driven confidence
+    tilt (#654): "lead_with_felt" when it felt harder than HR showed, "dont_dismiss_hr"
+    when it felt easier (hold both — real zone time is real work), "balanced" when
+    aligned, or "hr_only" with no RPE. A fired confounder (`hr_confounded`) informs
+    the drift read, not this weighting.
     `pain_trend` is None (no data), an abstention marker (too few samples), or a
     direction+slope trend dict scoped to this run's pain location; never a
     diagnosis. All RPE/pain fields degrade to None/empty when
@@ -890,7 +893,7 @@ class IntensityFeltVsMeasured(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     read: str                                 # aligned | felt_harder | felt_easier
-    trust: str                                # rpe_over_hr | balanced
+    trust: str                                # lead_with_felt | dont_dismiss_hr | balanced (#654)
 
 
 class IntensityDriftRead(BaseModel):

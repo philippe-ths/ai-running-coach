@@ -3,9 +3,18 @@ what the body showed (HR-derived intensity), plus a pain-score trend.
 
 This app uniquely holds both sides of the perception-vs-physiology gap, and that
 gap is coaching signal (ADR-0007's "the gap is the signal", extended from
-intent-vs-execution to perception-vs-physiology). When an HR confounder fired
-(N4 discount_signals), RPE is the more trustworthy intensity read because it
-survives HR distortion, so the coach should weight it above HR.
+intent-vs-execution to perception-vs-physiology).
+
+The weighting the coach should lean toward is a function of the gap DIRECTION, and
+symmetric (#654). A run that felt HARDER than HR showed carries a real experience
+the HR number misses (heat, fatigue, poor fuelling), so lean toward the felt read.
+A run that felt EASIER than HR showed is the mirror: the easy feel is real, but the
+time actually spent in the HR zones is real cardiovascular work too, so do NOT
+declare the run purely easy on the RPE alone — hold both. Earlier this resolved
+one-directionally ("an HR confounder fired, so trust the RPE"), which let a run
+with real Z3-Z4 time be called "genuinely easy" on RPE 3. A fired confounder
+lowers confidence in the DRIFT/fatigue read (it leads the drift elsewhere in the
+pack), it does not license substituting RPE for the measured intensity.
 
 Design note: divergence is computed against the HR-derived `effort` axis
 (intensity), NOT `effort_score`. `effort_score` is a TRIMP-like cumulative load
@@ -63,15 +72,30 @@ def compute_divergence(rpe: Optional[int], effort_axis: Optional[str]) -> Option
     return {"divergence": divergence, "direction": direction}
 
 
-def recommend_weighting(rpe: Optional[int], hr_confounded: bool) -> str:
-    """Which intensity signal the report should lead with.
+def recommend_weighting(rpe: Optional[int], divergence_direction: Optional[str]) -> str:
+    """How the coach should weigh the felt (RPE) vs measured (HR) intensity reads —
+    a confidence tilt, never a substitution, and symmetric in the gap direction (#654).
 
-    No RPE -> HR is all we have. A confounder fired and we have RPE -> weight RPE
-    over HR (it survives HR distortion). Otherwise both agree enough to balance."""
+    - No RPE -> `hr_only`: HR is all we have.
+    - `felt_harder` -> `lead_with_felt`: the runner felt it substantially harder than
+      HR showed. That harder experience is real signal (heat, fatigue, fuelling) the
+      HR number misses, so lead with it rather than flattening it into the HR band.
+    - `felt_easier` -> `dont_dismiss_hr`: the mirror. The easy feel is real, but the
+      time actually spent in the HR zones is real cardiovascular work, so hold both and
+      do NOT call the run purely easy on the RPE alone.
+    - otherwise (`aligned` / unknown) -> `balanced`: the two agree enough to weigh together.
+
+    Deliberately NOT keyed on whether an HR confounder fired: a confounder inflates HR
+    and so lowers confidence in the DRIFT/fatigue read (it leads the drift elsewhere in
+    the pack), but it never licenses substituting RPE for the measured intensity, and it
+    only physically explains a `felt_easier` gap anyway. The `hr_confounded` fact still
+    rides the pack for the coach to explain WHY HR was elevated."""
     if rpe is None:
         return "hr_only"
-    if hr_confounded:
-        return "rpe_over_hr"
+    if divergence_direction == "felt_harder":
+        return "lead_with_felt"
+    if divergence_direction == "felt_easier":
+        return "dont_dismiss_hr"
     return "balanced"
 
 
@@ -118,6 +142,8 @@ def build_perceived_effort(
         divergence=divergence["divergence"] if divergence else None,
         divergence_direction=divergence["direction"] if divergence else None,
         hr_confounded=hr_confounded,
-        recommended_weighting=recommend_weighting(rpe, hr_confounded),
+        recommended_weighting=recommend_weighting(
+            rpe, divergence["direction"] if divergence else None
+        ),
         pain_trend=compute_pain_trend(pain_scores),
     )
