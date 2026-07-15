@@ -90,12 +90,16 @@ def test_upload_truncates_long_title(client):
 
 def test_upload_truncates_long_filename(client):
     # #706: the reflected filename (its default-title derivation and the stored
-    # value) is length-bounded at rest.
-    long_name = "f" * 5000 + ".md"
+    # value) is length-bounded at rest. Use a filename modestly over the 255 cap
+    # (not a multi-KB one): a multipart FILENAME rides the part's Content-Disposition
+    # HEADER, and newer starlette/python-multipart reject an oversize part header with
+    # 400 before the endpoint runs, so a pathologically long filename would test the
+    # parser's header limit rather than this truncation.
+    long_name = "f" * 300 + ".md"
     with patch("app.api.materials.enqueue_distillation"):
         resp = _upload(client, b"content", kind="other", filename=long_name)
     assert resp.status_code == 202
-    assert len(resp.json()["filename"]) <= 255
+    assert len(resp.json()["filename"]) == 255
 
 
 def test_upload_rejects_unknown_kind(client):
