@@ -46,6 +46,7 @@ frontend/tsconfig.tsbuildinfo
 
 # IDE
 .idea/
+.vscode/
 
 # AI workflow and skills (tooling config, not product code)
 .agents/
@@ -53,18 +54,21 @@ frontend/tsconfig.tsbuildinfo
 .github/*
 !.github/workflows/
 claude.md
-CLAUDE.md
-.claude/
 .codex/
 AGENTS.md
 .vercel
 .env*
+
+# make coach-review generated review artifacts (regenerated locally; see the
+# Makefile coach-review target). Durable audit reports keep distinct names
+# (performance-audit-*, multi-user-readiness-audit-*, knowledge-base-alignment-*)
+# and stay tracked.
+docs/audit/coach-*
+
 # >>> ai-workflow (vendored, managed by installer) >>>
 ai-workflow.md
 .ai-policy/
 .githooks/
-.github/copilot-instructions.md
-.github/hooks/
-.vscode/
-.agents/skills/
+CLAUDE.md
+.claude/
 # <<< ai-workflow <<<
