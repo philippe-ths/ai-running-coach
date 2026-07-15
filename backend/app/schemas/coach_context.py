@@ -646,6 +646,13 @@ class RecentActivityItem(BaseModel):
     weekday: Optional[str] = None
     structure: Optional[str] = None  # continuous | intervals (the classifier verdict)
     interval_shape: Optional[str] = None  # e.g. "7x400m"; None for a continuous run
+    # #661: how this past session's interval structure was detected — "recorded_laps"
+    # when the runner pressed the lap button (so a later report must NOT advise the lap
+    # button on this session), else None (stream-detected or not an interval session).
+    # Reuses the exact `metrics.interval_structure.source` vocabulary the subject-run
+    # rule already keys on, so the coach reads a past session the same way. Optional and
+    # null-dropped, so packs stored before #661 still validate on strict re-parse.
+    source: Optional[str] = None
     # #650: the classifier's runner-RELATIVE "long run" verdict, surfaced only when long
     # (None otherwise) so the coach recognises a past long run without guessing a
     # per-runner distance threshold. The symmetric case to the interval marker.
@@ -1838,7 +1845,7 @@ def _drop_recent_training_dedup(rt: Dict[str, Any], _data: Dict[str, Any]) -> No
         # weekday is always populated (from the date), so it stays. Re-parse safe: both
         # default to None when absent.
         for act in win.get("activities", []):
-            for k in ("structure", "interval_shape", "long_run"):
+            for k in ("structure", "interval_shape", "source", "long_run"):
                 if act.get(k) is None:
                     act.pop(k, None)
 

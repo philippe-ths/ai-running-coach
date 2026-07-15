@@ -92,6 +92,18 @@ def _interval_shape(interval_structure: Any) -> Optional[str]:
     return f"{n}x{rounded}m"
 
 
+def _interval_source(interval_structure: Any) -> Optional[str]:
+    """#661: how a past session's interval structure was detected. Returns
+    "recorded_laps" when the runner pressed the lap button (the stored
+    `interval_structure.source`), so a later report knows not to advise the lap
+    button on that session. Returns None for a stream-detected interval session or
+    a non-interval session — the same absence-means-not-lap-recorded reading the
+    subject-run rule uses (`metrics.interval_structure.source == "recorded_laps"`)."""
+    if not isinstance(interval_structure, dict):
+        return None
+    return interval_structure.get("source")
+
+
 def _by_type(window_facts: List[Any]) -> List[RecentTypeBreakdown]:
     """Per-activity-type counts + totals + the type's session share of the window,
     most-frequent type first (ties broken by type name for determinism)."""
@@ -144,6 +156,9 @@ def _recent_activities(window_facts: List[Any]) -> List[RecentActivityItem]:
             weekday=f.local_date.strftime("%a"),
             structure=getattr(f, "structure", None),
             interval_shape=_interval_shape(getattr(f, "interval_structure", None)),
+            # #661: carry the lap-button provenance so a later report engaging this
+            # past session's thread never advises the lap button on a recorded-laps run.
+            source=_interval_source(getattr(f, "interval_structure", None)),
             long_run=True if getattr(f, "duration_class", None) == "long" else None,
         )
         for f in ordered
