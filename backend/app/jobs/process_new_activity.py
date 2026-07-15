@@ -39,7 +39,7 @@ from app.models import Activity, Block, Exchange, StravaAccount
 from app.models.coaching_relationship import CoachingRelationship
 from app.services.analysis import analyze_with_streams
 from app.services.analysis.classifier import Classification, compose_headline
-from app.services.blocks import activity_end, assign_activity_to_block
+from app.services.blocks import activity_end, assign_activity_to_block, is_run_activity
 from app.services.coach import exchange_lifecycle as lifecycle
 from app.services.coach.receipt import build_receipt
 from app.services.coach.service import (
@@ -195,13 +195,13 @@ def _is_run_activity(activity: Activity) -> bool:
     """Whether an activity counts as a run for AUTOMATIC coach-report gating (#643).
 
     A coach report is only auto-generated for runs; every activity still gets its
-    receipt / check-in notification, and on-demand regeneration stays ungated. Uses
-    the coarse Strava `type` (ordinary, trail, and Strava-app treadmill runs all keep
-    `type == "Run"`, so they count), matching `blocks.pick_primary`'s own run test so
-    this gate agrees with which activity `pick_primary` anchors the report on. A
-    distinct Strava `type` such as "VirtualRun" is NOT auto-reported today; broadening
-    that requires changing `pick_primary` too (the report anchor) and is a follow-up."""
-    return (activity.type or "").lower() == "run"
+    receipt / check-in notification, and on-demand regeneration stays ungated.
+    Delegates to `blocks.is_run_activity`, the single run-family predicate shared
+    with `pick_primary` (the report anchor), so the gate agrees with which activity
+    the report generates on. The run family covers the coarse `type == "Run"`
+    (ordinary, trail, treadmill) plus connected-platform "VirtualRun" (Zwift,
+    Peloton), which #644 brought into scope alongside the anchor."""
+    return is_run_activity(activity)
 
 
 def _exchange_for_activity(db: Session, activity: Activity) -> Optional[Exchange]:

@@ -33,13 +33,33 @@ def activity_end(activity: Activity) -> datetime:
     return activity.start_date + timedelta(seconds=activity.elapsed_time_s or 0)
 
 
+# Strava `type` values that count as a run for block-anchoring and automatic
+# coach-report gating (#644). Ordinary, trail, and Strava-app treadmill runs all
+# collapse to "Run"; a connected-platform run (Zwift, Peloton) surfaces as the
+# distinct "VirtualRun" but is just as much a run the coach should anchor on and
+# report. Compared case-insensitively.
+RUN_ACTIVITY_TYPES = frozenset({"run", "virtualrun"})
+
+
+def is_run_activity(activity: Activity) -> bool:
+    """Whether an activity belongs to the run family (ordinary or virtual).
+
+    The single source of truth shared by `pick_primary` (which activity the
+    report anchors on) and the automatic coach-report gate in
+    `process_new_activity`, so "block contains a run" stays exactly equal to
+    "primary is a run" (#643/#644). Both must move together or the gate and the
+    anchor disagree.
+    """
+    return (activity.type or "").lower() in RUN_ACTIVITY_TYPES
+
+
 def pick_primary(members: Sequence[Activity]) -> Activity:
     """The block's primary activity: the run, else the longest member.
 
     Ties (several runs, or no run) resolve to the longest by elapsed time,
     then earliest start for determinism.
     """
-    runs = [a for a in members if (a.type or "").lower() == "run"]
+    runs = [a for a in members if is_run_activity(a)]
     pool = runs or list(members)
     return sorted(pool, key=lambda a: (-(a.elapsed_time_s or 0), a.start_date))[0]
 
