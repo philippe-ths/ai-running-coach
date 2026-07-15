@@ -137,6 +137,43 @@ def test_recent_session_carries_weekday_structure_and_shape():
     assert easy.interval_shape is None  # a continuous run has no rep shape
 
 
+def test_recent_session_carries_interval_source_when_lap_recorded():
+    """#661: a past interval session tags whether the runner pressed the lap button
+    (recorded_laps), so a later report never advises the lap button on it. A
+    stream-detected interval session and a continuous run carry no source (absence =
+    not lap-recorded), matching the subject-run rule's vocabulary."""
+    lap = {"source": "recorded_laps", "work_segments": [{"distance_m": 400.0} for _ in range(7)]}
+    stream = {"work_segments": [{"distance_m": 400.0} for _ in range(6)]}
+    facts = [
+        _fact(0, type="Run", structure="intervals", interval_structure=lap),
+        _fact(1, type="Run", structure="intervals", interval_structure=stream),
+        _fact(2, type="Run", structure="continuous"),
+    ]
+    ctx = build_recent_training(facts, _AS_OF)
+    assert ctx.last_7d.activities[0].source == "recorded_laps"
+    assert ctx.last_7d.activities[1].source is None  # stream-detected, not lap-recorded
+    assert ctx.last_7d.activities[2].source is None  # not an interval session
+
+
+def test_serialization_drops_null_interval_source_keeps_recorded_laps():
+    """#661: the null-drop trim omits a null `source` (costs no tokens) but keeps a
+    real "recorded_laps" marker so the coach can read it."""
+    from app.schemas.coach_context import _drop_recent_training_dedup
+
+    rt = {
+        "last_7d": {
+            "activities": [
+                {"date": "2026-06-01", "type": "Run", "structure": "intervals", "source": "recorded_laps"},
+                {"date": "2026-05-31", "type": "Run", "structure": "intervals", "source": None},
+            ]
+        }
+    }
+    _drop_recent_training_dedup(rt, {})
+    acts = rt["last_7d"]["activities"]
+    assert acts[0]["source"] == "recorded_laps"
+    assert "source" not in acts[1]  # null source dropped
+
+
 def test_recent_session_marks_long_run_only_when_long():
     """#650: a recent session carries a long-run marker ONLY when the classifier's
     runner-relative verdict is "long" — a standard run stays unmarked (no per-session
