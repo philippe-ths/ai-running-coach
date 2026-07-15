@@ -441,17 +441,19 @@ async def stream_chat_response(
     # Uuid column type does not bind a str under SQLite (used in tests).
     activity_id = _coerce_uuid(activity_id)
 
+    # #685: a stored report is NOT required to chat. Under the receipt cadence the
+    # full report lands asynchronously (~30 min after the run), so a runner can open
+    # the activity and ask a question before any report exists. When there is no
+    # report the coach still answers from the activity's own data (splits, profile,
+    # cross-activity thread) plus the on-demand query tools (#648); a stored report,
+    # when present, adds the richer pack context. The safety-floor validator
+    # (`_validate_chat_text`) runs regardless and already tolerates an empty pack.
     report_row = get_active_report_row(db, activity_id) or (
         db.query(CoachReport)
         .filter(CoachReport.activity_id == activity_id)
         .order_by(CoachReport.created_at.desc())
         .first()
     )
-    if not report_row:
-        yield ChatStreamEvent(
-            text="I don't have an analysis for this activity yet. Please generate the coach report first."
-        )
-        return
 
     activity = (
         db.query(Activity)
@@ -478,9 +480,10 @@ async def stream_chat_response(
         )
         return
 
-    # Build context from the stored context pack
-    context_pack = report_row.context_pack or {}
-    report_content = report_row.report or {}
+    # Build context from the stored context pack (empty when no report exists yet,
+    # #685 — the coach then leans on the activity data + on-demand query tools).
+    context_pack = (report_row.context_pack if report_row else None) or {}
+    report_content = (report_row.report if report_row else None) or {}
 
     # Compute per-km splits from the activity's streams
     effective_type = activity.user_intent or activity.type
@@ -538,7 +541,9 @@ async def stream_chat_response(
     system_prompt = _build_chat_system_prompt(
         context_pack, report_content, profile_dict, splits_formatted,
         voice_block, cross_activity_block,
-        prompt_id=report_row.prompt_id,
+        # No stored report yet (#685): frame the (empty) pack under the active
+        # configured prompt so the coach view is byte-stable with the report path.
+        prompt_id=report_row.prompt_id if report_row else settings.COACH_PROMPT_ID,
     )
 
     # Save the user message
