@@ -1,4 +1,4 @@
-.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local coach-review eval eval-selftest diagram-check verify-local deployed-handshake-smoke post-deploy-verify preflight-env-check
+.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local coach-review eval eval-selftest eval-memory eval-memory-selftest diagram-check verify-local deployed-handshake-smoke post-deploy-verify preflight-env-check
 
 # Prefer the project venv interpreter when it exists, fall back to bare python.
 # Path is relative to backend/ since the targets cd there first. CI has no
@@ -82,6 +82,17 @@ eval:
 # no API key required, so this is safe to run in CI.
 eval-selftest:
 	cd backend && $(BACKEND_PY) -m scripts.eval_coach_reports --self-test
+
+# Offline runner-memory eval harness (#658) — the durable-memory counterpart to
+# `eval`. Scores memory writes against ADR 0025 rubric assertions.
+#   make eval-memory EVAL_MEMORY_ARGS="--scan"   # score stored profiles (needs DB)
+eval-memory:
+	cd backend && $(BACKEND_PY) -m scripts.eval_runner_memory $(EVAL_MEMORY_ARGS)
+
+# Validate the runner-memory rubric against its synthetic good/bad fixtures. No DB
+# and no API key required, so this is safe to run in CI.
+eval-memory-selftest:
+	cd backend && $(BACKEND_PY) -m scripts.eval_runner_memory --self-test
 
 # Deployed-only smoke for the Strava + Telegram handshake auth gates (#540).
 # NOT a CI gate: needs a live deployment (real APP_ENV/secrets). Non-mutating —
