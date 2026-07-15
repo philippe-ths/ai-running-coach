@@ -64,12 +64,12 @@ def test_felt_vs_measured_present_with_a_check_in():
     read = build_intensity_read(
         this_session=_session(),
         distribution_adjusted=None,
-        perceived_effort=_pe(divergence_direction="felt_harder", recommended_weighting="rpe_over_hr"),
+        perceived_effort=_pe(divergence_direction="felt_harder", recommended_weighting="lead_with_felt"),
         calibration_hr_drift=_calibrated_drift(),
         confounders=["heat"],
     )
     assert read.felt_vs_measured.read == "felt_harder"
-    assert read.felt_vs_measured.trust == "rpe_over_hr"
+    assert read.felt_vs_measured.trust == "lead_with_felt"
 
 
 def test_felt_vs_measured_absent_without_rpe():

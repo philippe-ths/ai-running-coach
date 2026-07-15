@@ -6,11 +6,11 @@ and the single-shot on-ingest report) must only generate when the block's
 primary activity is a run. On-request regeneration is a separate path and stays
 ungated (not exercised here).
 
-"Running" is the coarse Strava ``type == "Run"`` (ordinary, trail, and
-Strava-app treadmill runs all keep ``type == "Run"``), matching
-``blocks.pick_primary`` so the gate agrees with which activity is chosen as the
-block primary the report generates on. A distinct ``type`` such as "VirtualRun"
-is a known gap (follow-up).
+"Running" is the run family shared with ``blocks.pick_primary`` so the gate
+agrees with which activity is chosen as the block primary the report generates
+on: the coarse Strava ``type == "Run"`` (ordinary, trail, and Strava-app
+treadmill runs all keep ``type == "Run"``) plus the distinct ``VirtualRun``
+(Zwift/Peloton connected-platform runs), brought into scope by #644.
 """
 
 from datetime import datetime
@@ -174,6 +174,29 @@ async def test_trail_run_still_gets_auto_report(db, receipt_cadence, notifier):
     assert result is not None
     row = get_active_report_row(db, run.id)
     assert row is not None and not row.is_fallback
+
+
+async def test_virtual_run_gets_auto_report(db, receipt_cadence, notifier):
+    """A connected-platform run (Zwift/Peloton) has Strava `type == "VirtualRun"`.
+    It is a run the coach should coach, so it is now in the auto-report run family
+    (#644) and gets its automatic report, not just a receipt."""
+    vrun = _seed(db, type="VirtualRun", name="Zwift session")
+    block = _block_of(db, vrun)
+    assert block.primary_activity_id == vrun.id  # picked as the run primary
+    await _send_receipt(db=db, activity=vrun, block=block, notifier=notifier)
+
+    with patch("app.services.coach.service.AnthropicClient",
+               return_value=_client_returning_fuller()):
+        result = await process_block_complete(
+            db=db, block_id=str(block.id), activity_id=str(vrun.id), notifier=notifier
+        )
+
+    assert result is not None
+    ex = _exchange_of(db, vrun)
+    assert ex.fuller_sent_at is not None  # closed: the report went
+    row = get_active_report_row(db, vrun.id)
+    assert row is not None and not row.is_fallback
+    assert len(notifier.sent) == 2  # receipt + report
 
 
 async def test_mixed_block_reports_on_run_primary(db, receipt_cadence, notifier):

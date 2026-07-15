@@ -441,17 +441,19 @@ async def stream_chat_response(
     # Uuid column type does not bind a str under SQLite (used in tests).
     activity_id = _coerce_uuid(activity_id)
 
+    # #685: a stored report is NOT required to chat. Under the receipt cadence the
+    # full report lands asynchronously (~30 min after the run), so a runner can open
+    # the activity and ask a question before any report exists. When there is no
+    # report the coach still answers from the activity's own data (splits, profile,
+    # cross-activity thread) plus the on-demand query tools (#648); a stored report,
+    # when present, adds the richer pack context. The safety-floor validator
+    # (`_validate_chat_text`) runs regardless and already tolerates an empty pack.
     report_row = get_active_report_row(db, activity_id) or (
         db.query(CoachReport)
         .filter(CoachReport.activity_id == activity_id)
         .order_by(CoachReport.created_at.desc())
         .first()
     )
-    if not report_row:
-        yield ChatStreamEvent(
-            text="I don't have an analysis for this activity yet. Please generate the coach report first."
-        )
-        return
 
     activity = (
         db.query(Activity)
@@ -478,9 +480,10 @@ async def stream_chat_response(
         )
         return
 
-    # Build context from the stored context pack
-    context_pack = report_row.context_pack or {}
-    report_content = report_row.report or {}
+    # Build context from the stored context pack (empty when no report exists yet,
+    # #685 — the coach then leans on the activity data + on-demand query tools).
+    context_pack = (report_row.context_pack if report_row else None) or {}
+    report_content = (report_row.report if report_row else None) or {}
 
     # Compute per-km splits from the activity's streams
     effective_type = activity.user_intent or activity.type
@@ -538,7 +541,9 @@ async def stream_chat_response(
     system_prompt = _build_chat_system_prompt(
         context_pack, report_content, profile_dict, splits_formatted,
         voice_block, cross_activity_block,
-        prompt_id=report_row.prompt_id,
+        # No stored report yet (#685): frame the (empty) pack under the active
+        # configured prompt so the coach view is byte-stable with the report path.
+        prompt_id=report_row.prompt_id if report_row else settings.COACH_PROMPT_ID,
     )
 
     # Save the user message
@@ -600,6 +605,8 @@ async def stream_chat_response(
     llm_messages = messages  # mutated across tool rounds (assistant + tool_result turns)
     assistant_text = None
     stream_failed = False
+    # The message served if the stream fails; the except may specialise it (#625).
+    stream_fail_message = "Sorry, I encountered an error. Please try again."
     tools_used: List[str] = []  # ordered, de-duped tool names, persisted for the trace
     last_heartbeat = time.monotonic()
     try:
@@ -668,12 +675,25 @@ async def stream_chat_response(
             assistant_text = _extract_block_text(final_msg.content_blocks)
             break
     except Exception as e:
-        logger.error("Chat streaming error: %s", e)
+        import anthropic
+
+        # #625: an exhausted 429 (the bounded retry in stream_chat_turn gave up)
+        # gets a transparent "busy, try again" message rather than the generic
+        # error — consistent with how the report path degrades on rate limits. Any
+        # other transport error keeps the generic message.
+        rate_limited = isinstance(e, anthropic.RateLimitError)
+        logger.error("Chat streaming error (rate_limited=%s): %s", rate_limited, e)
         stream_failed = True
+        stream_fail_message = (
+            "I'm getting a lot of requests right now, so I couldn't finish that "
+            "reply. Give me a moment and try again — your message is saved."
+            if rate_limited
+            else "Sorry, I encountered an error. Please try again."
+        )
 
     if stream_failed:
         # A transport-level error message is safe by construction; no gating needed.
-        assistant_text = "Sorry, I encountered an error. Please try again."
+        assistant_text = stream_fail_message
     else:
         # Defensive: the tools-off final round should always yield text; an empty
         # reply still gates safely below.

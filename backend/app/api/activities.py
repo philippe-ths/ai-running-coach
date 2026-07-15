@@ -2,6 +2,8 @@ from datetime import date, datetime, timedelta
 from typing import Annotated, List, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -240,7 +242,12 @@ def read_activities(
                 activity, Classification.from_metrics(activity.metrics)
             )
         responses.append(response)
-    return responses
+    # #684: the models above are already validated once (model_validate). Returning
+    # them directly would let FastAPI re-validate against `response_model`, re-running
+    # `ActivityRead.normalize_run_cadence` — a NON-idempotent single-leg->two-leg
+    # doubling — a second time, so avg_cadence would be doubled twice. Serialize the
+    # already-normalized instances directly to keep normalization at exactly one pass.
+    return JSONResponse(content=jsonable_encoder(responses))
 
 @router.get("/activities/{activity_id}", response_model=ActivityDetailRead)
 def read_activity(
@@ -293,7 +300,14 @@ def read_activity(
             sample_count=readiness.sample_count,
         )
 
-    return response
+    # #684: `response` is already validated once (model_validate above). Returning it
+    # directly would let FastAPI re-validate it against `response_model`, re-running
+    # the cadence normalizers (`normalize_run_cadence`, `normalize_stream_cadence`) —
+    # each a NON-idempotent `< 130 spm -> double` rule — a SECOND time, doubling
+    # avg_cadence and the raw cadence stream twice while the guarded smoothed_cadence
+    # recompute stays at one doubling (the 254-vs-127 split). Serialize the
+    # already-normalized instance directly so normalization runs at exactly one pass.
+    return JSONResponse(content=jsonable_encoder(response))
 
 @router.post("/activities/{activity_id}/checkin", response_model=CheckInRead)
 def create_checkin(
