@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 
 from app.api import health, auth, activities, blocks, webhooks, profile, trends, coach, debug, strava_import, materials, account
 from app.core.auth import BasicAuthMiddleware
+from app.core.body_size_limit import BodySizeLimitMiddleware
 from app.services.strava_ingestion.port import StravaRateLimited
 from app.core.clerk_auth import verify_clerk_session
 from app.core.config import settings
@@ -81,6 +82,14 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Edge body-size cap (#705). Added LAST so it is the OUTERMOST middleware: an
+# oversize body is rejected before auth/CORS do any work on it, and before the
+# form parser spools it to disk.
+app.add_middleware(
+    BodySizeLimitMiddleware,
+    max_body_bytes=settings.MAX_REQUEST_BODY_BYTES,
 )
 
 # Include routers. Public (no per-user session): health, auth, webhooks.

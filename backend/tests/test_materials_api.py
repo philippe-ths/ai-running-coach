@@ -67,6 +67,37 @@ def test_upload_rejects_oversize(client, monkeypatch):
     assert resp.status_code == 413
 
 
+def test_upload_rejected_at_edge_before_endpoint_when_body_exceeds_request_cap(client):
+    # #705: a body over the wired edge request cap (MAX_REQUEST_BODY_BYTES, 1 MiB)
+    # is rejected before the endpoint (and before the form parser spools it),
+    # regardless of the endpoint's own 256 KB cap. The middleware captures the cap
+    # at construction, so this exercises the real wired value with an oversize body.
+    oversize = b"x" * (settings.MAX_REQUEST_BODY_BYTES + 1)
+    with patch("app.api.materials.enqueue_distillation") as enqueue:
+        resp = _upload(client, oversize, kind="other")
+    assert resp.status_code == 413
+    enqueue.assert_not_called()  # never reached the endpoint
+
+
+def test_upload_truncates_long_title(client):
+    # #706: the reflected title is length-bounded at rest.
+    long_title = "T" * 5000
+    with patch("app.api.materials.enqueue_distillation"):
+        resp = _upload(client, b"content", kind="other", title=long_title)
+    assert resp.status_code == 202
+    assert len(resp.json()["title"]) == 200
+
+
+def test_upload_truncates_long_filename(client):
+    # #706: the reflected filename (its default-title derivation and the stored
+    # value) is length-bounded at rest.
+    long_name = "f" * 5000 + ".md"
+    with patch("app.api.materials.enqueue_distillation"):
+        resp = _upload(client, b"content", kind="other", filename=long_name)
+    assert resp.status_code == 202
+    assert len(resp.json()["filename"]) <= 255
+
+
 def test_upload_rejects_unknown_kind(client):
     with patch("app.api.materials.enqueue_distillation"):
         resp = _upload(client, b"content", kind="malware")

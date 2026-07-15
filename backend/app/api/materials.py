@@ -46,6 +46,15 @@ router = APIRouter()
 # it aside, so it neither blocks new uploads nor dedups against a fresh one.
 _LIVE_STATUSES = ("processing", "active", "failed")
 
+# Bound the two reflected text fields (#706). `title` (a Form field) and
+# `filename` (from the multipart part) are echoed verbatim in list/detail
+# responses; the file BODY is capped but these were not. Cap them like the
+# distilled fields already are, so a future non-escaping consumer cannot inherit
+# stored oversize/XSS content and responses stay bounded. Truncate (do not
+# reject): an over-long title/filename should not fail an otherwise-valid upload.
+_MAX_TITLE_LEN = 200
+_MAX_FILENAME_LEN = 255
+
 
 def _default_title(filename: str) -> str:
     name = (filename or "material").rsplit("/", 1)[-1]
@@ -109,7 +118,12 @@ async def upload_material(
         )
 
     content_hash = hashlib.sha256(raw_bytes).hexdigest()
-    resolved_title = (title or "").strip() or _default_title(file.filename)
+    # Cap the two reflected fields at rest (#706). `_default_title` derives from the
+    # filename, so bound both the resolved title and the stored filename.
+    resolved_title = ((title or "").strip() or _default_title(file.filename))[
+        :_MAX_TITLE_LEN
+    ]
+    resolved_filename = (file.filename or "material.md")[:_MAX_FILENAME_LEN]
 
     # Dedup / retry on content_hash among the runner's live (non-archived) materials.
     existing = (
@@ -154,7 +168,7 @@ async def upload_material(
         user_id=user_id,
         kind=kind.value,
         title=resolved_title,
-        filename=file.filename or "material.md",
+        filename=resolved_filename,
         raw_text=raw_text,
         content_hash=content_hash,
         status="processing",
