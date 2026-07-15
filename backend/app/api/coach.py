@@ -410,17 +410,12 @@ async def post_chat(
     """Send a message and stream the coach's response via SSE."""
     # P2.1: deny before opening the stream if the activity is not the user's.
     _require_owned_activity(db, activity_id, user)
-    # Validate that a coach report exists
-    existing = (
-        db.query(CoachReport)
-        .filter(CoachReport.activity_id == activity_id)
-        .first()
-    )
-    if not existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Generate a coach report before starting a conversation.",
-        )
+    # #685: do NOT require an existing coach report. Under the receipt cadence a
+    # run's full report is generated asynchronously (~30 min after the session),
+    # so the activity page shows a live chat box before any report exists. The
+    # chat service degrades gracefully with no stored report — it answers from the
+    # activity's own data plus the on-demand query tools (#648) — so hard-blocking
+    # here with a 400 only surfaced to the runner as "couldn't reach your coach".
 
     async def event_stream():
         # Flush a comment frame immediately so the connection (and its 200) is
