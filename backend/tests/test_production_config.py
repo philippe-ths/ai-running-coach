@@ -92,6 +92,39 @@ def test_error_lists_every_missing_setting(monkeypatch):
         assert name in msg
 
 
+def test_raises_in_production_on_cors_wildcard(monkeypatch):
+    # #707: `*` origins with credentials enabled is a real cross-origin hole; the
+    # boot must fail closed on it even when every other setting is present.
+    _set(
+        monkeypatch,
+        APP_ENV="production",
+        CLERK_JWKS_URL=_FAKE_JWKS,
+        BASIC_AUTH_USER=_FAKE_USER,
+        BASIC_AUTH_PASSWORD=_FAKE_PASSWORD,
+        CORS_ALLOWED_ORIGINS="https://app.example.com,*",
+    )
+    with pytest.raises(ProductionConfigError) as exc:
+        assert_production_config()
+    assert "*" in str(exc.value)
+
+
+def test_explicit_cors_allowlist_passes_in_production(monkeypatch):
+    _set(
+        monkeypatch,
+        APP_ENV="production",
+        CLERK_JWKS_URL=_FAKE_JWKS,
+        BASIC_AUTH_USER=_FAKE_USER,
+        BASIC_AUTH_PASSWORD=_FAKE_PASSWORD,
+        CORS_ALLOWED_ORIGINS="https://app.example.com",
+    )
+    assert_production_config()  # does not raise
+
+
+def test_cors_wildcard_ignored_outside_production(monkeypatch):
+    _set(monkeypatch, APP_ENV="local", CORS_ALLOWED_ORIGINS="*")
+    assert_production_config()  # does not raise
+
+
 def test_whitespace_only_value_counts_as_missing(monkeypatch):
     # A fat-fingered blank secret must be treated as unset, not "present", so it
     # cannot satisfy the gate (boundary case for the .strip() check).

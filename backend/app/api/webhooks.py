@@ -1,4 +1,5 @@
 import logging
+import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -61,7 +62,8 @@ def verify_webhook(
             detail="Service unavailable: webhook verify token not configured",
         )
 
-    if mode == "subscribe" and verify_token == expected_token:
+    # Constant-time compare (#706), consistent with BasicAuth/OAuth-state gates.
+    if mode == "subscribe" and secrets.compare_digest(verify_token, expected_token):
         return {"hub.challenge": challenge}
 
     raise HTTPException(status_code=403, detail="Invalid verification token")
@@ -91,7 +93,11 @@ def _event_is_authentic(event: "StravaEvent", db: Session) -> bool:
        it never blocks the legitimate first sight of a new activity.
     """
     expected_subscription_id = settings.STRAVA_WEBHOOK_SUBSCRIPTION_ID
-    if expected_subscription_id and event.subscription_id != expected_subscription_id:
+    # The subscription id is secret-ish (Strava returns it only at registration),
+    # so compare it constant-time on its string form (#706), like the other gates.
+    if expected_subscription_id and not secrets.compare_digest(
+        str(event.subscription_id), str(expected_subscription_id)
+    ):
         logger.warning(
             "strava_webhook_rejected_subscription_mismatch",
             extra={
@@ -252,7 +258,11 @@ def _secret_is_valid(secret_header: str | None) -> bool:
     """
     expected_secret = settings.TELEGRAM_WEBHOOK_SECRET
     if expected_secret:
-        if secret_header != expected_secret:
+        # Constant-time compare (#706); a missing header is a mismatch, and
+        # compare_digest requires two strings (it raises on None).
+        if secret_header is None or not secrets.compare_digest(
+            secret_header, expected_secret
+        ):
             logger.warning("telegram_webhook_rejected_secret_mismatch")
             return False
     elif settings.APP_ENV == "production":

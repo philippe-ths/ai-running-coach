@@ -73,7 +73,7 @@ def get_activity(
     db: Session,
     activity_id: str | uuid.UUID,
     *,
-    user_id: uuid.UUID | None = None,
+    user_id: uuid.UUID,
 ) -> Activity | None:
     # Bind a real UUID: Postgres adapts a string, but SQLite (tests) does not.
     if isinstance(activity_id, str):
@@ -92,11 +92,11 @@ def get_activity(
         # A soft-deleted activity reads as not-present (#410): the detail view
         # 404s on it, consistent with the list and every other read path.
         .filter(Activity.is_deleted == False)  # noqa: E712
+        # P2.1: scope to the authenticated user. user_id is REQUIRED (#706): an
+        # unscoped read is a cross-tenant leak, so another user's activity reads
+        # as absent (the endpoint then 404s), matching the sibling query helpers.
+        .filter(Activity.user_id == user_id)
     )
-    # P2.1: when a user_id is supplied, another user's activity reads as absent
-    # (the endpoint then 404s) rather than leaking across tenants.
-    if user_id is not None:
-        query = query.filter(Activity.user_id == user_id)
     return query.first()
 
 

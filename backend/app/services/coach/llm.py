@@ -76,9 +76,16 @@ def _rate_limit_backoff_seconds(exc: Any, retry_index: int) -> float:
 
 @dataclass
 class Usage:
-    """Token usage for the per-user budget gate (#472). 0 when none was returned."""
+    """Token usage for the per-user budget gate (#472). 0 when none was returned.
+
+    `cache_read_input_tokens` / `cache_creation_input_tokens` (#629) are captured
+    for verification of prompt-cache hits; they are NOT billed on the budget gate
+    (which bills the uncached `input_tokens` only — a conservative under-estimate,
+    since caching strictly lowers real cost)."""
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 def _usage_from_response(response: Any) -> Usage:
@@ -87,7 +94,25 @@ def _usage_from_response(response: Any) -> Usage:
     return Usage(
         input_tokens=getattr(usage, "input_tokens", 0) or 0,
         output_tokens=getattr(usage, "output_tokens", 0) or 0,
+        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
     )
+
+
+def _cacheable_system(system: str) -> List[Dict[str, Any]]:
+    """Wrap the system prompt as a single cacheable content block (#629).
+
+    The Anthropic prompt cache is a prefix match, and our coach system prompt is
+    byte-identical across every activity for a given prompt id + voice, so caching
+    it takes the ~7k-10k input tok/report system prefix from full price to ~0.1x on
+    a cache read. `tools` render before `system` in cache order and our tool schema
+    is deterministic too, so this one breakpoint caches tools + system together.
+
+    Behaviour-preserving: same prompt, same params, same output. A no-op when the
+    prefix is under the model's minimum cacheable length (the API silently ignores
+    the breakpoint), so it never harms the shorter aux-path prompts that also route
+    through the create-based methods."""
+    return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
 
 
 @dataclass
@@ -103,6 +128,9 @@ class MessageResult:
     # Usage for the per-user budget gate (P2.2); 0 when no usage was returned.
     input_tokens: int = 0
     output_tokens: int = 0
+    # Prompt-cache verification (#629); not billed on the budget gate.
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 @dataclass
@@ -146,7 +174,7 @@ class AnthropicClient:
                     model=self.model,
                     max_tokens=max_tokens,
                     temperature=0.2,
-                    system=system,
+                    system=_cacheable_system(system),  # #629 prompt caching
                     messages=[{"role": "user", "content": user}],
                     timeout=_TIMEOUT_SECONDS,
                 )
@@ -230,7 +258,7 @@ class AnthropicClient:
                     model=self.model,
                     max_tokens=max_tokens,
                     temperature=0,
-                    system=system,
+                    system=_cacheable_system(system),  # #629 prompt caching
                     messages=[{"role": "user", "content": user}],
                     tools=[tool],
                     tool_choice={"type": "tool", "name": tool_name},
@@ -314,7 +342,7 @@ class AnthropicClient:
                 async with self.client.messages.stream(
                     model=self.model,
                     max_tokens=max_tokens,
-                    system=system,
+                    system=_cacheable_system(system),  # #629 prompt caching
                     messages=[{"role": "user", "content": user}],
                     thinking={"type": "adaptive"},
                     output_config={"effort": _COACH_EFFORT},
@@ -324,11 +352,23 @@ class AnthropicClient:
                 ) as stream:
                     final = await stream.get_final_message()
                 usage = getattr(final, "usage", None)
+                cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+                cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                # Verify cache behaviour in prod (#629): ~0 read on the first report
+                # in a TTL window (a write instead), then the full system-prompt
+                # count on subsequent reports. A read that stays 0 across reports
+                # signals a silent prefix invalidator.
+                logger.info(
+                    "coach_prompt_cache",
+                    extra={"cache_read": cache_read, "cache_creation": cache_creation},
+                )
                 return MessageResult(
                     content_blocks=list(final.content),
                     stop_reason=final.stop_reason,
                     input_tokens=getattr(usage, "input_tokens", 0) or 0,
                     output_tokens=getattr(usage, "output_tokens", 0) or 0,
+                    cache_read_input_tokens=cache_read,
+                    cache_creation_input_tokens=cache_creation,
                 )
             except (
                 anthropic.APITimeoutError,
