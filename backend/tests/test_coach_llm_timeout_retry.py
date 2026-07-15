@@ -399,3 +399,81 @@ async def test_generate_coach_message_retries_on_429_then_succeeds():
         result = await client.generate_coach_message(system="sys", user="user", tools=[])
 
     assert result.stop_reason == "end_turn"
+
+
+# ---------------------------------------------------------------------------
+# stream_chat_turn — 429 resilience on the CHAT streaming path (#625)
+#
+# The chat path streams tokens (an async generator), so it was left out of #603's
+# scope. A 429 is admission-time capacity raised before the first token, so a
+# bounded retry re-issues the request with no duplicate output; once tokens have
+# streamed it must NOT re-run (that would duplicate the buffered reply).
+# ---------------------------------------------------------------------------
+
+
+def _make_chat_streaming_ctx(outcomes):
+    """`messages.stream` factory shaped for stream_chat_turn. Each entry is
+    consumed per call: a BaseException raised on context entry (the admission-time
+    429), or a (deltas, final) tuple whose text_stream yields `deltas` then whose
+    get_final_message returns `final`."""
+    calls = iter(outcomes)
+
+    @asynccontextmanager
+    async def _ctx(*args, **kwargs):
+        outcome = next(calls)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        deltas, final = outcome
+
+        async def _text_stream():
+            for d in deltas:
+                yield d
+
+        stream = MagicMock()
+        stream.text_stream = _text_stream()
+        stream.get_final_message = AsyncMock(return_value=final)
+        yield stream
+
+    return _ctx
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_turn_retries_on_429_then_succeeds():
+    """A 429 on the first admission is retried; the second attempt streams the
+    reply, so the runner gets a brief wait instead of a failed turn."""
+    client = AnthropicClient(api_key="k", model="m")
+    err = _make_rate_limit_error(retry_after=1)
+    final = _make_ok_message_result()
+    client.client.messages.stream = _make_chat_streaming_ctx(
+        [err, (["Hello ", "there"], final)]
+    )
+
+    deltas = []
+    with patch("asyncio.sleep", new=AsyncMock()):
+        async for d in client.stream_chat_turn(
+            system="s", messages=[{"role": "user", "content": "hi"}]
+        ):
+            deltas.append(d)
+
+    text = "".join(d.text for d in deltas if d.text)
+    assert text == "Hello there"
+    finals = [d for d in deltas if d.final is not None]
+    assert finals and finals[-1].final.stop_reason == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_turn_propagates_429_after_retries_exhausted():
+    """When the bounded retry is exhausted the 429 propagates, so chat.py's
+    safe-degrade path serves a transparent 'busy, try again' message."""
+    client = AnthropicClient(api_key="k", model="m")
+    n = _llm_mod._MAX_RATE_LIMIT_RETRIES
+    client.client.messages.stream = _make_chat_streaming_ctx(
+        [_make_rate_limit_error() for _ in range(n + 1)]
+    )
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        with pytest.raises(anthropic.RateLimitError):
+            async for _ in client.stream_chat_turn(
+                system="s", messages=[{"role": "user", "content": "hi"}]
+            ):
+                pass

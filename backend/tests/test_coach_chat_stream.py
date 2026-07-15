@@ -157,6 +157,36 @@ def test_chat_works_before_a_report_exists(client, db):
     assert saved[1].content == reply
 
 
+def test_chat_degrades_gracefully_on_exhausted_rate_limit(client, db):
+    """#625: when the bounded 429 retry is exhausted, the chat turn degrades to a
+    transparent 'busy, try again' message with a 200/intact connection — not a
+    crash or the generic error."""
+    activity = _seed_activity_with_report(db)
+
+    import anthropic
+    import httpx
+
+    def _rate_limited():
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp = httpx.Response(status_code=429, request=req)
+        return anthropic.RateLimitError("rate limited", response=resp, body=None)
+
+    async def _stub(self, *, system, messages, tools=None, max_tokens=1024):
+        raise _rate_limited()
+        yield  # unreachable; makes this an async generator like the real method
+
+    with patch("app.services.coach.llm.AnthropicClient.stream_chat_turn", new=_stub):
+        resp = client.post(
+            f"/api/activities/{activity.id}/coach-chat",
+            json={"message": "How did I do?"},
+        )
+
+    assert resp.status_code == 200
+    assert "data: [DONE]" in resp.text
+    reconstructed = _reconstruct_from_sse(resp.text).lower()
+    assert "requests" in reconstructed and "moment" in reconstructed
+
+
 def test_chat_stream_reports_error_without_breaking_connection(client, db):
     """A failure mid-stream must not sever the connection (which the browser
     shows as a bare "Load failed") — it streams a readable message and closes

@@ -605,6 +605,8 @@ async def stream_chat_response(
     llm_messages = messages  # mutated across tool rounds (assistant + tool_result turns)
     assistant_text = None
     stream_failed = False
+    # The message served if the stream fails; the except may specialise it (#625).
+    stream_fail_message = "Sorry, I encountered an error. Please try again."
     tools_used: List[str] = []  # ordered, de-duped tool names, persisted for the trace
     last_heartbeat = time.monotonic()
     try:
@@ -673,12 +675,25 @@ async def stream_chat_response(
             assistant_text = _extract_block_text(final_msg.content_blocks)
             break
     except Exception as e:
-        logger.error("Chat streaming error: %s", e)
+        import anthropic
+
+        # #625: an exhausted 429 (the bounded retry in stream_chat_turn gave up)
+        # gets a transparent "busy, try again" message rather than the generic
+        # error — consistent with how the report path degrades on rate limits. Any
+        # other transport error keeps the generic message.
+        rate_limited = isinstance(e, anthropic.RateLimitError)
+        logger.error("Chat streaming error (rate_limited=%s): %s", rate_limited, e)
         stream_failed = True
+        stream_fail_message = (
+            "I'm getting a lot of requests right now, so I couldn't finish that "
+            "reply. Give me a moment and try again — your message is saved."
+            if rate_limited
+            else "Sorry, I encountered an error. Please try again."
+        )
 
     if stream_failed:
         # A transport-level error message is safe by construction; no gating needed.
-        assistant_text = "Sorry, I encountered an error. Please try again."
+        assistant_text = stream_fail_message
     else:
         # Defensive: the tools-off final round should always yield text; an empty
         # reply still gates safely below.
