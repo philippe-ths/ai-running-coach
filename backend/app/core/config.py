@@ -321,6 +321,15 @@ class Settings(BaseSettings):
     USER_MATERIAL_MAX_BYTES: int = 262144  # 256 KB per uploaded .md file
     USER_MATERIAL_MAX_COUNT: int = 50  # max non-archived materials per user
 
+    # Edge request-body cap (#705). Bounds the total body of ANY request before the
+    # form parser spools it to disk, so an oversize coach-material upload is rejected
+    # at the app edge instead of after a multi-GB body has landed. The largest
+    # legitimate request is a material upload (<=256 KB text + multipart overhead);
+    # 1 MiB leaves ~4x headroom for framing/growth while capping abuse. The material
+    # endpoint's own 256 KB check still fires between 256 KB and this cap, so valid
+    # uploads are unaffected.
+    MAX_REQUEST_BODY_BYTES: int = 1048576  # 1 MiB
+
     # Phase 2 identity: social login via Clerk (ADR 0022). The frontend (Vercel)
     # owns the Clerk session; the backend VERIFIES the session token itself via
     # Clerk's JWKS and resolves user_id from the verified email, so it never
