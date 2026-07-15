@@ -663,6 +663,24 @@ const NODES = [
   from:[], body:()=> '' },
 ];
 
+/* ---------- omit the flat sections the live grouped pack STRUCTURALLY REPLACES ----------
+   perceived_effort / calibration / training_load / training_volume / recent_training / intensity
+   are still declared on CoachContextPack — so the drift guard binds each to a p_* node here, and
+   a flat-prompt rollback repopulates them — but the LIVE grouped pack emits their merged
+   successors instead (intensity_read / referral / readiness / recent_weeks / intensity_mix). When
+   the flat section is absent from THIS capture the node is not "empty this run", it is gone from
+   how the pack builds now: we drop it from the drawn NODES entirely and strip it from every
+   from-edge, so the deriv builders route straight to their grouped successor with no dead box in
+   between. Capture-driven: a rollback capture (flat prompt) has P.<section> present, HIDDEN is
+   empty, and the flat node draws again with zero code change. The source text is untouched (only
+   the runtime array is pruned), so the drift guard still sees every p_* binding. */
+const _REPLACED_BY_GROUPED = { p_perceived:'perceived_effort', p_calibration:'calibration',
+  p_training_load:'training_load', p_training_volume:'training_volume',
+  p_recent_training:'recent_training', p_intensity:'intensity' };
+const HIDDEN = new Set(Object.keys(_REPLACED_BY_GROUPED).filter(id=>!P[_REPLACED_BY_GROUPED[id]]));
+for(const id of HIDDEN){ const i=NODES.findIndex(n=>n.id===id); if(i>=0) NODES.splice(i,1); }
+NODES.forEach(n=>{ if(n.from) n.from=n.from.filter(s=>!HIDDEN.has(s)); });
+
 /* ---------- build adjacency ---------- */
 const byId = Object.fromEntries(NODES.map(n=>[n.id,n]));
 const consumers = {}; NODES.forEach(n=>consumers[n.id]=[]);
