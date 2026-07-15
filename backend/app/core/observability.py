@@ -232,6 +232,21 @@ def assert_production_config() -> None:
     """
     if settings.APP_ENV != "production":
         return
+
+    # CORS wildcard guard (#707). `allow_credentials=True` is hardcoded in
+    # main.py, so a `*` origin would let ANY site make credentialed requests --
+    # an actual cross-origin hole, not just a permissive default. Refuse to boot
+    # on it (fail closed, same posture as the missing-settings guard below). The
+    # default is an explicit allowlist, so this only fires on a real misconfig,
+    # and a false positive can only block a new deploy, never the running one.
+    if "*" in settings.cors_allowed_origins_list:
+        logging.getLogger(__name__).critical("production_cors_wildcard_with_credentials")
+        raise ProductionConfigError(
+            "Refusing to boot: CORS_ALLOWED_ORIGINS contains '*' while credentials "
+            "are enabled, which lets any origin make credentialed requests. Set an "
+            "explicit origin allowlist and redeploy."
+        )
+
     missing = [
         name
         for name in _REQUIRED_IN_PRODUCTION
