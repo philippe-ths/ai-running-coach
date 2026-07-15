@@ -48,7 +48,6 @@ from app.services.analysis.classifier import Classification, playbook_key
 from app.services.coach.prompts import (
     MESSAGE_PROMPT_PREFIX,
     PROMPT_VERSIONS,
-    TWO_STAGE_PROMPT_ID,
     TWO_STAGE_PROMPT_IDS,
     build_system_prompt,
     is_grouped_pack_prompt,

@@ -69,7 +69,6 @@ export default async function ActivityDetail({ params }: { params: { id: string 
                     )}
                 </div>
             </div>
-            {/* IntentSelector moved to main content */}
         </div>
       </header>
 

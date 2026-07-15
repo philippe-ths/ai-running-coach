@@ -5,7 +5,7 @@ LLM client abstraction — keeps the coach service decoupled from any specific p
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Dict, List, Optional, Protocol
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
 
@@ -115,12 +115,6 @@ class ChatTurnDelta:
     final: Optional[MessageResult] = None
 
 
-class LLMClient(Protocol):
-    """Protocol for LLM clients that return raw JSON strings."""
-
-    async def generate_json(self, system: str, user: str, max_tokens: int) -> str: ...
-
-
 class AnthropicClient:
     """Anthropic Claude client for JSON generation."""
 
@@ -191,26 +185,6 @@ class AnthropicClient:
                     await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
                     continue
                 raise
-
-    async def generate_text(
-        self, system: str, user: str, max_tokens: int = 512
-    ) -> str:
-        """Generate a free-text (prose) completion.
-
-        Same transport, retry, and timeout behaviour as `generate_json`; the only
-        difference is intent — the caller expects prose, not JSON, so there is no
-        parsing downstream. Used by the A2c Consolidation job to write the
-        relationship narrative on the cheap Haiku tier.
-        """
-        return await self.generate_json(system=system, user=user, max_tokens=max_tokens)
-
-    async def generate_text_with_usage(
-        self, *, system: str, user: str, max_tokens: int = 512
-    ) -> tuple[str, Usage]:
-        """`generate_text` that also returns token usage for the budget gate (#472)."""
-        return await self.generate_json_with_usage(
-            system=system, user=user, max_tokens=max_tokens
-        )
 
     async def generate_structured(
         self,
@@ -401,23 +375,6 @@ class AnthropicClient:
                     await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
                     continue
                 raise
-
-    async def stream_chat(
-        self,
-        system: str,
-        messages: List[dict],
-        max_tokens: int = 1024,
-    ) -> AsyncIterator[str]:
-        """Stream text deltas for a multi-turn conversation."""
-        async with self.client.messages.stream(
-            model=self.model,
-            max_tokens=max_tokens,
-            temperature=0.3,
-            system=system,
-            messages=messages,
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
 
     async def stream_chat_turn(
         self,
