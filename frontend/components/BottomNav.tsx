@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import { Home, Activity, Gauge, TrendingUp, LucideIcon } from 'lucide-react';
 
 const TABS: { href: string; label: string; Icon: LucideIcon }[] = [
@@ -11,17 +12,44 @@ const TABS: { href: string; label: string; Icon: LucideIcon }[] = [
   { href: '/trends', label: 'Trends', Icon: TrendingUp },
 ];
 
+// The on-screen keyboard shrinks the VISUAL viewport but not the LAYOUT viewport,
+// so a `position: fixed; bottom: 0` bar stays pinned to the layout-viewport bottom —
+// which is now hidden behind the keyboard, leaving the bar stranded partway up the
+// screen over page content (iOS Safari especially, #683). The bar is not useful
+// while typing, so hide it whenever the keyboard is open and restore it on close.
+// The `visualViewport` height dropping well below the layout height is the reliable
+// cross-browser keyboard signal; the threshold ignores the smaller URL-bar deltas.
+const KEYBOARD_HEIGHT_THRESHOLD_PX = 150;
+
+function useKeyboardOpen(): boolean {
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      setKeyboardOpen(window.innerHeight - vv.height > KEYBOARD_HEIGHT_THRESHOLD_PX);
+    };
+    vv.addEventListener('resize', update);
+    update();
+    return () => vv.removeEventListener('resize', update);
+  }, []);
+
+  return keyboardOpen;
+}
+
 // Native-app-style bottom tab bar. Mobile only (md:hidden); the top NavBar's
 // text links take over on larger screens.
 export default function BottomNav() {
   const pathname = usePathname();
+  const keyboardOpen = useKeyboardOpen();
 
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href);
 
   return (
     <nav
-      className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-gray-200 bg-white/95 backdrop-blur dark:border-gray-700 dark:bg-gray-900/95 pb-[max(0.375rem,calc(env(safe-area-inset-bottom)-0.75rem))]"
+      className={`${keyboardOpen ? 'hidden' : ''} md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-gray-200 bg-white/95 backdrop-blur dark:border-gray-700 dark:bg-gray-900/95 pb-[max(0.375rem,calc(env(safe-area-inset-bottom)-0.75rem))]`}
       aria-label="Primary"
     >
       <div className="flex items-stretch justify-around">
