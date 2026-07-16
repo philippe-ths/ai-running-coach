@@ -1,4 +1,7 @@
+@north-star.md
+
 > Domain vocabulary lives in `CONTEXT.md`. This file describes the current implementation; the glossary describes the language.
+> The North Star above is the standing test for every coach-LLM decision (loaded via this file's import); apply it alongside the workflow whenever a change touches what the coach receives or is told.
 
 ## Product Summary
 
