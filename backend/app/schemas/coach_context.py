@@ -1030,6 +1030,7 @@ class RecentWeeksActivity(BaseModel):
     hr_drift: Optional[float] = None      # within-run cardiac drift, HR-bearing runs/rides only
     structure: Optional[str] = None       # continuous | intervals (runs only)
     shape: Optional[str] = None           # e.g. "6x800m" (interval runs only)
+    source: Optional[str] = None     # "recorded_laps" when the runner pressed the lap button on this past session (so a later report must NOT advise the lap button on it), else None; reuses the exact metrics.interval_structure.source vocabulary the subject-run rule keys on. Null-dropped, so packs stored before this change still validate on strict re-parse.
     long_run: Optional[bool] = None       # runner-relative long-run verdict, surfaced only when long
     pain: Optional[int] = None            # check-in pain score, surfaced only when present
     notes: Optional[str] = None           # bounded check-in notes, surfaced only when present

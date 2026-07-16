@@ -1115,6 +1115,26 @@ SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER = _regroup_lean_opener_prompt(
     SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER
 )
 
+# ADR 0026 follow-up (#712): grouped_v6 = grouped_v5's prose (grouped_v3 base + v3
+# orientation) with the recorded-laps discipline RAISED from the subject run to the CLASS.
+# #661 added the `source == "recorded_laps"` marker to recent-session data; rather than bolt a
+# second, parallel past-session sentence onto the existing rule, this rewrites the one clause to
+# cover ANY session whose laps were runner-recorded — this run or a past one the coach revisits
+# from recent_weeks — so the rule is stated once at the right altitude. One clause replaced;
+# every prior prompt byte-identical; ships INERT (flip target: grouped_v5 -> grouped_v6).
+_LEAN_LAPS_RULE_SUBJECT_ONLY = (
+    "if the laps were runner-recorded, never tell them to use the lap button they already pressed."
+)
+_LEAN_LAPS_RULE_WITH_PAST = (
+    "if a session's laps were runner-recorded — this run or an earlier one you're revisiting — "
+    "never tell them to use the lap button they already pressed."
+)
+assert _LEAN_LAPS_RULE_SUBJECT_ONLY in SYSTEM_PROMPT_MESSAGE_LEAN_V1  # guard: fail loudly if the base clause wording drifts
+SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V6 = _regroup_lean_prompt(
+    SYSTEM_PROMPT_MESSAGE_LEAN_V1.replace(_LEAN_LAPS_RULE_SUBJECT_ONLY, _LEAN_LAPS_RULE_WITH_PAST),
+    _GROUP_ORIENTATION_V3,
+)
+
 
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
@@ -1189,6 +1209,10 @@ PROMPT_VERSIONS = {
     # fuller prose never named salience), so it reuses grouped_v3's system prompt. The
     # disposition-first prose tune lands as a later commit on this id. Ships INERT.
     "coach_message_lean_grouped_v5": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3,
+    # #712 — grouped_v6 = grouped_v5 + the past-session recorded-laps prose clause. Same
+    # feature set as grouped_v5 (identical pack); only the fuller system-prompt TEXT differs.
+    # Ships INERT (flip target: grouped_v5 -> grouped_v6, zero code change).
+    "coach_message_lean_grouped_v6": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V6,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -1234,6 +1258,9 @@ _OPENER_PROMPTS = {
     # carries salience.novelty and the opener prose (which reads it) stays byte-identical to
     # grouped_v3. Prod never runs the opener (receipt cadence), so this path is defensive.
     "coach_message_lean_grouped_v5": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
+    # #712: the past-session laps rule is a fuller-only prose clause; the opener carries no lap
+    # advice, so grouped_v6's opener is byte-identical to grouped_v3/v5.
+    "coach_message_lean_grouped_v6": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
 }
 
 # ADR 0026 Slice 1: the prompt ids that receive the GROUPED pack serialization
@@ -1248,6 +1275,7 @@ GROUPED_PACK_PROMPT_IDS: frozenset[str] = frozenset(
         "coach_message_lean_grouped_v3",
         "coach_message_lean_grouped_v4",
         "coach_message_lean_grouped_v5",
+        "coach_message_lean_grouped_v6",
     }
 )
 

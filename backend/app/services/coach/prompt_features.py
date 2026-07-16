@@ -338,6 +338,28 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.PACK_COACH_VIEW,
         }
     ),
+    # #712: grouped_v6 = grouped_v5 + the past-session recorded-laps prose clause. NO new
+    # capability (same feature set as grouped_v5), so its pack is byte-identical to grouped_v5's;
+    # only the system-prompt TEXT differs. Ships INERT (flip target: grouped_v5 -> grouped_v6).
+    "coach_message_lean_grouped_v6": frozenset(
+        {
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.READINESS,
+            _F.USER_MATERIALS,
+            _F.RECENT_WEEKS,
+            _F.STREAM_VIEW,
+            _F.TRAINING_HISTORY_2WK,
+            _F.MEMORY,
+            _F.INTENSITY_READ,
+            _F.INTENSITY_MIX,
+            _F.METRICS_COACH_FRAMED,
+            _F.SALIENCE_DROPPED,
+            _F.PACK_COACH_VIEW,
+        }
+    ),
 }
 
 

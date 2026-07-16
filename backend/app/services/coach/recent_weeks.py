@@ -143,6 +143,16 @@ def _totals(window_facts: List[Any]) -> RecentWeeksTotals:
     )
 
 
+def _interval_source(interval_structure: Any) -> Optional[str]:
+    """How this past session's interval structure was detected — "recorded_laps" when
+    the runner pressed the lap button, else None. Mirrors recent_training._interval_source,
+    reusing the exact `metrics.interval_structure.source` vocabulary the subject-run rule
+    keys on, so the coach reads a past session the same way (#712)."""
+    if not isinstance(interval_structure, dict):
+        return None
+    return interval_structure.get("source")
+
+
 def _activity(fact: Any, checkins: dict) -> RecentWeeksActivity:
     ci: Optional[CheckInFacts] = checkins.get(getattr(fact, "activity_id", None))
     is_run = _is_run(fact)
@@ -165,6 +175,7 @@ def _activity(fact: Any, checkins: dict) -> RecentWeeksActivity:
         ),
         structure=(getattr(fact, "structure", None) if is_run else None),
         shape=(_interval_shape(getattr(fact, "interval_structure", None)) if is_run else None),
+        source=(_interval_source(getattr(fact, "interval_structure", None)) if is_run else None),
         long_run=(True if (is_run and getattr(fact, "duration_class", None) == "long") else None),
         pain=ci.pain_score if ci else None,
         notes=note,
