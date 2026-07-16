@@ -46,11 +46,37 @@ PRICE_PER_MTOK: Dict[str, tuple[float, float]] = {
 }
 _DEFAULT_PRICE = (5.0, 25.0)  # conservative: assume Opus tier when unknown
 
+# Prompt-caching price multipliers on the INPUT price (#709/#629). Anthropic
+# bills a cache read at ~0.1x the base input price and a cache write at ~1.25x
+# for the 5-minute ephemeral TTL the coach uses (llm.py sets `cache_control:
+# {"type": "ephemeral"}` with no `ttl`, i.e. the 5-min default). A 1-hour TTL
+# would be 2.0x; if the coach ever switches TTL, bump _CACHE_WRITE_MULTIPLIER.
+_CACHE_READ_MULTIPLIER = 0.1
+_CACHE_WRITE_MULTIPLIER = 1.25
 
-def cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
-    """List-price cost of one call in USD."""
+
+def cost_usd(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_input_tokens: int = 0,
+    cache_creation_input_tokens: int = 0,
+) -> float:
+    """List-price cost of one call in USD, cache-aware (#709).
+
+    With prompt caching active the API reports `input_tokens` as only the
+    *uncached* input; the cached portion arrives as `cache_read_input_tokens`
+    (billed ~0.1x) and `cache_creation_input_tokens` (billed ~1.25x). The three
+    input buckets are disjoint, so their costs add. Callers that pass no cache
+    counts (the pre-caching path) are byte-stable with the old 3-arg pricing.
+    """
     price_in, price_out = PRICE_PER_MTOK.get(model, _DEFAULT_PRICE)
-    return (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+    return (
+        input_tokens * price_in
+        + cache_read_input_tokens * price_in * _CACHE_READ_MULTIPLIER
+        + cache_creation_input_tokens * price_in * _CACHE_WRITE_MULTIPLIER
+        + output_tokens * price_out
+    ) / 1_000_000
 
 
 def _now() -> datetime:
@@ -193,9 +219,23 @@ class BudgetGate:
             logger.warning("llm_budget_check_failed", extra={"error": str(exc)})
             return False
 
-    def record(self, user_id, model: str, input_tokens: int, output_tokens: int) -> None:
+    def record(
+        self,
+        user_id,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_input_tokens: int = 0,
+        cache_creation_input_tokens: int = 0,
+    ) -> None:
         """Add one call's list-price cost to the user's and the global windows."""
-        amount = cost_usd(model, input_tokens, output_tokens)
+        amount = cost_usd(
+            model,
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+        )
         if amount <= 0:
             return
         today = _now().date()
@@ -268,5 +308,19 @@ def over_budget(user_id) -> bool:
     return get_gate().over_budget(user_id)
 
 
-def record(user_id, model: str, input_tokens: int, output_tokens: int) -> None:
-    get_gate().record(user_id, model, input_tokens, output_tokens)
+def record(
+    user_id,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_input_tokens: int = 0,
+    cache_creation_input_tokens: int = 0,
+) -> None:
+    get_gate().record(
+        user_id,
+        model,
+        input_tokens,
+        output_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+    )

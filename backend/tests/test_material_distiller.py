@@ -107,7 +107,14 @@ async def test_distill_records_haiku_spend_for_the_user(db):
     with patch.object(md, "budget_record", MagicMock()) as rec:
         await md.distill_material(db, material.id, client=client)
 
-    rec.assert_called_once_with(material.user_id, "claude-haiku-4-5", 100, 50)
+    rec.assert_called_once_with(
+        material.user_id,
+        "claude-haiku-4-5",
+        100,
+        50,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
 
 
 @pytest.mark.asyncio
