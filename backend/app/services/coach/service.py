@@ -977,7 +977,14 @@ async def _call_message(
     # P2.2: count EVERY sub-call's spend (the retry/escalation fan-out is the
     # cost lever the going-live doc flags), keyed by activity-owner user_id.
     if user_id is not None:
-        budget_record(user_id, client.model, result.input_tokens, result.output_tokens)
+        budget_record(
+            user_id,
+            client.model,
+            result.input_tokens,
+            result.output_tokens,
+            cache_read_input_tokens=result.cache_read_input_tokens,
+            cache_creation_input_tokens=result.cache_creation_input_tokens,
+        )
     return result
 
 

@@ -261,7 +261,14 @@ async def generate_receipt_templates(
             max_tokens=_MAX_TOKENS,
         )
         if user_id is not None:
-            budget_record(user_id, client.model, usage.input_tokens, usage.output_tokens)
+            budget_record(
+                user_id,
+                client.model,
+                usage.input_tokens,
+                usage.output_tokens,
+                cache_read_input_tokens=usage.cache_read_input_tokens,
+                cache_creation_input_tokens=usage.cache_creation_input_tokens,
+            )
         record = GeneratedReceiptTemplates.model_validate(raw)
     except Exception:  # noqa: BLE001 — fail-visible to logs, never crash; floor stands
         logger.exception("receipt-voice generation failed; house-default floor stands")
