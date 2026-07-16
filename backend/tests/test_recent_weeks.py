@@ -222,3 +222,41 @@ def test_notes_are_bounded():
     rw = _build(checkins)
     wed = rw.this_week.days[2].activities[0]
     assert wed.notes is not None and len(wed.notes) <= 200
+
+
+def test_recorded_laps_source_carried_on_recent_weeks():
+    """#712: a past session whose interval structure came from the runner's own recorded
+    laps carries source=='recorded_laps', so a later report knows not to advise the lap
+    button on it. Mirrors the subject-run `metrics.interval_structure.source` reading."""
+    lap_run = FakeFact(
+        "lap_run", date(2026, 7, 14), distance_m=8000, moving_time_s=2400,
+        effort_score=120.0, effort="hard", structure="intervals",
+        interval_structure={
+            "source": "recorded_laps",
+            "work_segments": [{"distance_m": 400}] * 8,
+        },
+    )
+    facts = _baseline_history() + [lap_run]
+    rw = build_recent_weeks(facts, {}, AS_OF)
+    act = next(a for d in rw.this_week.days for a in d.activities if a.type == "Run")
+    assert act.source == "recorded_laps"
+    # It survives the section's null-strip serialization (byte present when it applies).
+    from app.schemas.coach_context import _strip_nulls_in_place
+    dumped = act.model_dump()
+    _strip_nulls_in_place(dumped)
+    assert dumped.get("source") == "recorded_laps"
+
+
+def test_stream_detected_and_continuous_runs_have_no_source_marker():
+    """A stream-detected interval run (interval_structure without a `source` key) and a
+    continuous run (no interval_structure) both carry source is None, so it is dropped
+    from serialization — byte-stable when absent. The shared fixture's l_fri/t_wed carry
+    interval_structure with NO source, and the walk is a non-run."""
+    from app.schemas.coach_context import _strip_nulls_in_place
+    rw = _build()
+    for d in list(rw.last_week.days) + list(rw.this_week.days):
+        for a in d.activities:
+            assert a.source is None
+            dumped = a.model_dump()
+            _strip_nulls_in_place(dumped)
+            assert "source" not in dumped

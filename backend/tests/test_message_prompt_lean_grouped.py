@@ -108,3 +108,23 @@ def test_grouped_builds_for_both_modes():
 
 def test_grouped_ships_inert():
     assert settings.COACH_PROMPT_ID != GROUPED
+
+
+def test_message_prompt_lean_grouped_v6_extends_laps_rule_to_past_sessions():
+    """#712: grouped_v6 = grouped_v5's fuller prose with the recorded-laps discipline
+    extended to a past session pulled from recent_weeks. It differs from grouped_v5 ONLY
+    in that one laps clause; the opener is byte-identical; it serves the grouped pack."""
+    v5 = prompts.PROMPT_VERSIONS["coach_message_lean_grouped_v5"]
+    v6 = prompts.PROMPT_VERSIONS["coach_message_lean_grouped_v6"]
+    # v6 differs from v5 ONLY by the extended past-session laps clause.
+    assert v6 != v5
+    assert v6.replace(prompts._LEAN_LAPS_RULE_WITH_PAST, prompts._LEAN_LAPS_RULE_SUBJECT_ONLY) == v5
+    assert "past session you bring up from their recent weeks" in v6
+    assert "past session you bring up from their recent weeks" not in v5
+    # opener byte-identical (no lap clause in the opener).
+    assert (
+        prompts._OPENER_PROMPTS["coach_message_lean_grouped_v6"]
+        == prompts._OPENER_PROMPTS["coach_message_lean_grouped_v5"]
+    )
+    # grouped serialization + feature parity with the flip target.
+    assert "coach_message_lean_grouped_v6" in prompts.GROUPED_PACK_PROMPT_IDS
