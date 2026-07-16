@@ -329,6 +329,89 @@ def get_block_primary_report_row(db: Session, activity_id) -> Optional[CoachRepo
     return get_displayable_report_row(db, block.primary_activity_id)
 
 
+@dataclass
+class _GenerationRequest:
+    """Everything one LLM generation call for an activity needs, assembled once.
+
+    Produced by `_assemble_generation_request` and consumed by the three
+    generation entry points (get_or_generate / generate_opener / generate_fuller).
+    `input_hash` is the pack fingerprint (the cache identity); `pack_dict` is the
+    LLM-facing serialization (flat vs grouped per ADR 0026).
+    """
+
+    prompt_id: str
+    schema_version: str
+    pack: CoachContextPack
+    pack_dict: dict
+    input_hash: str
+    system_prompt: str
+    user_message: str
+    voice: object
+
+
+def _assemble_generation_request(
+    db: Session,
+    activity: Activity,
+    *,
+    mode: str = "fuller",
+    continuity: Optional[ContinuityContext] = None,
+) -> _GenerationRequest:
+    """Assemble the shared generation request for one activity: the context pack,
+    its fingerprint (the cache identity), the LLM-facing serialized pack (flat vs
+    grouped per ADR 0026), the mode-appropriate system prompt, and the outgoing
+    user message. Shared by all three generation entry points so the
+    pack-build -> serialize -> prompt-render sequence — and the flat/grouped
+    branch — lives in exactly one place.
+
+    `mode` selects the two-stage form: "fuller" (the default, deep-coaching prompt
+    + playbook + fuller view) or "opener" (the lean reaction prompt; the playbook
+    is ignored and the opener view keeps salience). `continuity` (the opener prose
+    + reply) rides the pack on the fuller turn only. Pure assembly (reads only):
+    the caller owns cache-checking and persistence.
+    """
+    prompt_id = settings.COACH_PROMPT_ID
+    schema_version = active_schema_version(prompt_id)
+    # The runner's stance (P1.3) keys the corpus school and the emphasis section
+    # under a stance-aware prompt; inert otherwise.
+    stance = _resolve_stance_for_activity(db, activity)
+    pack = build_context_pack(
+        db, activity, continuity=continuity, prompt_id=prompt_id, stance=stance
+    )
+    input_hash = pack.fingerprint()
+    # ADR 0026: serve the grouped pack under a grouped-pack prompt id, the flat pack
+    # otherwise. The stored context_pack matches what the LLM saw; loaders (chat, eval)
+    # are shape-tolerant via CoachContextPack.load. The fingerprint stays flat-based, so
+    # the cache identity is unchanged.
+    pack_dict = (
+        pack.to_grouped_dict()
+        if is_grouped_pack_prompt(prompt_id)
+        else pack.to_serializable_dict()
+    )
+    # The activity-type playbook (ADR 0007) rides the fuller/single-shot system
+    # prompt; build_system_prompt ignores it under mode="opener". The voice block
+    # (P1.1) rides both stages via render_voice_block (a no-op for non-voice prompts).
+    classification = Classification.from_metrics(activity.metrics)
+    voice = _resolve_voice_for_activity(db, activity)
+    system_prompt = build_system_prompt(
+        prompt_id,
+        playbook_key(activity, classification),
+        mode=mode,
+        voice=voice,
+        pack=pack,
+    )
+    user_message = _llm_pack_message(pack_dict, prompt_id, mode=mode)
+    return _GenerationRequest(
+        prompt_id=prompt_id,
+        schema_version=schema_version,
+        pack=pack,
+        pack_dict=pack_dict,
+        input_hash=input_hash,
+        system_prompt=system_prompt,
+        user_message=user_message,
+        voice=voice,
+    )
+
+
 async def get_or_generate_coach_report(
     db: Session, activity_id: str, force: bool = False
 ) -> Optional[CoachReportRead]:
@@ -372,33 +455,9 @@ async def get_or_generate_coach_report(
     if not activity or not activity.metrics:
         return None
 
-    # Resolve the active prompt up front: the prompt id gates the corpus pack
-    # section (P1.2), so it must be known before the pack is built.
-    prompt_id = settings.COACH_PROMPT_ID
-    schema_version = active_schema_version(prompt_id)
-
-    # Build context pack. The runner's stance (P1.3) keys the corpus school and the
-    # emphasis section under a stance-aware prompt; inert otherwise.
-    stance = _resolve_stance_for_activity(db, activity)
-    pack = build_context_pack(db, activity, prompt_id=prompt_id, stance=stance)
-    input_hash = pack.fingerprint()
-    # ADR 0026: serve the grouped pack under a grouped-pack prompt id, the flat pack
-    # otherwise. The stored context_pack matches what the LLM saw; loaders (chat, eval)
-    # are shape-tolerant via CoachContextPack.load. The fingerprint stays flat-based, so
-    # the cache identity is unchanged.
-    pack_dict = (
-        pack.to_grouped_dict()
-        if is_grouped_pack_prompt(prompt_id)
-        else pack.to_serializable_dict()
-    )
-
-    # Build prompt with activity-type playbook, selected from the axes (ADR 0007)
-    classification = Classification.from_metrics(activity.metrics)
-    voice = _resolve_voice_for_activity(db, activity)
-    system_prompt = build_system_prompt(
-        prompt_id, playbook_key(activity, classification), voice=voice, pack=pack
-    )
-    user_message = _llm_pack_message(pack_dict, prompt_id)
+    # Assemble the generation request (pack, fingerprint, serialized pack, system
+    # prompt, user message). Single-shot uses the default fuller mode + playbook.
+    req = _assemble_generation_request(db, activity)
 
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY,
@@ -407,27 +466,27 @@ async def get_or_generate_coach_report(
 
     # Dispatch on prompt family (ADR 0009): the A3 prose-message path vs the
     # legacy structured path. Both normalise to a _GenOutcome so storage is shared.
-    if prompt_id.startswith(MESSAGE_PROMPT_PREFIX):
+    if req.prompt_id.startswith(MESSAGE_PROMPT_PREFIX):
         outcome = await _generate_message(
-            client, system_prompt, user_message, pack, user_id=activity.user_id
+            client, req.system_prompt, req.user_message, req.pack, user_id=activity.user_id
         )
     else:
         outcome = await _generate_structured(
-            client, system_prompt, user_message, pack, user_id=activity.user_id
+            client, req.system_prompt, req.user_message, req.pack, user_id=activity.user_id
         )
 
     read = _persist_report(
         db,
         activity=activity,
-        prompt_id=prompt_id,
-        schema_version=schema_version,
-        pack=pack,
-        pack_dict=pack_dict,
-        input_hash=input_hash,
+        prompt_id=req.prompt_id,
+        schema_version=req.schema_version,
+        pack=req.pack,
+        pack_dict=req.pack_dict,
+        input_hash=req.input_hash,
         outcome=outcome,
         existing=existing,  # #273: in-place swap on force; None -> insert (first gen)
         fire_learning_loop=True,
-        voice=voice,
+        voice=req.voice,
     )
     return read
 
@@ -468,10 +527,11 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     if not activity or not activity.metrics:
         return None
 
-    prompt_id = settings.COACH_PROMPT_ID
-    schema_version = active_schema_version(prompt_id)
-    stance = _resolve_stance_for_activity(db, activity)
-    pack = build_context_pack(db, activity, prompt_id=prompt_id, stance=stance)
+    # Assemble the opener request first (mode="opener": lean prompt, salience-
+    # bearing view kept). The idempotent cache check below reads req.pack.salience,
+    # so the pack must exist before it — this entry point (unlike the fuller/single-
+    # shot paths) builds the pack ahead of the cache check by design.
+    req = _assemble_generation_request(db, activity, mode="opener")
 
     existing = get_active_report_row(db, activity_uuid)
     if existing is not None:
@@ -481,51 +541,33 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
         # stored opener was a fallback.
         schedule = existing.is_fallback or \
             bool((existing.report or {}).get("schedule_fuller_turn")) or \
-            pack.salience.safety_override.force_fuller
+            req.pack.salience.safety_override.force_fuller
         return OpenerResult(
             report=_to_read(existing),
             schedule_fuller_turn=schedule,
             is_fallback=existing.is_fallback,
         )
 
-    input_hash = pack.fingerprint()
-    # ADR 0026: serve the grouped pack under a grouped-pack prompt id, the flat pack
-    # otherwise. The stored context_pack matches what the LLM saw; loaders (chat, eval)
-    # are shape-tolerant via CoachContextPack.load. The fingerprint stays flat-based, so
-    # the cache identity is unchanged.
-    pack_dict = (
-        pack.to_grouped_dict()
-        if is_grouped_pack_prompt(prompt_id)
-        else pack.to_serializable_dict()
-    )
-    # The opener is a brief reaction, not a playbook-driven analysis (mode="opener"
-    # ignores the playbook), so the system prompt is the lean opener form. The voice
-    # block (P1.1) rides both stages, so the opener already speaks in the declared
-    # voice.
-    voice = _resolve_voice_for_activity(db, activity)
-    system_prompt = build_system_prompt(prompt_id, mode="opener", voice=voice, pack=pack)
-    # mode="opener": the opener view KEEPS salience (the opener reads salience.novelty); the
-    # fuller drop (ADR 0026 Slice 5) applies only to the two fuller-mode call sites.
-    user_message = _llm_pack_message(pack_dict, prompt_id, mode="opener")
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
     )
     outcome = await _generate_message(
-        client, system_prompt, user_message, pack, is_opener=True, user_id=activity.user_id
+        client, req.system_prompt, req.user_message, req.pack,
+        is_opener=True, user_id=activity.user_id,
     )
 
     read = _persist_report(
         db,
         activity=activity,
-        prompt_id=prompt_id,
-        schema_version=schema_version,
-        pack=pack,
-        pack_dict=pack_dict,
-        input_hash=input_hash,
+        prompt_id=req.prompt_id,
+        schema_version=req.schema_version,
+        pack=req.pack,
+        pack_dict=req.pack_dict,
+        input_hash=req.input_hash,
         outcome=outcome,
         existing=None,
         fire_learning_loop=False,  # the opener writes nothing to durable memory
-        voice=voice,
+        voice=req.voice,
     )
     # Hybrid salience: the opener LLM's judgment OR the deterministic safety
     # override (the model can never stay quiet on a red-flag run). A fallback
@@ -534,7 +576,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     # exchange silently producing nothing.
     schedule = outcome.is_fallback or \
         bool(outcome.report_dump.get("schedule_fuller_turn")) or \
-        pack.salience.safety_override.force_fuller
+        req.pack.salience.safety_override.force_fuller
     return OpenerResult(report=read, schedule_fuller_turn=schedule, is_fallback=outcome.is_fallback)
 
 
@@ -594,31 +636,14 @@ async def generate_fuller(
         reply=fetch_latest_user_reply(db, activity_uuid),
     )
 
-    prompt_id = settings.COACH_PROMPT_ID
-    schema_version = active_schema_version(prompt_id)
-    stance = _resolve_stance_for_activity(db, activity)
-    pack = build_context_pack(db, activity, continuity=continuity, prompt_id=prompt_id, stance=stance)
-    input_hash = pack.fingerprint()
-    # ADR 0026: serve the grouped pack under a grouped-pack prompt id, the flat pack
-    # otherwise. The stored context_pack matches what the LLM saw; loaders (chat, eval)
-    # are shape-tolerant via CoachContextPack.load. The fingerprint stays flat-based, so
-    # the cache identity is unchanged.
-    pack_dict = (
-        pack.to_grouped_dict()
-        if is_grouped_pack_prompt(prompt_id)
-        else pack.to_serializable_dict()
-    )
-    classification = Classification.from_metrics(activity.metrics)
-    voice = _resolve_voice_for_activity(db, activity)
-    system_prompt = build_system_prompt(
-        prompt_id, playbook_key(activity, classification), mode="fuller", voice=voice, pack=pack
-    )
-    user_message = _llm_pack_message(pack_dict, prompt_id)
+    # Assemble the fuller request (mode="fuller": deep prompt + playbook + fuller
+    # view). Continuity (the opener prose + reply) rides the pack on this turn only.
+    req = _assemble_generation_request(db, activity, mode="fuller", continuity=continuity)
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
     )
     outcome = await _generate_message(
-        client, system_prompt, user_message, pack, user_id=activity.user_id
+        client, req.system_prompt, req.user_message, req.pack, user_id=activity.user_id
     )
 
     # Preserve the opener prose on the evolving row — the fuller LLM does not emit
@@ -642,15 +667,15 @@ async def generate_fuller(
     return _persist_report(
         db,
         activity=activity,
-        prompt_id=prompt_id,
-        schema_version=schema_version,
-        pack=pack,
-        pack_dict=pack_dict,
-        input_hash=input_hash,
+        prompt_id=req.prompt_id,
+        schema_version=req.schema_version,
+        pack=req.pack,
+        pack_dict=req.pack_dict,
+        input_hash=req.input_hash,
         outcome=outcome,
         existing=existing,  # in-place update of the opener row, or None -> insert
         fire_learning_loop=True,
-        voice=voice,
+        voice=req.voice,
     )
 
 
