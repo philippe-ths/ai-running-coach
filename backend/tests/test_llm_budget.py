@@ -36,6 +36,38 @@ def test_cost_usd_matches_price_table():
     assert budget.cost_usd("mystery-model", 1_000_000, 0) == pytest.approx(5.0)
 
 
+def test_cost_usd_prices_cache_tokens():
+    # #709: with prompt caching, usage.input_tokens is only the UNCACHED portion;
+    # the cached portion is billed separately — cache reads at ~0.1x the input
+    # price, cache creation at ~1.25x (the 5-min ephemeral TTL the coach uses).
+    # The three input buckets are disjoint, so their costs sum.
+    assert budget.cost_usd(
+        "claude-opus-4-8", 0, 0, cache_read_input_tokens=1_000_000
+    ) == pytest.approx(0.5)  # 1M * $5 * 0.1
+    assert budget.cost_usd(
+        "claude-opus-4-8", 0, 0, cache_creation_input_tokens=1_000_000
+    ) == pytest.approx(6.25)  # 1M * $5 * 1.25
+    assert budget.cost_usd(
+        "claude-opus-4-8",
+        1_000_000,
+        1_000_000,
+        cache_read_input_tokens=1_000_000,
+        cache_creation_input_tokens=1_000_000,
+    ) == pytest.approx(5.0 + 25.0 + 0.5 + 6.25)
+    # Backwards-compatible: omitting the cache args is byte-stable with the old
+    # 3-arg pricing (the default code path when caching reports zero cache tokens).
+    assert budget.cost_usd("claude-opus-4-8", 1_000_000, 1_000_000) == pytest.approx(30.0)
+
+
+def test_record_bills_cache_tokens(monkeypatch):
+    # Cache-creation spend alone accrues on the counter (1M Opus creation tokens
+    # = $6.25, over the $1 cap) — the counter is now honest about cached cost.
+    monkeypatch.setattr(settings, "LLM_BUDGET_USER_DAILY_USD", 1.0)
+    gate = budget.new_in_memory_gate()
+    gate.record("user-A", "claude-opus-4-8", 0, 0, cache_creation_input_tokens=1_000_000)
+    assert gate.over_budget("user-A") is True
+
+
 def test_over_budget_is_per_user(monkeypatch):
     monkeypatch.setattr(settings, "LLM_BUDGET_USER_DAILY_USD", 1.0)
     gate = budget.new_in_memory_gate()
