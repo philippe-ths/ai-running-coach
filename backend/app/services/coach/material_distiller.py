@@ -173,7 +173,14 @@ async def _distill_with_one_retry(
         max_tokens=_MAX_TOKENS,
     )
     if user_id is not None:
-        budget_record(user_id, client.model, usage.input_tokens, usage.output_tokens)
+        budget_record(
+            user_id,
+            client.model,
+            usage.input_tokens,
+            usage.output_tokens,
+            cache_read_input_tokens=usage.cache_read_input_tokens,
+            cache_creation_input_tokens=usage.cache_creation_input_tokens,
+        )
     try:
         return DistilledMaterial.model_validate(raw)
     except ValidationError as exc:
@@ -193,7 +200,14 @@ async def _distill_with_one_retry(
         max_tokens=_MAX_TOKENS,
     )
     if user_id is not None:
-        budget_record(user_id, client.model, usage.input_tokens, usage.output_tokens)
+        budget_record(
+            user_id,
+            client.model,
+            usage.input_tokens,
+            usage.output_tokens,
+            cache_read_input_tokens=usage.cache_read_input_tokens,
+            cache_creation_input_tokens=usage.cache_creation_input_tokens,
+        )
     return DistilledMaterial.model_validate(raw)
 
 

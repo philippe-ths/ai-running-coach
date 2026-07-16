@@ -159,7 +159,14 @@ async def test_refresh_records_haiku_spend_for_the_user(db):
     with patch.object(RV, "budget_record", MagicMock()) as rec:
         await RV.refresh_receipt_templates(db, rel.user_id, client=_client(payload))
 
-    rec.assert_called_once_with(rel.user_id, "claude-haiku-4-5", 100, 50)
+    rec.assert_called_once_with(
+        rel.user_id,
+        "claude-haiku-4-5",
+        100,
+        50,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
 
 
 @pytest.mark.asyncio

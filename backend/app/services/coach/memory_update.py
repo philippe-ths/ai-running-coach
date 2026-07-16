@@ -567,7 +567,14 @@ async def update_memory(
 
     # Record the Haiku spend on the per-user budget counter (#472). Best-effort;
     # record() is a no-op when budgets are unconfigured.
-    budget_record(user_id, client.model, usage.input_tokens, usage.output_tokens)
+    budget_record(
+        user_id,
+        client.model,
+        usage.input_tokens,
+        usage.output_tokens,
+        cache_read_input_tokens=usage.cache_read_input_tokens,
+        cache_creation_input_tokens=usage.cache_creation_input_tokens,
+    )
 
     try:
         output = RunnerMemoryWriterOutput.model_validate(raw)
