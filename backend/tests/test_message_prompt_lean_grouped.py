@@ -116,11 +116,12 @@ def test_message_prompt_lean_grouped_v6_extends_laps_rule_to_past_sessions():
     in that one laps clause; the opener is byte-identical; it serves the grouped pack."""
     v5 = prompts.PROMPT_VERSIONS["coach_message_lean_grouped_v5"]
     v6 = prompts.PROMPT_VERSIONS["coach_message_lean_grouped_v6"]
-    # v6 differs from v5 ONLY by the extended past-session laps clause.
+    # v6 differs from v5 ONLY by raising the laps clause from this-run to the class
+    # (any runner-recorded session, this run or a past one revisited).
     assert v6 != v5
     assert v6.replace(prompts._LEAN_LAPS_RULE_WITH_PAST, prompts._LEAN_LAPS_RULE_SUBJECT_ONLY) == v5
-    assert "past session you bring up from their recent weeks" in v6
-    assert "past session you bring up from their recent weeks" not in v5
+    assert "an earlier one you're revisiting" in v6
+    assert "an earlier one you're revisiting" not in v5
     # opener byte-identical (no lap clause in the opener).
     assert (
         prompts._OPENER_PROMPTS["coach_message_lean_grouped_v6"]

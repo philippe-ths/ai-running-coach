@@ -1116,16 +1116,18 @@ SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER = _regroup_lean_opener_prompt(
 )
 
 # ADR 0026 follow-up (#712): grouped_v6 = grouped_v5's prose (grouped_v3 base + v3
-# orientation) with the recorded-laps discipline EXTENDED to past sessions. #661 added the
-# `source == "recorded_laps"` marker to recent-session data; this teaches the coach to apply
-# the same "do not advise the lap button they already pressed" rule when it engages a past
-# session from `recent_weeks`. Text-only change to one clause; every prior prompt byte-
-# identical; ships INERT (flip target: grouped_v5 -> grouped_v6, zero code change).
-_LEAN_LAPS_RULE_SUBJECT_ONLY = "never tell them to use the lap button they already pressed."
+# orientation) with the recorded-laps discipline RAISED from the subject run to the CLASS.
+# #661 added the `source == "recorded_laps"` marker to recent-session data; rather than bolt a
+# second, parallel past-session sentence onto the existing rule, this rewrites the one clause to
+# cover ANY session whose laps were runner-recorded — this run or a past one the coach revisits
+# from recent_weeks — so the rule is stated once at the right altitude. One clause replaced;
+# every prior prompt byte-identical; ships INERT (flip target: grouped_v5 -> grouped_v6).
+_LEAN_LAPS_RULE_SUBJECT_ONLY = (
+    "if the laps were runner-recorded, never tell them to use the lap button they already pressed."
+)
 _LEAN_LAPS_RULE_WITH_PAST = (
-    "never tell them to use the lap button they already pressed. The same holds for any past "
-    "session you bring up from their recent weeks — if its laps were runner-recorded, never "
-    "point them to the lap button there either."
+    "if a session's laps were runner-recorded — this run or an earlier one you're revisiting — "
+    "never tell them to use the lap button they already pressed."
 )
 assert _LEAN_LAPS_RULE_SUBJECT_ONLY in SYSTEM_PROMPT_MESSAGE_LEAN_V1  # guard: fail loudly if the base clause wording drifts
 SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V6 = _regroup_lean_prompt(
