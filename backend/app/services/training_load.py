@@ -20,9 +20,11 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models import Activity, DerivedMetric
+from app.models import Activity, DerivedMetric, UserProfile
 from app.schemas.trends import LoadActivityPoint, LoadResponse, LoadWeek
 from app.services.analysis.classifier import Classification, compose_headline
+from app.services.weeks import MONDAY, resolve_week_start
+from app.services.weeks import week_start as _shared_week_start
 
 # The chronic baseline window and the optimal band around it.
 CHRONIC_WEEKS = 4
@@ -44,8 +46,10 @@ class LoadFact:
     headline: Optional[str] = None
 
 
-def week_start(d: date) -> date:
-    return d - timedelta(days=d.weekday())
+def week_start(d: date, starts_on: int = MONDAY) -> date:
+    # Delegates to the single week-boundary definition (#676); default Monday
+    # keeps every existing caller byte-identical.
+    return _shared_week_start(d, starts_on)
 
 
 def _status(score: float, target_min: Optional[float], target_max: Optional[float]) -> str:
@@ -62,6 +66,7 @@ def build_load_report(
     facts: list[LoadFact],
     today: date,
     series_start: Optional[date] = None,
+    week_starts_on: int = MONDAY,
 ) -> LoadResponse:
     """Pure aggregation: facts -> chronological weekly report ending this week.
 
@@ -70,21 +75,25 @@ def build_load_report(
     the series length matches an unbounded build). When None, the first week is
     derived from ``facts`` as before. Either way it is clamped to the
     MAX_WEEKS floor.
+
+    ``week_starts_on`` (0=Monday default, 6=Sunday) sets the week boundary the
+    weekly buckets align to (#676). The within-week day-of-week breakdown array
+    (``daily`` below) stays weekday-indexed (Mon=0) regardless.
     """
-    current_week = week_start(today)
+    current_week = week_start(today, week_starts_on)
     # Bound the series so per-request cost stays flat as history grows.
     earliest_served = current_week - timedelta(weeks=MAX_WEEKS - 1)
     if series_start is not None:
         first_week = series_start
     elif facts:
-        first_week = min(week_start(f.day) for f in facts)
+        first_week = min(week_start(f.day, week_starts_on) for f in facts)
     else:
         first_week = current_week
     first_week = max(first_week, earliest_served)
 
     by_week: dict[date, list[LoadFact]] = {}
     for f in facts:
-        by_week.setdefault(week_start(f.day), []).append(f)
+        by_week.setdefault(week_start(f.day, week_starts_on), []).append(f)
 
     n_weeks = (current_week - first_week).days // 7 + 1
     starts = [first_week + timedelta(weeks=i) for i in range(n_weeks)]
@@ -138,7 +147,10 @@ def get_load_report(
     # full-history scan. We compute `today` once and reuse it for both the SQL
     # bound and the pure report build so a midnight rollover can't disagree.
     resolved_today = today or date.today()
-    earliest_served = week_start(resolved_today) - timedelta(weeks=MAX_WEEKS - 1)
+    week_starts_on = resolve_week_start(
+        db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+    )
+    earliest_served = week_start(resolved_today, week_starts_on) - timedelta(weeks=MAX_WEEKS - 1)
 
     # Project only the columns the report needs instead of materializing full
     # Activity + DerivedMetric ORM objects. This avoids loading the per-row
@@ -223,4 +235,6 @@ def get_load_report(
                 headline=compose_headline(activity, Classification.from_metrics(metrics)),
             )
         )
-    return build_load_report(facts, resolved_today, series_start=series_start)
+    return build_load_report(
+        facts, resolved_today, series_start=series_start, week_starts_on=week_starts_on
+    )

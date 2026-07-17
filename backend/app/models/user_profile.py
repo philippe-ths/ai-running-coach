@@ -35,6 +35,12 @@ class UserProfile(Base):
     # Opt-in medication/physiology flag (N4 confounder stage reads it). Nullable:
     # unset means "unknown", not "no stimulant use".
     stimulant_use: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    # The day the runner's week starts, in Python weekday() space (0=Monday,
+    # 6=Sunday). Null resolves to Monday, so every pre-existing row and every
+    # runner who has not chosen keeps byte-identical "this week" framing across
+    # the coach pack and the Trends API (#676). The product offers only Monday or
+    # Sunday; the single week-boundary definition in services/weeks.py is general.
+    week_starts_on: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

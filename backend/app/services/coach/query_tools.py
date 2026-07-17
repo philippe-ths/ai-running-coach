@@ -42,13 +42,14 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Activity
+from app.models import Activity, UserProfile
 from app.models.derived_metric import DerivedMetric
 from app.services.coach import coach_units
 from app.services.analysis.splits import calculate_splits
 from app.services.coach.recent_training import _interval_shape
 from app.services.coach.volume import build_volume_report
 from app.services.trends import _query_activity_facts
+from app.services.weeks import MONDAY, resolve_week_start, week_start
 
 logger = logging.getLogger(__name__)
 
@@ -101,10 +102,21 @@ def _first_of_month(d: date) -> date:
     return d.replace(day=1)
 
 
-def resolve_window(window: str, today: date) -> Optional[ResolvedWindow]:
+def _owner_week_start(db: Session, owner_user_id) -> int:
+    """The owner's chosen week start (0=Monday default, 6=Sunday), for the calendar
+    windows resolve_window computes (#676)."""
+    return resolve_week_start(
+        db.query(UserProfile).filter(UserProfile.user_id == owner_user_id).first()
+    )
+
+
+def resolve_window(
+    window: str, today: date, week_starts_on: int = MONDAY
+) -> Optional[ResolvedWindow]:
     """Resolve a named window to a concrete date range as of `today`, or None if the
     name is unknown. Rolling windows end today inclusive; calendar windows follow the
-    runner's local calendar; all_time has no start."""
+    runner's local calendar; all_time has no start. `week_starts_on` (0=Monday default,
+    6=Sunday) sets the boundary for the this_week/last_week windows (#676)."""
     end_excl = today + timedelta(days=1)  # inclusive of today
 
     if window in _ROLLING_DAYS_RANGEKEY:
@@ -119,12 +131,12 @@ def resolve_window(window: str, today: date) -> Optional[ResolvedWindow]:
         start = end_excl - timedelta(days=14)
         return ResolvedWindow(start, end_excl, f"the last 14 days ({start.isoformat()} to {today.isoformat()})", None)
     if window == "this_week":
-        start = today - timedelta(days=today.weekday())  # Monday
+        start = week_start(today, week_starts_on)
         return ResolvedWindow(start, end_excl, f"this week ({start.isoformat()} to {today.isoformat()})", None)
     if window == "last_week":
-        this_mon = today - timedelta(days=today.weekday())
-        start = this_mon - timedelta(days=7)
-        return ResolvedWindow(start, this_mon, f"last week ({start.isoformat()} to {(this_mon - timedelta(days=1)).isoformat()})", None)
+        this_start = week_start(today, week_starts_on)
+        start = this_start - timedelta(days=7)
+        return ResolvedWindow(start, this_start, f"last week ({start.isoformat()} to {(this_start - timedelta(days=1)).isoformat()})", None)
     if window == "this_month":
         start = _first_of_month(today)
         return ResolvedWindow(start, end_excl, f"this month ({start.isoformat()} to {today.isoformat()})", None)
@@ -227,7 +239,7 @@ def list_activities_in_range(
     window. Each entry carries the per-run distance/pace/effort the frozen pack omits,
     plus the #650 shape markers, and the `activity_id` the coach passes to
     get_session_detail for depth."""
-    resolved = resolve_window(window, today)
+    resolved = resolve_window(window, today, _owner_week_start(db, owner_user_id))
     if resolved is None:
         return {"error": "unknown_window", "window": window, "allowed": list(LIST_WINDOWS)}
 
@@ -348,7 +360,8 @@ def get_training_summary(
     rather than summing rows itself. vs-typical reuses `build_volume_report`'s rolling
     framing (canonical norm, no drift) and is present only for a rolling window with no
     type filter (the norm is holistic)."""
-    resolved = resolve_window(window, today)
+    week_starts_on = _owner_week_start(db, owner_user_id)
+    resolved = resolve_window(window, today, week_starts_on)
     if resolved is None or window not in SUMMARY_WINDOWS:
         return {"error": "unknown_window", "window": window, "allowed": list(SUMMARY_WINDOWS)}
 
@@ -366,7 +379,7 @@ def get_training_summary(
         # so it can establish the baseline, ask for this window's rolling framing.
         all_facts = _query_activity_facts(db, None, resolved.end, user_id=owner_user_id)
         try:
-            report = build_volume_report(all_facts, today, resolved.range_key)
+            report = build_volume_report(all_facts, today, resolved.range_key, week_starts_on)
             vs_typical = _vs_typical(report)
         except Exception as exc:  # a norm failure must never fail the whole tool
             logger.warning("training_summary vs_typical failed: %s", exc)
