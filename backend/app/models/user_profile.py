@@ -21,6 +21,10 @@ class UserProfile(Base):
     current_weekly_km: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_hr: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_hr_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # "user_entered", "race_estimate", "lab_test"
+    # Manual resting HR (bpm), the interim source ahead of a device integration
+    # (#555). Null until the runner enters it; the referral layer abstains while
+    # absent, and #166's sustained-rise red flag activates once a trend source lands.
+    resting_hr: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # The runner's own HR-zone lower bounds (5 ascending bpm values), pulled from
     # their Strava athlete zones so time-in-zone matches what Strava shows (#297).
     # Null until first synced; analysis then falls back to the %-of-max-HR scheme.
