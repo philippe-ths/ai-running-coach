@@ -44,14 +44,14 @@ from app.core.queue import queue
 from app.db.session import SessionLocal
 from app.models import StravaAccount, StravaImport
 from app.services.analysis import analyze
+from app.services.blocks import (
+    assign_block_guarded,
+    reconcile_unassigned_activities,
+)
 from app.services.strava_ingestion import (
     ensure_valid_access_token,
     get_strava_port,
     upsert_activity,
-)
-from app.services.strava_ingestion.ingestion import (
-    _assign_block,
-    reconcile_unassigned_activities,
 )
 from app.services.strava_ingestion.port import StravaRateLimited
 
@@ -124,7 +124,7 @@ async def run_import_batch(
         try:
             activity = upsert_activity(db, raw, account.user_id)
             db.commit()
-            _assign_block(db, activity)
+            assign_block_guarded(db, activity)
             # Deterministic analysis only (no streams, no LLM, no notification);
             # a failure here must not abort the import of the rest of the page.
             try:

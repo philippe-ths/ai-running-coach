@@ -106,7 +106,7 @@ def test_runner_boundaries_reclassify_aerobic_run_below_strava_threshold():
 def test_extract_hr_zone_bounds_parses_strava_payload():
     """#297: pull the 5 ascending HR-zone lower bounds from a Strava
     /athlete/zones payload (real shape: heart_rate.zones with min/max)."""
-    from app.services.strava_ingestion.ingestion import extract_hr_zone_bounds
+    from app.services.analysis.zones import extract_hr_zone_bounds
 
     payload = {
         "heart_rate": {
@@ -128,7 +128,7 @@ def test_extract_hr_zone_bounds_parses_strava_payload():
 def test_extract_hr_zone_bounds_rejects_bad_shapes():
     """Off-shape payloads return None so analysis falls back to the %max scheme
     rather than binning against garbage."""
-    from app.services.strava_ingestion.ingestion import extract_hr_zone_bounds
+    from app.services.analysis.zones import extract_hr_zone_bounds
 
     assert extract_hr_zone_bounds(None) is None
     assert extract_hr_zone_bounds({}) is None

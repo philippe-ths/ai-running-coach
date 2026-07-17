@@ -1,9 +1,11 @@
 from app.services.strava_ingestion.http_adapter import HTTPStravaAdapter
 from app.services.strava_ingestion.in_memory_adapter import InMemoryStravaAdapter
+from app.services.strava_ingestion.auth import ensure_valid_access_token
 from app.services.strava_ingestion.ingestion import (
-    ensure_valid_access_token,
     ingest_activity_by_id,
     ingest_recent_activities,
+)
+from app.services.strava_ingestion.persistence import (
     refetch_streams,
     upsert_activity,
 )
