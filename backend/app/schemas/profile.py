@@ -13,6 +13,7 @@ class UserProfileBase(BaseModel):
     current_weekly_km: Optional[int] = None
     max_hr: Optional[int] = None
     max_hr_source: Optional[str] = None  # "user_entered", "race_estimate", "lab_test"
+    resting_hr: Optional[int] = None  # manual resting HR (bpm), interim source for #555
     upcoming_races: List[Dict[str, Any]] = []
     injury_notes: Optional[str] = None
     stimulant_use: Optional[bool] = None

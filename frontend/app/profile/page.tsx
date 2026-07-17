@@ -30,7 +30,8 @@ export default function ProfilePage() {
     // upcoming_races handling skipped for simple MVP form, 
     // but field exists in backend schema
     upcoming_races: [],
-    max_hr: 0 // New field state
+    max_hr: 0, // New field state
+    resting_hr: 0
   });
 
   useEffect(() => {
@@ -47,7 +48,8 @@ export default function ProfilePage() {
             current_weekly_km: data.current_weekly_km || 0,
             injury_notes: data.injury_notes || '',
             upcoming_races: data.upcoming_races || [],
-            max_hr: data.max_hr || 0
+            max_hr: data.max_hr || 0,
+            resting_hr: data.resting_hr || 0
         });
         setLoading(false);
       })
@@ -77,7 +79,7 @@ export default function ProfilePage() {
     const { name, value } = e.target;
     setFormData(prev => ({
         ...prev,
-        [name]: name === 'weekly_days_available' || name === 'current_weekly_km' || name === 'max_hr' ? Number(value) : value
+        [name]: name === 'weekly_days_available' || name === 'current_weekly_km' || name === 'max_hr' || name === 'resting_hr' ? Number(value) : value
     }));
   };
 
@@ -155,6 +157,21 @@ export default function ProfilePage() {
                 />
                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     Used to calculate zones. If unknown, estimate with 220 minus age.
+                </p>
+            </div>
+
+            <div>
+                <label className="block text-sm font-medium mb-1">Resting Heart Rate (bpm)</label>
+                <input
+                    type="number" min="30" max="120"
+                    name="resting_hr"
+                    value={formData.resting_hr || ''}
+                    onChange={handleChange}
+                    placeholder="e.g. 50"
+                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
+                />
+                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Your typical morning resting HR. Helps the coach read fatigue trends.
                 </p>
             </div>
 
