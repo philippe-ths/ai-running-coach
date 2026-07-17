@@ -48,6 +48,7 @@ from app.schemas.coach_context import (
     VolumeWindow,
 )
 from app.schemas.trends import VolumeFraming, VolumeMetricVsNorm, VolumeReport
+from app.services.weeks import MONDAY, days_into_week, week_start
 
 # The metrics compared, in a fixed order (byte-stable pack).
 _METRICS = ("sessions", "distance_m", "moving_time_s", "effort_score")
@@ -148,17 +149,23 @@ def _window(
     )
 
 
-def build_training_volume(facts: List[Any], as_of: date) -> TrainingVolumeContext:
+def build_training_volume(
+    facts: List[Any], as_of: date, week_starts_on: int = MONDAY
+) -> TrainingVolumeContext:
     """Build the volume-vs-norm signal as of `as_of` from facts spanning at least
     the trailing ~91 days. Facts are duck-typed: each needs `local_date`,
-    `activity_type`, `distance_m`, `moving_time_s`, `effort_score`."""
+    `activity_type`, `distance_m`, `moving_time_s`, `effort_score`.
+
+    `week_starts_on` (0=Monday default, 6=Sunday) sets the calendar-week boundary
+    so it matches the runner's chosen week start (#676); rolling_7d is
+    week-start-independent."""
     # Current windows.
     rolling_start = as_of - timedelta(days=6)  # 7 days ending on as_of inclusive
     rolling_facts = [f for f in facts if rolling_start <= f.local_date <= as_of]
 
-    week_start = as_of - timedelta(days=as_of.weekday())  # Monday of this week
-    week_facts = [f for f in facts if week_start <= f.local_date <= as_of]
-    week_days_elapsed = as_of.weekday() + 1  # Mon=1 .. Sun=7
+    wk_start = week_start(as_of, week_starts_on)  # first day of this week
+    week_facts = [f for f in facts if wk_start <= f.local_date <= as_of]
+    week_days_elapsed = days_into_week(as_of, week_starts_on)
 
     # Norm baselines: the runner's own per-day training rate over history strictly
     # BEFORE the current 7-day window, projected to a weekly figure (#451). This is the
@@ -318,11 +325,14 @@ def _report_framing(
     )
 
 
-def _calendar_period(range_key: str, as_of: date) -> Tuple[date, date, int, str]:
+def _calendar_period(
+    range_key: str, as_of: date, week_starts_on: int = MONDAY
+) -> Tuple[date, date, int, str]:
     """The current calendar period for a range: (start, last_day, length_days, label).
-    The period runs from `start` to `last_day`; the caller compares to-date (start..as_of)."""
+    The period runs from `start` to `last_day`; the caller compares to-date (start..as_of).
+    Only the weekly (7D) period depends on `week_starts_on` (#676)."""
     if range_key == "7D":
-        start = as_of - timedelta(days=as_of.weekday())  # Monday
+        start = week_start(as_of, week_starts_on)
         last = start + timedelta(days=6)
         label = "This week"
     elif range_key == "30D":
@@ -347,7 +357,9 @@ def _calendar_period(range_key: str, as_of: date) -> Tuple[date, date, int, str]
     return start, last, (last - start).days + 1, label
 
 
-def build_volume_report(facts: List[Any], as_of: date, range_key: str) -> VolumeReport:
+def build_volume_report(
+    facts: List[Any], as_of: date, range_key: str, week_starts_on: int = MONDAY
+) -> VolumeReport:
     """The Trends-page volume-vs-norm report for `range_key` (7D/30D/3M/6M/1Y) as of
     `as_of`. Two framings — rolling (trailing N days) and calendar (current period to
     date) — each metric vs the runner's norm for a FULL period of that length (#436):
@@ -362,7 +374,7 @@ def build_volume_report(facts: List[Any], as_of: date, range_key: str) -> Volume
         facts, "rolling", f"{n}-day rolling", roll_start, as_of, n, True, baseline_days
     )
 
-    p_start, p_last, p_days, p_label = _calendar_period(range_key, as_of)
+    p_start, p_last, p_days, p_label = _calendar_period(range_key, as_of, week_starts_on)
     calendar = _report_framing(
         facts, "calendar", p_label, p_start, as_of, p_days, as_of >= p_last, baseline_days
     )

@@ -8,6 +8,7 @@ export interface UserProfile {
   max_hr?: number;
   max_hr_source?: string | null;  // "user_entered" | "race_estimate" | "lab_test"
   resting_hr?: number;  // manual resting HR (bpm), interim source for #555
+  week_starts_on?: number;  // 0=Monday (default), 6=Sunday (#676)
   upcoming_races: { name: string; date: string; distance_km: number }[];
   injury_notes?: string;
   updated_at: string;

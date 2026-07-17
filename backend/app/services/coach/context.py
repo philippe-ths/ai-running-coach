@@ -52,6 +52,7 @@ from app.services.coach.stance import StanceProfile, resolve_stance
 from app.services.coach.volume import build_training_volume
 from app.services.coach.recent_training import build_recent_training
 from app.services.coach.recent_weeks import CheckInFacts, build_recent_weeks
+from app.services.weeks import resolve_week_start
 from app.services.coach.training_history import build_training_history
 from app.services.coach.intensity import build_intensity
 from app.services.coach.intensity_read import build_intensity_mix, build_intensity_read
@@ -485,7 +486,8 @@ def _build_training_volume_context(
     facts = _query_activity_facts(
         db, local_day - timedelta(days=91), local_day + timedelta(days=1), user_id=activity.user_id
     )
-    return build_training_volume(facts, local_day)
+    week_starts_on = resolve_week_start(_load_profile(db, activity.user_id))
+    return build_training_volume(facts, local_day, week_starts_on)
 
 
 def _build_recent_training_context(
@@ -591,7 +593,8 @@ def _build_recent_weeks_context(
         if f.local_date >= local_day - timedelta(days=14)
     ]
     checkins = _query_recent_checkins(db, recent_ids)
-    return build_recent_weeks(facts, checkins, local_day)
+    week_starts_on = resolve_week_start(_load_profile(db, activity.user_id))
+    return build_recent_weeks(facts, checkins, local_day, week_starts_on)
 
 
 # The wide fetch span for the multi-year history scan: ~10 years, so the deep ladder

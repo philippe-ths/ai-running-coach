@@ -31,7 +31,8 @@ export default function ProfilePage() {
     // but field exists in backend schema
     upcoming_races: [],
     max_hr: 0, // New field state
-    resting_hr: 0
+    resting_hr: 0,
+    week_starts_on: 0 // 0=Monday (default), 6=Sunday (#676)
   });
 
   useEffect(() => {
@@ -49,7 +50,8 @@ export default function ProfilePage() {
             injury_notes: data.injury_notes || '',
             upcoming_races: data.upcoming_races || [],
             max_hr: data.max_hr || 0,
-            resting_hr: data.resting_hr || 0
+            resting_hr: data.resting_hr || 0,
+            week_starts_on: data.week_starts_on ?? 0
         });
         setLoading(false);
       })
@@ -79,7 +81,7 @@ export default function ProfilePage() {
     const { name, value } = e.target;
     setFormData(prev => ({
         ...prev,
-        [name]: name === 'weekly_days_available' || name === 'current_weekly_km' || name === 'max_hr' || name === 'resting_hr' ? Number(value) : value
+        [name]: name === 'weekly_days_available' || name === 'current_weekly_km' || name === 'max_hr' || name === 'resting_hr' || name === 'week_starts_on' ? Number(value) : value
     }));
   };
 
@@ -177,13 +179,29 @@ export default function ProfilePage() {
 
             <div>
                 <label className="block text-sm font-medium mb-1">Current Weekly Volume (km)</label>
-                <input 
+                <input
                     type="number" min="0"
                     name="current_weekly_km"
                     value={formData.current_weekly_km}
                     onChange={handleChange}
                     className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 />
+            </div>
+
+            <div>
+                <label className="block text-sm font-medium mb-1">Week Starts On</label>
+                <select
+                    name="week_starts_on"
+                    value={formData.week_starts_on}
+                    onChange={handleChange}
+                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
+                >
+                    <option value={0}>Monday</option>
+                    <option value={6}>Sunday</option>
+                </select>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Sets which day your training week begins, for &ldquo;this week&rdquo; on the coach and Trends.
+                </p>
             </div>
         </div>
 

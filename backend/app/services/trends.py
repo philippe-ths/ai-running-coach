@@ -11,7 +11,8 @@ from typing import List, Optional
 from sqlalchemy import select, and_
 from sqlalchemy.orm import Session
 
-from app.models import Activity, DerivedMetric
+from app.models import Activity, DerivedMetric, UserProfile
+from app.services.weeks import MONDAY, resolve_week_start, week_start
 from app.schemas.trends import (
     TrendsResponse,
     TrendsSummary,
@@ -232,20 +233,25 @@ class WeekBucket:
 _EPOCH_MONDAY = date(1970, 1, 5)
 
 
-def _period_start(d: date, period: str) -> date:
+def _period_start(d: date, period: str, week_starts_on: int = MONDAY) -> date:
     """First local day of the coarse bucket that ``d`` falls in.
 
-    - ``biweekly``: 14-day bins aligned to ``_EPOCH_MONDAY`` (Monday start).
+    - ``biweekly``: 14-day bins aligned to the week-start grid (fortnight parity).
     - ``monthly``: the first of the calendar month.
+
+    ``week_starts_on`` (0=Monday default, 6=Sunday) shifts the biweekly grid so
+    it aligns with the weekly bars (#676); monthly is unaffected.
     """
     if period == "monthly":
         return d.replace(day=1)
-    # biweekly: snap to the bin's starting Monday by fortnight parity.
-    monday = d - timedelta(days=d.weekday())
-    weeks = (monday - _EPOCH_MONDAY).days // 7
+    # biweekly: snap to the bin's starting week boundary by fortnight parity. The
+    # parity epoch is the week-start grid's own epoch so weekly and biweekly agree.
+    epoch = week_start(_EPOCH_MONDAY, week_starts_on)
+    start = week_start(d, week_starts_on)
+    weeks = (start - epoch).days // 7
     if weeks % 2 == 1:
-        monday -= timedelta(days=7)
-    return monday
+        start -= timedelta(days=7)
+    return start
 
 
 def _next_period_start(start: date, period: str) -> date:
@@ -598,6 +604,7 @@ def build_weekly_buckets(
     until: Optional[date] = None,
     pre_window_daily: Optional[List[DailyFact]] = None,
     rolling_anchor: Optional[date] = None,
+    week_starts_on: int = MONDAY,
 ) -> List[WeekBucket]:
     """
     Roll daily facts into 7-day buckets.
@@ -619,7 +626,7 @@ def build_weekly_buckets(
     def _key(d: date) -> date:
         if rolling_anchor is not None:
             return _rolling_bin_start(d, rolling_anchor, 7)
-        return d - timedelta(days=d.weekday())
+        return week_start(d, week_starts_on)
 
     # Build buckets from actual data first
     buckets: dict[date, WeekBucket] = {}
@@ -674,6 +681,7 @@ def build_period_buckets(
     until: Optional[date] = None,
     pre_window_daily: Optional[List[DailyFact]] = None,
     rolling_anchor: Optional[date] = None,
+    week_starts_on: int = MONDAY,
 ) -> List[PeriodBucket]:
     """Roll daily facts into coarse buckets (#432) for ``biweekly`` or ``monthly``.
 
@@ -692,7 +700,7 @@ def build_period_buckets(
     def _key(d: date) -> date:
         if rolling_anchor is not None:
             return _rolling_bin_start(d, rolling_anchor, bin_days)
-        return _period_start(d, period)
+        return _period_start(d, period, week_starts_on)
 
     def _advance(cur: date) -> date:
         if rolling_anchor is not None:
@@ -861,6 +869,7 @@ def build_zone_load_weekly(
     activity_facts: List[ActivityFact],
     weekly_buckets: List["WeekBucket"],
     rolling_anchor: Optional[date] = None,
+    week_starts_on: int = MONDAY,
 ) -> List[dict]:
     """
     Aggregate per-activity time_in_zones into weekly 3-zone buckets.
@@ -878,7 +887,7 @@ def build_zone_load_weekly(
         if rolling_anchor is not None:
             key = _rolling_bin_start(af.local_date, rolling_anchor, 7)
         else:
-            key = af.local_date - timedelta(days=af.local_date.weekday())
+            key = week_start(af.local_date, week_starts_on)
         easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
         prev = zone_by_week.get(key, (0, 0, 0))
         zone_by_week[key] = (
@@ -937,6 +946,7 @@ def build_zone_load_period(
     period_buckets: List["PeriodBucket"],
     period: str,
     rolling_anchor: Optional[date] = None,
+    week_starts_on: int = MONDAY,
 ) -> List[dict]:
     """Per-coarse-bucket 3-zone minutes (#432), continuous over ``period_buckets``.
 
@@ -951,7 +961,7 @@ def build_zone_load_period(
         if rolling_anchor is not None:
             ps = _rolling_bin_start(af.local_date, rolling_anchor, _ROLLING_BIN_DAYS[period])
         else:
-            ps = _period_start(af.local_date, period)
+            ps = _period_start(af.local_date, period, week_starts_on)
         easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
         prev = zone_by_period.get(ps, (0, 0, 0))
         zone_by_period[ps] = (
@@ -1055,6 +1065,15 @@ def get_trends_report(
     # comparison spans [prev_start, prev_end). Calendar mode shifts both.
     since, prev_start, prev_end = _resolve_window(range_upper, mode)
 
+    # The runner's chosen week start (0=Monday default, 6=Sunday), which the
+    # calendar-mode weekly/biweekly bars align to (#676). Rolling mode buckets by
+    # today-anchored blocks, so it is week-start-independent there.
+    week_starts_on = resolve_week_start(
+        db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if user_id is not None
+        else None
+    )
+
     # Rolling mode buckets the bars in fixed-width blocks rolling back from today
     # rather than snapping to the calendar grid (#630). None keeps the calendar
     # keying (ISO-Monday weeks / calendar months / the fortnight grid).
@@ -1067,7 +1086,7 @@ def get_trends_report(
     if mode == "calendar" and range_upper in _RANGE_DAYS and _RANGE_DAYS[range_upper]:
         from app.services.coach.volume import _calendar_period
 
-        _, until, _, _ = _calendar_period(range_upper, date.today())
+        _, until, _, _ = _calendar_period(range_upper, date.today(), week_starts_on)
 
     # 1. Activity-level facts (filtered by types if provided)
     activity_facts = build_activity_facts(
@@ -1155,6 +1174,7 @@ def get_trends_report(
     weekly = build_weekly_buckets(
         daily_facts, range_key=range_upper, since=since, until=until,
         pre_window_daily=pre_window_daily, rolling_anchor=rolling_anchor,
+        week_starts_on=week_starts_on,
     )
 
     weekly_distance = [
@@ -1196,10 +1216,12 @@ def get_trends_report(
     biweekly = build_period_buckets(
         daily_facts, "biweekly", range_key=range_upper, since=since, until=until,
         pre_window_daily=pre_window_daily, rolling_anchor=rolling_anchor,
+        week_starts_on=week_starts_on,
     )
     monthly = build_period_buckets(
         daily_facts, "monthly", range_key=range_upper, since=since, until=until,
         pre_window_daily=pre_window_daily, rolling_anchor=rolling_anchor,
+        week_starts_on=week_starts_on,
     )
 
     def _period_distance(buckets: List[PeriodBucket]) -> List[PeriodDistancePoint]:
@@ -1269,7 +1291,9 @@ def get_trends_report(
     # 9. Zone load (3-zone stacked bar)
     weekly_zone_load = [
         ZoneLoadWeekPoint(**p)
-        for p in build_zone_load_weekly(activity_facts, weekly, rolling_anchor=rolling_anchor)
+        for p in build_zone_load_weekly(
+            activity_facts, weekly, rolling_anchor=rolling_anchor, week_starts_on=week_starts_on
+        )
     ]
     daily_zone_load = [
         DailyZoneLoadPoint(**p)
@@ -1277,11 +1301,17 @@ def get_trends_report(
     ]
     biweekly_zone_load = [
         PeriodZoneLoadPoint(**p)
-        for p in build_zone_load_period(activity_facts, biweekly, "biweekly", rolling_anchor=rolling_anchor)
+        for p in build_zone_load_period(
+            activity_facts, biweekly, "biweekly", rolling_anchor=rolling_anchor,
+            week_starts_on=week_starts_on,
+        )
     ]
     monthly_zone_load = [
         PeriodZoneLoadPoint(**p)
-        for p in build_zone_load_period(activity_facts, monthly, "monthly", rolling_anchor=rolling_anchor)
+        for p in build_zone_load_period(
+            activity_facts, monthly, "monthly", rolling_anchor=rolling_anchor,
+            week_starts_on=week_starts_on,
+        )
     ]
 
     return TrendsResponse(
@@ -1334,13 +1364,18 @@ def get_volume_report(
     )
 
     resolved = as_of or date.today()
+    week_starts_on = resolve_week_start(
+        db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+        if user_id is not None
+        else None
+    )
     key = range_key if range_key in _RANGE_WINDOW_DAYS else "7D"
     n = _RANGE_WINDOW_DAYS[key]
     roll_start = resolved - timedelta(days=n - 1)
-    period_start, _, _, _ = _calendar_period(key, resolved)
+    period_start, _, _, _ = _calendar_period(key, resolved, week_starts_on)
     # Fetch back to the earliest window start plus the term-scaled norm baseline.
     earliest = min(roll_start, period_start) - timedelta(days=_BASELINE_DAYS_BY_RANGE[key] + 1)
     facts = _query_activity_facts(
         db, earliest, resolved + timedelta(days=1), types, user_id=user_id
     )
-    return build_volume_report(facts, resolved, key)
+    return build_volume_report(facts, resolved, key, week_starts_on)

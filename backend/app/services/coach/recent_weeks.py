@@ -28,6 +28,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any, List, NamedTuple, Optional, Union
 
+from app.services.weeks import MONDAY, days_into_week, is_last_day_of_week, week_start
+
 from app.schemas.coach_context import (
     RecentWeeksActivity,
     RecentWeeksAllTotal,
@@ -245,12 +247,16 @@ def _vs_typical(
 
 
 def build_recent_weeks(
-    facts: List[Any], checkins: dict, as_of: date
+    facts: List[Any], checkins: dict, as_of: date, week_starts_on: int = MONDAY
 ) -> RecentWeeksContext:
     """Build the day-resolved recent-weeks read as of `as_of` (the runner's local day)
     from facts spanning at least the trailing ~91 days (the two weeks of structure plus
     the ~12-week norm baseline). Facts are duck-typed `ActivityFact`s; `checkins` maps
-    `activity_id -> CheckInFacts` for the per-activity felt-effort signals."""
+    `activity_id -> CheckInFacts` for the per-activity felt-effort signals.
+
+    `week_starts_on` (0=Monday default, 6=Sunday) sets the calendar-week boundary so
+    "this week" / "last week" match the runner's chosen week start (#676); the rolling
+    7d lane is week-start-independent."""
     # rolling 7d — the load-verdict lane (full 7 days, directly comparable).
     roll_start = as_of - timedelta(days=6)
     roll_facts = [f for f in facts if roll_start <= f.local_date <= as_of]
@@ -264,16 +270,17 @@ def build_recent_weeks(
         vs_your_typical=_vs_typical(roll_facts, facts, as_of - timedelta(days=7)),
     )
 
-    # this week — Monday to the run's day (partial unless the run is on a Sunday).
-    this_start = as_of - timedelta(days=as_of.weekday())
-    this_complete = as_of.weekday() == 6  # Sunday
+    # this week — week start to the run's day (partial unless the run is the last day
+    # of the runner's week).
+    this_start = week_start(as_of, week_starts_on)
+    this_complete = is_last_day_of_week(as_of, week_starts_on)
     this_facts = [f for f in facts if this_start <= f.local_date <= as_of]
     this_week = RecentWeeksCalendar(
         start=_endpoint(this_start),
         end=_endpoint(as_of),
         label="This week" if this_complete else "This week, in progress",
         complete=this_complete,
-        days_elapsed=as_of.weekday() + 1,
+        days_elapsed=days_into_week(as_of, week_starts_on),
         days=_days(this_start, as_of, this_facts, checkins),
         week_totals=_totals(this_facts),
         # A partial week carries NO verdict (the #653 fix); a complete Sunday week does.
@@ -284,7 +291,7 @@ def build_recent_weeks(
         ),
     )
 
-    # last week — the previous Monday-Sunday block (complete).
+    # last week — the previous complete week block (ends the day before this_start).
     last_end = this_start - timedelta(days=1)
     last_start = last_end - timedelta(days=6)
     last_facts = [f for f in facts if last_start <= f.local_date <= last_end]
