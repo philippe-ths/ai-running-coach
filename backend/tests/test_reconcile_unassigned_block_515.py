@@ -28,9 +28,9 @@ from datetime import datetime, timedelta
 from app.models import Activity, Block, StravaAccount, User
 from app.services.strava_ingestion import InMemoryStravaAdapter, ingest_recent_activities
 from app.services.strava_ingestion import ingestion as ingestion_module
-from app.services.strava_ingestion.ingestion import (
+from app.services.blocks import (
     RECONCILE_MAX_PER_RUN,
-    _assign_block,
+    assign_block_guarded,
     reconcile_unassigned_activities,
 )
 
@@ -127,8 +127,8 @@ def test_assignment_failure_during_ingest_strands_but_does_not_break(db, monkeyp
 
     monkeypatch.setattr(blocks_module, "assign_activity_to_block", _boom)
 
-    # The guard must swallow the failure: _assign_block does not raise.
-    _assign_block(db, activity)
+    # The guard must swallow the failure: assign_block_guarded does not raise.
+    assign_block_guarded(db, activity)
 
     # Assignment never landed: no Block exists for this user, so the activity is
     # stranded (block_id NULL). Asserting on the absence of a Block avoids reading

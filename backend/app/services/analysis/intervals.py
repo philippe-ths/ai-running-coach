@@ -622,3 +622,29 @@ def detect_intervals_from_laps(
         "summary": _summarize(work_details, rest_details),
         "source": "recorded_laps",
     }
+
+
+def merge_preserved_laps(
+    existing_raw_summary: dict | None, incoming_raw: dict
+) -> dict:
+    """Preserve recorded laps across a lap-less re-sync (#170).
+
+    The detail endpoint (webhook/self-heal, `ingest_activity_by_id`) returns the
+    runner's `laps`; the summary list endpoint (manual sync, backfill) does not.
+    Without this, a routine "Sync Now" would overwrite an activity's recorded
+    laps with a lap-less payload and re-analysis would silently downgrade its
+    lap-sourced interval structure back to the stream heuristic. A fresh payload
+    that does carry laps still wins (the detail re-fetch is authoritative).
+
+    Pure: returns `incoming_raw` unchanged, or a shallow copy carrying the
+    preserved `laps`. This is interval-detection domain knowledge (which lap
+    source is authoritative), kept with the interval logic it serves rather than
+    inside the persistence writer.
+    """
+    if (
+        not incoming_raw.get("laps")
+        and isinstance(existing_raw_summary, dict)
+        and existing_raw_summary.get("laps")
+    ):
+        return {**incoming_raw, "laps": existing_raw_summary["laps"]}
+    return incoming_raw
