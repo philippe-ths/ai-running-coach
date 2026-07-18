@@ -1,21 +1,16 @@
-"""M1 — runner memory store (DB layer over `runner_memory`) + markdown render.
+"""M1 — runner memory store (DB layer over `runner_memory`).
 
 The thin store: round-trip a profile, upsert replaces the single per-user row in
-place, get returns None for an unknown user, and the pure markdown render emits
-all five headings even when empty. No LLM here.
+place, and get returns None for an unknown user. No LLM here.
 """
 
 import uuid
 
 from app.models.runner_memory import RunnerMemory
 from app.models.user import User
-from app.schemas.coach_memory import (
-    MEMORY_SECTION_TITLES,
-    RunnerMemoryProfile,
-)
+from app.schemas.coach_memory import RunnerMemoryProfile
 from app.services.coach.memory_store import (
     get_memory,
-    render_profile_markdown,
     upsert_memory,
 )
 
@@ -65,19 +60,3 @@ def test_upsert_accepts_string_user_id(db):
     uid = _user(db)
     upsert_memory(db, str(uid), profile=RunnerMemoryProfile(who_you_are=["runs early"]))
     assert get_memory(db, str(uid)) is not None
-
-
-def test_render_emits_all_five_headings_when_empty():
-    markdown = render_profile_markdown(RunnerMemoryProfile())
-    for title in MEMORY_SECTION_TITLES.values():
-        assert f"## {title}" in markdown
-    # An empty section renders a placeholder, not a phantom bullet.
-    assert "_(nothing yet)_" in markdown
-
-
-def test_render_lists_section_lines():
-    markdown = render_profile_markdown(
-        RunnerMemoryProfile(limits_and_constraints=["Left knee niggle, mentioned once"])
-    )
-    assert "## Limits & constraints" in markdown
-    assert "- Left knee niggle, mentioned once" in markdown

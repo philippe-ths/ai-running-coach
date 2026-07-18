@@ -1,17 +1,33 @@
 """Characterisation tests for the typed CoachContextPack schema.
 
-These tests pin the migration's load-bearing invariant: a typed pack must produce
-the byte-identical cache hash the legacy dict-based pack produced, and round-trip
-through model_validate / model_dump without losing or reordering fields.
+These tests pin the migration's load-bearing invariant: a typed pack's fingerprint
+must equal the canonical SHA-256 of its serialized dict form (the cache identity the
+legacy dict-based pack produced), and round-trip through model_validate / model_dump
+without losing or reordering fields.
 """
 
+import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
 
 from app.models import Activity, DerivedMetric, UserProfile
 from app.models.user import User
 from app.schemas.coach_context import CoachContextPack
-from app.services.coach.context import build_context_pack, hash_context_pack
+from app.services.coach.context import build_context_pack
+
+
+def _canonical_pack_hash(pack: dict) -> str:
+    """The canonical dict-hash the versioned cache identity is defined against.
+
+    This is the formula `CoachContextPack.fingerprint()` must stay byte-identical to
+    (previously the app-side `hash_context_pack`, removed once `fingerprint()` became
+    the sole caller). Kept here as the migration cross-check oracle: if `fingerprint()`
+    ever changes its canonical form, these tests catch the drift in the cache key.
+    """
+    return hashlib.sha256(
+        json.dumps(pack, sort_keys=True, default=str).encode()
+    ).hexdigest()
 
 
 def _legacy_full_pack() -> dict:
@@ -482,16 +498,16 @@ def test_load_accepts_both_flat_and_grouped_shapes():
     assert from_flat.fingerprint() == from_grouped.fingerprint()
 
 
-def test_fingerprint_matches_legacy_hash_full():
+def test_fingerprint_matches_canonical_hash_full():
     pack_dict = _legacy_full_pack()
-    expected = hash_context_pack(pack_dict)
+    expected = _canonical_pack_hash(pack_dict)
     pack = CoachContextPack.load(pack_dict)
     assert pack.fingerprint() == expected
 
 
-def test_fingerprint_matches_legacy_hash_sparse():
+def test_fingerprint_matches_canonical_hash_sparse():
     pack_dict = _legacy_sparse_pack()
-    expected = hash_context_pack(pack_dict)
+    expected = _canonical_pack_hash(pack_dict)
     pack = CoachContextPack.load(pack_dict)
     assert pack.fingerprint() == expected
 
@@ -557,8 +573,8 @@ def test_real_fixture_pack_roundtrips_through_typed_schema(db):
 
     # Round-trip through model_validate preserves the dict shape.
     assert CoachContextPack.load(pack_dict).to_serializable_dict() == pack_dict
-    # The typed fingerprint matches the legacy dict-based hash byte-for-byte.
-    assert pack.fingerprint() == hash_context_pack(pack_dict)
+    # The typed fingerprint matches the canonical dict-based hash byte-for-byte.
+    assert pack.fingerprint() == _canonical_pack_hash(pack_dict)
 
 
 # --- The #493 gated-pack-section registry --------------------------------------
