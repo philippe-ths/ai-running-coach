@@ -1,0 +1,10 @@
+# Experiment outputs (reproducible from the scripts; contain real activity data + large
+# base64 charts, so they are not committed).
+out/
+out_bare/
+*.png
+results.json
+judgments.json
+artifact.html
+run.log
+__pycache__/
