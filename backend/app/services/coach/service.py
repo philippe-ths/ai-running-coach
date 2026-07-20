@@ -172,24 +172,34 @@ def is_receipt_cadence(prompt_id: str) -> bool:
     return settings.COACH_RECEIPT_CADENCE and is_two_stage_prompt(prompt_id)
 
 
-def _resolve_voice_for_activity(db: Session, activity: Activity):
-    """Resolve the runner's declared coach voice for this activity's owner (P1.1).
+def _relationship_for_activity(
+    db: Session, activity: Activity
+) -> Optional[CoachingRelationship]:
+    """Load the runner's thin CoachingRelationship row, or None.
 
-    Loads the thin CoachingRelationship row (the row may not exist yet — a runner
-    who never opened their profile) and resolves it to a VoiceProfile; a missing
-    row or an undeclared voice resolves to the moderate default. This only affects
-    voice-aware prompts (coach_message_v3) — render_voice_block is a no-op for every
-    other prompt id, so the resolved voice is harmless under any other prompt."""
-    # #522: COACH_RELATIONSHIP_ENABLED off => never read the relationship; resolve to
-    # the moderate default voice (the runner's declared voice has no effect).
+    Returns None both when the row does not exist yet (a runner who never opened
+    their profile) and when COACH_RELATIONSHIP_ENABLED is off (#522: never read the
+    relationship, so the runner's declared voice/stance has no effect). In both cases
+    the caller's resolver maps None to its moderate/default profile, so a missing row
+    and a disabled input are indistinguishable by design."""
     if not settings.COACH_RELATIONSHIP_ENABLED:
-        return resolve_voice(None)
-    relationship = (
+        return None
+    return (
         db.query(CoachingRelationship)
         .filter(CoachingRelationship.user_id == activity.user_id)
         .first()
     )
-    return resolve_voice(relationship)
+
+
+def _resolve_voice_for_activity(db: Session, activity: Activity):
+    """Resolve the runner's declared coach voice for this activity's owner (P1.1).
+
+    Resolves the thin CoachingRelationship row to a VoiceProfile; a missing row, an
+    undeclared voice, or a disabled relationship input resolves to the moderate
+    default. This only affects voice-aware prompts (coach_message_v3) —
+    render_voice_block is a no-op for every other prompt id, so the resolved voice is
+    harmless under any other prompt."""
+    return resolve_voice(_relationship_for_activity(db, activity))
 
 
 def report_voice_stale(db: Session, row: Optional[CoachReport]) -> bool:
@@ -224,23 +234,14 @@ def report_voice_stale(db: Session, row: Optional[CoachReport]) -> bool:
 def _resolve_stance_for_activity(db: Session, activity: Activity):
     """Resolve the runner's declared coaching stance for this activity's owner (P1.3).
 
-    Loads the thin CoachingRelationship row (may not exist yet) and resolves it to a
-    StanceProfile (selected school + the two emphasis axes); a missing row or an
-    undeclared stance resolves to the default school (aerobic-base) + balanced
+    Resolves the thin CoachingRelationship row to a StanceProfile (selected school +
+    the two emphasis axes); a missing row, an undeclared stance, or a disabled
+    relationship input resolves to the default school (aerobic-base) + balanced
     emphasis. This only takes effect under a stance-aware prompt (coach_message_v5):
     build_context_pack threads the school into the corpus section and the emphasis
     into the stance section only under v5, so the resolved stance is harmless under
     any other prompt id (the P1.2/voice precedent)."""
-    # #522: COACH_RELATIONSHIP_ENABLED off => never read the relationship; resolve to
-    # the default school + balanced emphasis (the runner's declared stance has no effect).
-    if not settings.COACH_RELATIONSHIP_ENABLED:
-        return resolve_stance(None)
-    relationship = (
-        db.query(CoachingRelationship)
-        .filter(CoachingRelationship.user_id == activity.user_id)
-        .first()
-    )
-    return resolve_stance(relationship)
+    return resolve_stance(_relationship_for_activity(db, activity))
 
 
 def active_schema_version(prompt_id: str) -> str:

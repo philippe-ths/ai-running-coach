@@ -2,18 +2,15 @@
 
 The runner memory profile: one rewritten-from-source per-runner profile, written
 by the background update pass (M2) and read into the coach pack (M3). This layer
-only persists and retrieves the row and renders it to markdown; the authority
-boundary (memory yields to measured data, never lowers the safety floor) is
-enforced elsewhere (the v13 prompt addendum + the medical-scope validator). No
-LLM here.
+only persists and retrieves the row; the authority boundary (memory yields to
+measured data, never lowers the safety floor) is enforced elsewhere (the v13
+prompt addendum + the medical-scope validator). No LLM here.
 
-Three entry points:
+Two entry points:
 - `get_memory(db, user_id)`: the user's memory row, or None.
 - `upsert_memory(db, user_id, ...)`: create or wholesale-replace the single
   per-user row (the update pass rewrites it from scratch each run, so this is a
   full replace, not a merge). Best-effort against the UNIQUE(user_id) race.
-- `render_profile_markdown(profile)`: a pure projection of a profile to markdown
-  for surfacing/debug — emits all five headings even when a section is empty.
 
 All reads/writes are user-scoped.
 """
@@ -29,11 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.runner_memory import RunnerMemory
-from app.schemas.coach_memory import (
-    MEMORY_SECTION_FIELDS,
-    MEMORY_SECTION_TITLES,
-    RunnerMemoryProfile,
-)
+from app.schemas.coach_memory import RunnerMemoryProfile
 
 logger = logging.getLogger(__name__)
 
@@ -107,22 +100,3 @@ def upsert_memory(
             raise
     db.refresh(row)
     return row
-
-
-def render_profile_markdown(profile: RunnerMemoryProfile) -> str:
-    """Render a profile to markdown for surfacing/debug.
-
-    Pure (no DB, no LLM). Always emits all five section headings in canonical
-    order, even when a section is empty, so the shape is constant for every runner
-    ("same sections everyone").
-    """
-    blocks: list[str] = []
-    for field in MEMORY_SECTION_FIELDS:
-        lines = [f"## {MEMORY_SECTION_TITLES[field]}"]
-        items = getattr(profile, field)
-        if items:
-            lines.extend(f"- {item}" for item in items)
-        else:
-            lines.append("_(nothing yet)_")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks) + "\n"

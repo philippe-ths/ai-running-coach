@@ -1720,7 +1720,9 @@ class CoachContextPack(BaseModel):
         return _nest_flat(self.to_serializable_dict())
 
     def fingerprint(self) -> str:
-        """Deterministic SHA-256 cache key. Byte-identical to the legacy hash_context_pack output."""
+        """Deterministic SHA-256 cache key: the canonical hash of the serialized pack
+        (sorted-key JSON with `default=str`), which the versioned-cache identity is
+        defined against."""
         serialised = json.dumps(self.to_serializable_dict(), sort_keys=True, default=str)
         return hashlib.sha256(serialised.encode()).hexdigest()
 

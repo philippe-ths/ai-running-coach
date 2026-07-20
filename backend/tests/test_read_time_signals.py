@@ -22,11 +22,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.services.coach.context import (
-    READ_TIME_SIGNALS,
     _ADHERENCE_SIGNAL,
     _CALIBRATION_SIGNAL,
+    _INTENSITY_SIGNAL,
     _MEMORY_SIGNAL,
     _RECENT_TRAINING_SIGNAL,
+    _RECENT_WEEKS_SIGNAL,
+    _READINESS_SIGNAL,
+    _TRAINING_HISTORY_2WK_SIGNAL,
     _TRAINING_HISTORY_SIGNAL,
     _TRAINING_LOAD_SIGNAL,
     _TRAINING_VOLUME_SIGNAL,
@@ -36,19 +39,36 @@ from app.services.coach.read_time_signals import ReadTimeSignal, gather
 
 _AS_OF = datetime(2026, 3, 20, 8, 0, tzinfo=timezone.utc)
 
+# Every read-time signal, reached at its call site through the one `ReadTimeSignal`
+# seam. There is no aggregate registry object — each signal is wired directly at its
+# `gather(...)` call site — so this tuple is the test's own enumeration.
+_ALL_SIGNALS = (
+    _CALIBRATION_SIGNAL,
+    _ADHERENCE_SIGNAL,
+    _TRAINING_LOAD_SIGNAL,
+    _TRAINING_VOLUME_SIGNAL,
+    _RECENT_TRAINING_SIGNAL,
+    # ADR 0026 Slice 2 (#670): the redefined right_now content signals + the rebased
+    # training-history ladder (PR 2), which coexists with the original for byte-stability.
+    _READINESS_SIGNAL,
+    _RECENT_WEEKS_SIGNAL,
+    _TRAINING_HISTORY_SIGNAL,
+    _TRAINING_HISTORY_2WK_SIGNAL,
+    _MEMORY_SIGNAL,
+    _INTENSITY_SIGNAL,
+)
 
-# --- registry shape ----------------------------------------------------------
+
+# --- signal shape ------------------------------------------------------------
 
 
-def test_all_signals_registered_under_one_interface():
-    assert set(READ_TIME_SIGNALS) == {
+def test_all_signals_share_one_interface():
+    assert {s.name for s in _ALL_SIGNALS} == {
         "calibration",
         "adherence",
         "training_load",
         "training_volume",
         "recent_training",
-        # ADR 0026 Slice 2 (#670): the redefined right_now content signals + the rebased
-        # training-history ladder (PR 2), which coexists with the original for byte-stability.
         "readiness",
         "recent_weeks",
         "training_history",
@@ -56,7 +76,7 @@ def test_all_signals_registered_under_one_interface():
         "memory",
         "intensity",
     }
-    assert all(isinstance(s, ReadTimeSignal) for s in READ_TIME_SIGNALS.values())
+    assert all(isinstance(s, ReadTimeSignal) for s in _ALL_SIGNALS)
 
 
 def test_always_emitted_vs_gated_split_is_explicit():

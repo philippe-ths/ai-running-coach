@@ -14,12 +14,10 @@ view) is reachable through the retrieval seam on demand, not forced into the
 default pack.
 """
 
-import hashlib
-import json
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, undefer
@@ -59,7 +57,6 @@ from app.services.coach.intensity_read import build_intensity_mix, build_intensi
 from app.services.readiness import build_readiness
 from app.services.coach.retrieval import (
     fetch_corpus,
-    fetch_latest_user_reply,
     fetch_prior_commitments,
     fetch_prior_digests,
     fetch_stream_view,
@@ -1485,19 +1482,19 @@ def _novelty_axis_history(db: Session, activity: Activity) -> list[AxisSnapshot]
     ]
 
 
-# --- The read-time history-scan signal registry (#492) ----------------------
-# The five signals reached through the one `ReadTimeSignal` seam. Each pairs a
+# --- The read-time history-scan signals (#492) ------------------------------
+# The signals reached through the one `ReadTimeSignal` seam. Each pairs a
 # `_build_*_context` adapter (the bounded scan + thin-history abstention) with its
 # optional prompt-feature gate, so `gather` applies gating + dispatch uniformly and
 # `build_context_pack` / `build_b_baseline` never repeat a private convention.
 #
-# Two are ALWAYS-EMITTED (gate_feature=None — calibration and adherence live in the
-# B baseline and always produce a section, possibly empty/degraded). Three are
-# PROMPT-GATED (the section is dropped from serialization when the active prompt does
-# not carry the feature, keeping the pack byte-stable elsewhere).
+# The ALWAYS-EMITTED signals (gate_feature=None — calibration and adherence live in
+# the B baseline and always produce a section, possibly empty/degraded) run on every
+# prompt; the PROMPT-GATED signals are dropped from serialization when the active
+# prompt does not carry the feature, keeping the pack byte-stable elsewhere.
 #
-# #203 slots a stored-artifact adapter in by re-registering the same `name` with a
-# read-stored compute of the SAME (db, activity, as_of) shape — no `context.py` change.
+# #203 slots a stored-artifact adapter in by swapping a signal's compute for a
+# read-stored one of the SAME (db, activity, as_of) shape — no call-site change.
 _CALIBRATION_SIGNAL = ReadTimeSignal("calibration", _build_calibration_context)
 _ADHERENCE_SIGNAL = ReadTimeSignal("adherence", _build_adherence_context)
 _TRAINING_LOAD_SIGNAL = ReadTimeSignal(
@@ -1533,34 +1530,3 @@ _INTENSITY_SIGNAL = ReadTimeSignal(
     "intensity", _build_intensity_context, PromptFeature.INTENSITY
 )
 
-# All read-time signals, keyed by name — the registry a stored-artifact adapter
-# (#203) would look up and swap an entry in without touching the call sites above.
-# `memory` (ADR 0025) is itself the stored-artifact adapter the seam was designed
-# for: it reads a written profile rather than scanning history.
-READ_TIME_SIGNALS: Dict[str, ReadTimeSignal] = {
-    s.name: s
-    for s in (
-        _CALIBRATION_SIGNAL,
-        _ADHERENCE_SIGNAL,
-        _TRAINING_LOAD_SIGNAL,
-        _TRAINING_VOLUME_SIGNAL,
-        _RECENT_TRAINING_SIGNAL,
-        _READINESS_SIGNAL,
-        _RECENT_WEEKS_SIGNAL,
-        _TRAINING_HISTORY_SIGNAL,
-        _TRAINING_HISTORY_2WK_SIGNAL,
-        _MEMORY_SIGNAL,
-        _INTENSITY_SIGNAL,
-    )
-}
-
-
-def hash_context_pack(pack: Dict[str, Any]) -> str:
-    """Deterministic SHA-256 hash of a legacy dict-shaped pack.
-
-    Retained for migration safety (tests pin the typed model's fingerprint against this);
-    new code should call CoachContextPack.fingerprint() instead.
-    """
-    return hashlib.sha256(
-        json.dumps(pack, sort_keys=True, default=str).encode()
-    ).hexdigest()
