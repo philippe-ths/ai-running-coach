@@ -207,7 +207,7 @@ def _is_run_activity(activity: Activity) -> bool:
 def _exchange_for_activity(db: Session, activity: Activity) -> Optional[Exchange]:
     """The exchange owning this activity's block, via lazy block assignment."""
     block = _ensure_block(db, activity)
-    return db.query(Exchange).filter(Exchange.block_id == block.id).first()
+    return lifecycle.get_exchange_for_block(db, block.id)
 
 
 def _receipt_templates_for(db: Session, user_id) -> Optional[dict]:
@@ -283,7 +283,7 @@ async def _send_receipt(
 
     # Open the exchange on the first receipt, independent of delivery (A4 posture):
     # the reply window anchors here and must work even for a NoOp local notifier.
-    exchange = db.query(Exchange).filter(Exchange.block_id == block.id).first()
+    exchange = lifecycle.get_exchange_for_block(db, block.id)
     if exchange is not None:
         lifecycle.open_exchange(db, exchange)
 
@@ -393,11 +393,7 @@ def _resolve_completed_block(
         )
         return None
 
-    exchange = db.query(Exchange).filter(Exchange.block_id == block.id).first()
-    if exchange is None:  # defensive: blocks are created with their exchange
-        exchange = Exchange(user_id=block.user_id, block_id=block.id)
-        db.add(exchange)
-        db.commit()
+    exchange = lifecycle.ensure_exchange_for_block(db, block)
 
     primary = db.query(Activity).filter(Activity.id == block.primary_activity_id).one()
 
@@ -542,7 +538,7 @@ def _enqueue_reply_fuller(db: Session, activity_id) -> bool:
         return False  # no activity, or never grouped (nothing to advance)
 
     block = db.query(Block).filter(Block.id == activity.block_id).first()
-    exchange = db.query(Exchange).filter(Exchange.block_id == activity.block_id).first()
+    exchange = lifecycle.get_exchange_for_block(db, activity.block_id)
     if block is None or exchange is None:
         return False
     # Open (opener generated, not closed) and within the reply window: a closed or
@@ -589,14 +585,16 @@ def _record_done_and_schedule(db: Session, activity_id) -> bool:
         return False
 
     block = db.query(Block).filter(Block.id == activity.block_id).first()
-    exchange = db.query(Exchange).filter(Exchange.block_id == activity.block_id).first()
+    exchange = lifecycle.get_exchange_for_block(db, activity.block_id)
     if block is None or exchange is None:
         return False
-    if lifecycle.is_closed(exchange):
-        return False  # closed: the full report already went
-    # A "done" tap cannot resurrect a stale exchange (an unopened one is allowed —
-    # the receipt opens it on ingest, but a defensive mark_done opens it anyway).
-    if exchange.opened_at is not None and not lifecycle.within_reply_window(exchange):
+    # A "done" tap acts only on an OPEN, in-window exchange — the SAME guard the reply
+    # path uses (`can_fire_reply_fuller`), so the "reply/done may act only on an open,
+    # in-window exchange" invariant has one implementation, not two (#697). The receipt
+    # opens the exchange on ingest, so a delivered receipt (the only surface carrying the
+    # "done" button) always sees an opened exchange; a closed/stale one never re-fires
+    # (AC3/AC4). `mark_done` still opens defensively.
+    if not lifecycle.can_fire_reply_fuller(exchange):
         return False
 
     # Record the explicit completion signal (idempotent), opening the exchange if

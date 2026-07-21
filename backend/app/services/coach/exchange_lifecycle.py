@@ -45,7 +45,7 @@ from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Activity, Exchange
+from app.models import Activity, Block, Exchange
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +87,33 @@ def within_reply_window(exchange: Exchange, *, now: Optional[datetime] = None) -
 
 
 def can_fire_reply_fuller(exchange: Exchange, *, now: Optional[datetime] = None) -> bool:
-    """Whether a runner reply may early-fire the fuller turn: the exchange is open,
-    not closed, and within the reply window (A4 reply path)."""
+    """Whether a runner action (a reply OR a "done" tap) may early-fire the fuller/full
+    report: the exchange is open, not closed, and within the reply window. The SINGLE
+    act-guard shared by the A4 reply path and the #296 "done" path, so "reply/done may
+    act only on an open, in-window exchange" has one implementation, not two."""
     return is_open(exchange) and within_reply_window(exchange, now=now)
+
+
+# --- block -> exchange resolution ---------------------------------------------
+
+
+def get_exchange_for_block(db: Session, block_id) -> Optional[Exchange]:
+    """The Exchange owning this block, or None (A1: one exchange per block, `block_id`
+    UNIQUE). The single block->exchange lookup, so the job layer never re-implements the
+    query at each call site."""
+    return db.query(Exchange).filter(Exchange.block_id == block_id).first()
+
+
+def ensure_exchange_for_block(db: Session, block: Block) -> Exchange:
+    """The block's Exchange, creating one if it is somehow missing (defensive: blocks are
+    created WITH their exchange in `blocks.py`, A1). Idempotent get-or-create, so a
+    block-complete check that finds no row still resolves an exchange rather than crashing."""
+    exchange = get_exchange_for_block(db, block.id)
+    if exchange is None:
+        exchange = Exchange(user_id=block.user_id, block_id=block.id)
+        db.add(exchange)
+        db.commit()
+    return exchange
 
 
 # --- state transitions (each guarded, idempotent, committing) -----------------
