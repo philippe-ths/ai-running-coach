@@ -46,14 +46,17 @@ frontend/tsconfig.tsbuildinfo
 
 # IDE
 .idea/
-.vscode/
 
 # AI workflow and skills (tooling config, not product code)
+# The installer only ignores the last-installed tool's paths in its managed
+# block below; these keep every installed tool's artifacts local-only.
 .agents/
 .gemini/
 .github/*
 !.github/workflows/
 claude.md
+CLAUDE.md
+.claude/
 .codex/
 AGENTS.md
 .vercel
@@ -69,6 +72,8 @@ docs/audit/coach-*
 ai-workflow.md
 .ai-policy/
 .githooks/
-CLAUDE.md
-.claude/
+.github/copilot-instructions.md
+.github/hooks/
+.vscode/
+.agents/skills/
 # <<< ai-workflow <<<
