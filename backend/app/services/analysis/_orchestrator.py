@@ -11,6 +11,7 @@ from app.services.analysis.flags import generate_flags
 from app.services.analysis.intervals import detect_intervals, detect_intervals_from_laps
 from app.services.analysis.risk import compute_risk_score
 from app.services.analysis.workout_matching import match_planned_to_detected, build_interval_kpis
+from app.services.analysis.composition import DerivedMetricFields, IntervalSession
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +72,11 @@ def compute_confidence(activity, streams_dict, check_in, interval_structure=None
     # Interval-specific sanity checks. These reasons (no_intervals_detected,
     # rep variability, match mismatch) only describe an interval session, so
     # they must not lower the overall confidence of a non-interval activity
-    # (#169). The orchestrator nulls interval_structure when the structure axis
-    # did not resolve to intervals, so its presence is the "is interval session"
-    # gate; without it, workout_match's reasons stay confined to workout_match.
+    # (#169). `interval_structure` here is already the gated value from the
+    # single owner (IntervalSession, #701): it is non-None only for an interval
+    # session, so this function makes no independent session decision — its
+    # presence is the gate, and without it workout_match's reasons stay confined
+    # to workout_match.
     if interval_structure and workout_match:
         match_reasons = workout_match.get("confidence_reasons", [])
         for r in match_reasons:
@@ -156,15 +159,16 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
 
       A. Load phase (steps 1-4): activity, recent history, streams, check-in,
          profile-derived max_hr / HR zones. Pure DB reads.
-      B. Pre-commit metrics phase (steps 5-9.6): build the `metrics_data` dict
-         from the pure analysis stages, then upsert + commit it. This phase
+      B. Pre-commit metrics phase (steps 5-9.6): build the typed
+         `DerivedMetricFields` accumulator (`state`, #701) from the pure
+         analysis stages, then upsert + commit `state.to_columns()`. This phase
          carries the two real intra-phase ordering invariants, both flagged
          INVARIANT inline below:
            1. The interval-structure PROBE precedes classification, and the
               probed structure feeds the classifier's structure axis.
-           2. The kept `interval_structure` (nulled unless the structure axis
-              resolved to "intervals") GATES interval matching/KPIs and the
-              interval confidence checks.
+           2. The single interval-session gate (`IntervalSession.gate`, the ONE
+              owner of "is this an interval session") GATES interval
+              matching/KPIs and the interval confidence checks.
       C. Post-commit phase (step 11): the runner-baseline recompute, which by
          INVARIANT must follow the commit (see `_post_commit_baseline`).
 
@@ -212,12 +216,19 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
 
     # 5. Compute metrics. Pass the check-in RPE so the training-load primitive
     # (#186) can fall back to session-RPE on a strap-less run.
-    metrics_data = compute_derived_metrics_data(
-        activity,
-        streams_dict,
-        max_hr=max_hr,
-        rpe=check_in.rpe if check_in else None,
-        zone_boundaries=zone_boundaries,
+    #
+    # The pure metrics stage still returns its own dict (its external contract);
+    # the orchestrator seeds the typed accumulator (`state`, #701) from it and
+    # writes every subsequent stage's output as a typed attribute rather than a
+    # string key. `state.to_columns()` reproduces the exact upsert dict.
+    state = DerivedMetricFields.from_base_metrics(
+        compute_derived_metrics_data(
+            activity,
+            streams_dict,
+            max_hr=max_hr,
+            rpe=check_in.rpe if check_in else None,
+            zone_boundaries=zone_boundaries,
+        )
     )
 
     # 6. Classify into orthogonal axes (ADR 0007). Probe interval structure so
@@ -237,53 +248,52 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     # recorded laps do not contain.
     lap_structure = detect_intervals_from_laps(activity.raw_summary, streams_dict, max_hr=max_hr)
     stream_structure = detect_intervals(streams_dict, "Intervals", max_hr=max_hr) if streams_dict else None
-    interval_structure = lap_structure or stream_structure
+    probed_structure = lap_structure or stream_structure
     classification = classify_activity(
         activity, history,
-        time_in_zones=metrics_data.get("time_in_zones"),
-        pace_variability=metrics_data.get("pace_variability"),
-        has_interval_structure=interval_structure is not None,
+        time_in_zones=state.time_in_zones,
+        pace_variability=state.pace_variability,
+        has_interval_structure=probed_structure is not None,
         max_hr=max_hr,
     )
-    metrics_data["effort"] = classification.effort
-    metrics_data["duration_class"] = classification.duration_class
-    metrics_data["structure"] = classification.structure
-    metrics_data["is_hilly"] = classification.is_hilly
-    metrics_data["is_race"] = classification.is_race
+    state.effort = classification.effort
+    state.duration_class = classification.duration_class
+    state.structure = classification.structure
+    state.is_hilly = classification.is_hilly
+    state.is_race = classification.is_race
 
-    # 6.5 Interval segmentation — keep the probed structure only when the
-    # structure axis resolved to intervals.
+    # 6.5 Interval segmentation — resolve the single "is this an interval
+    # session" gate (#701). IntervalSession.gate keeps the probed structure only
+    # when the classifier's structure axis resolved to intervals; it is the ONE
+    # owner of that concept.
     #
-    # ORDERING INVARIANT 2 (structure-axis gates interval KPIs): this null-out
-    # turns the post-classification `interval_structure` local into the single
-    # "is this an interval session" gate. Every downstream interval-only stage
-    # (6.6 workout matching, 6.7 KPIs, and the interval confidence checks in
-    # compute_confidence) keys off this gated value, so it must be applied here,
-    # AFTER classification and BEFORE those stages read it.
-    if classification.structure != "intervals":
-        interval_structure = None
-    metrics_data["interval_structure"] = interval_structure
+    # ORDERING INVARIANT 2 (structure-axis gates interval KPIs): the gate is the
+    # single source every downstream interval-only stage keys off — 6.6 workout
+    # matching, 6.7 KPIs, and the interval confidence checks in
+    # compute_confidence all read `interval_session.structure`. It must be
+    # resolved here, AFTER classification and BEFORE those stages read it.
+    interval_session = IntervalSession.gate(classification.structure, probed_structure)
+    state.interval_structure = interval_session.structure
 
     # 6.6 Workout matching — compare planned vs detected
     planned_workout = _extract_planned_workout(check_in)
-    workout_match = match_planned_to_detected(interval_structure, planned_workout)
-    metrics_data["workout_match"] = workout_match
+    workout_match = match_planned_to_detected(interval_session.structure, planned_workout)
+    state.workout_match = workout_match
 
     # 6.7 Interval-specific KPIs, gated on the structure axis via the
-    # interval_structure nulled at 6.5 (INVARIANT 2).
-    if interval_structure:
+    # interval_session gate (INVARIANT 2).
+    if interval_session.is_session:
         zones_calibrated = bool(
             profile and (profile.hr_zones or (profile.max_hr and profile.max_hr > 100))
         )
-        interval_kpis = build_interval_kpis(
-            interval_structure,
+        state.interval_kpis = build_interval_kpis(
+            interval_session.structure,
             max_hr=max_hr,
             zones_calibrated=zones_calibrated,
-            time_in_zones=metrics_data.get("time_in_zones"),
+            time_in_zones=state.time_in_zones,
         )
-        metrics_data["interval_kpis"] = interval_kpis
     else:
-        metrics_data["interval_kpis"] = None
+        state.interval_kpis = None
 
     # 7. Load history metrics for load spike detection
     history_metrics = (
@@ -293,12 +303,15 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
         if history else []
     )
 
-    # 8. Flags (all flag logic consolidated in flags.py)
+    # 8. Flags (all flag logic consolidated in flags.py). flags.py reads the
+    # accumulator as a dict; state.to_columns() presents the current typed
+    # values in that shape (later-stage fields are still at their defaults and
+    # unread here).
     all_flags = generate_flags(
-        activity, metrics_data, history, check_in,
+        activity, state.to_columns(), history, check_in,
         history_metrics=history_metrics,
     )
-    metrics_data["flags"] = all_flags
+    state.flags = all_flags
 
     # 8.5 Risk score (deterministic, based on flags + check-in + training context)
     check_in_data = {
@@ -309,29 +322,31 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     # can read it instead of recomputing.
     from app.services.analysis._training_context import build_training_context
     training_ctx = build_training_context(db, activity)
-    metrics_data["training_context"] = training_ctx
+    state.training_context = training_ctx
     risk_result = compute_risk_score(all_flags, check_in_data, training_ctx)
-    metrics_data["risk_level"] = risk_result["risk_level"]
-    metrics_data["risk_score"] = risk_result["risk_score"]
-    metrics_data["risk_reasons"] = risk_result["risk_reasons"]
+    state.risk_level = risk_result["risk_level"]
+    state.risk_score = risk_result["risk_score"]
+    state.risk_reasons = risk_result["risk_reasons"]
 
-    # 9. Confidence (with interval sanity checks)
+    # 9. Confidence (with interval sanity checks). Consumes the gated structure
+    # from the single owner (interval_session), so the interval-only reasons
+    # stay confined to an interval session (#169/#701).
     confidence, confidence_reasons = compute_confidence(
         activity, streams_dict, check_in,
-        interval_structure=interval_structure,
+        interval_structure=interval_session.structure,
         workout_match=workout_match,
     )
-    metrics_data["confidence"] = confidence
-    metrics_data["confidence_reasons"] = confidence_reasons
+    state.confidence = confidence
+    state.confidence_reasons = confidence_reasons
 
     # 9.5 Discount signals (N4) — deterministic confounder annotation. Flags
     # when HR drift is likely inflated by heat/terrain/stimulant rather than
     # genuine fatigue. Reuses the profile loaded for max_hr above.
     from app.services.analysis.discount_signals import compute_discount_signals
-    metrics_data["discount_signals"] = compute_discount_signals(
+    state.discount_signals = compute_discount_signals(
         average_temp=activity.raw_summary.get("average_temp") if activity.raw_summary else None,
-        is_hilly=metrics_data.get("is_hilly"),
-        hr_drift=metrics_data.get("hr_drift"),
+        is_hilly=state.is_hilly,
+        hr_drift=state.hr_drift,
         stimulant_use=profile.stimulant_use if profile else None,
     )
 
@@ -341,17 +356,19 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     # every analysis (self-heals on re-sync/backfill), a convenience view that
     # never overrides the re-derived metrics. Degrades to None without streams.
     from app.services.analysis.stream_view import build_stream_view
-    metrics_data["stream_view"] = build_stream_view(streams_dict)
+    state.stream_view = build_stream_view(streams_dict)
 
-    # 10. Upsert DerivedMetric
+    # 10. Upsert DerivedMetric. state.to_columns() reproduces the exact dict the
+    # upsert consumed before the typed-intermediate refactor (#701).
+    metric_columns = state.to_columns()
     existing_dm = db.query(DerivedMetric).filter(DerivedMetric.activity_id == activity.id).first()
 
     if existing_dm:
-        for k, v in metrics_data.items():
+        for k, v in metric_columns.items():
             setattr(existing_dm, k, v)
         dm = existing_dm
     else:
-        dm = DerivedMetric(activity_id=activity.id, **metrics_data)
+        dm = DerivedMetric(activity_id=activity.id, **metric_columns)
         db.add(dm)
 
     db.commit()
