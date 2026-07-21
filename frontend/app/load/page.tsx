@@ -8,7 +8,15 @@ import { fetchFromAPI } from "@/lib/api";
 import { formatDateLabel } from "@/lib/format";
 import LoadTrendChart from "@/components/load/LoadTrendChart";
 
+// Weekday-indexed labels (Mon=0..Sun=6), matching each week's `daily` array.
 const DAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"];
+
+// The weekday indices to render, in order, for a runner whose week starts on
+// `weekStartsOn` (0=Monday default, 6=Sunday, #676/#724). Monday yields the
+// identity order [0..6], so a default runner's breakdown is byte-identical.
+function dayOrder(weekStartsOn: number): number[] {
+  return Array.from({ length: 7 }, (_, k) => (weekStartsOn + k) % 7);
+}
 
 const STATUS_META: Record<LoadStatus, { label: string; classes: string }> = {
   optimal: {
@@ -88,6 +96,7 @@ export default function LoadPage() {
   const status = STATUS_META[week.status] ?? STATUS_META.no_baseline;
   const maxDaily = Math.max(...week.daily, 1);
   const isCurrent = index === data.weeks.length - 1;
+  const order = dayOrder(data.week_starts_on ?? 0);
 
   return (
     <div className="space-y-6">
@@ -138,18 +147,21 @@ export default function LoadPage() {
 
         {/* Day-of-week breakdown */}
         <div className="flex items-end gap-2 h-20">
-          {week.daily.map((score, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
-              <div
-                className={`w-full max-w-[28px] rounded-t ${
-                  score > 0 ? "bg-blue-500 dark:bg-blue-600" : "bg-gray-100 dark:bg-gray-700"
-                }`}
-                style={{ height: `${score > 0 ? Math.max((score / maxDaily) * 100, 6) : 4}%` }}
-                title={score > 0 ? `${score}` : undefined}
-              />
-              <span className="text-[10px] text-gray-400 dark:text-gray-500">{DAY_LABELS[i]}</span>
-            </div>
-          ))}
+          {order.map((j) => {
+            const score = week.daily[j];
+            return (
+              <div key={j} className="flex-1 flex flex-col items-center gap-1 h-full justify-end">
+                <div
+                  className={`w-full max-w-[28px] rounded-t ${
+                    score > 0 ? "bg-blue-500 dark:bg-blue-600" : "bg-gray-100 dark:bg-gray-700"
+                  }`}
+                  style={{ height: `${score > 0 ? Math.max((score / maxDaily) * 100, 6) : 4}%` }}
+                  title={score > 0 ? `${score}` : undefined}
+                />
+                <span className="text-[10px] text-gray-400 dark:text-gray-500">{DAY_LABELS[j]}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
