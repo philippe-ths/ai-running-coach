@@ -294,6 +294,26 @@ async def test_done_tap_noops_when_exchange_closed(db, configured, notifier):
     sched.assert_not_called()
 
 
+async def test_done_tap_noops_when_exchange_stale(db, configured, notifier, monkeypatch):
+    # #697: the "done" path now shares the reply path's act-guard
+    # (`can_fire_reply_fuller`), so a tap on a STALE exchange (opener older than the
+    # reply window) no-ops exactly as a stale reply does — one guard, not two. It also
+    # must NOT record done (no state transition on a guard failure).
+    from datetime import timedelta
+
+    monkeypatch.setattr(settings, "EXCHANGE_REPLY_WINDOW_SECONDS", 86400)
+    activity = _seed(db)
+    ex = _exchange_of(db, activity)
+    ex.opened_at = datetime.now(timezone.utc) - timedelta(days=3)  # opened, but stale
+    db.add(ex)
+    db.commit()
+    with patch.object(pna, "_schedule_block_complete") as sched:
+        assert mark_done_and_schedule(db, activity.id) is False
+    sched.assert_not_called()
+    ex = _exchange_of(db, activity)
+    assert ex.done_at is None
+
+
 # --- rollback inertness -------------------------------------------------------
 
 
