@@ -35,6 +35,30 @@ def test_week_starts_on_monday():
     assert week_start(date(2026, 6, 14)) == date(2026, 6, 8)
 
 
+def test_report_carries_week_starts_on_default_monday():
+    # #724: the report surfaces the runner's week boundary so the client can order
+    # the within-week day breakdown. Default (unspecified) is Monday, byte-stable.
+    report = build_load_report([_fact(date(2026, 6, 8), 50.0)], TODAY)
+    assert report.week_starts_on == 0
+
+
+def test_report_carries_week_starts_on_sunday():
+    # #724: a Sunday-start runner's report carries week_starts_on=6 (SUNDAY) while
+    # the daily array stays weekday-indexed (Mon=0), so the client rotates labels
+    # Sun..Sat without the backend reshaping the array.
+    facts = [
+        _fact(date(2026, 6, 8), 50.0),   # Monday -> daily[0]
+        _fact(date(2026, 6, 7), 30.0),   # Sunday -> daily[6]
+    ]
+    report = build_load_report(facts, TODAY, week_starts_on=6)
+    assert report.week_starts_on == 6
+    # A Sunday-start week containing this Friday (TODAY) runs Sun 2026-06-07..Sat.
+    week = report.weeks[-1]
+    assert week.week_start == date(2026, 6, 7)
+    # daily is still weekday-indexed regardless of week_starts_on.
+    assert week.daily == [50.0, 0.0, 0.0, 0.0, 0.0, 0.0, 30.0]
+
+
 def test_weekly_score_sums_and_daily_breakdown():
     facts = [
         _fact(date(2026, 6, 8), 50.0),   # Monday

@@ -207,6 +207,10 @@ class LoadWeek(BaseModel):
 
 class LoadResponse(BaseModel):
     weeks: List[LoadWeek]  # chronological; last entry is the current week
+    # The runner's week boundary (0=Monday default, 6=Sunday, #676). Each week's
+    # `daily` array stays weekday-indexed (Mon=0); this lets the client render the
+    # within-week day breakdown starting on the runner's chosen day (#724).
+    week_starts_on: int = 0
 
 
 class VolumeMetricVsNorm(BaseModel):
