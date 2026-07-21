@@ -50,7 +50,9 @@ def test_maybe_enqueue_self_heal_is_bounded():
     fake_redis = MagicMock()
     fake_redis.set.side_effect = [True, None]  # first acquires, second throttled
     fake_queue = MagicMock()
-    with patch.object(self_heal, "redis_conn", fake_redis), \
+    # The cooldown idiom lives in batch_chain now (#698); it imports redis_conn
+    # from app.core.queue, so patch it there.
+    with patch("app.core.queue.redis_conn", fake_redis), \
          patch.object(self_heal, "queue", fake_queue):
         first = maybe_enqueue_self_heal("user-1")
         second = maybe_enqueue_self_heal("user-1")
@@ -67,7 +69,7 @@ def test_maybe_enqueue_self_heal_never_raises_into_request():
     request that triggered it — it is a best-effort safety net."""
     fake_redis = MagicMock()
     fake_redis.set.side_effect = RuntimeError("redis down")
-    with patch.object(self_heal, "redis_conn", fake_redis):
+    with patch("app.core.queue.redis_conn", fake_redis):
         assert maybe_enqueue_self_heal("user-1") is False
 
 
