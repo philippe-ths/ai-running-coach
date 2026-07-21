@@ -187,4 +187,8 @@ export interface LoadWeek {
 
 export interface LoadData {
   weeks: LoadWeek[];
+  // Runner's week boundary (0=Monday default, 6=Sunday, #676/#724). Each week's
+  // `daily` array stays weekday-indexed (Mon=0); the client orders the day
+  // breakdown starting on this day. Optional so a pre-#724 payload defaults Monday.
+  week_starts_on?: number;
 }

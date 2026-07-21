@@ -7,8 +7,9 @@ the DB read and pack wiring live in `context.py`.
 
 Two framings, both surfaced (the runner reasons in both):
   - rolling_7d: the trailing 7 days, a full week directly comparable to the norm.
-  - calendar_week: the current Monday-Sunday block to date (partial until Sunday),
-    judged against the norm PRO-RATED to the elapsed days so a partial week is fair.
+  - calendar_week: the current calendar-week block to date, aligned to the runner's
+    own week-start (partial until the week closes), judged against the norm PRO-RATED
+    to the elapsed days so a partial week is fair.
 
 The norm is the runner's own per-day training rate over history BEFORE the current
 7 days, projected to a weekly figure (#451): the SAME clamped per-day-rate
@@ -29,8 +30,8 @@ totals were a second copy of that section's roll-up. `rolling_7d` then carries t
 vs-norm VERDICT only (norm + direction + pct); the actual trailing-7d numbers live in
 `recent_training`. The drop is GATED on `recent_training` being present (v9/v10 keep
 the values, since no descriptive lane exists there to carry them).
-`calendar_week` keeps its current values (no other section carries the Monday-to-date
-window). The builder below still COMPUTES current on both windows (direction/pct
+`calendar_week` keeps its current values (no other section carries the
+week-start-to-date window). The builder below still COMPUTES current on both windows (direction/pct
 derive from it); the drop is a pack-serialization concern only (see
 `coach_context._drop_training_volume_rolling_current`), so this module and the
 Trends-page `build_volume_report` are unchanged.

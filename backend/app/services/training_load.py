@@ -134,7 +134,7 @@ def build_load_report(
             )
         )
 
-    return LoadResponse(weeks=weeks)
+    return LoadResponse(weeks=weeks, week_starts_on=week_starts_on)
 
 
 def get_load_report(
