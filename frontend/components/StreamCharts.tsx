@@ -41,6 +41,58 @@ function formatElapsed(seconds: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
+// Linear-interpolated percentile over an ascending-sorted array (p in [0, 100]).
+function percentile(sortedAsc: number[], p: number): number {
+  if (sortedAsc.length === 0) return 0;
+  if (sortedAsc.length === 1) return sortedAsc[0];
+  const idx = (p / 100) * (sortedAsc.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sortedAsc[lo];
+  const frac = idx - lo;
+  return sortedAsc[lo] * (1 - frac) + sortedAsc[hi] * frac;
+}
+
+// Minimum elevation span (metres) so a near-flat run renders flat rather than
+// mountainous (#727): a 60 m total window mirrors the #726 experiment harness,
+// which fixes the "flat run looks hilly" misread.
+const MIN_ELEVATION_SPAN_M = 60;
+
+// The DISPLAY y-domain for a chart, kept separate from the true data min/max
+// (which still feed the Max/Avg readout). Auto-fitting every series to its own
+// data range produced two misleading reads (#727): a flat run's ~10 m of
+// undulation filled the panel and looked hilly, and interval walk/stop pace
+// extremes squashed the reps into a sliver. So:
+//   - altitude: enforce a minimum span centred on the data midpoint, so trivial
+//     elevation change occupies a proportionally small slice of the panel.
+//   - velocity_smooth (pace, plotted in m/s): clamp to the robust running range
+//     (8th-98th percentile, 5% pad) so stops/walks near 0 m/s do not set the
+//     scale and the running band fills the panel. Samples outside the domain
+//     peg to the panel edge (the SimpleChart y-mapping clamps).
+// Every other series keeps its data range, so their rendering is unchanged.
+function computeYDomain(
+  type: string,
+  dataMin: number,
+  dataMax: number,
+  validData: number[],
+): { domainMin: number; domainMax: number } {
+  if (type === 'altitude') {
+    const mid = (dataMin + dataMax) / 2;
+    const half = Math.max((dataMax - dataMin) / 2, MIN_ELEVATION_SPAN_M / 2);
+    return { domainMin: mid - half, domainMax: mid + half };
+  }
+  if (type === 'velocity_smooth' && validData.length > 1) {
+    const sorted = [...validData].sort((a, b) => a - b);
+    const lo = percentile(sorted, 8);
+    const hi = percentile(sorted, 98);
+    const span = hi - lo;
+    if (span > 0) {
+      return { domainMin: lo - 0.05 * span, domainMax: hi + 0.05 * span };
+    }
+  }
+  return { domainMin: dataMin, domainMax: dataMax };
+}
+
 interface SimpleChartProps {
   type: string;
   data: (number | null)[];
@@ -66,7 +118,7 @@ const SimpleChart = React.memo(function SimpleChart({ type, data, secondaryData,
   const areaRef = useRef<HTMLDivElement>(null);
 
   // Compute stats for scaling using only valid data
-  const { pathD, secondaryPathD, primaryData, min, max, avg, range } = useMemo(() => {
+  const { pathD, secondaryPathD, primaryData, min, max, avg, domainMin, domainRange } = useMemo(() => {
     // Cadence dropouts/ramps must not set the chart scale (#310). Strava reports
     // 0 cadence before the first detected step (and during pauses), and the
     // smoothing of that region emits LOW NON-ZERO ramp values (real data observed:
@@ -92,7 +144,7 @@ const SimpleChart = React.memo(function SimpleChart({ type, data, secondaryData,
 
     // Filter out nulls for stats
     const validData = primaryData.filter((v): v is number => v !== null);
-    if (!validData.length) return { pathD: '', secondaryPathD: '', primaryData, min: 0, max: 0, avg: 0, range: 1 };
+    if (!validData.length) return { pathD: '', secondaryPathD: '', primaryData, min: 0, max: 0, avg: 0, domainMin: 0, domainRange: 1 };
 
     // Include secondary data in min/max calc so it fits in the chart
     const allValues = [...validData];
@@ -115,7 +167,11 @@ const SimpleChart = React.memo(function SimpleChart({ type, data, secondaryData,
     }
 
     const avg = sum / validData.length;
-    const range = max - min || 1;
+
+    // Display domain (per-type; see computeYDomain, #727), distinct from the raw
+    // data min/max above which still feed the Max/Avg readout.
+    const { domainMin, domainMax } = computeYDomain(type, min, max, validData);
+    const domainRange = (domainMax - domainMin) || 1;
 
     // Helper to generate path with gaps
     const generatePath = (arr: (number | null)[]) => {
@@ -125,7 +181,11 @@ const SimpleChart = React.memo(function SimpleChart({ type, data, secondaryData,
             if (val === null) continue;
 
             const x = (i / (arr.length - 1)) * CHART_WIDTH;
-            const y = CHART_HEIGHT - ((val - min) / range) * CHART_HEIGHT;
+            // Clamp to the panel so an out-of-domain sample (e.g. a walk/stop
+            // below the clamped pace range) pegs to the edge instead of drawing
+            // far outside the chart.
+            const rawY = CHART_HEIGHT - ((val - domainMin) / domainRange) * CHART_HEIGHT;
+            const y = Math.max(0, Math.min(CHART_HEIGHT, rawY));
 
             // If previous point was null or this is first point, Move to. Else Line to.
             const prevVal = i > 0 ? arr[i-1] : null;
@@ -148,7 +208,8 @@ const SimpleChart = React.memo(function SimpleChart({ type, data, secondaryData,
       min,
       max,
       avg,
-      range
+      domainMin,
+      domainRange
     };
   }, [data, secondaryData, type]);
 
@@ -168,7 +229,7 @@ const SimpleChart = React.memo(function SimpleChart({ type, data, secondaryData,
   const scrubX = scrubIndex === null ? null : (scrubIndex / (data.length - 1)) * CHART_WIDTH;
   const scrubY = scrubValue === null || scrubValue === undefined
     ? null
-    : CHART_HEIGHT - ((scrubValue - min) / range) * CHART_HEIGHT;
+    : Math.max(0, Math.min(CHART_HEIGHT, CHART_HEIGHT - ((scrubValue - domainMin) / domainRange) * CHART_HEIGHT));
 
   const handlePointer = (e: React.PointerEvent<HTMLDivElement>) => {
     const rect = areaRef.current?.getBoundingClientRect();
