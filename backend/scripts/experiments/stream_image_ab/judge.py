@@ -94,6 +94,7 @@ def _stream_digest(db, activity_id: str) -> Dict[str, Any]:
     hr = arr("heartrate")
     vel = arr("velocity_smooth")
     alt = arr("altitude")
+    cad = arr("cadence")
     digest: Dict[str, Any] = {}
     if hr is not None and hr.size:
         # first vs last third mean HR — the raw drift signal the judge checks against.
@@ -118,6 +119,15 @@ def _stream_digest(db, activity_id: str) -> Dict[str, Any]:
             "min_m": round(float(alt.min())), "max_m": round(float(alt.max())),
             "gain_m": round(gain), "start_m": round(float(alt[0])), "end_m": round(float(alt[-1])),
         }
+    if cad is not None and cad.size:
+        from app.services.units.cadence import cadence_doubling_factor
+        pos = cad[cad > 0]
+        if pos.size:
+            spm = pos * cadence_doubling_factor(float(pos.mean()))
+            digest["cadence_spm"] = {
+                "mean": round(float(spm.mean())), "min": round(float(spm.min())),
+                "max": round(float(spm.max())),
+            }
     if dm is not None:
         digest["derived_metrics"] = {
             "structure": dm.structure, "duration_class": dm.duration_class,
@@ -126,6 +136,23 @@ def _stream_digest(db, activity_id: str) -> Dict[str, Any]:
             "is_race": dm.is_race, "time_in_zones": dm.time_in_zones,
             "risk_level": dm.risk_level, "flags": dm.flags,
         }
+        # Interval ground truth (the point of the interval test): the actual rep
+        # structure the coach had to read from the raw stream.
+        istruct = dm.interval_structure or {}
+        segs = istruct.get("work_segments") if isinstance(istruct, dict) else None
+        if segs:
+            digest["interval_structure"] = {
+                "source": istruct.get("source") or "stream-detected",
+                "n_work_segments": len(segs),
+                "warmup_s": istruct.get("warmup_duration_s"),
+                "cooldown_s": istruct.get("cooldown_duration_s"),
+                "segments": [
+                    {"n": s.get("segment_number"), "duration_s": s.get("duration_s"),
+                     "pace_s_per_km": s.get("pace_s_per_km"), "avg_hr": s.get("avg_hr"),
+                     "peak_hr": s.get("peak_hr")}
+                    for s in segs
+                ],
+            }
     return digest
 
 

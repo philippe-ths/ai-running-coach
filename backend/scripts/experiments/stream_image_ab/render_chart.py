@@ -53,12 +53,29 @@ def _fmt_clock(minutes: float, _pos=None) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def _robust_range(a: np.ndarray, lo_pct: float, hi_pct: float, pad: float = 0.0):
+    finite = a[np.isfinite(a)]
+    if not finite.size:
+        return None
+    lo = float(np.percentile(finite, lo_pct))
+    hi = float(np.percentile(finite, hi_pct))
+    span = hi - lo
+    return lo - pad * span, hi + pad * span
+
+
 def render_stream_chart(
     streams: Dict[str, List[Any]],
     *,
     title: str = "",
+    optimized: bool = False,
 ) -> Optional[bytes]:
-    """streams_dict -> PNG bytes (or None if no time/metric channels)."""
+    """streams_dict -> PNG bytes (or None if no time/metric channels).
+
+    optimized=True renders a vision-legibility-tuned chart (#726): a pace axis clamped
+    to the running range with dense M:SS gridlines (so reps aren't compressed by walk
+    recoveries), a minimum elevation span and fixed grade range (so flat terrain looks
+    flat), dense time gridlines (so reps are countable), and larger fonts. Pure
+    legibility — no derived values (rep paces, interval structure) are drawn."""
     time = streams.get("time")
     if not time:
         return None
@@ -95,12 +112,12 @@ def render_stream_chart(
         mean = float(finite.mean()) if finite.size else None
         cad = cad * cadence_doubling_factor(mean)
 
+    pace_title = "Pace (min/km) — HIGHER = FASTER" if optimized else "Pace (min/km)"
     panels = []
     if hr is not None:
         panels.append(("hr", "Heart rate (bpm)", _rolling_mean(hr, window), "#e6194B", False))
     if pace is not None:
-        panels.append(("pace", "Pace (min/km)", _rolling_mean(pace, window), "#4363d8", True))
-    # Terrain panel: elevation profile (area) with grade overlaid.
+        panels.append(("pace", pace_title, _rolling_mean(pace, window), "#4363d8", True))
     if alt is not None or grade is not None:
         panels.append(("terrain", "Elevation (m) + grade (%)", None, None, False))
     if cad is not None:
@@ -109,39 +126,67 @@ def render_stream_chart(
     if not panels:
         return None
 
+    tfs, lfs = (15, 13) if optimized else (11, 10)  # title / label font sizes
+    row_h = 2.9 if optimized else 2.4
     fig, axes = plt.subplots(
-        len(panels), 1, figsize=(16, 2.4 * len(panels)), sharex=True, dpi=100
+        len(panels), 1, figsize=(16, row_h * len(panels)), sharex=True,
+        dpi=120 if optimized else 100,
     )
     if len(panels) == 1:
         axes = [axes]
     if title:
-        fig.suptitle(title, fontsize=15, fontweight="bold", y=0.995)
+        fig.suptitle(title, fontsize=tfs + 2, fontweight="bold", y=0.997)
 
     for ax, (key, label, data, color, invert) in zip(axes, panels):
         if key == "terrain":
             if alt is not None:
-                ax.fill_between(minutes, alt, np.nanmin(alt), color="#9A6324", alpha=0.28, lw=0)
-                ax.plot(minutes, _rolling_mean(alt, window), color="#9A6324", lw=1.4, label="elevation")
-                ax.set_ylabel("Elevation (m)")
+                base = float(np.nanmin(alt))
+                ax.fill_between(minutes, _rolling_mean(alt, window), base, color="#9A6324", alpha=0.28, lw=0)
+                ax.plot(minutes, _rolling_mean(alt, window), color="#9A6324", lw=1.6, label="elevation")
+                ax.set_ylabel("Elevation (m)", fontsize=lfs)
+                if optimized:
+                    # Minimum span so a flat run reads flat, not mountainous.
+                    finite = alt[np.isfinite(alt)]
+                    mid = float((finite.min() + finite.max()) / 2)
+                    half = max((finite.max() - finite.min()) / 2, 30.0)
+                    ax.set_ylim(mid - half, mid + half)
             if grade is not None:
                 axg = ax.twinx()
                 axg.plot(minutes, _rolling_mean(grade, window), color="#808000", lw=1.0, alpha=0.8, label="grade %")
                 axg.axhline(0, color="#808000", lw=0.5, ls=":", alpha=0.5)
-                axg.set_ylabel("Grade (%)", color="#808000")
-                axg.tick_params(axis="y", labelcolor="#808000")
-            ax.set_title(label, fontsize=11, loc="left")
+                axg.set_ylabel("Grade (%)", color="#808000", fontsize=lfs)
+                axg.tick_params(axis="y", labelcolor="#808000", labelsize=lfs - 2)
+                if optimized:
+                    axg.set_ylim(-15, 15)  # fixed so small grades look small
+            ax.set_title(label, fontsize=tfs, loc="left")
         else:
-            ax.plot(minutes, data, color=color, lw=1.6)
-            ax.set_title(label, fontsize=11, loc="left")
-            ax.set_ylabel(label.split(" (")[0])
+            ax.plot(minutes, data, color=color, lw=1.8 if optimized else 1.6)
+            ax.set_title(label, fontsize=tfs, loc="left")
+            ax.set_ylabel(label.split(" (")[0], fontsize=lfs)
             if invert:
                 ax.invert_yaxis()
                 ax.yaxis.set_major_formatter(plt.FuncFormatter(_fmt_pace))
-        ax.grid(True, alpha=0.25)
+                if optimized and data is not None:
+                    # Clamp to the running range so reps aren't compressed by walk
+                    # recoveries, and label every 30 s.
+                    rng = _robust_range(data, 2, 92, pad=0.05)
+                    if rng:
+                        ax.set_ylim(rng[1], rng[0])  # inverted: fast(low s) at top
+                    ax.yaxis.set_major_locator(plt.MultipleLocator(30))
+        if optimized:
+            ax.grid(which="major", alpha=0.35, lw=0.8)
+            ax.grid(which="minor", alpha=0.15, lw=0.5)
+            ax.minorticks_on()
+            ax.tick_params(labelsize=lfs - 2)
+        else:
+            ax.grid(True, alpha=0.25)
         ax.margins(x=0.01)
 
-    axes[-1].set_xlabel("Time (h:mm:ss)")
+    axes[-1].set_xlabel("Time (h:mm:ss)", fontsize=lfs)
     axes[-1].xaxis.set_major_formatter(plt.FuncFormatter(_fmt_clock))
+    if optimized:
+        axes[-1].xaxis.set_major_locator(plt.MultipleLocator(3))   # every 3 min
+        axes[-1].xaxis.set_minor_locator(plt.MultipleLocator(1))   # minor every 1 min
     fig.tight_layout(rect=[0, 0, 1, 0.985])
 
     buf = io.BytesIO()
