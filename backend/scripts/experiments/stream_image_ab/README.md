@@ -7,6 +7,12 @@ This is an **exploratory research harness**, not production code. Nothing here i
 into the app. It reuses the real coach assembly (`_assemble_generation_request` /
 `_generate_message`, `coach_message_lean_grouped_v5`) so results transfer.
 
+> **Status: INCONCLUSIVE / suggestive.** The findings below come from N=3-per-condition
+> smokes scored by a single LLM judge, and the human blind A/B reads (the intended
+> tiebreaker) have not been done. They point at a plausible mechanism and a directional
+> lean, not a decision. Do not treat "not worth a pipeline swap" as settled — it is the
+> current lean, pending larger N and the owner's blind reads.
+
 ## Files
 
 | File | Role |
@@ -56,7 +62,7 @@ EXP_OUT="$OUT" PYTHONPATH="$PP" .venv/bin/python "$EXP/judge.py"
 EXP_OUT="$OUT" PYTHONPATH="$EXP:." .venv/bin/python "$EXP/make_artifact.py"
 ```
 
-## Findings (3-run smokes per condition)
+## Findings (preliminary — 3-run smokes per condition, single judge, human reads pending)
 
 **Cost:** the 60-point numeric `stream_view` is the cheaper input every time
 (~1.1k vs ~1.57k tokens; ~+450 for the image). The "full-res shape at a flat price"
@@ -91,14 +97,16 @@ auto-zoomed so 10 m of noise looked like mountains. The `optimized=True` chart f
 (image then read reps at 3:30-4:30/km and called the course flat), leaving only residual
 per-value gaps (rep count off by one; missing a rep-to-rep HR climb).
 
-**Conclusion for the product:** this reinforces the current architecture. Per-rep detail
-already reaches the coach deterministically via `interval_structure`, and exact drift/zones
-via `DerivedMetric`, so the stream's only real job is gestalt. An optimized image is a *safe*
-gestalt channel but adds nothing over the numbers for the per-value substance production
-already supplies — so it is **not worth a pipeline swap or the ~450-token-per-report vision
-tax**. The one marginal case is an on-demand deep-dive image on long *continuous* runs
-(gestalt-dominated). The "conditional inclusion" heuristic, if ever pursued, is long
-continuous runs — NOT intervals.
+**Directional read for the product (NOT a decision):** the results *lean* toward keeping the
+current architecture. Per-rep detail already reaches the coach deterministically via
+`interval_structure`, and exact drift/zones via `DerivedMetric`, so the stream's main job is
+gestalt; an optimized image looks like a *safe* gestalt channel that adds little over the
+numbers for the per-value substance production already supplies. On that reasoning an image
+channel does not obviously clear its cost (~450 tokens/report + a rendering stage) — but this
+is a lean from thin evidence, not a settled "no". If any case survives a larger, human-checked
+run, it is an on-demand deep-dive image on long *continuous* runs (gestalt-dominated), NOT
+intervals. To actually decide: scale N, focus the judge on the stream-dependent delta, add
+the owner blind reads, and fix the judge digest (#728).
 
 **Spin-off worth doing regardless:** the chart-scaling bugs found here (auto-scaled elevation
 making flat runs look hilly; pace compressed by recoveries) would mislead any viewer,
