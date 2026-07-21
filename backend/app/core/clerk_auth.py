@@ -70,7 +70,9 @@ class ClerkVerifier:
         jwk_client: Optional[object] = None,
     ) -> None:
         self._issuer = issuer
-        self._authorized_parties = tuple(authorized_parties)
+        # Normalise (strip trailing slash) so an operator- or config-supplied
+        # origin with a trailing "/" still matches the bare-origin azp Clerk mints.
+        self._authorized_parties = tuple(p.rstrip("/") for p in authorized_parties)
         self._leeway = leeway
         # PyJWKClient caches signing keys in-process after the first fetch.
         self._jwk_client = jwk_client or jwt.PyJWKClient(jwks_url)
@@ -102,8 +104,15 @@ class ClerkVerifier:
             raise ClerkAuthError(f"could not verify session token: {exc}") from exc
 
         if self._authorized_parties:
+            # Clerk sets `azp` to the frontend origin that minted the token, so a
+            # token issued by the SAME instance for a DIFFERENT app/origin carries
+            # that other origin here and is rejected (the #707 threat: a valid
+            # same-instance token from a foreign frontend). A token with NO azp is
+            # allowed, per Clerk's documented guidance to skip the check when the
+            # claim is absent; our browser-minted sessions always carry it, so an
+            # absent azp is not the foreign-origin case this guards against.
             azp = claims.get("azp")
-            if azp not in self._authorized_parties:
+            if azp is not None and str(azp).rstrip("/") not in self._authorized_parties:
                 raise ClerkAuthError("token authorized party not allowed")
 
         return claims

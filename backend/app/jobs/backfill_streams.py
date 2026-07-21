@@ -19,9 +19,8 @@ worker free between batches and the combined Strava call rate under the
 
 import asyncio
 import logging
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -30,7 +29,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.queue import queue
 from app.db.session import SessionLocal
-from app.models import Activity, ActivityStream
+from app.jobs import batch_chain
+from app.models import Activity
 from app.services.analysis import analyze_with_streams
 from app.services.strava_ingestion import strava_budget
 from app.services.strava_ingestion.port import StravaRateLimited
@@ -56,28 +56,18 @@ def _eligible_stmt(*, user_id: Optional[str] = None):
     opened. When `user_id` is given the set is scoped to that runner (#470), so a
     user's trigger only backfills their own history; omit it for a global pass.
     """
-    has_streams = (
-        select(ActivityStream.id)
-        .where(ActivityStream.activity_id == Activity.id)
-        .exists()
-    )
     stmt = select(Activity).where(
         Activity.is_deleted.is_(False),
         Activity.streams_backfilled_at.is_(None),
-        ~has_streams,
+        ~batch_chain.has_streams_exists(),
     )
-    if user_id is not None:
-        # user_id rides through RQ as a string; coerce so the Uuid column
-        # comparison works on both Postgres and the SQLite test backend.
-        if isinstance(user_id, str):
-            user_id = uuid.UUID(user_id)
-        stmt = stmt.where(Activity.user_id == user_id)
+    stmt = batch_chain.scope_to_user(stmt, user_id)
     return stmt.order_by(Activity.start_date.desc())
 
 
 def count_eligible(db: Session, *, user_id: Optional[str] = None) -> int:
     """How many activities still need stream-derived analysis (optionally scoped)."""
-    return len(db.execute(_eligible_stmt(user_id=user_id)).scalars().all())
+    return batch_chain.count_eligible(db, _eligible_stmt(user_id=user_id))
 
 
 @dataclass
@@ -157,18 +147,11 @@ async def backfill_streams_batch(
 
 
 def _schedule_next_batch(user_id: Optional[str] = None) -> None:
-    """Schedule the next batch after the configured pause, so the single worker
-    stays free to process webhooks between batches. Carries `user_id` so the
-    self-paced chain stays scoped to the triggering runner (#470).
-
-    Uses RQ-native deferred scheduling (drained by the worker's `with_scheduler`),
-    so no separate rq-scheduler process is needed (#123/ADR 0006)."""
-    from app.core.queue import queue
-
-    queue.enqueue_in(
-        timedelta(seconds=settings.BACKFILL_BATCH_PAUSE_SECONDS),
-        backfill_streams_job,
-        user_id,
+    """Schedule the next batch after the configured pause (the normal, work-remains
+    path). Carries `user_id` so the self-paced chain stays scoped to the triggering
+    runner (#470). The chain mechanics live in `batch_chain.schedule_after` (#698)."""
+    batch_chain.schedule_after(
+        backfill_streams_job, settings.BACKFILL_BATCH_PAUSE_SECONDS, user_id
     )
 
 
@@ -176,12 +159,8 @@ def _reschedule_after_budget(user_id: Optional[str] = None) -> None:
     """Re-enqueue this batch after the Strava-budget backoff (#544), when the
     shared budget is exhausted, so the chain resumes once capacity frees rather
     than dropping the runner's backfill."""
-    from app.core.queue import queue
-
-    queue.enqueue_in(
-        timedelta(seconds=settings.STRAVA_BUDGET_BACKOFF_SECONDS),
-        backfill_streams_job,
-        user_id,
+    batch_chain.schedule_after(
+        backfill_streams_job, settings.STRAVA_BUDGET_BACKOFF_SECONDS, user_id
     )
 
 
@@ -233,32 +212,6 @@ def backfill_streams_job(user_id: Optional[str] = None) -> None:
         logger.info("Backfill complete: no eligible activities remain")
 
 
-def _acquire_enqueue_slot(user_id: str) -> bool:
-    """Best-effort guard: at most one backfill chain enqueued per user per
-    cooldown, so rapid re-triggers (a double Sync tap, or Sync racing the manual
-    backfill endpoint) don't spawn overlapping chains that double-fetch the same
-    activity's streams against the shared budget. Degrades OPEN on any Redis error
-    so a coordination outage never blocks a legitimate backfill."""
-    try:
-        from app.core.queue import redis_conn
-
-        return bool(
-            redis_conn.set(
-                f"backfill_enqueue:{user_id}",
-                "1",
-                nx=True,
-                ex=_BACKFILL_ENQUEUE_COOLDOWN_S,
-            )
-        )
-    except Exception as exc:  # Redis down / misconfigured: enqueue anyway
-        logger.warning(
-            "backfill_enqueue_guard_unavailable user=%s: %s; enqueuing anyway",
-            user_id,
-            exc,
-        )
-        return True
-
-
 def enqueue_backfill(db: Session, user_id) -> int:
     """Count the runner's eligible activities and enqueue their first backfill batch.
 
@@ -271,11 +224,13 @@ def enqueue_backfill(db: Session, user_id) -> int:
     idempotent, and the per-activity budget re-check (#601) bounds the cost."""
     user_id = str(user_id)
     eligible = count_eligible(db, user_id=user_id)
-    if eligible and _acquire_enqueue_slot(user_id):
+    if eligible and batch_chain.acquire_enqueue_slot(
+        f"backfill_enqueue:{user_id}", _BACKFILL_ENQUEUE_COOLDOWN_S
+    ):
         queue.enqueue(
             backfill_streams_job,
             user_id,
             job_id=f"{_BACKFILL_JOB_ID}_{user_id}",
-            result_ttl=3600,
+            result_ttl=batch_chain.CHAIN_RESULT_TTL,
         )
     return eligible
