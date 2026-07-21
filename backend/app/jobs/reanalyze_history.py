@@ -83,6 +83,34 @@ def count_eligible(
     return len(db.execute(_eligible_stmt(cursor=cursor, user_id=user_id)).scalars().all())
 
 
+def reanalyze_activity_if_streams(db: Session, activity_id) -> bool:
+    """Re-derive ONE activity's analysis from its ALREADY-STORED streams (no Strava
+    call) — the single-activity form of the bulk re-analysis (#646).
+
+    The coach-report "Re-run" calls this before regenerating so the report reflects
+    the current deployed analysis code instead of a stale/buggy `DerivedMetric` frozen
+    at the activity's original analysis. `analyze` upserts the `DerivedMetric` and
+    commits, so it is idempotent and safe to repeat.
+
+    Returns True when analysis ran, False when it was skipped because the activity has
+    no stored streams (a summary-only import) — the caller then proceeds with the
+    existing metrics rather than failing or reaching out to Strava.
+    """
+    activity_uuid = (
+        activity_id if isinstance(activity_id, uuid.UUID) else uuid.UUID(str(activity_id))
+    )
+    has_streams = (
+        db.query(ActivityStream.id)
+        .filter(ActivityStream.activity_id == activity_uuid)
+        .first()
+        is not None
+    )
+    if not has_streams:
+        return False
+    analyze(db, str(activity_uuid))
+    return True
+
+
 @dataclass
 class ReanalyzeBatchResult:
     processed: list[int] = field(default_factory=list)  # strava_activity_ids

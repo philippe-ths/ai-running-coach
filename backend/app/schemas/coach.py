@@ -102,6 +102,15 @@ class CoachReportMeta(BaseModel):
     # by the read endpoint; defaults False so stored meta (which never carries it) and
     # every non-voice prompt validate unchanged.
     voice_stale: bool = False
+    # #646 non-destructive-regen provenance stamp — STORED, set only when this report
+    # was produced by a force "Re-run" that superseded a prior report (not on a first
+    # generation, where both stay None). `regenerated_at` is when the Re-run ran;
+    # `memory_as_of` is the runner-memory profile's grounded-through date at that time.
+    # Runner memory is intentionally current + unversioned, so the stamp is how a
+    # regenerated old report's hindsight is made honest (the preserved original carries
+    # the point-in-time memory). Optional/defaulted so pre-#646 stored meta validates.
+    regenerated_at: Optional[datetime] = None
+    memory_as_of: Optional[datetime] = None
 
 
 class CoachReportContent(BaseModel):

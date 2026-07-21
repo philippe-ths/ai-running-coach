@@ -152,6 +152,7 @@ def fetch_prior_digests(
             Activity.is_deleted == False,  # noqa: E712
             Activity.start_date < activity.start_date,
             CoachReport.is_fallback == False,  # noqa: E712
+            CoachReport.superseded_at.is_(None),  # #646: current rows only, not audit copies
         )
         # start_date orders by exchange recency; created_at picks the latest
         # version per activity; id is a stable final tiebreaker.
@@ -222,6 +223,7 @@ def fetch_prior_commitments(db: Session, activity: Activity) -> Optional[PriorCo
             Activity.is_deleted == False,  # noqa: E712
             Activity.start_date < activity.start_date,
             CoachReport.is_fallback == False,  # noqa: E712
+            CoachReport.superseded_at.is_(None),  # #646: current rows only, not audit copies
         )
         .order_by(
             Activity.start_date.desc(),
@@ -265,6 +267,7 @@ def fetch_recent_user_digests(
             Activity.user_id == _as_uuid(user_id),
             Activity.is_deleted == False,  # noqa: E712
             CoachReport.is_fallback == False,  # noqa: E712
+            CoachReport.superseded_at.is_(None),  # #646: current rows only, not audit copies
         )
         .order_by(
             Activity.start_date.desc(),

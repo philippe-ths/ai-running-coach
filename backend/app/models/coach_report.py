@@ -2,9 +2,9 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, ForeignKey, DateTime, JSON, String, Uuid, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, DateTime, Index, JSON, String, Uuid, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, text
 
 from app.db.base import Base
 from app.models.base import generate_uuid
@@ -13,16 +13,27 @@ from app.models.base import generate_uuid
 class CoachReport(Base):
     __tablename__ = "coach_reports"
 
-    # Cache identity is (activity_id, prompt_id, schema_version): one report per
-    # activity per report shape. A version bump retains prior versions rather
+    # Cache identity is (activity_id, prompt_id, schema_version): one CURRENT report
+    # per activity per report shape. A version bump retains prior versions rather
     # than overwriting them, so report history is comparable across prompt/schema
     # changes (the seam the M5 eval harness relies on). prompt_id/schema_version
     # are nullable so old code (during the deploy window on the preview-shared
     # production DB) can still insert; new code always populates them.
+    #
+    # #646 non-destructive regen: a force regeneration no longer overwrites the
+    # active row in place. It sets `superseded_at` on the prior current row (an
+    # immutable audit copy of what the coach saw) and inserts the regenerated report
+    # as a new CURRENT row. "Current" = superseded_at IS NULL, so the uniqueness is
+    # a PARTIAL unique index scoped to the current rows (unlimited archived copies,
+    # exactly one current row per key). Expressed for both Postgres (prod) and SQLite
+    # (tests build from the model via create_all); both support partial indexes.
     __table_args__ = (
-        UniqueConstraint(
+        Index(
+            "uq_coach_reports_activity_version_current",
             "activity_id", "prompt_id", "schema_version",
-            name="uq_coach_reports_activity_version",
+            unique=True,
+            postgresql_where=text("superseded_at IS NULL"),
+            sqlite_where=text("superseded_at IS NULL"),
         ),
     )
 
@@ -44,6 +55,16 @@ class CoachReport(Base):
 
     is_fallback: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false", default=False
+    )
+
+    # #646 non-destructive regeneration: NULL for the CURRENT report, a timestamp for
+    # an ARCHIVED (superseded) audit copy. A force "Re-run" sets this on the prior
+    # current row and inserts a fresh current row, so the original report + its
+    # point-in-time context_pack snapshot survive for comparison instead of being
+    # overwritten. All display/active/digest/eval read paths filter to superseded_at
+    # IS NULL; archived rows are audit-only and never served as the report.
+    superseded_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     # P1.1 voice freshness (not cache IDENTITY): the fingerprint of the runner's

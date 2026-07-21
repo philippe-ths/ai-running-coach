@@ -144,17 +144,37 @@ class TestRegenerateEnqueueFailure:
 
 
 class TestRegenerateJob:
-    def test_job_delegates_to_force_regeneration(self):
+    def test_job_reanalyzes_then_delegates_to_force_regeneration(self):
+        # #646: the Re-run job re-derives analysis from stored streams FIRST (so the
+        # report reflects current deployed analysis code), then force-regenerates.
         from app.jobs import process_new_activity as job_mod
 
         fake_db = MagicMock()
         with patch.object(job_mod, "SessionLocal", return_value=fake_db), \
+             patch.object(job_mod, "reanalyze_activity_if_streams", return_value=True) as reanalyze, \
              patch.object(job_mod, "get_or_generate_coach_report", new=AsyncMock(return_value=None)) as gen:
             job_mod.regenerate_report_job("11111111-1111-1111-1111-111111111111")
+        # re-analysis runs before the regen, against the same activity/session.
+        reanalyze.assert_called_once()
+        assert reanalyze.call_args.args[1] == "11111111-1111-1111-1111-111111111111"
         gen.assert_awaited_once()
         # force=True is the whole point: it regenerates the active-version row.
         assert gen.await_args.kwargs.get("force") is True
         fake_db.close.assert_called_once()  # session is always closed
+
+    def test_job_proceeds_when_reanalysis_fails(self):
+        # #646: re-analysis is best-effort — a failure must NOT block the regen.
+        from app.jobs import process_new_activity as job_mod
+
+        fake_db = MagicMock()
+        with patch.object(job_mod, "SessionLocal", return_value=fake_db), \
+             patch.object(job_mod, "reanalyze_activity_if_streams",
+                          side_effect=RuntimeError("analysis blew up")), \
+             patch.object(job_mod, "get_or_generate_coach_report", new=AsyncMock(return_value=None)) as gen:
+            job_mod.regenerate_report_job("11111111-1111-1111-1111-111111111111")
+        gen.assert_awaited_once()  # regen still ran with existing metrics
+        assert gen.await_args.kwargs.get("force") is True
+        fake_db.close.assert_called_once()
 
 
 class TestJobTimeouts:

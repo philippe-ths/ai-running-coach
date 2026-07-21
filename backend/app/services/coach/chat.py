@@ -450,7 +450,10 @@ async def stream_chat_response(
     # (`_validate_chat_text`) runs regardless and already tolerates an empty pack.
     report_row = get_active_report_row(db, activity_id) or (
         db.query(CoachReport)
-        .filter(CoachReport.activity_id == activity_id)
+        .filter(
+            CoachReport.activity_id == activity_id,
+            CoachReport.superseded_at.is_(None),  # #646: current rows only, not audit copies
+        )
         .order_by(CoachReport.created_at.desc())
         .first()
     )
