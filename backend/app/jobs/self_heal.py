@@ -21,8 +21,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
-from app.core.queue import queue, redis_conn
+from app.core.queue import queue
 from app.db.session import SessionLocal
+from app.jobs import batch_chain
 from app.models import Activity, StravaAccount
 from app.services.strava_ingestion import (
     ensure_valid_access_token,
@@ -42,18 +43,21 @@ _PER_PAGE = 30
 def maybe_enqueue_self_heal(user_id) -> bool:
     """Enqueue a self-heal check for ``user_id`` unless one ran very recently.
 
-    Bounded by an atomic Redis SET NX EX, so app-open spam and rapid Refresh taps
-    collapse to at most one check per ``SELF_HEAL_MIN_INTERVAL_SECONDS``. Returns
-    True when a check was enqueued, False when throttled or on any error — it is a
-    best-effort safety net and must never break the request that triggered it.
+    Bounded by the shared per-user enqueue cooldown (an atomic Redis SET NX EX,
+    #698), so app-open spam and rapid Refresh taps collapse to at most one check
+    per ``SELF_HEAL_MIN_INTERVAL_SECONDS``. ``degrade_open=False`` because this is a
+    best-effort safety net: a Redis outage skips the check (the next app-open
+    re-triggers it) rather than spending a scarce Strava call. Returns True when a
+    check was enqueued, False when throttled or on any error — it must never break
+    the request that triggered it.
     """
+    if not batch_chain.acquire_enqueue_slot(
+        f"self_heal:{user_id}",
+        settings.SELF_HEAL_MIN_INTERVAL_SECONDS,
+        degrade_open=False,
+    ):
+        return False
     try:
-        key = f"self_heal:{user_id}"
-        acquired = redis_conn.set(
-            key, "1", nx=True, ex=settings.SELF_HEAL_MIN_INTERVAL_SECONDS
-        )
-        if not acquired:
-            return False
         queue.enqueue(self_heal_job, str(user_id), job_id=f"self_heal_{user_id}")
         return True
     except Exception as exc:  # noqa: BLE001 — never propagate into the request

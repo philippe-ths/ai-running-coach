@@ -26,9 +26,7 @@ the single worker to webhooks/self-heal between batches.
 """
 
 import logging
-import uuid
 from dataclasses import dataclass, field
-from datetime import timedelta
 from typing import Optional
 
 from sqlalchemy import select
@@ -37,7 +35,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.queue import queue
 from app.db.session import SessionLocal
-from app.models import Activity, ActivityStream
+from app.jobs import batch_chain
+from app.models import Activity
 from app.services.analysis import analyze
 from app.services.analysis.baseline import recompute_runner_baseline
 
@@ -56,23 +55,13 @@ def _eligible_stmt(*, cursor: Optional[int] = None, user_id: Optional[str] = Non
     set is scoped to that runner (#470), so a user's trigger only re-analyzes
     their own history; omit it for a global pass (the offline eval rebuild).
     """
-    has_streams = (
-        select(ActivityStream.id)
-        .where(ActivityStream.activity_id == Activity.id)
-        .exists()
-    )
     stmt = select(Activity).where(
         Activity.is_deleted.is_(False),
-        has_streams,
+        batch_chain.has_streams_exists(),
     )
     if cursor is not None:
         stmt = stmt.where(Activity.strava_activity_id < cursor)
-    if user_id is not None:
-        # user_id rides through RQ as a string; coerce so the Uuid column
-        # comparison works on both Postgres and the SQLite test backend.
-        if isinstance(user_id, str):
-            user_id = uuid.UUID(user_id)
-        stmt = stmt.where(Activity.user_id == user_id)
+    stmt = batch_chain.scope_to_user(stmt, user_id)
     return stmt.order_by(Activity.strava_activity_id.desc())
 
 
@@ -80,7 +69,9 @@ def count_eligible(
     db: Session, *, cursor: Optional[int] = None, user_id: Optional[str] = None
 ) -> int:
     """How many activities are still eligible (optionally past the cursor / scoped)."""
-    return len(db.execute(_eligible_stmt(cursor=cursor, user_id=user_id)).scalars().all())
+    return batch_chain.count_eligible(
+        db, _eligible_stmt(cursor=cursor, user_id=user_id)
+    )
 
 
 @dataclass
@@ -163,19 +154,12 @@ def reanalyze_history_batch(
 
 
 def _schedule_next_batch(cursor: int, user_id: Optional[str] = None) -> None:
-    """Schedule the next batch after the configured pause, so the single worker
-    stays free to process webhooks between batches. Carries `user_id` so the
-    self-paced chain stays scoped to the triggering runner (#470).
-
-    Uses RQ-native deferred scheduling (drained by the worker's `with_scheduler`),
-    so no separate rq-scheduler process is needed (#123/ADR 0006)."""
-    from app.core.queue import queue
-
-    queue.enqueue_in(
-        timedelta(seconds=settings.REANALYZE_BATCH_PAUSE_SECONDS),
-        reanalyze_history_job,
-        cursor,
-        user_id,
+    """Schedule the next batch after the configured pause. Carries the advanced
+    `cursor` and `user_id` so the self-paced chain resumes strictly past where it
+    stopped and stays scoped to the triggering runner (#470). The chain mechanics
+    live in `batch_chain.schedule_after` (#698)."""
+    batch_chain.schedule_after(
+        reanalyze_history_job, settings.REANALYZE_BATCH_PAUSE_SECONDS, cursor, user_id
     )
 
 
@@ -222,6 +206,6 @@ def enqueue_reanalyze(db: Session, user_id) -> int:
             None,  # cursor: start from the newest activity
             user_id,
             job_id=f"{_REANALYZE_JOB_ID}_{user_id}",
-            result_ttl=3600,
+            result_ttl=batch_chain.CHAIN_RESULT_TTL,
         )
     return eligible
