@@ -35,6 +35,7 @@ from app.services.coach.query_tools import (
     CHAT_TOOLS,
     TOOL_STATUS_LABELS,
     execute_chat_tool,
+    summarize_tool_call,
 )
 from app.services.coach.validator import (
     PolicyViolation,
@@ -100,9 +101,11 @@ def _slice_for_stream(text: str) -> List[str]:
 @dataclass
 class ChatStreamEvent:
     """One item the route renders to SSE: a content slice (a `data:` frame), a
-    content-free heartbeat (an SSE comment frame the client ignores), or an ephemeral
+    content-free heartbeat (an SSE comment frame the client ignores), an ephemeral
     status affordance (#648: a JSON-object `data:` frame the client shows while a tool
-    round runs, distinct from the string content frames).
+    round runs, distinct from the string content frames), or a tool-trace record
+    (#664: the post-fetch `{tool,label,detail,count}` of WHAT was fetched, banked by
+    the client into the persistent "looked up …" trace).
 
     #375: #340's buffer-then-validate left a long silent gap between the route's
     `: ok` frame and the post-generation content, where token streaming used to keep
@@ -112,6 +115,10 @@ class ChatStreamEvent:
     is_heartbeat: bool = False
     status_label: str = ""  # #648: ephemeral "fetching data" affordance
     status_tool: str = ""   # the tool name behind that affordance (for the persistent trace)
+    # #664: a completed tool call's compact, server-derived trace record (window +
+    # count). Emitted AFTER the fetch, so it carries the result summary the pre-fetch
+    # status frame cannot. None on every non-trace event.
+    trace_entry: Optional[dict] = None
 
 
 # How often a keepalive heartbeat is emitted while the reply is being buffered
@@ -607,7 +614,11 @@ async def stream_chat_response(
     stream_failed = False
     # The message served if the stream fails; the except may specialise it (#625).
     stream_fail_message = "Sorry, I encountered an error. Please try again."
-    tools_used: List[str] = []  # ordered, de-duped tool names, persisted for the trace
+    # #664: ordered, one-record-per-CALL trace of WHAT each tool fetched (tool name,
+    # friendly label, resolved window, result count), persisted for the UI's
+    # "looked up …" trace. NOT de-duped by name, so a multi-window turn shows every
+    # fetch rather than collapsing to one chip (the #648 f/u the issue asks for).
+    tool_trace: List[dict] = []
     last_heartbeat = time.monotonic()
     try:
         for round_idx in range(_MAX_TOOL_ROUNDS):
@@ -651,18 +662,22 @@ async def stream_chat_response(
                 tool_results = []
                 for blk in tool_uses:
                     name = _block_attr(blk, "name")
-                    if name and name not in tools_used:
-                        tools_used.append(name)
-                    # Show the ephemeral affordance BEFORE the fetch runs (#648). Carry
-                    # the tool name so the client can build the persistent trace too.
+                    tool_input = _block_attr(blk, "input") or {}
+                    # Show the ephemeral affordance BEFORE the fetch runs (#648): the
+                    # spinner cannot yet know the result, so it stays present-tense.
                     yield ChatStreamEvent(
                         status_label=TOOL_STATUS_LABELS.get(name, "Looking that up…"),
                         status_tool=name or "",
                     )
                     last_heartbeat = time.monotonic()
-                    result = execute_chat_tool(
-                        db, owner_user_id, name, _block_attr(blk, "input") or {}
-                    )
+                    result = execute_chat_tool(db, owner_user_id, name, tool_input)
+                    # #664: AFTER the fetch, derive the compact trace record of what it
+                    # returned (resolved window + count, all server-derived) and both
+                    # bank it and stream it, so the persistent trace shows what was
+                    # fetched, not just that a tool ran. One record per call.
+                    entry = summarize_tool_call(name, tool_input, result)
+                    tool_trace.append(entry)
+                    yield ChatStreamEvent(trace_entry=entry)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": _block_attr(blk, "id"),
@@ -724,12 +739,13 @@ async def stream_chat_response(
         yield ChatStreamEvent(text=piece)
 
     # Save the validated assistant response (never the raw gated text), tagged with
-    # the data tools this turn ran so the UI can show a persistent trace (#648 f/u).
+    # the trace of what the data tools fetched this turn so the UI can show a
+    # persistent "looked up …" trace that survives a reload (#648 f/u, #664).
     assistant_msg = CoachChatMessage(
         activity_id=activity_id,
         role="assistant",
         content=assistant_text,
-        tools_used=tools_used or None,
+        tools_used=tool_trace or None,
     )
     db.add(assistant_msg)
     db.commit()
