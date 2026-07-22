@@ -149,7 +149,9 @@ def score_db_reports(
         # the active output shape across the cutover (AC5).
         schema_version = active_schema_version(prompt_id)
 
-    query = db.query(CoachReport)
+    # #646: score CURRENT rows only; superseded audit copies would double-count the
+    # same activity's regenerated report into the scorecard.
+    query = db.query(CoachReport).filter(CoachReport.superseded_at.is_(None))
     if not all_versions:
         query = query.filter(
             CoachReport.prompt_id == prompt_id,
@@ -230,7 +232,9 @@ async def judge_db_reports(
     if schema_version is None:
         schema_version = active_schema_version(prompt_id)
 
-    query = db.query(CoachReport)
+    # #646: score CURRENT rows only; superseded audit copies would double-count the
+    # same activity's regenerated report into the scorecard.
+    query = db.query(CoachReport).filter(CoachReport.superseded_at.is_(None))
     if not all_versions:
         query = query.filter(
             CoachReport.prompt_id == prompt_id,

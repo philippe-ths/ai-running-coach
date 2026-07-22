@@ -659,6 +659,23 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
             minute: '2-digit',
           })}
         </span>
+        {/* #646: honesty stamp on a re-run report — memory is current + unversioned,
+            so a report re-generated later speaks with hindsight; the original is
+            preserved and this stamp makes the vantage point explicit. */}
+        {report.meta.regenerated_at && (
+          <span title="This report was re-run after its original generation. Runner memory is always current, so it may reflect knowledge gained since the run.">
+            {'· Regenerated '}
+            {new Date(report.meta.regenerated_at).toLocaleDateString(undefined, {
+              month: 'short',
+              day: 'numeric',
+            })}
+            {report.meta.memory_as_of &&
+              `, memory as of ${new Date(report.meta.memory_as_of).toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+              })}`}
+          </span>
+        )}
       </div>
 
       {/* Debug: opt-in via NEXT_PUBLIC_SHOW_DEBUG_PANEL=true (or "1"). Off in

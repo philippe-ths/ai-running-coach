@@ -31,6 +31,7 @@ from app.schemas.coach import (
 )
 from app.schemas.coach_context import CoachContextPack, ContinuityContext
 from app.services.coach.budget import over_budget as budget_over, record as budget_record
+from app.services.coach.memory_store import get_memory
 from app.services.coach.memory_update import enqueue_memory_update
 from app.services.coach.context import build_context_pack
 from app.services.coach.coach_framing import coach_llm_view
@@ -272,6 +273,9 @@ def get_active_report_row(db: Session, activity_id) -> Optional[CoachReport]:
             CoachReport.activity_id == activity_uuid,
             CoachReport.prompt_id == prompt_id,
             CoachReport.schema_version == active_schema_version(prompt_id),
+            # #646: only the CURRENT row is the active report; superseded audit copies
+            # of the same key are never served.
+            CoachReport.superseded_at.is_(None),
         )
         .first()
     )
@@ -297,7 +301,12 @@ def get_displayable_report_row(db: Session, activity_id) -> Optional[CoachReport
     activity_uuid = _coerce_uuid(activity_id)
     return (
         db.query(CoachReport)
-        .filter(CoachReport.activity_id == activity_uuid)
+        .filter(
+            CoachReport.activity_id == activity_uuid,
+            # #646: never fall back to a superseded audit copy; only current rows
+            # (of any prompt/schema version) are displayable.
+            CoachReport.superseded_at.is_(None),
+        )
         .order_by(CoachReport.created_at.desc())
         .first()
     )
@@ -680,6 +689,23 @@ async def generate_fuller(
     )
 
 
+def _memory_as_of(db: Session, user_id) -> Optional[datetime]:
+    """The runner-memory profile's as-of date, for the #646 regeneration stamp.
+
+    Reads the (current, unversioned) runner memory row's `grounded_through` — the
+    date of the most recent source the profile was rewritten from — falling back to
+    when the row was last written. None when memory is disabled or no profile exists
+    yet. This is provenance only (never grounds a fact); it makes a regenerated old
+    report honest about the vantage point its memory speaks from.
+    """
+    if not settings.COACH_MEMORY_ENABLED:
+        return None
+    row = get_memory(db, user_id)
+    if row is None:
+        return None
+    return row.grounded_through or row.updated_at
+
+
 def _persist_report(
     db: Session,
     *,
@@ -694,9 +720,21 @@ def _persist_report(
     fire_learning_loop: bool,
     voice=None,
 ) -> Optional[CoachReportRead]:
-    """Build the meta + digest, persist the report (in-place UPDATE of `existing`
-    or a fresh INSERT), and optionally fire the learning loop. Shared by the
-    single-shot path, the opener, and the fuller turn so storage is identical.
+    """Build the meta + digest, persist the report, and optionally fire the learning
+    loop. Shared by the single-shot path, the opener, and the fuller turn so storage
+    is identical.
+
+    Three persistence shapes:
+    - INSERT (existing is None): a first generation.
+    - in-place UPDATE (existing is an opener-only row, or a fallback replacing a
+      fallback): the opener->fuller fill evolves ONE logical report on the same row,
+      so it is not a supersede.
+    - #646 SUPERSEDE (existing is a COMPLETE report and the new outcome is good): a
+      force "Re-run" archives the prior current row (superseded_at = now, an immutable
+      audit copy of what the coach saw) and INSERTS the regenerated report as the new
+      current row, in ONE transaction (flush the archive first so the partial unique
+      index has room). The original report + its point-in-time context_pack snapshot
+      survive; the new row carries the regenerated-on + memory-as-of stamp.
 
     The digest is stored only for a COMPLETE non-fallback report — an opener-only
     row (is_opener_only) and any fallback carry no digest, so they never feed the
@@ -736,6 +774,24 @@ def _persist_report(
             prompt_id,
         )
 
+    # #646: a force "Re-run" over a COMPLETE existing report is a non-destructive
+    # supersede (archive + insert), not an in-place overwrite. An opener->fuller fill
+    # (existing is opener-only) and a fallback outcome stay in-place: they evolve the
+    # one logical report, not a regeneration. The #279 guard above already returned
+    # for a fallback-over-good, so a supersede is always a good report replacing a
+    # complete prior one.
+    supersede = (
+        existing is not None
+        and not is_opener_only(existing.report)
+        and not outcome.is_fallback
+    )
+
+    # The provenance stamp rides only a supersede (a true Re-run); a first generation
+    # or an opener->fuller fill leaves both None, so the normal path's meta is
+    # unchanged bar the two None-defaulted keys.
+    regenerated_at = datetime.now(timezone.utc) if supersede else None
+    memory_as_of = _memory_as_of(db, activity.user_id) if supersede else None
+
     meta = CoachReportMeta(
         confidence=pack.metrics.confidence,
         model_id=settings.COACH_MODEL_ID,
@@ -745,6 +801,8 @@ def _persist_report(
         generated_at=datetime.now(timezone.utc),
         policy_violations=outcome.policy_violations,
         tail_degraded=outcome.tail_degraded,
+        regenerated_at=regenerated_at,
+        memory_as_of=memory_as_of,
     )
 
     # P1.1 voice freshness: stamp the voice this report speaks in, so a later voice
@@ -771,10 +829,12 @@ def _persist_report(
                 "exchange digest projection failed for activity %s", activity_uuid
             )
 
-    if existing is not None:
-        # A4 in-place UPDATE: the fuller turn fills the opener's evolving row. The
-        # cache identity (activity_id, prompt_id, schema_version) is unchanged — it
-        # is the same physical row — so the M0 versioned cache is preserved.
+    if existing is not None and not supersede:
+        # A4 in-place UPDATE: the fuller turn fills the opener's evolving row (or a
+        # fallback replaces a fallback). The cache identity (activity_id, prompt_id,
+        # schema_version) is unchanged — it is the same physical row — so the M0
+        # versioned cache is preserved and no audit copy is minted (there is no prior
+        # complete report to preserve; the opener is one half of this same report).
         existing.report = outcome.report_dump
         existing.meta = meta.model_dump(mode="json")
         existing.context_pack = pack_dict
@@ -787,6 +847,15 @@ def _persist_report(
         db.refresh(existing)
         row = existing
     else:
+        if supersede:
+            # #646: archive the prior current row as an immutable audit copy, then
+            # insert the regenerated report as the new current row — one transaction,
+            # so a crash leaves the prior report intact (#273) and the partial unique
+            # index never sees two current rows for the key. Flush the archive first
+            # so the UPDATE lands before the INSERT under that index.
+            existing.superseded_at = regenerated_at
+            db.add(existing)
+            db.flush()
         db_report = CoachReport(
             activity_id=activity_uuid,
             prompt_id=prompt_id,
@@ -803,9 +872,10 @@ def _persist_report(
         try:
             db.commit()
         except IntegrityError:
-            # A concurrent request generated the active-version row first. Yield to
-            # the row that landed (and do NOT fire the learning loop — the winner's
-            # generation owns it).
+            # A concurrent request generated the active-version row first (and, on a
+            # supersede, archived the same prior row). Roll back — which also reverts
+            # our archive — and yield to the row that landed (do NOT fire the learning
+            # loop; the winner's generation owns it).
             db.rollback()
             winner = get_active_report_row(db, activity_uuid)
             if winner is not None:

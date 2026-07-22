@@ -37,6 +37,7 @@ from app.core.queue import queue
 from app.db.session import SessionLocal
 from app.models import Activity, Block, Exchange, StravaAccount
 from app.models.coaching_relationship import CoachingRelationship
+from app.jobs.reanalyze_history import reanalyze_activity_if_streams
 from app.services.analysis import analyze_with_streams
 from app.services.analysis.classifier import Classification, compose_headline
 from app.services.blocks import activity_end, assign_activity_to_block, is_run_activity
@@ -762,11 +763,29 @@ def regenerate_report_job(activity_id: str) -> None:
     LLM call (30-120s) never blocks the HTTP request or exceeds the gateway timeout
     — the request only enqueues this job and the frontend polls for the result.
 
-    Delegates to the same force path the synchronous endpoint used, so the result
-    is identical; only the place it runs changes. Idempotent enough for a double
-    click: a second run just replaces the active-version row again."""
+    #646 fix-refresh: re-derive analysis from the activity's ALREADY-STORED streams
+    first (cheap, local, NO Strava call), so the regenerated report reflects the
+    current deployed analysis code rather than a stale `DerivedMetric`. Skips
+    gracefully when there are no stored streams, and a re-analysis failure never
+    blocks the regeneration (it proceeds with the existing metrics). The force regen
+    itself is non-destructive: it archives the prior report and mints a new current
+    row stamped with the regeneration date + memory as-of date."""
     db = SessionLocal()
     try:
+        try:
+            reanalyzed = reanalyze_activity_if_streams(db, str(activity_id))
+            logger.info(
+                "regenerate_report_job re-analysis %s for activity %s",
+                "ran" if reanalyzed else "skipped (no stored streams)",
+                activity_id,
+            )
+        except Exception:  # noqa: BLE001 — re-analysis must never block the regen
+            db.rollback()
+            logger.exception(
+                "regenerate_report_job re-analysis failed for activity %s; "
+                "proceeding with existing metrics",
+                activity_id,
+            )
         asyncio.run(get_or_generate_coach_report(db, str(activity_id), force=True))
     finally:
         db.close()

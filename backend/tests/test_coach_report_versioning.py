@@ -158,7 +158,10 @@ async def test_version_bump_regenerates_and_retains_old_version(db):
 # --- force ----------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_force_regenerates_active_and_retains_prior_versions(db):
+async def test_force_regenerates_nondestructively_archiving_prior(db):
+    # #646: a force "Re-run" over a complete report is NON-DESTRUCTIVE. It archives
+    # the prior current row (superseded_at set — an immutable audit copy of what the
+    # coach saw) and inserts the regenerated report as a NEW current row.
     activity = _seed_activity(db)
     old = _insert_report(db, activity.id, ACTIVE_PROMPT_ID, "1.0")
     active = _insert_report(db, activity.id, ACTIVE_PROMPT_ID, SCHEMA_VERSION)
@@ -169,16 +172,29 @@ async def test_force_regenerates_active_and_retains_prior_versions(db):
     fake.generate_json.assert_called_once()
     # Prior (1.0) version survives the force.
     assert db.query(CoachReport).filter(CoachReport.id == old.id).first() is not None
-    # Exactly one active-version row, regenerated IN PLACE (#273 generate-then-swap:
-    # the active row is held and its content swapped atomically, so the row id is
-    # stable and a crash mid-regen can never leave zero rows). Content is refreshed.
-    active_rows = db.query(CoachReport).filter(
+
+    # The prior active row is preserved AS AN ARCHIVE (superseded_at set, original
+    # content intact) — the point-in-time snapshot the audit/review loop relies on.
+    archived = db.query(CoachReport).filter(CoachReport.id == active_id).first()
+    assert archived is not None
+    assert archived.superseded_at is not None
+    assert archived.report["key_takeaways"][0]["text"] == "Cached takeaway one."
+
+    # Exactly ONE current active-version row, and it is the freshly generated one
+    # (a new physical row, not the archived original).
+    current_rows = db.query(CoachReport).filter(
         CoachReport.activity_id == activity.id,
         CoachReport.schema_version == SCHEMA_VERSION,
+        CoachReport.superseded_at.is_(None),
     ).all()
-    assert len(active_rows) == 1
-    assert active_rows[0].id == active_id  # same physical row, swapped in place
+    assert len(current_rows) == 1
+    assert current_rows[0].id != active_id  # new row, original preserved
     assert result.report.key_takeaways[0].text == "Freshly generated one."
+    # Two schema-2.0-family rows now coexist for this activity: 1 archived + 1 current.
+    assert db.query(CoachReport).filter(
+        CoachReport.activity_id == activity.id,
+        CoachReport.schema_version == SCHEMA_VERSION,
+    ).count() == 2
 
 
 def test_force_via_api_does_not_destroy_prior_versions(client, db):

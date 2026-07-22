@@ -40,6 +40,12 @@ export interface CoachReportMeta {
   // current one, so it should regenerate to honour the new voice. A read-time flag
   // set by the backend; the panel auto-triggers the async regen once when it is true.
   voice_stale?: boolean;
+  // #646: non-destructive-regen provenance. Set only when this report was produced by
+  // a "Re-run" that superseded a prior report. `regenerated_at` is when it re-ran;
+  // `memory_as_of` is the runner-memory as-of date it spoke from. The panel shows a
+  // "Regenerated ..., memory as of ..." stamp so a report re-run with hindsight is honest.
+  regenerated_at?: string | null;
+  memory_as_of?: string | null;
 }
 
 export interface CoachReportContent {
