@@ -26,6 +26,7 @@ the single worker to webhooks/self-heal between batches.
 """
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -36,7 +37,7 @@ from app.core.config import settings
 from app.core.queue import queue
 from app.db.session import SessionLocal
 from app.jobs import batch_chain
-from app.models import Activity
+from app.models import Activity, ActivityStream
 from app.services.analysis import analyze
 from app.services.analysis.baseline import recompute_runner_baseline
 
