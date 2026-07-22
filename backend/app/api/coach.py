@@ -435,6 +435,12 @@ async def post_chat(
                     # frame), so the client renders it as status instead of appending
                     # it to the reply.
                     yield f"data: {json.dumps({'type': 'status', 'label': event.status_label, 'tool': event.status_tool})}\n\n"
+                elif event.trace_entry is not None:
+                    # #664: the post-fetch trace record of WHAT a tool fetched (window +
+                    # count). A JSON OBJECT payload tagged `tool_trace`, distinct from
+                    # both the string content frames and the status affordance, so the
+                    # client banks it into the persistent trace instead of the reply.
+                    yield f"data: {json.dumps({'type': 'tool_trace', 'entry': event.trace_entry})}\n\n"
                 else:
                     yield _sse_data(event.text)
         except Exception:

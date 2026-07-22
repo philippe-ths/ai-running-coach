@@ -232,3 +232,59 @@ def test_execute_dispatch_reaches_each_tool(db):
         db, u.id, "list_activities_in_range", {"window": "last_7_days"}, today=TODAY)
     assert "totals" in qt.execute_chat_tool(
         db, u.id, "get_training_summary", {"window": "last_7_days"}, today=TODAY)
+
+
+# --- #664: summarize_tool_call, the persistent-trace record derivation ------------
+
+def test_summarize_list_call_carries_window_and_count():
+    entry = qt.summarize_tool_call(
+        "list_activities_in_range",
+        {"window": "last_30_days"},
+        {"count": 12, "showing": 12, "activities": []},
+    )
+    assert entry == {
+        "tool": "list_activities_in_range",
+        "label": "Looked up your training history",
+        "detail": "last 30 days",
+        "count": 12,
+    }
+
+
+def test_summarize_summary_call_uses_session_total_as_count():
+    entry = qt.summarize_tool_call(
+        "get_training_summary",
+        {"window": "last_7_days"},
+        {"totals": {"sessions": 4}, "by_type": [], "vs_typical": None},
+    )
+    assert entry["detail"] == "last 7 days"
+    assert entry["count"] == 4
+    assert entry["label"] == "Tallied your recent training"
+
+
+def test_summarize_session_detail_uses_date_no_count():
+    entry = qt.summarize_tool_call(
+        "get_session_detail", {"activity_id": "x"}, {"date": "2026-07-08", "type": "Run"},
+    )
+    assert entry["detail"] == "2026-07-08"
+    assert entry["count"] is None
+    assert entry["label"] == "Pulled up a past session"
+
+
+def test_summarize_error_result_degrades_to_label_only():
+    entry = qt.summarize_tool_call(
+        "list_activities_in_range", {"window": "nonsense"}, {"error": "unknown_window"},
+    )
+    # unknown window -> no humanised detail, no count, but the label still renders
+    assert entry["detail"] is None
+    assert entry["count"] is None
+    assert entry["label"] == "Looked up your training history"
+
+
+def test_summarize_unknown_tool_uses_generic_label():
+    entry = qt.summarize_tool_call("something_new", {}, {})
+    assert entry == {
+        "tool": "something_new",
+        "label": "Looked up your training data",
+        "detail": None,
+        "count": None,
+    }

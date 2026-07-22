@@ -48,7 +48,7 @@ export type {
   CoachReportMeta,
 } from "./types/coach";
 export { isMessageReport, isOpenerOnly } from "./types/coach";
-export type { ChatMessage } from "./types/chat";
+export type { ChatMessage, ToolTraceEntry } from "./types/chat";
 export type {
   VoiceDials,
   VoiceAxisInfo,

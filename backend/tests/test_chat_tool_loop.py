@@ -136,9 +136,10 @@ async def test_direct_answer_without_a_tool_call(db):
 
 @pytest.mark.asyncio
 async def test_tools_used_persisted_and_returned_in_history(db):
-    """#648 f/u: a turn that runs data tools banks their names on the assistant
-    message and every status frame carries the tool name, so the UI can render a
-    persistent trace that survives a reload."""
+    """#648 f/u / #664: a turn that runs data tools banks a trace record per call on
+    the assistant message — the resolved window and result count, not just the tool
+    name — so the UI can render a persistent "looked up …" trace that survives a
+    reload."""
     activity = _seed_activity_with_report(db)
     _past_run(db, activity.user_id, days_ago=5, distance_m=12000)
 
@@ -149,22 +150,95 @@ async def test_tools_used_persisted_and_returned_in_history(db):
     with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
         events = await _drain(db, activity.id, "how far was my longest run?")
 
-    # the status frame carries the tool name for the live/persistent trace
-    assert any(ev.status_tool == "list_activities_in_range" for ev in events)
+    # a tool_trace event carries WHAT was fetched: resolved window + count (#664),
+    # all server-derived, so the runner can sanity-check the coach's data.
+    traces = [ev.trace_entry for ev in events if ev.trace_entry is not None]
+    assert traces == [{
+        "tool": "list_activities_in_range",
+        "label": "Looked up your training history",
+        "detail": "last 30 days",
+        "count": 1,
+    }]
 
-    # the assistant row banked the tool it ran
+    # the assistant row banked that same record
     saved = (
         db.query(CoachChatMessage)
         .filter(CoachChatMessage.activity_id == activity.id,
                 CoachChatMessage.role == "assistant")
         .one()
     )
-    assert saved.tools_used == ["list_activities_in_range"]
+    assert saved.tools_used == [{
+        "tool": "list_activities_in_range",
+        "label": "Looked up your training history",
+        "detail": "last 30 days",
+        "count": 1,
+    }]
 
     # and the history read surfaces it (from_attributes) for a reloaded UI
     history = get_chat_history(db, str(activity.id))
     assistant = [m for m in history if m.role == "assistant"][-1]
-    assert assistant.tools_used == ["list_activities_in_range"]
+    assert assistant.tools_used is not None
+    entry = assistant.tools_used[0]
+    assert entry.tool == "list_activities_in_range"
+    assert entry.detail == "last 30 days"
+    assert entry.count == 1
+    assert entry.label == "Looked up your training history"
+
+
+@pytest.mark.asyncio
+async def test_multi_window_fetch_shows_one_record_per_call(db):
+    """#664: two list calls over different windows no longer collapse to one chip —
+    the trace banks one record per CALL, so a genuine multi-window turn is honest."""
+    activity = _seed_activity_with_report(db)
+    _past_run(db, activity.user_id, days_ago=3, distance_m=9000)
+    _past_run(db, activity.user_id, days_ago=40, distance_m=15000)
+
+    stub = chat_tool_loop_stub([
+        [{"name": "list_activities_in_range", "input": {"window": "last_7_days"}}],
+        [{"name": "list_activities_in_range", "input": {"window": "last_90_days"}}],
+        "You did one run this week and two in the last 90 days.",
+    ])
+    with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
+        await _drain(db, activity.id, "how much have I run lately?")
+
+    saved = (
+        db.query(CoachChatMessage)
+        .filter(CoachChatMessage.activity_id == activity.id,
+                CoachChatMessage.role == "assistant")
+        .one()
+    )
+    # last_7_days sees only the 3-days-ago run; last_90_days also sweeps in the
+    # 40-days-ago run and the seeded subject activity (~55 days ago). The point is
+    # that the two windows are BOTH recorded, with their own counts, rather than
+    # collapsing to one chip.
+    assert saved.tools_used == [
+        {"tool": "list_activities_in_range", "label": "Looked up your training history",
+         "detail": "last 7 days", "count": 1},
+        {"tool": "list_activities_in_range", "label": "Looked up your training history",
+         "detail": "last 90 days", "count": 3},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_legacy_string_tools_used_coerced_on_read(db):
+    """#664: a pre-#664 assistant row stored bare tool-name strings; the history read
+    coerces them into records (filling the label) so a reloaded UI needs no legacy
+    branch."""
+    activity = _seed_activity_with_report(db)
+    db.add(CoachChatMessage(
+        activity_id=activity.id, role="assistant", content="old turn",
+        tools_used=["list_activities_in_range", "get_training_summary"],
+    ))
+    db.commit()
+
+    history = get_chat_history(db, str(activity.id))
+    assistant = [m for m in history if m.role == "assistant"][-1]
+    assert [e.tool for e in assistant.tools_used] == [
+        "list_activities_in_range", "get_training_summary"]
+    assert assistant.tools_used[0].label == "Looked up your training history"
+    # legacy rows have no stored window/count
+    assert assistant.tools_used[0].detail is None
+    assert assistant.tools_used[0].count is None
 
 
 @pytest.mark.asyncio
