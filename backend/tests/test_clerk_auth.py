@@ -189,6 +189,67 @@ class TestVerifierCrypto:
         assert verifier.verify(ok)["azp"] == "https://app.example.com"
 
 
+class TestAuthorizedParties:
+    """azp allowlist arming (#707): a same-instance token minted for a FOREIGN
+    frontend origin is rejected, trailing slashes are normalised so a
+    config-supplied ``origin/`` still matches the bare-origin azp, and a token
+    with NO azp is allowed (Clerk's documented skip-when-absent guidance)."""
+
+    def _verifier(self, pub, parties):
+        return ClerkVerifier(
+            TEST_JWKS_URL,
+            issuer=TEST_ISSUER,
+            authorized_parties=parties,
+            jwk_client=_FakeJWKClient(pub),
+            leeway=30,
+        )
+
+    def test_foreign_azp_rejected(self, rsa_keys):
+        priv, pub = rsa_keys
+        verifier = self._verifier(pub, ("https://app.example.com",))
+        token = _make_token(priv, claims={"azp": "https://evil.example.com"})
+        with pytest.raises(ClerkAuthError):
+            verifier.verify(token)
+
+    def test_trailing_slash_normalised_both_sides(self, rsa_keys):
+        priv, pub = rsa_keys
+        # Configured party carries a trailing slash; the token's azp does not.
+        verifier = self._verifier(pub, ("https://app.example.com/",))
+        token = _make_token(priv, claims={"azp": "https://app.example.com"})
+        assert verifier.verify(token)["azp"] == "https://app.example.com"
+
+    def test_missing_azp_allowed(self, rsa_keys):
+        # No azp claim -> the check is skipped (Clerk guidance). A foreign token
+        # always carries its own origin in azp, so absence is not the threat.
+        priv, pub = rsa_keys
+        verifier = self._verifier(pub, ("https://app.example.com",))
+        token = _make_token(priv)  # no azp in the default payload
+        assert "azp" not in verifier.verify(token)
+
+    def test_empty_allowlist_disables_check(self, rsa_keys):
+        priv, pub = rsa_keys
+        verifier = self._verifier(pub, ())
+        token = _make_token(priv, claims={"azp": "https://anything.example.com"})
+        assert verifier.verify(token)["azp"] == "https://anything.example.com"
+
+    def test_get_verifier_arms_from_derived_settings(self, monkeypatch, rsa_keys):
+        # The production wiring: with CLERK_AUTHORIZED_PARTIES unset, get_verifier
+        # derives the allowlist from CORS_ALLOWED_ORIGINS + APP_BASE_URL, so azp
+        # validation is armed by default from existing config (no new env var).
+        monkeypatch.setattr(settings, "CLERK_JWKS_URL", TEST_JWKS_URL)
+        monkeypatch.setattr(settings, "CLERK_AUTHORIZED_PARTIES", "")
+        monkeypatch.setattr(
+            settings, "CORS_ALLOWED_ORIGINS", "https://app.example.com/"
+        )
+        monkeypatch.setattr(settings, "APP_BASE_URL", "https://app.example.com")
+        clerk_auth.reset_verifier_cache()
+        try:
+            verifier = clerk_auth.get_verifier()
+            assert verifier._authorized_parties == ("https://app.example.com",)
+        finally:
+            clerk_auth.reset_verifier_cache()
+
+
 # --- dependency enforcement over HTTP (TestClient) -------------------------
 
 class TestSessionEnforcement:
@@ -225,6 +286,25 @@ class TestSessionEnforcement:
         # runner like strava_login, so it requires the session (401 without a
         # token). The bare OAuth callback stays the only session-exempt handshake.
         assert client.get("/api/auth/strava/status").status_code == 401
+
+    def test_foreign_azp_token_denied_over_http(self, client, monkeypatch, rsa_keys):
+        # End-to-end #707: a signature-valid token minted by the same Clerk
+        # instance for a DIFFERENT frontend origin is rejected by the dependency
+        # (401), not just at the verifier unit level.
+        priv, pub = rsa_keys
+        monkeypatch.setattr(settings, "CLERK_JWKS_URL", TEST_JWKS_URL)
+        armed = ClerkVerifier(
+            TEST_JWKS_URL,
+            issuer=TEST_ISSUER,
+            authorized_parties=("https://app.example.com",),
+            jwk_client=_FakeJWKClient(pub),
+            leeway=30,
+        )
+        monkeypatch.setattr(clerk_auth, "get_verifier", lambda: armed)
+        foreign = _make_token(priv, claims={"azp": "https://evil.example.com"})
+        assert client.get("/api/profile", headers={HEADER: foreign}).status_code == 401
+        good = _make_token(priv, claims={"azp": "https://app.example.com"})
+        assert client.get("/api/profile", headers={HEADER: good}).status_code == 200
 
 
 # --- email resolution (claim + Clerk API fallback) -------------------------

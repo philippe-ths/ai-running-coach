@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { ChatMessage, CoachReport, isMessageReport } from '@/lib/types';
+import { ChatMessage, CoachReport, ToolTraceEntry, isMessageReport } from '@/lib/types';
 import { MessageCircle, Send, Loader2, RotateCcw, Sparkles, Search } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -10,32 +10,40 @@ interface Props {
   activityId: string;
 }
 
-// #648 f/u: friendly past-tense labels for the persistent tool-use trace shown on
-// an assistant turn that fetched data. Keyed by the backend tool name carried on
-// each status frame (and persisted to CoachChatMessage.tools_used). An unknown key
-// falls back to a generic phrasing so a new tool never renders a raw identifier.
-const TOOL_TRACE_LABELS: Record<string, string> = {
-  list_activities_in_range: 'Looked up your training history',
-  get_session_detail: 'Pulled up a past session',
-  get_training_summary: 'Tallied your recent training',
-};
+// #664: the friendly past-tense label is now server-owned (query_tools.TOOL_TRACE_LABELS,
+// carried on each trace entry), consolidating the #663 duplication. This is only a
+// defensive fallback for an entry that somehow arrives without one.
+const toolTraceLabel = (entry: ToolTraceEntry): string =>
+  entry.label ?? 'Looked up your training data';
 
-const toolTraceLabel = (name: string): string =>
-  TOOL_TRACE_LABELS[name] ?? 'Looked up your training data';
+// #664: render one trace chip's "what was fetched" tail — the resolved window and a
+// result count — from the server-derived entry. e.g. "· last 30 days (12 sessions)".
+const toolTraceDetail = (entry: ToolTraceEntry): string => {
+  const parts: string[] = [];
+  if (entry.detail) parts.push(entry.detail);
+  if (entry.count != null) parts.push(`${entry.count} ${entry.count === 1 ? 'session' : 'sessions'}`);
+  if (!parts.length) return '';
+  // "last 30 days (12 sessions)" when both present; either alone otherwise.
+  return entry.detail && entry.count != null
+    ? ` · ${entry.detail} (${entry.count} ${entry.count === 1 ? 'session' : 'sessions'})`
+    : ` · ${parts.join(' ')}`;
+};
 
 // The persistent "looked up …" trace rendered above an assistant turn that ran one
 // or more data tools. Survives a reload because tools_used is stored on the message.
-function ToolTrace({ tools }: { tools: string[] }) {
+// #664: one chip PER tool call (no name de-dup), each showing what it fetched, so a
+// multi-window turn no longer collapses to a single chip.
+function ToolTrace({ tools }: { tools: ToolTraceEntry[] }) {
   if (!tools.length) return null;
   return (
     <div className="mb-1.5 flex flex-wrap gap-1.5">
-      {tools.map((name, i) => (
+      {tools.map((entry, i) => (
         <span
-          key={`${name}-${i}`}
+          key={`${entry.tool}-${i}`}
           className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-300"
         >
           <Search className="w-2.5 h-2.5 shrink-0" />
-          {toolTraceLabel(name)}
+          {toolTraceLabel(entry)}{toolTraceDetail(entry)}
         </span>
       ))}
     </div>
@@ -193,10 +201,11 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
 
       const decoder = new TextDecoder();
       let fullResponse = '';
-      // #648 f/u: accumulate the data tools the coach ran this turn (ordered,
-      // de-duplicated) so we can attach them to the finalized assistant message
-      // and render a persistent "looked up …" trace that survives a reload.
-      const toolsUsed: string[] = [];
+      // #648 f/u / #664: accumulate the trace records of what the coach fetched this
+      // turn (one per tool call, describing the resolved window + count) so we can
+      // attach them to the finalized assistant message and render a persistent
+      // "looked up …" trace that survives a reload.
+      const toolsUsed: ToolTraceEntry[] = [];
       // SSE events are delimited by a blank line. Buffer across reads so an
       // event split over two network chunks is reassembled before parsing.
       let buffer = '';
@@ -210,13 +219,16 @@ const CoachChat = forwardRef<CoachChatHandle, Props>(function CoachChat({ activi
             // The backend JSON-encodes each chunk so multi-line markdown
             // survives the SSE protocol intact. A content frame is a JSON string;
             // a status frame (#648) is a JSON object {type:'status',label,tool}
-            // shown as an ephemeral "fetching" affordance (label), whose tool name
-            // is banked for the persistent trace, not appended to the reply.
+            // shown as an ephemeral "fetching" affordance (label); a tool_trace
+            // frame (#664) is {type:'tool_trace',entry:{tool,label,detail,count}}
+            // banked into the persistent trace, not appended to the reply.
             const parsed = JSON.parse(data);
             if (parsed && typeof parsed === 'object' && parsed.type === 'status') {
               setFetchingLabel(parsed.label ?? '');
-              const tool = typeof parsed.tool === 'string' ? parsed.tool : '';
-              if (tool && !toolsUsed.includes(tool)) toolsUsed.push(tool);
+            } else if (parsed && typeof parsed === 'object' && parsed.type === 'tool_trace') {
+              if (parsed.entry && typeof parsed.entry === 'object') {
+                toolsUsed.push(parsed.entry as ToolTraceEntry);
+              }
             } else if (typeof parsed === 'string') {
               fullResponse += parsed;
               setStreamingText(fullResponse);

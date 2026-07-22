@@ -120,6 +120,43 @@ def test_can_fire_reply_fuller_requires_open_and_in_window(db, window):
         _exchange(db, opened_at=now - timedelta(days=3))) is False  # stale
 
 
+# --- block -> exchange resolution (#697) --------------------------------------
+
+
+def test_get_exchange_for_block_returns_the_row(db):
+    ex = _exchange(db)
+    assert lifecycle.get_exchange_for_block(db, ex.block_id) is ex
+
+
+def test_get_exchange_for_block_returns_none_when_absent(db):
+    assert lifecycle.get_exchange_for_block(db, uuid4()) is None
+
+
+def test_ensure_exchange_for_block_returns_existing(db):
+    ex = _exchange(db)
+    block = ex.block
+    # blocks are created WITH their exchange, so ensure resolves the existing one
+    # without creating a duplicate.
+    assert lifecycle.ensure_exchange_for_block(db, block) is ex
+    assert (
+        db.query(Exchange).filter(Exchange.block_id == block.id).count() == 1
+    )
+
+
+def test_ensure_exchange_for_block_creates_when_missing(db):
+    ex = _exchange(db)
+    block = ex.block
+    db.delete(ex)
+    db.commit()
+    assert lifecycle.get_exchange_for_block(db, block.id) is None
+
+    created = lifecycle.ensure_exchange_for_block(db, block)
+    assert created.block_id == block.id
+    assert created.user_id == block.user_id
+    db.refresh(block)
+    assert lifecycle.get_exchange_for_block(db, block.id) is created
+
+
 # --- open transition ----------------------------------------------------------
 
 

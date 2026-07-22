@@ -352,7 +352,12 @@ class Settings(BaseSettings):
     # instance; set explicitly only to override.
     CLERK_ISSUER: str = ""
     # Optional comma-separated allowlist of authorized parties (the `azp` claim,
-    # the frontend origin Clerk issued the token to). Empty disables the check.
+    # the frontend origin Clerk issued the token to). When set it wins outright.
+    # When EMPTY the allowlist is DERIVED from the app's own frontend origins
+    # already in config (CORS_ALLOWED_ORIGINS + APP_BASE_URL), so azp validation
+    # is armed by default with no new required env var (#707); see
+    # clerk_authorized_parties_list. Set this explicitly only to override that
+    # derivation (e.g. to add a satellite origin Clerk mints tokens for).
     CLERK_AUTHORIZED_PARTIES: str = ""
     # Clock-skew tolerance (seconds) for token exp/nbf/iat checks.
     CLERK_LEEWAY_SECONDS: int = 30
@@ -439,7 +444,31 @@ class Settings(BaseSettings):
 
     @property
     def clerk_authorized_parties_list(self) -> list[str]:
-        return [p.strip() for p in self.CLERK_AUTHORIZED_PARTIES.split(",") if p.strip()]
+        """The authorized-party (``azp``) allowlist for Clerk token verification.
+
+        An explicit ``CLERK_AUTHORIZED_PARTIES`` wins. When it is unset the list
+        is DERIVED from the app's own frontend origins already in config -- the
+        CORS allowlist plus ``APP_BASE_URL`` -- so azp validation is ARMED by
+        default from existing config with no new required env var (#707),
+        mirroring how ``STRAVA_OAUTH_STATE_SECRET`` falls back to existing
+        secrets. A token minted by the SAME Clerk instance for a DIFFERENT
+        frontend origin then carries that other origin in ``azp`` and is
+        rejected, while the real frontend -- which must be a CORS-allowed origin
+        to reach the backend at all -- always matches, so a correctly-configured
+        deploy sees no false 401s. Origins are normalised (trailing slash
+        stripped) and de-duplicated, order-stable. Empty only if every source is
+        blank (never in a real deploy), which leaves the check inert.
+        """
+        if self.CLERK_AUTHORIZED_PARTIES.strip():
+            raw = self.CLERK_AUTHORIZED_PARTIES.split(",")
+        else:
+            raw = [*self.cors_allowed_origins_list, self.APP_BASE_URL]
+        deduped: dict[str, None] = {}
+        for origin in raw:
+            norm = origin.strip().rstrip("/")
+            if norm:
+                deduped.setdefault(norm, None)
+        return list(deduped)
 
     @property
     def clerk_enabled(self) -> bool:
