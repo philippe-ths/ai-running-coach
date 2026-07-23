@@ -282,11 +282,16 @@ export default function EfficiencyTrendChart({ data, delta }: Props) {
                 stroke="#64748b" // slate-500
                 strokeWidth={2}
                 dot={false}
+                activeDot={false}
                 name="Trend"
                 isAnimationActive={false}
               />
 
-              {/* Dynamic Scatter Lines per Type */}
+              {/* One scatter Line per type. No per-line activeDot: with same-day
+                  activities on separate rows sharing one x, recharts would enlarge
+                  only whichever single row it treats as active (misleadingly
+                  highlighting just one of the day's dots). The cursor line + the
+                  day-grouped tooltip do the highlighting instead. */}
               {presentTypes.map((type) => (
                <Line
                   key={type}
@@ -295,7 +300,7 @@ export default function EfficiencyTrendChart({ data, delta }: Props) {
                   stroke={getColor(type)}
                   strokeWidth={0}
                   dot={<EfficiencyDot />}
-                  activeDot={{ r: 5 }}
+                  activeDot={false}
                   connectNulls={false}
                   name={type}
                   isAnimationActive={false}
