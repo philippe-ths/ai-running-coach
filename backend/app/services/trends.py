@@ -818,10 +818,26 @@ def build_continuous_suffer_scores(
 
     return result
 
+# Efficiency (m/beat) is affected by conditions we can flag from fields already on
+# the projection, so a hilly or stop-heavy activity is not silently read as less
+# fit (#746). Thresholds mirror the analysis layer: HILLY matches the classifier's
+# hilly gate; STOPPY marks a meaningful share of elapsed time stopped (the speed
+# term already uses moving time, so stops act mainly on avg_hr).
+_EFFICIENCY_HILLY_GAIN_PER_KM = 15.0  # mirrors analysis.classifier._HILLY_GAIN_PER_KM
+_EFFICIENCY_STOPPY_FRACTION = 0.10
+
+
 def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
     """
     Build data points for Efficiency = Speed (m/s) / HR (bpm).
     Only includes activities with distance > 1km and valid HR.
+
+    Each point also carries a stable activity_id (#745, so same-day activities are
+    individually addressable) and condition flags (hills, stops) derived from
+    fields already on the projection so the chart can surface confounders (#746)
+    rather than present an unadjusted number as pure fitness. Heat is a further
+    known confounder but lives in the deferred raw_summary (not projected here for
+    perf, #359/#367) and is left as a follow-up.
     """
     points = []
     for f in facts:
@@ -841,12 +857,29 @@ def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
 
         efficiency = speed / f.avg_hr
         
+        # --- condition confounders (#746), from already-projected fields ---
+        gain_per_km = (
+            f.elev_gain_m / (f.distance_m / 1000.0) if f.distance_m > 0 else 0.0
+        )
+        stopped_frac = (
+            (f.elapsed_time_s - f.moving_time_s) / f.elapsed_time_s
+            if f.elapsed_time_s and f.elapsed_time_s > 0
+            else 0.0
+        )
+        stopped_frac = max(0.0, min(1.0, stopped_frac))
+
         points.append({
             "date": f.local_date.isoformat(),
+            "activity_id": str(f.activity_id),
             "efficiency_mps_per_bpm": round(efficiency, 4),
             "type": f.activity_type,
+            "elev_gain_m": round(f.elev_gain_m or 0.0, 1),
+            "gain_per_km": round(gain_per_km, 1),
+            "hilly": gain_per_km >= _EFFICIENCY_HILLY_GAIN_PER_KM,
+            "stopped_frac": round(stopped_frac, 3),
+            "stoppy": stopped_frac >= _EFFICIENCY_STOPPY_FRACTION,
         })
-    
+
     return sorted(points, key=lambda p: p["date"])
 
 

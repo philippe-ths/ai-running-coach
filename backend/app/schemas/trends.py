@@ -103,6 +103,17 @@ class EfficiencyPoint(BaseModel):
     date: date
     efficiency_mps_per_bpm: float
     type: str
+    # #745: stable per-activity id so same-day activities (e.g. a morning run and
+    # an afternoon walk) are individually addressable in the chart instead of
+    # collapsing onto one day slot. (Activity.id is a UUID, serialized as a string.)
+    activity_id: str
+    # #746: condition confounders surfaced alongside the metric (not baked into
+    # it) so an unadjusted efficiency comparison is not read as pure fitness.
+    elev_gain_m: float = 0.0
+    gain_per_km: float = 0.0
+    hilly: bool = False
+    stopped_frac: float = 0.0
+    stoppy: bool = False
 
 
 class ZoneLoadWeekPoint(BaseModel):

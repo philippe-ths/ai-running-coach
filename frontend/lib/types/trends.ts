@@ -56,6 +56,14 @@ export interface EfficiencyPoint {
   date: string;
   efficiency_mps_per_bpm: number;
   type: string;
+  // #745: stable per-activity id (UUID) so same-day activities are individually selectable.
+  activity_id: string;
+  // #746: condition confounders surfaced alongside the metric (not baked in).
+  elev_gain_m: number;
+  gain_per_km: number;
+  hilly: boolean;
+  stopped_frac: number;
+  stoppy: boolean;
 }
 
 export interface ZoneLoadWeekPoint {
