@@ -47,12 +47,20 @@ const M_PER_BEAT = (eff: number) => +(eff * 60).toFixed(2);
 // [type] key (the m/beat value under the activity's own type, for its scatter
 // Line) needs the index signature.
 interface EffRow extends EfficiencyPoint {
-  idx: string;
+  dayOrdinal: number;
   dayKey: string;
   label: string;
   value: number;
   trend: number | null;
   [key: string]: unknown;
+}
+
+// One point per calendar day for the rolling trend Line (its own dataset so the
+// line stays clean even when a day has several activities).
+interface TrendRow {
+  dayOrdinal: number;
+  trend: number | null;
+  label: string;
 }
 
 // Per-activity dot that outlines confounded activities (#746) so a hilly /
@@ -91,10 +99,14 @@ function EfficiencyDot(props: {
 // element so recharts injects active/payload alongside the byDay prop.
 function EfficiencyTooltip(props: {
   active?: boolean;
-  payload?: Array<{ payload?: EffRow }>;
+  payload?: Array<{ payload?: EffRow | TrendRow }>;
   byDay?: Map<string, EffRow[]>;
 }) {
-  const row = props.payload?.[0]?.payload;
+  // The active payload can include the trend series; pick an activity row (the one
+  // carrying dayKey) so the tooltip always groups by the hovered day.
+  const row = (props.payload ?? [])
+    .map((p) => p.payload)
+    .find((p): p is EffRow => !!p && "dayKey" in p);
   if (!props.active || !row) return null;
   const acts = props.byDay?.get(row.dayKey) ?? [row];
   const trend = row.trend;
@@ -145,27 +157,49 @@ export default function EfficiencyTrendChart({ data, delta }: Props) {
     // 3. Calculate SMA on the filtered subset
     const sma = calculateSMA(filtered, 5);
 
-    // 4. One row PER ACTIVITY on a unique x-slot (#745): keying the x-axis by a
-    //    day label collapsed a same-day run + walk onto one slot, so only one was
-    //    reachable. Each activity now gets its own `idx` slot (its own dot),
-    //    while the axis tick still shows the calendar day.
-    return filtered.map((p, idx) => ({
-      ...p,
-      idx: String(idx),
-      dayKey: p.date.slice(0, 10),
-      label: formatDateLabel(p.date),
-      value: M_PER_BEAT(p.efficiency_mps_per_bpm),
-      [p.type]: M_PER_BEAT(p.efficiency_mps_per_bpm),
-      // Trend line
-      trend: sma[idx] != null ? +(sma[idx]! * 60).toFixed(2) : null,
-    })) as EffRow[];
+    // 4. Anchor the x-axis to the DAY, not to each activity (#745). Each distinct
+    //    calendar day gets an ordinal, and every activity that day shares that x —
+    //    so a run + walk + ride on one day stack vertically under the same date and
+    //    the trend/cursor lines up with all of them, instead of being spread across
+    //    adjacent slots. Each activity is still its own dot (reachable), and the
+    //    tooltip still lists every activity that day. Per-day trend = the SMA of the
+    //    last activity that day, so the trend Line stays one clean point per day.
+    const dayOrder: string[] = [];
+    const ordinalOf = new Map<string, number>();
+    const trendOf = new Map<string, number | null>();
+    filtered.forEach((p, i) => {
+      const d = p.date.slice(0, 10);
+      if (!ordinalOf.has(d)) { ordinalOf.set(d, dayOrder.length); dayOrder.push(d); }
+      trendOf.set(d, sma[i] != null ? +(sma[i]! * 60).toFixed(2) : null); // last activity of day wins
+    });
+
+    const rows = filtered.map((p) => {
+      const d = p.date.slice(0, 10);
+      return {
+        ...p,
+        dayOrdinal: ordinalOf.get(d)!,
+        dayKey: d,
+        label: formatDateLabel(p.date),
+        value: M_PER_BEAT(p.efficiency_mps_per_bpm),
+        [p.type]: M_PER_BEAT(p.efficiency_mps_per_bpm),
+        trend: trendOf.get(d) ?? null,
+      };
+    }) as EffRow[];
+
+    const trendData: TrendRow[] = dayOrder.map((d, i) => ({
+      dayOrdinal: i,
+      trend: trendOf.get(d) ?? null,
+      label: formatDateLabel(d),
+    }));
+
+    return { rows, trendData, dayOrder };
   }, [data, selectedTypes]);
 
   // Group every activity by calendar day so the tooltip can list all activities
   // that share a day (#745), not just the one under the cursor.
   const byDay = useMemo(() => {
-    const m = new Map<string, typeof chartData>();
-    for (const r of chartData) {
+    const m = new Map<string, EffRow[]>();
+    for (const r of chartData.rows) {
       const arr = m.get(r.dayKey);
       if (arr) arr.push(r);
       else m.set(r.dayKey, [r]);
@@ -173,19 +207,20 @@ export default function EfficiencyTrendChart({ data, delta }: Props) {
     return m;
   }, [chartData]);
 
-  // idx -> day tick label, blanking repeats within a day so the axis reads one
-  // date per day even though each activity is its own slot.
-  const tickLabels = useMemo(
-    () =>
-      chartData.map((r, i) =>
-        i > 0 && chartData[i - 1].dayKey === r.dayKey ? "" : r.label,
-      ),
-    [chartData],
-  );
+  // Thin the day ordinals to ~8 axis ticks, each formatted as its date.
+  const tickVals = useMemo(() => {
+    const n = chartData.dayOrder.length;
+    if (n <= 1) return n === 1 ? [0] : [];
+    const step = Math.max(1, Math.ceil(n / 8));
+    const t: number[] = [];
+    for (let i = 0; i < n; i += step) t.push(i);
+    if (t[t.length - 1] !== n - 1) t.push(n - 1);
+    return t;
+  }, [chartData.dayOrder]);
 
   // Extract unique types from chartData for coloring/legend
   const presentTypes = useMemo(() => {
-    const types = new Set(chartData.map((p) => p.type));
+    const types = new Set(chartData.rows.map((p) => p.type));
     return Array.from(types);
   }, [chartData]);
 
@@ -212,18 +247,24 @@ export default function EfficiencyTrendChart({ data, delta }: Props) {
         </div>
       </div>
 
-      {chartData.length === 0 ? (
+      {chartData.rows.length === 0 ? (
         <p className="text-gray-400 dark:text-gray-500 text-sm py-8 text-center">
           No sufficient heart rate data for this range.
         </p>
       ) : (
         <ResponsiveContainer width="100%" height={300}>
-            <ComposedChart data={chartData}>
+            <ComposedChart data={chartData.rows}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis
-                dataKey="idx"
-                type="category"
-                tickFormatter={(v) => tickLabels[Number(v)] ?? ""}
+                dataKey="dayOrdinal"
+                type="number"
+                domain={[-0.5, Math.max(0, chartData.dayOrder.length - 1) + 0.5]}
+                ticks={tickVals}
+                allowDecimals={false}
+                tickFormatter={(v) => {
+                  const d = chartData.dayOrder[Number(v)];
+                  return d ? formatDateLabel(d) : "";
+                }}
                 tick={{ fontSize: 12 }}
                 tickLine={false}
                 axisLine={false}
@@ -240,8 +281,10 @@ export default function EfficiencyTrendChart({ data, delta }: Props) {
               <Tooltip content={<EfficiencyTooltip byDay={byDay} />} />
               <Legend />
 
-              {/* Trend Line */}
+              {/* Trend Line — its own one-point-per-day dataset so it stays clean
+                  even when a day has several activities. */}
               <Line
+                data={chartData.trendData}
                 type="monotone"
                 dataKey="trend"
                 stroke="#64748b" // slate-500
