@@ -55,14 +55,6 @@ interface EffRow extends EfficiencyPoint {
   [key: string]: unknown;
 }
 
-// One point per calendar day for the rolling trend Line (its own dataset so the
-// line stays clean even when a day has several activities).
-interface TrendRow {
-  dayOrdinal: number;
-  trend: number | null;
-  label: string;
-}
-
 // Per-activity dot that outlines confounded activities (#746) so a hilly /
 // stop-heavy point is flagged at a glance, not only on hover. Colored by the
 // row's own type (each dot's payload is a single activity), and rendered as one
@@ -99,14 +91,10 @@ function EfficiencyDot(props: {
 // element so recharts injects active/payload alongside the byDay prop.
 function EfficiencyTooltip(props: {
   active?: boolean;
-  payload?: Array<{ payload?: EffRow | TrendRow }>;
+  payload?: Array<{ payload?: EffRow }>;
   byDay?: Map<string, EffRow[]>;
 }) {
-  // The active payload can include the trend series; pick an activity row (the one
-  // carrying dayKey) so the tooltip always groups by the hovered day.
-  const row = (props.payload ?? [])
-    .map((p) => p.payload)
-    .find((p): p is EffRow => !!p && "dayKey" in p);
+  const row = props.payload?.[0]?.payload;
   if (!props.active || !row) return null;
   const acts = props.byDay?.get(row.dayKey) ?? [row];
   const trend = row.trend;
@@ -186,13 +174,16 @@ export default function EfficiencyTrendChart({ data, delta }: Props) {
       };
     }) as EffRow[];
 
-    const trendData: TrendRow[] = dayOrder.map((d, i) => ({
-      dayOrdinal: i,
-      trend: trendOf.get(d) ?? null,
-      label: formatDateLabel(d),
-    }));
+    // Explicit y-domain from the activity values (+ padding). recharts' auto
+    // domain missed the higher activity values (a bike ride's m/beat can top the
+    // chart) and clipped those dots above the plot, so pin it to the data.
+    const vals = rows.map((r) => r.value).filter((v) => Number.isFinite(v));
+    const lo = vals.length ? Math.min(...vals) : 0;
+    const hi = vals.length ? Math.max(...vals) : 1;
+    const pad = (hi - lo) * 0.08 || 0.1;
+    const yDomain: [number, number] = [+(lo - pad).toFixed(2), +(hi + pad).toFixed(2)];
 
-    return { rows, trendData, dayOrder };
+    return { rows, dayOrder, yDomain };
   }, [data, selectedTypes]);
 
   // Group every activity by calendar day so the tooltip can list all activities
@@ -274,17 +265,18 @@ export default function EfficiencyTrendChart({ data, delta }: Props) {
                 tickLine={false}
                 axisLine={false}
                 width={50}
-                domain={["auto", "auto"]}
+                domain={chartData.yDomain}
                 tickFormatter={(val) => `${val.toFixed(1)} m`}
                 unit=""
               />
               <Tooltip content={<EfficiencyTooltip byDay={byDay} />} />
               <Legend />
 
-              {/* Trend Line — its own one-point-per-day dataset so it stays clean
-                  even when a day has several activities. */}
+              {/* Trend Line. Uses the main per-activity data (each row carries its
+                  day's trend value), so same-day rows are identical points and the
+                  line stays clean — while the y-domain is still computed from every
+                  activity value, so no dot is clipped. */}
               <Line
-                data={chartData.trendData}
                 type="monotone"
                 dataKey="trend"
                 stroke="#64748b" // slate-500
