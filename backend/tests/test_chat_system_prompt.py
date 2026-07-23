@@ -69,6 +69,15 @@ def test_chat_carries_the_week_frame_mirroring_discipline():
     assert "not their week" in t
 
 
+def test_chat_carries_the_personalisation_disposition():
+    """The coach adapts to THIS runner, not the median: their build/history/stated facts
+    shape the advice, and what's right for a typical runner can be wrong for this one.
+    Mirrors the report prompt's "coach this runner, not the median" disposition."""
+    t = CHAT_SYSTEM_TEMPLATE.lower()
+    assert "this particular runner, not the average one" in t
+    assert "wrong for this one" in t
+
+
 def test_chat_tiering_cites_memory_not_the_retired_sections():
     """ADR 0025 retired the narrative + believed_facts sections (now null stubs); the
     runner `memory` profile replaced them. When the pack carries a `memory` section the

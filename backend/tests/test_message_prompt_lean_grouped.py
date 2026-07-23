@@ -129,3 +129,29 @@ def test_message_prompt_lean_grouped_v6_extends_laps_rule_to_past_sessions():
     )
     # grouped serialization + feature parity with the flip target.
     assert "coach_message_lean_grouped_v6" in prompts.GROUPED_PACK_PROMPT_IDS
+
+
+def test_message_prompt_lean_grouped_v7_adds_personalisation_bullet():
+    """grouped_v7 = grouped_v5's fuller prose + the "coach this runner, not the median"
+    personalisation bullet. It differs from grouped_v5 ONLY by that one bullet, so
+    reverting the bullet reproduces grouped_v5 BYTE-FOR-BYTE and the safety floor is
+    invariant by construction. A sibling of grouped_v6 (each isolates one change off
+    grouped_v5), so a grouped_v5 -> grouped_v7 flip is a pure A/B on personalisation."""
+    v5 = prompts.PROMPT_VERSIONS["coach_message_lean_grouped_v5"]
+    v7 = prompts.PROMPT_VERSIONS["coach_message_lean_grouped_v7"]
+    # v7 differs from v5 ONLY by the inserted personalisation bullet.
+    assert v7 != v5
+    assert v7.replace(prompts._LEAN_PERSONALISATION_BULLET, "") == v5
+    assert "not the average one" in v7
+    assert "not the average one" not in v5
+    # the disposition is fuller-only; the opener carries no advice, so it is byte-identical.
+    assert (
+        prompts._OPENER_PROMPTS["coach_message_lean_grouped_v7"]
+        == prompts._OPENER_PROMPTS["coach_message_lean_grouped_v5"]
+    )
+    # grouped serialization + registered as a flip target.
+    assert "coach_message_lean_grouped_v7" in prompts.GROUPED_PACK_PROMPT_IDS
+    assert features_for("coach_message_lean_grouped_v7") == features_for(
+        "coach_message_lean_grouped_v5"
+    )
+    assert settings.COACH_PROMPT_ID != "coach_message_lean_grouped_v7"  # ships inert
