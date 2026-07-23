@@ -1136,6 +1136,34 @@ SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V6 = _regroup_lean_prompt(
 )
 
 
+# Personalisation (owner request): coach THIS runner, not the median. A running plan tuned
+# for the average athlete can be wrong for the person actually being coached (a heavier
+# runner, an older one, one coming back from injury), so this adds one disposition bullet to
+# lean_v1's "how I coach" list — the coach adapts method to who this runner is (from their
+# profile, history, and what they've said) and treats the standard playbook as a starting
+# point, not a template. Stated as a CLASS, never an enumerated case, so it steers for
+# runners we did not foresee. Isolated off the LIVE prod prompt (grouped_v5's prose) as a
+# SIBLING of grouped_v6, so flipping grouped_v5 -> grouped_v7 is a PURE A/B on personalisation
+# alone (grouped_v6's past-session laps clause is a separate pending flip). One bullet
+# inserted; every prior prompt byte-identical; the opener carries no advice so its prose is
+# byte-identical to grouped_v3/v5. Ships INERT (flip target: grouped_v5 -> grouped_v7).
+_LEAN_PERSONALISATION_ANCHOR = "- I lead with what the run MEANS for this person"
+_LEAN_PERSONALISATION_BULLET = (
+    "- I coach the runner in front of me, not the average one. Their build, their history, "
+    "and what they've told me shape what \"right\" looks like here — the standard playbook is "
+    "where I start, not where I land. What keeps a typical runner healthy can be exactly what "
+    "this one needs me to change. When I don't know something about them, I don't guess it.\n"
+)
+assert _LEAN_PERSONALISATION_ANCHOR in SYSTEM_PROMPT_MESSAGE_LEAN_V1  # guard: fail loudly if the anchor drifts
+SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V7 = _regroup_lean_prompt(
+    SYSTEM_PROMPT_MESSAGE_LEAN_V1.replace(
+        _LEAN_PERSONALISATION_ANCHOR,
+        _LEAN_PERSONALISATION_BULLET + _LEAN_PERSONALISATION_ANCHOR,
+    ),
+    _GROUP_ORIENTATION_V3,
+)
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -1213,6 +1241,11 @@ PROMPT_VERSIONS = {
     # feature set as grouped_v5 (identical pack); only the fuller system-prompt TEXT differs.
     # Ships INERT (flip target: grouped_v5 -> grouped_v6, zero code change).
     "coach_message_lean_grouped_v6": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V6,
+    # grouped_v7 = grouped_v5 + the "coach this runner, not the median" personalisation
+    # bullet. Same feature set as grouped_v5 (identical pack); only the fuller system-prompt
+    # TEXT differs. A SIBLING of grouped_v6 (each isolates one change off grouped_v5), so
+    # flipping grouped_v5 -> grouped_v7 is a pure A/B on personalisation. Ships INERT.
+    "coach_message_lean_grouped_v7": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V7,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -1261,6 +1294,9 @@ _OPENER_PROMPTS = {
     # #712: the past-session laps rule is a fuller-only prose clause; the opener carries no lap
     # advice, so grouped_v6's opener is byte-identical to grouped_v3/v5.
     "coach_message_lean_grouped_v6": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
+    # grouped_v7: the personalisation bullet is a fuller-only disposition (the opener makes no
+    # recommendations), so grouped_v7's opener is byte-identical to grouped_v3/v5.
+    "coach_message_lean_grouped_v7": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
 }
 
 # ADR 0026 Slice 1: the prompt ids that receive the GROUPED pack serialization
@@ -1276,6 +1312,7 @@ GROUPED_PACK_PROMPT_IDS: frozenset[str] = frozenset(
         "coach_message_lean_grouped_v4",
         "coach_message_lean_grouped_v5",
         "coach_message_lean_grouped_v6",
+        "coach_message_lean_grouped_v7",
     }
 )
 
