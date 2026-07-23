@@ -53,10 +53,47 @@ function percentile(sortedAsc: number[], p: number): number {
   return sortedAsc[lo] * (1 - frac) + sortedAsc[hi] * frac;
 }
 
+// Centred, null-aware rolling mean (length-preserving). Each output is the mean
+// of the non-null samples within +/- floor(window/2); a fully-null neighbourhood
+// stays null so genuine gaps are not bridged.
+function rollingMean(arr: (number | null)[], window: number): (number | null)[] {
+  if (window <= 1) return arr;
+  const half = Math.floor(window / 2);
+  const out: (number | null)[] = new Array(arr.length).fill(null);
+  for (let i = 0; i < arr.length; i++) {
+    let sum = 0;
+    let count = 0;
+    const start = Math.max(0, i - half);
+    const end = Math.min(arr.length - 1, i + half);
+    for (let j = start; j <= end; j++) {
+      const v = arr[j];
+      if (v !== null) { sum += v; count += 1; }
+    }
+    out[i] = count > 0 ? sum / count : null;
+  }
+  return out;
+}
+
 // Minimum elevation span (metres) so a near-flat run renders flat rather than
 // mountainous (#727): a 60 m total window mirrors the #726 experiment harness,
 // which fixes the "flat run looks hilly" misread.
 const MIN_ELEVATION_SPAN_M = 60;
+
+// Grade (%) is signed around a MEANINGFUL zero (flat), so its display domain is
+// symmetric about 0 with a minimum half-span (#738): a near-flat run whose grade
+// only wanders +/-2% reads flat instead of filling the panel, while a genuinely
+// hilly run still expands to its real range (the half-span grows to the largest
+// |grade| seen, so nothing is cropped). Mirrors the elevation min-span idea
+// (#727) but anchored at 0 rather than the data midpoint.
+const MIN_GRADE_HALF_SPAN_PCT = 10;
+
+// Pace is the one series plotted from a raw, jittery per-second GPS velocity
+// stream, so sample-to-sample noise made it read as a dense mass rather than a
+// pace trace (#744). A centred, null-aware rolling mean over this many samples
+// (~seconds) removes that jitter while preserving real structure (surges, fades,
+// stops). Only the plotted line and scrub readout are smoothed; the Max/Avg
+// header stays computed from the true raw data.
+const PACE_SMOOTHING_WINDOW = 15;
 
 // The DISPLAY y-domain for a chart, kept separate from the true data min/max
 // (which still feed the Max/Avg readout). Auto-fitting every series to its own
@@ -89,6 +126,15 @@ function computeYDomain(
     if (span > 0) {
       return { domainMin: lo - 0.05 * span, domainMax: hi + 0.05 * span };
     }
+  }
+  if (type === 'grade_smooth' && validData.length > 0) {
+    let maxAbs = 0;
+    for (const v of validData) {
+      const a = Math.abs(v);
+      if (a > maxAbs) maxAbs = a;
+    }
+    const half = Math.max(maxAbs, MIN_GRADE_HALF_SPAN_PCT);
+    return { domainMin: -half, domainMax: half };
   }
   return { domainMin: dataMin, domainMax: dataMax };
 }
@@ -142,9 +188,17 @@ const SimpleChart = React.memo(function SimpleChart({ type, data, secondaryData,
       ? (isCadence ? dropCadenceDropouts(secondaryData) : secondaryData)
       : undefined;
 
-    // Filter out nulls for stats
+    // Pace is plotted from a raw jittery GPS velocity stream; smooth it for the
+    // DISPLAY line + scrub readout only (#744). Max/Avg below stay computed from
+    // the raw primaryData, so the reported figures are the true data and are not
+    // degraded by smoothing. Every other series is plotted as-is.
+    const plotData = type === 'velocity_smooth'
+      ? rollingMean(primaryData, PACE_SMOOTHING_WINDOW)
+      : primaryData;
+
+    // Filter out nulls for stats (RAW data, so Max/Avg are the true figures)
     const validData = primaryData.filter((v): v is number => v !== null);
-    if (!validData.length) return { pathD: '', secondaryPathD: '', primaryData, min: 0, max: 0, avg: 0, domainMin: 0, domainRange: 1 };
+    if (!validData.length) return { pathD: '', secondaryPathD: '', primaryData: plotData, min: 0, max: 0, avg: 0, domainMin: 0, domainRange: 1 };
 
     // Include secondary data in min/max calc so it fits in the chart
     const allValues = [...validData];
@@ -169,8 +223,10 @@ const SimpleChart = React.memo(function SimpleChart({ type, data, secondaryData,
     const avg = sum / validData.length;
 
     // Display domain (per-type; see computeYDomain, #727), distinct from the raw
-    // data min/max above which still feed the Max/Avg readout.
-    const { domainMin, domainMax } = computeYDomain(type, min, max, validData);
+    // data min/max above which still feed the Max/Avg readout. Computed from the
+    // PLOTTED values (smoothed for pace) so the clamp frames the line drawn.
+    const plotValid = plotData.filter((v): v is number => v !== null);
+    const { domainMin, domainMax } = computeYDomain(type, min, max, plotValid);
     const domainRange = (domainMax - domainMin) || 1;
 
     // Helper to generate path with gaps
@@ -198,13 +254,13 @@ const SimpleChart = React.memo(function SimpleChart({ type, data, secondaryData,
         return commands.join(' ');
     };
 
-    const pathD = generatePath(primaryData);
+    const pathD = generatePath(plotData);
     const secondaryPathD = secondaryDataNormalized ? generatePath(secondaryDataNormalized) : '';
 
     return {
       pathD,
       secondaryPathD,
-      primaryData,
+      primaryData: plotData,
       min,
       max,
       avg,
