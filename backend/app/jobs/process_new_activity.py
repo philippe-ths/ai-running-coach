@@ -2,18 +2,25 @@
 
 Both the Strava webhook (`aspect_type=create`) and the user-triggered self-heal
 check (#123/ADR 0006, which replaced the removed polling fallback) enqueue
-`process_new_activity_job`. Under the two-stage prompt (coach_message_v2) it runs
-ingest -> analyze -> block assignment, then schedules a BLOCK-COMPLETE check at
-+BLOCK_GAP_SECONDS (A1, ADR 0011) instead of opening the exchange inline: the
-gap that groups activities into a Block doubles as the debounce that decides the
-block is finished. `block_complete_job` no-ops when superseded (a newer member's
-check owns the block — idempotency over cancellation, the same pattern as the
-fuller timer) and otherwise runs the opener stage on the block's PRIMARY
-activity; the conditional fuller turn runs later in the separate, idempotent
-`fuller_turn_job`, fired by the timer or early by a reply. Under any single-shot
-prompt it runs the prior per-activity pipeline (ingest -> analyze -> coach
-report -> notify) untouched, so flipping COACH_PROMPT_ID back is a
-zero-code-change rollback (AC6).
+`process_new_activity_job`. It runs ingest -> analyze -> block assignment and then
+hands off to the active POST-ACTIVITY CADENCE (`app/jobs/cadence/`), which owns what
+happens next: schedule a block-complete check and open an exchange (two-stage), send
+an instant receipt (#296), or run the prior per-activity report inline (single-shot).
+Flipping COACH_PROMPT_ID / COACH_RECEIPT_CADENCE is therefore a zero-code-change
+rollback (AC6) — the cadence is resolved at dispatch time, never baked into a job's
+args.
+
+This module is the JOB layer: the RQ entrypoints, the ingest orchestration, and the
+stable delegators other modules import (`process_block_complete`,
+`maybe_enqueue_fuller_turn`, `mark_done_and_schedule`). The cadence BODIES live in
+`app/jobs/cadence/*` and the shared side effects in `app/jobs/exchange_ops.py` (#696);
+before that split they were `_private` helpers here that the cadence adapters called
+back across the module boundary, so no cadence could be read in one place.
+
+The RQ entrypoints below must KEEP this module path. RQ serializes a deferred job as
+its `module.function` string, so relocating them would strand every block-complete
+check (scheduled up to BLOCK_GAP_SECONDS out) and fuller timer (up to
+EXCHANGE_STAGE2_DELAY_SECONDS out) already sitting in Redis across a deploy.
 
 Per-stage dedup lives on the block's `exchanges` row (`opener_sent_at`,
 `fuller_sent_at`); `opened_at` marks the lifecycle (opener generated) independent
@@ -26,38 +33,20 @@ per-activity store.
 import asyncio
 import logging
 import uuid
-from datetime import timedelta
 from typing import Optional
 
 from rq import Retry
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.queue import queue
 from app.db.session import SessionLocal
-from app.models import Activity, Block, Exchange, StravaAccount
-from app.models.coaching_relationship import CoachingRelationship
+from app.jobs import exchange_ops
+from app.jobs.cadence import get_active_cadence
 from app.jobs.reanalyze_history import reanalyze_activity_if_streams
+from app.models import Activity, StravaAccount
 from app.services.analysis import analyze_with_streams
-from app.services.analysis.classifier import Classification, compose_headline
-from app.services.blocks import activity_end, assign_activity_to_block, is_run_activity
-from app.services.coach import exchange_lifecycle as lifecycle
-from app.services.coach.receipt import build_receipt
-from app.services.coach.service import (
-    generate_fuller,
-    generate_opener,
-    get_active_report_row,
-    get_or_generate_coach_report,
-    is_two_stage_prompt,
-)
-from app.schemas.coach import CoachReportRead
-from app.services.notifications import (
-    Notification,
-    build_coach_notification,
-    build_receipt_notification,
-    get_notifier,
-    resolve_recipient,
-)
+from app.services.coach.service import get_or_generate_coach_report
+from app.services.notifications import Notification, get_notifier
 from app.services.notifications.port import NotifierPort
 from app.services.strava_ingestion import (
     StravaPort,
@@ -77,79 +66,6 @@ logger = logging.getLogger(__name__)
 PIPELINE_RETRY = Retry(max=3, interval=[60, 300, 900])
 
 
-def _notify(
-    db: Session,
-    activity: Activity,
-    *,
-    report: CoachReportRead,
-    stage: str,
-    sentinel_attr: str,
-    notifier: NotifierPort,
-    sentinel_obj=None,
-    presend_claimed: bool = False,
-) -> Optional[Notification]:
-    """Send one stage's notification, deduped by its own stage sentinel.
-
-    The sentinel lives on `sentinel_obj` — the block's Exchange row under the
-    two-stage path (A1), or the Activity itself on the single-shot rollback
-    path. Skips when the stage sentinel is already set (at-most-once per
-    exchange per stage). Builds the channel-shaped Notification (stage-aware:
-    opener prose vs fuller message), sends it, and on success sets the
-    sentinel. On a send failure the sentinel is left null so the stage stays
-    re-sendable, mirroring the prior single-shot behaviour (#114). Returns the
-    Notification sent, or None.
-
-    `presend_claimed` (#506, fuller turn only): the caller already atomically
-    claimed the sentinel pre-send via `lifecycle.fuller_claim`, so the sentinel
-    IS the at-most-once claim — skip the already-sent guard (we own it) and do
-    NOT re-mark on success (the claim already set it). RELEASING a claim this
-    function did not take is not its business: returning None is the whole signal,
-    and `lifecycle.fuller_claim` releases on any exit the caller did not `keep()`
-    (#740). Releasing here as well was a second owner of the same invariant.
-    """
-    sentinel_obj = sentinel_obj if sentinel_obj is not None else activity
-    if not presend_claimed and lifecycle.notification_already_sent(sentinel_obj, sentinel_attr):
-        logger.info(
-            "Skipping %s notification for activity %s: already sent at %s",
-            stage, activity.strava_activity_id, getattr(sentinel_obj, sentinel_attr),
-        )
-        return None
-
-    headline = compose_headline(activity, Classification.from_metrics(activity.metrics))
-    notification = build_coach_notification(
-        report=report,
-        headline=headline,
-        distance_m=activity.distance_m or 0,
-        app_base_url=settings.APP_BASE_URL,
-        stage=stage,
-        # P2.4 (#120): route to the activity owner's bound channel; an unbound
-        # non-owner resolves to None (suppressed), and the global fallback is kept
-        # only for the identified owner or a db-proven single-user deploy (#600).
-        recipient=resolve_recipient(activity.user, db=db),
-    )
-    if notification is None:
-        logger.info(
-            "Skipping %s notification for activity %s: no channel configured",
-            stage, activity.strava_activity_id,
-        )
-        return None
-
-    try:
-        notifier.send(notification)
-    except Exception:
-        logger.exception(
-            "%s notification send failed for activity %s; sentinel left unset",
-            stage, activity.strava_activity_id,
-        )
-        return None
-
-    # Under the #506 pre-send claim the sentinel was already set atomically by the
-    # caller; do not re-mark (it would just rewrite the same value).
-    if not presend_claimed:
-        lifecycle.mark_notification_sent(db, sentinel_obj, sentinel_attr)
-    return notification
-
-
 async def process_new_activity(
     *,
     db: Session,
@@ -158,189 +74,18 @@ async def process_new_activity(
     strava_port: StravaPort,
     notifier: NotifierPort,
 ) -> Optional[Notification]:
-    """Ingest + analyze the activity and assign its Block, then schedule the
-    block-complete check (two-stage prompt) or run the single-shot pipeline
-    (rollback prompts). Under two-stage nothing is generated or notified here —
-    the opener fires from `block_complete_job` once the block has been quiet
-    for BLOCK_GAP_SECONDS (A1). Returns the Notification sent (single-shot
-    only), or None."""
+    """Ingest + analyze the activity and assign its Block, then hand off to the
+    active cadence's `on_ingest`. Returns the Notification sent (the single-shot
+    report or the #296 receipt), or None."""
     activity = await ingest_activity_by_id(
         db, account, strava_port, strava_activity_id
     )
     await analyze_with_streams(db, str(activity.id))
 
-    block = _ensure_block(db, activity)
-
-    # The post-activity cadence (single-shot / opener-fuller / receipt) is resolved
-    # from config at dispatch time and owns what happens next — see app/jobs/cadence.py.
-    # Lazy import keeps the cadence -> process_new_activity dependency one-directional.
-    from app.jobs.cadence import get_active_cadence
+    block = exchange_ops.ensure_block(db, activity)
 
     return await get_active_cadence(settings).on_ingest(
         db=db, activity=activity, block=block, notifier=notifier
-    )
-
-
-def _ensure_block(db: Session, activity: Activity) -> Block:
-    """The activity's Block, assigning one if ingestion has not yet (e.g. an
-    activity ingested by code that predates A1 block assignment)."""
-    if activity.block_id is not None:
-        return db.query(Block).filter(Block.id == activity.block_id).one()
-    return assign_activity_to_block(db, activity)
-
-
-def _is_run_activity(activity: Activity) -> bool:
-    """Whether an activity counts as a run for AUTOMATIC coach-report gating (#643).
-
-    A coach report is only auto-generated for runs; every activity still gets its
-    receipt / check-in notification, and on-demand regeneration stays ungated.
-    Delegates to `blocks.is_run_activity`, the single run-family predicate shared
-    with `pick_primary` (the report anchor), so the gate agrees with which activity
-    the report generates on. The run family covers the coarse `type == "Run"`
-    (ordinary, trail, treadmill) plus connected-platform "VirtualRun" (Zwift,
-    Peloton), which #644 brought into scope alongside the anchor."""
-    return is_run_activity(activity)
-
-
-def _exchange_for_activity(db: Session, activity: Activity) -> Optional[Exchange]:
-    """The exchange owning this activity's block, via lazy block assignment."""
-    block = _ensure_block(db, activity)
-    return lifecycle.get_exchange_for_block(db, block.id)
-
-
-def _receipt_templates_for(db: Session, user_id) -> Optional[dict]:
-    """The runner's pre-generated voiced receipt templates, or None for the
-    house-default floor. Read-only on the hot path: generation runs OFFLINE, never
-    here, so the receipt stays instant and LLM-free. A null column resolves to the
-    floor inside `build_receipt`. If a voice is declared but no set has been
-    generated yet, a lazy background refresh is enqueued (best-effort) so the NEXT
-    receipt speaks in voice — this receipt still uses the floor."""
-    from app.services.coach.receipt_voice import maybe_enqueue_lazy_refresh
-
-    rel = (
-        db.query(CoachingRelationship)
-        .filter(CoachingRelationship.user_id == user_id)
-        .first()
-    )
-    if rel is None:
-        return None
-    maybe_enqueue_lazy_refresh(rel)
-    return rel.receipt_templates
-
-
-async def _send_receipt(
-    *, db: Session, activity: Activity, block: Block, notifier: NotifierPort
-) -> Optional[Notification]:
-    """#296: send the instant, deterministic, block-aware receipt for this activity
-    and open the exchange.
-
-    Deduped by `Activity.receipt_sent_at` (one receipt per activity, idempotent on a
-    pipeline retry). The FIRST receipt opens the exchange (`opened_at`), anchoring
-    the reply window — independent of delivery, so the reply path works under a NoOp
-    local notifier. The receipt text is filled deterministically from the block
-    facts using the runner's voiced templates (or the house-default floor), so no
-    LLM is on the hot path and the receipt can never fall back. On a send failure the
-    sentinel is left null so the receipt stays re-sendable. Returns the Notification
-    sent, or None (already sent / no channel / send failed)."""
-    db.refresh(activity)
-    if activity.receipt_sent_at is not None:
-        logger.info(
-            "Skipping receipt for activity %s: already sent at %s",
-            activity.strava_activity_id, activity.receipt_sent_at,
-        )
-        return None
-
-    members = (
-        db.query(Activity)
-        .filter(Activity.block_id == block.id)
-        .order_by(Activity.start_date, Activity.id)
-        .all()
-    )
-    member_types = [m.type for m in members]
-    subject_index = next(
-        (i for i, m in enumerate(members) if m.id == activity.id), len(members) - 1
-    )
-    receipt = build_receipt(
-        member_types,
-        subject_index,
-        seed=activity.strava_activity_id,
-        templates=_receipt_templates_for(db, activity.user_id),
-    )
-    headline = compose_headline(activity, Classification.from_metrics(activity.metrics))
-    notification = build_receipt_notification(
-        receipt_text=receipt.text,
-        headline=headline,
-        activity_id=str(activity.id),
-        distance_m=activity.distance_m or 0,
-        app_base_url=settings.APP_BASE_URL,
-        # P2.4 (#120): route the receipt to the activity owner's bound channel; an
-        # unbound non-owner is suppressed, and the global fallback is kept only for
-        # the identified owner or a db-proven single-user deploy (#600).
-        recipient=resolve_recipient(activity.user, db=db),
-    )
-
-    # Open the exchange on the first receipt, independent of delivery (A4 posture):
-    # the reply window anchors here and must work even for a NoOp local notifier.
-    exchange = lifecycle.get_exchange_for_block(db, block.id)
-    if exchange is not None:
-        lifecycle.open_exchange(db, exchange)
-
-    if notification is None:
-        logger.info(
-            "No receipt notification for activity %s: no channel configured",
-            activity.strava_activity_id,
-        )
-        return None
-
-    try:
-        notifier.send(notification)
-    except Exception:
-        logger.exception(
-            "Receipt send failed for activity %s; sentinel left unset",
-            activity.strava_activity_id,
-        )
-        return None
-
-    lifecycle.record_receipt_sent(db, activity)
-    return notification
-
-
-async def _run_single_shot(
-    *, db: Session, activity: Activity, strava_activity_id: int, notifier: NotifierPort
-) -> Optional[Notification]:
-    """The prior single-shot pipeline (coach_message_v1 / coach_report_v*): one
-    report, one notification, gated by `coach_notification_sent_at`."""
-    # #643: auto-generate a coach report only for runs (the single-shot cadence has
-    # no receipt; a non-run is simply silent here). On-demand regeneration is a
-    # separate ungated path.
-    if not _is_run_activity(activity):
-        logger.info(
-            "Skipping single-shot report for activity %s: not a run (%s)",
-            strava_activity_id, activity.type,
-        )
-        return None
-
-    report = await get_or_generate_coach_report(db, str(activity.id))
-    if report is None:
-        logger.info(
-            "Skipping notification for activity %s: no coach report", strava_activity_id
-        )
-        return None
-
-    db.refresh(activity)
-    # Read the *active*-version row: prior versions may be retained alongside it,
-    # so a version-unaware query could gate notification on the wrong report.
-    coach_row = get_active_report_row(db, activity.id)
-    if coach_row is None or coach_row.is_fallback:
-        logger.info(
-            "Skipping notification for activity %s: report is fallback or missing",
-            strava_activity_id,
-        )
-        return None
-
-    return _notify(
-        db, activity, report=report, stage="fuller",
-        sentinel_attr="coach_notification_sent_at", notifier=notifier,
     )
 
 
@@ -358,148 +103,8 @@ async def process_block_complete(
     FIRE time, so a check pending across a cadence-flag flip does the now-current
     thing rather than a stale one.
     """
-    from app.jobs.cadence import get_active_cadence
-
     return await get_active_cadence(settings).on_block_complete(
         db=db, block_id=block_id, activity_id=activity_id, notifier=notifier
-    )
-
-
-def _resolve_completed_block(
-    db: Session, block_id: str, activity_id: str
-) -> Optional[tuple[Activity, Exchange]]:
-    """Shared block-complete setup for the two-stage cadences: resolve the block,
-    no-op (return None) when this check is superseded — a newer member now owns the
-    block (idempotency over cancellation) — or the block is gone or empty, ensure the
-    exchange row (defensive; blocks are created with theirs), and return the block's
-    PRIMARY activity plus its exchange. The single-shot cadence never reaches here; it
-    no-ops before any DB work."""
-    block = db.query(Block).filter(Block.id == uuid.UUID(str(block_id))).first()
-    if block is None:
-        logger.warning("block_complete: unknown block %s", block_id)
-        return None
-
-    members = db.query(Activity).filter(Activity.block_id == block.id).all()
-    if not members:
-        logger.warning("block_complete: block %s has no members", block_id)
-        return None
-    last = max(members, key=activity_end)
-    if str(last.id) != str(activity_id):
-        logger.info(
-            "block_complete superseded for block %s: %s is no longer the last member",
-            block_id, activity_id,
-        )
-        return None
-
-    exchange = lifecycle.ensure_exchange_for_block(db, block)
-
-    primary = db.query(Activity).filter(Activity.id == block.primary_activity_id).one()
-
-    # #643: auto-generate a coach report only when the block contains a run. Because
-    # `pick_primary` prefers a run, a non-run primary means the block has no run, so
-    # neither the block-complete timer nor a "done" tap (both routed here) produces a
-    # report. The receipt already fired on ingest, and on-demand regeneration is a
-    # separate ungated path.
-    if not _is_run_activity(primary):
-        logger.info(
-            "block_complete: block %s primary %s is not a run (%s); no auto coach report",
-            block_id, primary.strava_activity_id, primary.type,
-        )
-        return None
-
-    return primary, exchange
-
-
-async def _run_opener_stage(
-    *, db: Session, activity: Activity, exchange: Exchange, notifier: NotifierPort
-) -> Optional[Notification]:
-    """Stage one: generate + notify the opener for the block's primary activity,
-    then conditionally schedule the fuller turn. Deduped by the exchange's
-    `opener_sent_at` (the opener fires at most once per block); `opened_at`
-    marks generation so a late arrival knows the exchange has spoken even if
-    delivery failed or no channel is configured."""
-    db.refresh(exchange)
-    if lifecycle.notification_already_sent(exchange, "opener_sent_at"):
-        logger.info(
-            "Opener already sent for block %s; skipping", exchange.block_id
-        )
-        return None
-
-    result = await generate_opener(db, str(activity.id))
-    if result is None or result.report is None:
-        logger.info("No opener generated for activity %s", activity.strava_activity_id)
-        return None
-
-    lifecycle.open_exchange(db, exchange)
-
-    # Schedule the conditional fuller turn FIRST, on the salience decision (the
-    # opener LLM's judgment OR-ed with the deterministic safety override; a fallback
-    # opener also schedules a recovery fuller). Scheduling before notifying means a
-    # crash in between still leaves the fuller scheduled. Independent of opener-
-    # notify success: scheduling is about salience, not delivery. The timer is
-    # idempotent against an early reply via the fuller sentinel (ADR 0010 chose
-    # idempotency over racy timer cancellation).
-    if result.schedule_fuller_turn:
-        _schedule_fuller_turn(str(activity.id))
-        logger.info(
-            "Scheduled fuller turn for activity %s in %ds",
-            activity.strava_activity_id, settings.EXCHANGE_STAGE2_DELAY_SECONDS,
-        )
-
-    # Notify the opener — even a fallback opener, whose templated prose ("Nice work
-    # … I'll follow up shortly") is benign and non-medical, so a red-flag run whose
-    # opener LLM hiccuped still gets a non-silent opener (AC3) and the scheduled
-    # fuller carries the substantive coaching.
-    notification = _notify(
-        db, activity, report=result.report, stage="opener",
-        sentinel_attr="opener_sent_at", notifier=notifier, sentinel_obj=exchange,
-    )
-
-    return notification
-
-
-def _schedule_block_complete(block_id: str, activity_id: str) -> None:
-    """Enqueue the block-complete check after the grouping gap (the fuller-timer
-    pattern): every processed activity schedules one; stale checks no-op instead
-    of being cancelled.
-
-    Uses RQ-native deferred scheduling (drained by the worker's `with_scheduler`),
-    so no separate rq-scheduler process is needed (#123/ADR 0006)."""
-    from app.core.queue import queue
-
-    # job_timeout (#264): block-complete runs the opener generation, so it needs
-    # the same generous death-penalty ceiling as the rest of the coach jobs rather
-    # than RQ's 180s default. RQ-native enqueue_in uses `job_timeout` (rq-scheduler
-    # used `timeout`); the shared queue's default_timeout already supplies it, but
-    # we pass it explicitly to keep the #264 intent legible.
-    queue.enqueue_in(
-        timedelta(seconds=settings.BLOCK_GAP_SECONDS),
-        block_complete_job,
-        block_id,
-        activity_id,
-        job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
-    )
-
-
-def _schedule_fuller_turn(activity_id: str) -> None:
-    """Enqueue the fuller-turn job after the stage-two delay (same pattern as the
-    backfill self-pacing), so the worker stays free between stages. A reply may
-    fire the fuller earlier; the fuller job's sentinel makes the late timer a
-    harmless no-op (no timer cancellation).
-
-    Uses RQ-native deferred scheduling (drained by the worker's `with_scheduler`),
-    so no separate rq-scheduler process is needed (#123/ADR 0006)."""
-    from app.core.queue import queue
-
-    # job_timeout (#264): the fuller turn is the heavy two-stage generation
-    # (~120-360s), so it must outlast RQ's 180s default or the death penalty kills
-    # it mid-write. RQ-native enqueue_in uses `job_timeout` (rq-scheduler used
-    # `timeout`).
-    queue.enqueue_in(
-        timedelta(seconds=settings.EXCHANGE_STAGE2_DELAY_SECONDS),
-        fuller_turn_job,
-        activity_id,
-        job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
     )
 
 
@@ -510,50 +115,7 @@ def maybe_enqueue_fuller_turn(db: Session, activity_id) -> bool:
     the #296 receipt cadence waits for the block-complete timer or a "done" tap (so the
     report covers the whole session). Kept here as the stable import for checkins.py /
     chat.py and as the patch target their tests use."""
-    from app.jobs.cadence import get_active_cadence
-
     return get_active_cadence(settings).on_reply(db=db, activity_id=activity_id)
-
-
-def _enqueue_reply_fuller(db: Session, activity_id) -> bool:
-    """Enqueue the fuller turn early when the exchange owning this activity's block is
-    OPEN (the opener/fuller cadence only).
-
-    The exchange is open when (read from the exchanges row, A1): the opener has
-    generated (`opened_at` set — independent of delivery, so it works for a NoOp
-    local notifier too), the fuller is not yet sent (`fuller_sent_at` null), and
-    the opener is within EXCHANGE_REPLY_WINDOW_SECONDS — so a reply on a stale
-    exchange never spins up a fresh one (AC4, AC3 closed-never-refires). The
-    fuller fires on the block's PRIMARY activity (where the report row lives).
-    Idempotent against the racing timer (the fuller job's own sentinel guard); a
-    deterministic job_id collapses rapid repeated replies while the job is still
-    queued. Best-effort: a Redis hiccup never breaks the reply request. Returns
-    True if it enqueued the fuller turn.
-    """
-    activity_uuid = activity_id if isinstance(activity_id, uuid.UUID) else uuid.UUID(str(activity_id))
-    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
-    if activity is None or activity.block_id is None:
-        return False  # no activity, or never grouped (nothing to advance)
-
-    block = db.query(Block).filter(Block.id == activity.block_id).first()
-    exchange = lifecycle.get_exchange_for_block(db, activity.block_id)
-    if block is None or exchange is None:
-        return False
-    # Open (opener generated, not closed) and within the reply window: a closed or
-    # stale or never-opened exchange never re-fires / spins up (AC3/AC4). The state
-    # is owned by exchange_lifecycle, so the "never re-fire" guarantee lives once.
-    if not lifecycle.can_fire_reply_fuller(exchange):
-        return False
-
-    primary_id = block.primary_activity_id
-    try:
-        queue.enqueue(fuller_turn_job, str(primary_id), job_id=f"fuller_{primary_id}")
-    except Exception:
-        logger.exception(
-            "failed to enqueue reply-triggered fuller turn for block %s", block.id
-        )
-        return False
-    return True
 
 
 def mark_done_and_schedule(db: Session, activity_id) -> bool:
@@ -561,144 +123,7 @@ def mark_done_and_schedule(db: Session, activity_id) -> bool:
     block member. Delegates to the active cadence: only the receipt cadence records the
     completion and schedules the full report (single-shot and opener/fuller have no
     "done" affordance). Kept here as the stable import for webhooks.py."""
-    from app.jobs.cadence import get_active_cadence
-
     return get_active_cadence(settings).on_done(db=db, activity_id=activity_id)
-
-
-def _record_done_and_schedule(db: Session, activity_id) -> bool:
-    """Record the runner's explicit completion signal and schedule the full report at
-    +BLOCK_GAP_SECONDS (owner-locked: "done" -> full report in 30 min; receipt cadence).
-
-    Only while the exchange is OPEN, not yet CLOSED (`fuller_sent_at` null), and within
-    the reply window — so a "done" tap on a stale exchange never spins one up. The
-    full-report check is scheduled on the block's CURRENT last member, so a straggler
-    that syncs before it fires still supersedes it and is folded into the report
-    (idempotent over cancellation, and idempotent with the ingest-time check via
-    `fuller_sent_at`). Best-effort: a Redis hiccup never breaks the tap. Returns True if
-    it scheduled the report."""
-    activity_uuid = activity_id if isinstance(activity_id, uuid.UUID) else uuid.UUID(str(activity_id))
-    activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
-    if activity is None or activity.block_id is None:
-        return False
-
-    block = db.query(Block).filter(Block.id == activity.block_id).first()
-    exchange = lifecycle.get_exchange_for_block(db, activity.block_id)
-    if block is None or exchange is None:
-        return False
-    # A "done" tap acts only on an OPEN, in-window exchange — the SAME guard the reply
-    # path uses (`can_fire_reply_fuller`), so the "reply/done may act only on an open,
-    # in-window exchange" invariant has one implementation, not two (#697). The receipt
-    # opens the exchange on ingest, so a delivered receipt (the only surface carrying the
-    # "done" button) always sees an opened exchange; a closed/stale one never re-fires
-    # (AC3/AC4). `mark_done` still opens defensively.
-    if not lifecycle.can_fire_reply_fuller(exchange):
-        return False
-
-    # Record the explicit completion signal (idempotent), opening the exchange if
-    # the receipt somehow had not (defensive — the receipt opens it on ingest).
-    # #505: mark_done returns False when the exchange was ALREADY done, so a second/
-    # rapid "done" tap must NOT schedule another full-report generation — the first
-    # tap already scheduled it. Bail before re-scheduling so repeated taps queue exactly
-    # one generation (the fire-time dedup was the only prior backstop, by which point
-    # concurrent LLM generations could already be running).
-    if not lifecycle.mark_done(db, exchange):
-        logger.info(
-            "Ignoring duplicate done tap for block %s: already done", block.id
-        )
-        return False
-
-    last = max(
-        db.query(Activity).filter(Activity.block_id == block.id).all(),
-        key=activity_end,
-    )
-    try:
-        _schedule_block_complete(str(block.id), str(last.id))
-    except Exception:
-        logger.exception(
-            "failed to schedule done-triggered full report for block %s", block.id
-        )
-        return False
-    return True
-
-
-async def process_fuller_turn(
-    *, db: Session, activity: Activity, notifier: NotifierPort
-) -> Optional[Notification]:
-    """A4 stage two: generate (or finalize) the fuller turn and notify it.
-
-    At-most-once on the fuller sentinel (`fuller_sent_at`): a reply-fired run and the
-    timer-fired run cannot double-send — the loser no-ops. The guard is an ATOMIC claim
-    (#506): the old `is_closed` read was a non-atomic check-then-act with the slow
-    `generate_fuller` sitting between it and the notification sentinel, so under multiple
-    workers both triggers could pass the read, both generate, and both notify. We now
-    claim `fuller_sent_at` via a conditional UPDATE BEFORE generating, so the database
-    serializes the two triggers and only the winner proceeds. generate_fuller fills the
-    opener's evolving row in place and fires the learning loop on completion. A fallback
-    fuller / missing report / no-channel / send failure / RAISED exception RELEASES the
-    claim (sentinel back to null) so the stage stays re-sendable, consistent with the
-    single-shot fallback rule (#114) — the claim..send window is `lifecycle.fuller_claim`,
-    which releases on any exit this job did not `keep()`, so a crash mid-generation cannot
-    strand the turn CLOSED-but-unsent."""
-    # #216 / AC6 rollback inertness: a fuller scheduled via enqueue_in before a
-    # rollback to a single-shot prompt can still fire up to the stage-two delay
-    # after the flip. Gate it like every other two-stage trigger so the stale
-    # timer is a no-op instead of leaking a wrong-prompt generation + notification.
-    if not is_two_stage_prompt(settings.COACH_PROMPT_ID):
-        logger.info(
-            "Skipping fuller turn for activity %s: active prompt %s is single-shot",
-            activity.strava_activity_id, settings.COACH_PROMPT_ID,
-        )
-        return None
-
-    exchange = _exchange_for_activity(db, activity)
-    if exchange is None:
-        logger.warning(
-            "Fuller turn for activity %s: no exchange row; skipping",
-            activity.strava_activity_id,
-        )
-        return None
-    db.refresh(exchange)
-
-    # #506/#740: atomically claim the turn for the length of this block. A non-winning
-    # concurrent trigger (or a late timer after an early reply already closed the
-    # exchange) loses the claim and bails BEFORE generating — exactly one generation +
-    # one notification per exchange. The claim is released on EVERY exit that does not
-    # `keep()` it: a None read, a fallback/missing report, a no-channel/send-failure
-    # `_notify` return, OR a raised exception. That release rule is the lifecycle
-    # module's (see `fuller_claim`); this job just says when the turn was earned.
-    with lifecycle.fuller_claim(db, exchange) as claim:
-        if not claim.won:
-            logger.info(
-                "Fuller turn already claimed/notified for block %s; no-op",
-                exchange.block_id,
-            )
-            return None
-
-        read = await generate_fuller(db, str(activity.id))
-        if read is None:
-            logger.info("No fuller report for activity %s", activity.strava_activity_id)
-            return None
-
-        db.refresh(activity)
-        coach_row = get_active_report_row(db, activity.id)
-        if coach_row is None or coach_row.is_fallback:
-            logger.info(
-                "Skipping fuller notification for activity %s: report is fallback or missing",
-                activity.strava_activity_id,
-            )
-            return None
-
-        notification = _notify(
-            db, activity, report=read, stage="fuller",
-            sentinel_attr="fuller_sent_at", notifier=notifier, sentinel_obj=exchange,
-            presend_claimed=True,
-        )
-        # Kept only after a real successful send, so the happy path stays CLOSED and
-        # never re-sends.
-        if notification is not None:
-            claim.keep()
-        return notification
 
 
 def process_new_activity_job(
@@ -791,7 +216,9 @@ def fuller_turn_job(activity_id: str) -> None:
             logger.warning("fuller_turn_job: unknown activity %s", activity_id)
             return
         asyncio.run(
-            process_fuller_turn(db=db, activity=activity, notifier=get_notifier())
+            exchange_ops.run_fuller_turn(
+                db=db, activity=activity, notifier=get_notifier()
+            )
         )
     finally:
         db.close()

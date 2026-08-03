@@ -21,11 +21,10 @@ import pytest
 
 from app.core.config import settings
 from app.jobs import process_new_activity as pna
-from app.jobs.process_new_activity import (
-    _run_single_shot,
-    _send_receipt,
-    process_block_complete,
-)
+from app.jobs.cadence import opener_fuller
+from app.jobs.cadence.receipt import ReceiptCadence
+from app.jobs.cadence.single_shot import SingleShotCadence
+from app.jobs.process_new_activity import process_block_complete
 from app.models import Activity, Block, DerivedMetric, Exchange, StravaAccount, User, UserProfile
 from app.services.blocks import assign_activity_to_block
 from app.services.coach.llm import MessageResult
@@ -122,7 +121,7 @@ async def test_walk_gets_receipt_but_no_auto_report(db, receipt_cadence, notifie
     walk = _seed(db, type="Walk", name="Evening walk")
     block = _block_of(db, walk)
 
-    receipt = await _send_receipt(db=db, activity=walk, block=block, notifier=notifier)
+    receipt = await ReceiptCadence().send_receipt(db=db, activity=walk, block=block, notifier=notifier)
     assert receipt is not None
     assert len(notifier.sent) == 1  # the receipt fired for the walk
 
@@ -142,7 +141,7 @@ async def test_walk_gets_receipt_but_no_auto_report(db, receipt_cadence, notifie
 async def test_run_still_gets_auto_report(db, receipt_cadence, notifier):
     run = _seed(db, type="Run", name="Morning run")
     block = _block_of(db, run)
-    await _send_receipt(db=db, activity=run, block=block, notifier=notifier)
+    await ReceiptCadence().send_receipt(db=db, activity=run, block=block, notifier=notifier)
 
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client_returning_fuller()):
@@ -165,7 +164,7 @@ async def test_trail_run_still_gets_auto_report(db, receipt_cadence, notifier):
     run.raw_summary = {"sport_type": "TrailRun"}
     db.commit()
     block = _block_of(db, run)
-    await _send_receipt(db=db, activity=run, block=block, notifier=notifier)
+    await ReceiptCadence().send_receipt(db=db, activity=run, block=block, notifier=notifier)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client_returning_fuller()):
         result = await process_block_complete(
@@ -183,7 +182,7 @@ async def test_virtual_run_gets_auto_report(db, receipt_cadence, notifier):
     vrun = _seed(db, type="VirtualRun", name="Zwift session")
     block = _block_of(db, vrun)
     assert block.primary_activity_id == vrun.id  # picked as the run primary
-    await _send_receipt(db=db, activity=vrun, block=block, notifier=notifier)
+    await ReceiptCadence().send_receipt(db=db, activity=vrun, block=block, notifier=notifier)
 
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client_returning_fuller()):
@@ -213,7 +212,7 @@ async def test_mixed_block_reports_on_run_primary(db, receipt_cadence, notifier)
     block = db.query(Block).filter(Block.id == run.block_id).one()
     assert block.primary_activity_id == run.id  # the run is primary
 
-    await _send_receipt(db=db, activity=walk, block=block, notifier=notifier)
+    await ReceiptCadence().send_receipt(db=db, activity=walk, block=block, notifier=notifier)
     # the block-complete check fires on the LAST member (the walk), but generates
     # on the run primary, so a report is produced.
     with patch("app.services.coach.service.AnthropicClient",
@@ -235,7 +234,7 @@ async def test_single_shot_walk_generates_no_report(db, notifier, monkeypatch):
     monkeypatch.setattr(settings, "COACH_RECEIPT_CADENCE", False)
     walk = _seed(db, type="Walk", name="Lunch walk")
     with patch("app.services.coach.service.AnthropicClient") as client_cls:
-        result = await _run_single_shot(
+        result = await SingleShotCadence().run_single_shot(
             db=db, activity=walk, strava_activity_id=walk.strava_activity_id, notifier=notifier
         )
     assert result is None
@@ -251,7 +250,7 @@ async def test_opener_fuller_walk_generates_no_opener(db, notifier, monkeypatch)
     monkeypatch.setattr(settings, "COACH_RECEIPT_CADENCE", False)  # opener/fuller
     walk = _seed(db, type="Walk", name="Recovery walk")
     block = _block_of(db, walk)
-    with patch.object(pna, "_run_opener_stage", new=AsyncMock(return_value=None)) as opener:
+    with patch.object(opener_fuller.OpenerFullerCadence, "run_opener_stage", new=AsyncMock(return_value=None)) as opener:
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(walk.id), notifier=notifier
         )

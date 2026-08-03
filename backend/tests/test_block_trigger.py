@@ -16,7 +16,9 @@ from uuid import uuid4
 import pytest
 
 from app.core.config import settings
+from app.jobs import exchange_ops
 from app.jobs import process_new_activity as pna
+from app.jobs.cadence import opener_fuller
 from app.jobs.process_new_activity import (
     maybe_enqueue_fuller_turn,
     process_block_complete,
@@ -137,7 +139,7 @@ async def test_pipeline_schedules_block_complete_instead_of_inline_opener(
         "average_heartrate": 140,
     }])
 
-    with patch.object(pna, "_schedule_block_complete") as sched, \
+    with patch.object(exchange_ops, "schedule_block_complete") as sched, \
          patch("app.services.coach.service.AnthropicClient") as client_cls:
         result = await process_new_activity(
             db=db, account=account, strava_activity_id=9001,
@@ -164,7 +166,7 @@ async def test_block_complete_opens_exchange_and_notifies_primary(
 
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_opener_blocks(schedule=True))), \
-         patch.object(pna, "_schedule_fuller_turn") as sched:
+         patch.object(exchange_ops, "schedule_fuller_turn") as sched:
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=notifier
         )
@@ -207,7 +209,7 @@ async def test_stale_completion_check_noops_when_superseded(db, configured, noti
     db.refresh(block)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_opener_blocks(schedule=False))), \
-         patch.object(pna, "_schedule_fuller_turn"):
+         patch.object(exchange_ops, "schedule_fuller_turn"):
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(second.id), notifier=notifier
         )
@@ -269,7 +271,7 @@ async def test_reply_into_open_exchange_enqueues_fuller_on_primary(db, configure
         captured["kwargs"] = kwargs
 
     queue.enqueue = fake_enqueue
-    with patch.object(pna, "queue", queue):
+    with patch.object(opener_fuller, "queue", queue):
         # the reply lands on the WALK; the fuller still fires on the primary
         assert maybe_enqueue_fuller_turn(db, walk.id) is True
 

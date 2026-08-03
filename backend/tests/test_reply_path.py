@@ -31,7 +31,7 @@ def v2(monkeypatch):
 @pytest.fixture
 def fake_queue():
     fake = MagicMock()
-    with patch("app.jobs.process_new_activity.queue", fake):
+    with patch("app.jobs.cadence.opener_fuller.queue", fake):
         yield fake
 
 
@@ -144,7 +144,7 @@ def test_enqueue_best_effort_swallows_redis_error(db, v2):
     _exchange(db, activity, opened_at=datetime.now(timezone.utc))
     boom = MagicMock()
     boom.enqueue.side_effect = RuntimeError("redis down")
-    with patch("app.jobs.process_new_activity.queue", boom):
+    with patch("app.jobs.cadence.opener_fuller.queue", boom):
         # never raises into the reply request
         assert maybe_enqueue_fuller_turn(db, activity.id) is False
 

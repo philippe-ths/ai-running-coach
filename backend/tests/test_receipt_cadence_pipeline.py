@@ -16,12 +16,15 @@ import pytest
 
 from app.core.config import settings
 from app.jobs import process_new_activity as pna
+from app.jobs import exchange_ops
+from app.jobs.cadence import opener_fuller
+from app.jobs.cadence.receipt import ReceiptCadence
 from app.jobs.process_new_activity import (
-    _send_receipt,
     mark_done_and_schedule,
     maybe_enqueue_fuller_turn,
     process_block_complete,
 )
+from app.services.coach import exchange_lifecycle
 from app.models import Activity, DerivedMetric, Exchange, StravaAccount, User, UserProfile
 from app.services.blocks import assign_activity_to_block
 from app.services.coach.llm import MessageResult
@@ -121,7 +124,7 @@ def _client(*results):
 async def test_receipt_sends_opens_exchange_and_dedups(db, configured, notifier):
     activity = _seed(db)
     block = _block_of(db, activity)
-    n = await _send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+    n = await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
     assert n is not None
     assert len(notifier.sent) == 1
     db.refresh(activity)
@@ -130,7 +133,7 @@ async def test_receipt_sends_opens_exchange_and_dedups(db, configured, notifier)
     assert ex.opened_at is not None  # first receipt opens the exchange
 
     # Idempotent: a second send (pipeline retry) no-ops, no second notification.
-    again = await _send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+    again = await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
     assert again is None
     assert len(notifier.sent) == 1
 
@@ -140,7 +143,7 @@ async def test_receipt_never_calls_llm(db, configured, notifier):
     activity = _seed(db)
     block = _block_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient") as client_cls:
-        await _send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+        await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
     client_cls.assert_not_called()
 
 
@@ -151,12 +154,12 @@ async def test_block_complete_fires_full_report_not_opener(db, configured, notif
     activity = _seed(db)
     block = _block_of(db, activity)
     # receipt first (opens the exchange)
-    await _send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+    await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
     assert len(notifier.sent) == 1
 
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))), \
-         patch.object(pna, "_run_opener_stage") as opener:
+         patch.object(opener_fuller.OpenerFullerCadence, "run_opener_stage") as opener:
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=notifier
         )
@@ -203,7 +206,7 @@ async def test_block_complete_superseded_by_newer_member_noops(db, configured, n
 async def test_rpe_reply_does_not_early_fire_under_receipt_cadence(db, configured, notifier):
     activity = _seed(db)
     block = _block_of(db, activity)
-    await _send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+    await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
     # an RPE/pain reply just records the check-in; it must not fire the full report
     assert maybe_enqueue_fuller_turn(db, activity.id) is False
 
@@ -211,8 +214,8 @@ async def test_rpe_reply_does_not_early_fire_under_receipt_cadence(db, configure
 async def test_done_tap_records_and_schedules(db, configured, notifier):
     activity = _seed(db)
     block = _block_of(db, activity)
-    await _send_receipt(db=db, activity=activity, block=block, notifier=notifier)
-    with patch.object(pna, "_schedule_block_complete") as sched:
+    await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+    with patch.object(exchange_ops, "schedule_block_complete") as sched:
         assert mark_done_and_schedule(db, activity.id) is True
     sched.assert_called_once()
     ex = _exchange_of(db, activity)
@@ -226,8 +229,8 @@ async def test_repeated_done_taps_schedule_exactly_one_full_report(db, configure
     # queued redundant generations (deduped only at fire time, after spend may be live).
     activity = _seed(db)
     block = _block_of(db, activity)
-    await _send_receipt(db=db, activity=activity, block=block, notifier=notifier)
-    with patch.object(pna, "_schedule_block_complete") as sched:
+    await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+    with patch.object(exchange_ops, "schedule_block_complete") as sched:
         first = mark_done_and_schedule(db, activity.id)
         second = mark_done_and_schedule(db, activity.id)
         third = mark_done_and_schedule(db, activity.id)
@@ -254,7 +257,7 @@ async def test_concurrent_done_taps_schedule_exactly_one_full_report(db, configu
 
     activity = _seed(db)
     block = _block_of(db, activity)
-    await _send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+    await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
     db.commit()
 
     second_db = _Session(bind=db.connection())  # the second process's view of the same row
@@ -270,9 +273,9 @@ async def test_concurrent_done_taps_schedule_exactly_one_full_report(db, configu
             racing["second"] = mark_done_and_schedule(second_db, activity.id)
         return real_mark_done(db_, exchange, **kwargs)
 
-    real_mark_done = pna.lifecycle.mark_done
-    with patch.object(pna, "_schedule_block_complete") as sched, \
-         patch.object(pna.lifecycle, "mark_done", side_effect=race_then_mark):
+    real_mark_done = exchange_lifecycle.mark_done
+    with patch.object(exchange_ops, "schedule_block_complete") as sched, \
+         patch.object(exchange_lifecycle, "mark_done", side_effect=race_then_mark):
         first = mark_done_and_schedule(db, activity.id)
     second_db.close()
 
@@ -289,7 +292,7 @@ async def test_done_tap_noops_when_exchange_closed(db, configured, notifier):
     ex.fuller_sent_at = datetime.now(timezone.utc)  # already closed
     db.add(ex)
     db.commit()
-    with patch.object(pna, "_schedule_block_complete") as sched:
+    with patch.object(exchange_ops, "schedule_block_complete") as sched:
         assert mark_done_and_schedule(db, activity.id) is False
     sched.assert_not_called()
 
@@ -307,7 +310,7 @@ async def test_done_tap_noops_when_exchange_stale(db, configured, notifier, monk
     ex.opened_at = datetime.now(timezone.utc) - timedelta(days=3)  # opened, but stale
     db.add(ex)
     db.commit()
-    with patch.object(pna, "_schedule_block_complete") as sched:
+    with patch.object(exchange_ops, "schedule_block_complete") as sched:
         assert mark_done_and_schedule(db, activity.id) is False
     sched.assert_not_called()
     ex = _exchange_of(db, activity)
@@ -325,7 +328,7 @@ async def test_block_complete_runs_opener_after_cadence_flag_flipped_off(
     activity = _seed(db)
     block = _block_of(db, activity)
     monkeypatch.setattr(settings, "COACH_RECEIPT_CADENCE", False)
-    with patch.object(pna, "_run_opener_stage", new=AsyncMock(return_value=None)) as opener:
+    with patch.object(opener_fuller.OpenerFullerCadence, "run_opener_stage", new=AsyncMock(return_value=None)) as opener:
         await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=notifier
         )
@@ -339,7 +342,7 @@ async def test_block_complete_inert_after_rollback_to_single_shot(
     block = _block_of(db, activity)
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")  # single-shot
     with patch("app.services.coach.service.AnthropicClient") as client_cls, \
-         patch.object(pna, "_run_opener_stage") as opener:
+         patch.object(opener_fuller.OpenerFullerCadence, "run_opener_stage") as opener:
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=notifier
         )

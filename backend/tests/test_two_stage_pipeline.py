@@ -18,12 +18,11 @@ import pytest
 
 from app.core.config import settings
 from app.jobs import process_new_activity as pna
-from app.jobs.process_new_activity import (
-    _run_opener_stage,
-    _schedule_fuller_turn,
-    maybe_enqueue_fuller_turn,
-    process_fuller_turn,
-)
+from app.jobs import exchange_ops
+from app.jobs.cadence.opener_fuller import OpenerFullerCadence
+from app.jobs.exchange_ops import run_fuller_turn as process_fuller_turn
+from app.jobs.exchange_ops import schedule_fuller_turn
+from app.jobs.process_new_activity import maybe_enqueue_fuller_turn
 from app.models import Activity, DerivedMetric, Exchange, StravaAccount, User, UserProfile
 from app.services.blocks import assign_activity_to_block
 from app.services.coach.llm import MessageResult
@@ -126,8 +125,8 @@ async def test_opener_notifies_and_schedules_when_salient(db, configured, notifi
     exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
-         patch.object(pna, "_schedule_fuller_turn") as sched:
-        result = await _run_opener_stage(
+         patch.object(exchange_ops, "schedule_fuller_turn") as sched:
+        result = await OpenerFullerCadence().run_opener_stage(
             db=db, activity=activity, exchange=exchange, notifier=notifier
         )
 
@@ -151,8 +150,8 @@ async def test_fallback_opener_still_notified_and_schedules(db, configured, noti
     exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result([], stop_reason="refusal"))), \
-         patch.object(pna, "_schedule_fuller_turn") as sched:
-        result = await _run_opener_stage(
+         patch.object(exchange_ops, "schedule_fuller_turn") as sched:
+        result = await OpenerFullerCadence().run_opener_stage(
             db=db, activity=activity, exchange=exchange, notifier=notifier
         )
     assert result is not None  # the fallback opener WAS notified
@@ -165,8 +164,8 @@ async def test_opener_does_not_schedule_when_unremarkable(db, configured, notifi
     exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))), \
-         patch.object(pna, "_schedule_fuller_turn") as sched:
-        await _run_opener_stage(
+         patch.object(exchange_ops, "schedule_fuller_turn") as sched:
+        await OpenerFullerCadence().run_opener_stage(
             db=db, activity=activity, exchange=exchange, notifier=notifier
         )
     # AC1: an unremarkable run ends at the opener — no fuller scheduled.
@@ -180,8 +179,8 @@ async def test_red_flag_forces_schedule_despite_llm(db, configured, notifier):
     exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))), \
-         patch.object(pna, "_schedule_fuller_turn") as sched:
-        await _run_opener_stage(
+         patch.object(exchange_ops, "schedule_fuller_turn") as sched:
+        await OpenerFullerCadence().run_opener_stage(
             db=db, activity=activity, exchange=exchange, notifier=notifier
         )
     sched.assert_called_once()
@@ -192,13 +191,13 @@ async def test_opener_idempotent_skips_when_already_sent(db, configured, notifie
     exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
-         patch.object(pna, "_schedule_fuller_turn"):
-        await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
+         patch.object(exchange_ops, "schedule_fuller_turn"):
+        await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     # second run: opener already notified -> no-op, no second notification
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
-         patch.object(pna, "_schedule_fuller_turn") as sched2:
-        result = await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
+         patch.object(exchange_ops, "schedule_fuller_turn") as sched2:
+        result = await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert result is None
     assert len(notifier.sent) == 1
     sched2.assert_not_called()
@@ -249,22 +248,22 @@ async def test_concurrent_timer_and_reply_fuller_yields_one_notify_one_report(
 
     racing = {"second": None, "ran": False}
 
-    real_generate_fuller = pna.generate_fuller
+    real_generate_fuller = exchange_ops.generate_fuller
 
     async def generate_then_race(db_, activity_id, *args, **kwargs):
         # While the winner is "generating", a concurrent trigger arrives. With the
         # atomic claim already taken, this racing call must bail BEFORE generating.
         if not racing["ran"]:
             racing["ran"] = True
-            racing["second"] = await pna.process_fuller_turn(
+            racing["second"] = await exchange_ops.run_fuller_turn(
                 db=db_, activity=activity, notifier=notifier
             )
         return await real_generate_fuller(db_, activity_id, *args, **kwargs)
 
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()), _result(_fuller_blocks()))), \
-         patch.object(pna, "generate_fuller", side_effect=generate_then_race):
-        first = await pna.process_fuller_turn(db=db, activity=activity, notifier=notifier)
+         patch.object(exchange_ops, "generate_fuller", side_effect=generate_then_race):
+        first = await exchange_ops.run_fuller_turn(db=db, activity=activity, notifier=notifier)
 
     assert first is not None            # the winner generated + notified
     assert racing["second"] is None     # the racer bailed before generating (claim lost)
@@ -306,7 +305,7 @@ async def test_fuller_raised_exception_releases_claim_and_stays_recoverable(
     exchange = _exchange_of(db, activity)
 
     boom = RuntimeError("simulated JobTimeout / network error mid-fuller")
-    with patch.object(pna, "generate_fuller", new=AsyncMock(side_effect=boom)):
+    with patch.object(exchange_ops, "generate_fuller", new=AsyncMock(side_effect=boom)):
         with pytest.raises(RuntimeError):
             await process_fuller_turn(db=db, activity=activity, notifier=notifier)
 
@@ -334,8 +333,8 @@ async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, n
     exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))), \
-         patch.object(pna, "_schedule_fuller_turn"):
-        await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
+         patch.object(exchange_ops, "schedule_fuller_turn"):
+        await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert len(notifier.sent) == 1  # opener only
 
     empty = [_tail(headline="x", next_steps=[], risks=[], questions=[])]
@@ -351,7 +350,7 @@ async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, n
 
     # A reply re-opens the exchange — the recovery path the stuck fallback used to
     # defeat (the exchange is opened and unclosed, so maybe_enqueue re-fires).
-    with patch("app.jobs.process_new_activity.queue", Mock()):
+    with patch("app.jobs.cadence.opener_fuller.queue", Mock()):
         assert maybe_enqueue_fuller_turn(db, activity.id) is True
 
     # And the re-fired fuller now produces and notifies the real substantive turn.
@@ -370,8 +369,8 @@ async def test_two_notifications_max_opener_then_fuller(db, configured, notifier
     exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
-         patch.object(pna, "_schedule_fuller_turn"):
-        await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
+         patch.object(exchange_ops, "schedule_fuller_turn"):
+        await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         await process_fuller_turn(db=db, activity=activity, notifier=notifier)
@@ -399,8 +398,8 @@ async def test_scheduled_fuller_is_inert_after_rollback_to_single_shot(
     exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
-         patch.object(pna, "_schedule_fuller_turn"):
-        await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
+         patch.object(exchange_ops, "schedule_fuller_turn"):
+        await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert len(notifier.sent) == 1  # the opener went out before the rollback
 
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")  # rollback
@@ -427,14 +426,14 @@ async def test_opener_crash_before_schedule_recovers_on_rerun(db, configured, no
     exchange = _exchange_of(db, activity)
     with patch("app.services.coach.service.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
-         patch.object(pna, "_schedule_fuller_turn", side_effect=RuntimeError("worker died")):
+         patch.object(exchange_ops, "schedule_fuller_turn", side_effect=RuntimeError("worker died")):
         with pytest.raises(RuntimeError):
-            await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
+            await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert len(notifier.sent) == 0  # crashed before notify
 
     with patch("app.services.coach.service.AnthropicClient") as client_cls, \
-         patch.object(pna, "_schedule_fuller_turn") as sched:
-        result = await _run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
+         patch.object(exchange_ops, "schedule_fuller_turn") as sched:
+        result = await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
 
     assert result is not None
     client_cls.assert_not_called()  # idempotent re-entry, no fresh generation
@@ -466,7 +465,7 @@ async def test_schedule_fuller_turn_uses_enqueue_in(monkeypatch):
     monkeypatch.setattr(settings, "EXCHANGE_STAGE2_DELAY_SECONDS", 10800)
     monkeypatch.setattr("app.core.queue.queue", _FakeQueue())
 
-    _schedule_fuller_turn("abc-123")
+    schedule_fuller_turn("abc-123")
 
     assert captured["delta"] == timedelta(seconds=10800)
     assert captured["func"] is pna.fuller_turn_job
@@ -490,7 +489,7 @@ async def test_schedule_block_complete_uses_enqueue_in(monkeypatch):
     monkeypatch.setattr(settings, "BLOCK_GAP_SECONDS", 1800)
     monkeypatch.setattr("app.core.queue.queue", _FakeQueue())
 
-    pna._schedule_block_complete("block-1", "act-1")
+    exchange_ops.schedule_block_complete("block-1", "act-1")
 
     assert captured["delta"] == timedelta(seconds=1800)
     assert captured["func"] is pna.block_complete_job
