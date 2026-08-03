@@ -27,7 +27,15 @@ export default clerkEnabled ? enforce : () => NextResponse.next();
 export const config = {
   matcher: [
     // Run on everything except Next internals and files with an extension.
-    '/((?!_next|.*\\..*).*)',
+    //
+    // `apple-icon` is excluded by name (#228). It is a generated metadata asset
+    // like /icon.svg and /manifest.webmanifest, but unlike those it has no dot in
+    // its path, so it would otherwise land inside the gate: `auth().protect()`
+    // answers an image request with a 404, leaving the iOS home screen with no
+    // icon and a screenshot of the page in its place. Excluding it here rather
+    // than marking it a public route keeps all three metadata assets behaving
+    // identically -- outside the middleware entirely, not merely unprotected.
+    '/((?!_next|apple-icon|.*\\..*).*)',
     // Always run on API routes so the proxy can attach the session token.
     '/(api|trpc)(.*)',
   ],
