@@ -10,6 +10,7 @@ detection_confidence the same structure carries.
 from types import SimpleNamespace
 
 from app.services.analysis._orchestrator import compute_confidence
+from app.services.analysis.composition import IntervalSession
 
 
 def _activity(avg_hr=160.0):
@@ -36,7 +37,7 @@ def test_recorded_laps_structure_is_not_penalised():
 
     level, reasons = compute_confidence(
         _activity(), _full_streams(), check_in=SimpleNamespace(),
-        interval_structure=interval_structure, workout_match=workout_match,
+        interval_session=IntervalSession(structure=interval_structure), workout_match=workout_match,
     )
 
     assert "work_time_implausibly_high" not in reasons
@@ -55,7 +56,7 @@ def test_stream_sourced_structure_still_penalised():
 
     level, reasons = compute_confidence(
         _activity(), _full_streams(), check_in=SimpleNamespace(),
-        interval_structure=interval_structure, workout_match=workout_match,
+        interval_session=IntervalSession(structure=interval_structure), workout_match=workout_match,
     )
 
     assert "work_time_implausibly_high" in reasons
@@ -65,9 +66,9 @@ def test_stream_sourced_structure_still_penalised():
 
 # --- #169: interval-detection signals must not leak into the overall
 # confidence of a non-interval activity. When the structure axis did not
-# resolve to intervals, the orchestrator nulls interval_structure before this
-# call, so workout_match still reports "no_intervals_detected" but it must not
-# merge into the activity-level reasons.
+# resolve to intervals, the single gate (`IntervalSession`, #701) yields a
+# structure-less session, so workout_match still reports "no_intervals_detected"
+# but it must not merge into the activity-level reasons.
 
 def test_non_interval_activity_does_not_carry_no_intervals_detected():
     # A steady run: no interval structure, but match_planned_to_detected still
@@ -79,7 +80,7 @@ def test_non_interval_activity_does_not_carry_no_intervals_detected():
 
     level, reasons = compute_confidence(
         _activity(), _full_streams(), check_in=SimpleNamespace(),
-        interval_structure=None, workout_match=workout_match,
+        interval_session=IntervalSession(structure=None), workout_match=workout_match,
     )
 
     assert "no_intervals_detected" not in reasons
@@ -95,7 +96,7 @@ def test_non_interval_activity_with_complete_data_stays_high():
 
     level, reasons = compute_confidence(
         _activity(), _full_streams(), check_in=SimpleNamespace(),
-        interval_structure=None, workout_match=workout_match,
+        interval_session=IntervalSession(structure=None), workout_match=workout_match,
     )
 
     assert reasons == []
@@ -113,7 +114,7 @@ def test_interval_session_still_merges_its_reasons():
 
     level, reasons = compute_confidence(
         _activity(), _full_streams(), check_in=SimpleNamespace(),
-        interval_structure=interval_structure, workout_match=workout_match,
+        interval_session=IntervalSession(structure=interval_structure), workout_match=workout_match,
     )
 
     assert "high_rep_distance_variability" in reasons
