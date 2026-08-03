@@ -191,18 +191,18 @@ class TestJobTimeouts:
         # by the worker's with_scheduler), and RQ-native uses `job_timeout`, not
         # rq-scheduler's `timeout`.
         from app.core.config import settings
-        from app.jobs import process_new_activity as job_mod
+        from app.jobs import exchange_ops
 
         fake_queue = MagicMock()
         with patch("app.core.queue.queue", fake_queue):
-            job_mod._schedule_fuller_turn("act-1")
+            exchange_ops.schedule_fuller_turn("act-1")
         assert fake_queue.enqueue_in.call_args.kwargs.get("job_timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
 
     def test_scheduled_block_complete_sets_timeout(self):
         from app.core.config import settings
-        from app.jobs import process_new_activity as job_mod
+        from app.jobs import exchange_ops
 
         fake_queue = MagicMock()
         with patch("app.core.queue.queue", fake_queue):
-            job_mod._schedule_block_complete("block-1", "act-1")
+            exchange_ops.schedule_block_complete("block-1", "act-1")
         assert fake_queue.enqueue_in.call_args.kwargs.get("job_timeout") == settings.RQ_JOB_TIMEOUT_SECONDS
