@@ -1493,8 +1493,10 @@ def _novelty_axis_history(db: Session, activity: Activity) -> list[AxisSnapshot]
 # prompt; the PROMPT-GATED signals are dropped from serialization when the active
 # prompt does not carry the feature, keeping the pack byte-stable elsewhere.
 #
-# #203 slots a stored-artifact adapter in by swapping a signal's compute for a
-# read-stored one of the SAME (db, activity, as_of) shape — no call-site change.
+# A stored-artifact adapter is just a signal whose compute reads a stored row instead
+# of scanning history, at the SAME (db, activity, as_of) shape and gate: `_MEMORY_SIGNAL`
+# already is one, and #203 slots adherence/calibration in the same way, with no
+# call-site change. See read_time_signals.py for why the seam stays (#699 part b).
 _CALIBRATION_SIGNAL = ReadTimeSignal("calibration", _build_calibration_context)
 _ADHERENCE_SIGNAL = ReadTimeSignal("adherence", _build_adherence_context)
 _TRAINING_LOAD_SIGNAL = ReadTimeSignal(
