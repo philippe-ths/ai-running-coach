@@ -31,6 +31,18 @@ layer. A transition function never sends, never schedules, never generates; it r
 and mutates the Exchange/Activity sentinels under the at-most-once invariant and
 commits.
 
+Two categories live here, and the difference is the transaction (#740):
+
+- STATE TRANSITIONS (`open_exchange`, `mark_done`, `claim_fuller`, …) advance a live
+  exchange and COMMIT, because each is a standalone at-most-once decision that must
+  land before the caller does anything irreversible with the answer.
+- STRUCTURAL changes (`create_exchange_for_block`, `absorb_exchange`,
+  `delete_exchange_for_block`) construct/merge/remove the row itself and DO NOT
+  commit — they participate in the caller's transaction. The block-correction paths
+  in `services/blocks.py` are each one transaction (membership, bounds, primary, and
+  the exchange row land together or not at all), so a structural function that
+  committed mid-correction would change their failure semantics.
+
 Sentinel posture mirrors A4 exactly: a notification sentinel is set only on a
 successful send (the job calls `mark_notification_sent` AFTER the send returns), left
 null on failure so the stage stays re-sendable, and never reset by a `force=true`
@@ -38,8 +50,9 @@ regeneration (no transition here ever clears a sentinel).
 """
 
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Iterator, Optional
 
 from sqlalchemy import func, update
 from sqlalchemy.orm import Session
@@ -104,16 +117,111 @@ def get_exchange_for_block(db: Session, block_id) -> Optional[Exchange]:
     return db.query(Exchange).filter(Exchange.block_id == block_id).first()
 
 
+def require_exchange_for_block(db: Session, block_id) -> Exchange:
+    """The Exchange owning this block, raising `NoResultFound` when there is none.
+
+    The strict resolver for the block-CORRECTION paths (split/merge), where a missing
+    exchange is a broken invariant rather than a state to degrade around — every block
+    is created with its exchange. Raising (rather than returning None and crashing later
+    on an attribute) keeps the correction endpoints' failure mode exactly as it was: the
+    API layer catches only `ValueError`, so this surfaces as a 500, not a spurious 422.
+    """
+    return db.query(Exchange).filter(Exchange.block_id == block_id).one()
+
+
 def ensure_exchange_for_block(db: Session, block: Block) -> Exchange:
     """The block's Exchange, creating one if it is somehow missing (defensive: blocks are
     created WITH their exchange in `blocks.py`, A1). Idempotent get-or-create, so a
-    block-complete check that finds no row still resolves an exchange rather than crashing."""
+    block-complete check that finds no row still resolves an exchange rather than crashing.
+
+    The one COMMITTING creator: the job layer calls it outside any correction transaction,
+    so the recovered row must be durable before the block-complete check proceeds.
+    """
     exchange = get_exchange_for_block(db, block.id)
     if exchange is None:
-        exchange = Exchange(user_id=block.user_id, block_id=block.id)
-        db.add(exchange)
+        exchange = create_exchange_for_block(db, block)
         db.commit()
     return exchange
+
+
+# --- structural row changes (the caller's transaction, no commit) -------------
+
+#: The stage sentinels a block CORRECTION carries across, so a split or merge can
+#: never re-open delivery: whatever had already been sent stays marked as sent on
+#: every resulting exchange (ADR 0011 — corrections never re-fire).
+#:
+#: `done_at` is deliberately absent, preserving the behaviour these corrections have
+#: always had: it is the runner's completion tap (#296), not a delivery stage, and a
+#: dropped tap cannot cause a re-send (the `fuller_sent_at` inheritance is what stops
+#: a CLOSED exchange re-firing). Adding it would be a behaviour change — tracked
+#: separately rather than smuggled into a behaviour-preserving refactor.
+STAGE_SENTINELS = ("opened_at", "opener_sent_at", "fuller_sent_at")
+
+
+def create_exchange_for_block(
+    db: Session, block: Block, *, inherit_from: Optional[Exchange] = None
+) -> Exchange:
+    """Construct the Exchange row for a block (A1: created WITH the block, so the
+    one-exchange-per-block invariant is kept atomically at block creation).
+
+    `inherit_from` carries the `STAGE_SENTINELS` across from another exchange — the
+    split correction, where the new half must start out already knowing what has been
+    delivered so the correction cannot re-open delivery.
+
+    Structural: adds to the session but does NOT commit, so it lands with the rest of
+    the caller's block work (or not at all).
+    """
+    exchange = Exchange(user_id=block.user_id, block_id=block.id)
+    if inherit_from is not None:
+        for sentinel in STAGE_SENTINELS:
+            setattr(exchange, sentinel, getattr(inherit_from, sentinel))
+    db.add(exchange)
+    return exchange
+
+
+def absorb_exchange(db: Session, surviving: Exchange, absorbed: Exchange) -> Exchange:
+    """Fold one exchange into another and delete the absorbed row (the merge correction).
+
+    The survivor takes the MOST-ADVANCED value of each stage sentinel from either side,
+    so a merge can never re-fire a stage that either block had already delivered.
+
+    Structural: no commit — the merge is one transaction with the membership and bounds
+    changes. Returns the survivor.
+    """
+    for sentinel in STAGE_SENTINELS:
+        setattr(
+            surviving,
+            sentinel,
+            _latest(getattr(surviving, sentinel), getattr(absorbed, sentinel)),
+        )
+    db.delete(absorbed)
+    return surviving
+
+
+def delete_exchange_for_block(db: Session, block_id) -> bool:
+    """Delete the block's Exchange row, if it has one. Returns True if one was deleted.
+
+    Used when a block is emptied (its last activity was soft-deleted, #238): the row is
+    REMOVED rather than reset, so the at-most-once delivery guarantee is preserved by
+    absence — no notification can re-fire against a row that no longer exists.
+
+    Structural: no commit, and no flush — the caller sequences the flush, because the
+    Exchange must be gone before the Block row it references is deleted (FK order).
+    """
+    exchange = get_exchange_for_block(db, block_id)
+    if exchange is None:
+        return False
+    db.delete(exchange)
+    return True
+
+
+def _latest(a: Optional[datetime], b: Optional[datetime]) -> Optional[datetime]:
+    """The most-advanced sentinel: non-null wins; both set, the later."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return max(a, b)
 
 
 # --- state transitions (each guarded, idempotent, committing) -----------------
@@ -245,6 +353,58 @@ def claim_fuller(db: Session, exchange: Exchange, *, now: Optional[datetime] = N
         # Keep the in-memory instance consistent with the row the winner just claimed.
         exchange.fuller_sent_at = stamp
     return won
+
+
+class FullerClaim:
+    """The outcome of one `fuller_claim` attempt: whether this caller WON the turn, and
+    whether the completed work earned the right to KEEP the claim.
+
+    `won` is False for a losing concurrent trigger (or a late timer after an early reply
+    already closed the exchange) — it must bail without generating. The winner calls
+    `keep()` only once a notification has genuinely gone out; anything else (no report, a
+    fallback report, no channel, a send failure, a raised exception) leaves the claim
+    unkept and `fuller_claim` releases it on the way out.
+    """
+
+    __slots__ = ("won", "kept")
+
+    def __init__(self, won: bool) -> None:
+        self.won = won
+        self.kept = False
+
+    def keep(self) -> None:
+        """Keep the claim: the send succeeded, so `fuller_sent_at` stays set and the
+        exchange stays CLOSED. Irreversible by design — the exchange has spoken."""
+        self.kept = True
+
+
+@contextmanager
+def fuller_claim(db: Session, exchange: Exchange) -> Iterator[FullerClaim]:
+    """Claim the fuller turn for the length of a block, releasing it on every exit that
+    did not end in a successful send (#740).
+
+    The claim/release DANCE, owned here rather than hand-written at the call site. The
+    rule it enforces is subtle and was learned the hard way (#506/#114): `claim_fuller`
+    sets `fuller_sent_at`, which doubles as the CLOSED / at-most-once sentinel, so EVERY
+    path between the claim and a genuinely-successful send must put it back — not only
+    the clean early returns but a RAISED exception too (an RQ JobTimeoutException over
+    the ~120-360s generation window, a context-build or network error). Miss one and the
+    exchange exits CLOSED with no notification, and the RQ retry's claim finds the
+    sentinel set and bails, stranding the turn — strictly worse than the pre-claim
+    null-on-crash posture.
+
+    A LOSING caller never releases: the sentinel it found set belongs to the winner, and
+    clearing it would re-arm a turn somebody else is running.
+
+    The caller keeps SENDING (building the message, reading the report row) — this owns
+    only the row state, per the module boundary.
+    """
+    claim = FullerClaim(claim_fuller(db, exchange))
+    try:
+        yield claim
+    finally:
+        if claim.won and not claim.kept:
+            release_fuller_claim(db, exchange)
 
 
 def release_fuller_claim(db: Session, exchange: Exchange) -> None:

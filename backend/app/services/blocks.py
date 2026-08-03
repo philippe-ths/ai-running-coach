@@ -13,6 +13,13 @@ activity starts a new block (ADR 0011: open-absorbs, closed-starts-new).
 Split/merge are the runner's corrections, exposed as pure functions over a
 member list here and wired to API endpoints separately; corrections set
 `user_corrected` and never re-fire a notification.
+
+This module owns BLOCK shape (membership, bounds, primary) and calls
+`coach.exchange_lifecycle` for every Exchange row it touches — creation on
+assignment/split, sentinel inheritance on merge, removal when a block empties,
+and the closed-never-absorbs read (#740). The correction paths are each ONE
+transaction, so those lifecycle calls are the structural, non-committing kind:
+the exchange row lands with the membership and bounds changes, or not at all.
 """
 
 import logging
@@ -24,7 +31,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Activity, Block, CoachReport, Exchange
+from app.models import Activity, Block, CoachReport
+from app.services.coach import exchange_lifecycle as lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +99,7 @@ def assign_activity_to_block(
         )
         db.add(block)
         db.flush()
-        db.add(Exchange(user_id=activity.user_id, block_id=block.id))
+        lifecycle.create_exchange_for_block(db, block)
         activity.block_id = block.id
         db.commit()
         return block
@@ -125,8 +133,8 @@ def _find_joinable_block(db: Session, activity: Activity, gap: int) -> Optional[
         .all()
     )
     for block in candidates:
-        exchange = db.query(Exchange).filter(Exchange.block_id == block.id).first()
-        if exchange is not None and exchange.fuller_sent_at is not None:
+        exchange = lifecycle.get_exchange_for_block(db, block.id)
+        if exchange is not None and lifecycle.is_closed(exchange):
             continue  # closed-starts-new (ADR 0011)
         return block
     return None
@@ -151,7 +159,7 @@ def split_block(db: Session, block: Block, *, at_activity: Activity) -> tuple[Bl
     if not left_members or not right_members:
         raise ValueError("split would leave an empty block")
 
-    original_exchange = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+    original_exchange = lifecycle.require_exchange_for_block(db, block.id)
 
     new_block = Block(
         user_id=block.user_id,
@@ -162,15 +170,7 @@ def split_block(db: Session, block: Block, *, at_activity: Activity) -> tuple[Bl
     )
     db.add(new_block)
     db.flush()
-    db.add(
-        Exchange(
-            user_id=block.user_id,
-            block_id=new_block.id,
-            opened_at=original_exchange.opened_at,
-            opener_sent_at=original_exchange.opener_sent_at,
-            fuller_sent_at=original_exchange.fuller_sent_at,
-        )
-    )
+    lifecycle.create_exchange_for_block(db, new_block, inherit_from=original_exchange)
     for member in right_members:
         member.block_id = new_block.id
     db.flush()
@@ -194,15 +194,12 @@ def merge_blocks(db: Session, first: Block, second: Block) -> Block:
     if first.id == second.id:
         raise ValueError("cannot merge a block with itself")
 
-    surviving = db.query(Exchange).filter(Exchange.block_id == first.id).one()
-    absorbed = db.query(Exchange).filter(Exchange.block_id == second.id).one()
-    surviving.opened_at = _latest(surviving.opened_at, absorbed.opened_at)
-    surviving.opener_sent_at = _latest(surviving.opener_sent_at, absorbed.opener_sent_at)
-    surviving.fuller_sent_at = _latest(surviving.fuller_sent_at, absorbed.fuller_sent_at)
+    surviving = lifecycle.require_exchange_for_block(db, first.id)
+    absorbed = lifecycle.require_exchange_for_block(db, second.id)
+    lifecycle.absorb_exchange(db, surviving, absorbed)
 
     for member in db.query(Activity).filter(Activity.block_id == second.id).all():
         member.block_id = first.id
-    db.delete(absorbed)
     db.flush()
     db.delete(second)
 
@@ -257,9 +254,7 @@ def remove_activity_from_block(db: Session, activity: Activity) -> None:
     if not survivors:
         # Block is empty: clean it up so it cannot attract late arrivals or
         # trigger an opener. Delete Exchange first (FK constraint order).
-        exchange = db.query(Exchange).filter(Exchange.block_id == block_id).first()
-        if exchange is not None:
-            db.delete(exchange)
+        if lifecycle.delete_exchange_for_block(db, block_id):
             db.flush()
         db.delete(block)
     else:
@@ -269,15 +264,6 @@ def remove_activity_from_block(db: Session, activity: Activity) -> None:
         _recompute_block(db, block, force_primary=True)
 
     db.commit()
-
-
-def _latest(a: Optional[datetime], b: Optional[datetime]) -> Optional[datetime]:
-    """The most-advanced sentinel: non-null wins; both set, the later."""
-    if a is None:
-        return b
-    if b is None:
-        return a
-    return max(a, b)
 
 
 def _primary_has_report(db: Session, block: Block) -> bool:

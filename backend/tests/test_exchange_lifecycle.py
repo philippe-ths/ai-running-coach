@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import NoResultFound
 
 from app.core.config import settings
 from app.models import Activity, DerivedMetric, Exchange, User
@@ -19,6 +20,11 @@ from app.services.coach import exchange_lifecycle as lifecycle
 
 
 # --- fixtures -----------------------------------------------------------------
+
+
+def _aware(dt: datetime) -> datetime:
+    """SQLite returns naive datetimes; normalise for comparison against UTC."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def _user(db) -> User:
@@ -305,3 +311,209 @@ def test_unknown_sentinel_is_rejected(db):
         lifecycle.notification_already_sent(ex, "receipt_sent_at")
     with pytest.raises(ValueError):
         lifecycle.mark_notification_sent(db, ex, "opened_at")
+
+
+# --- structural row changes, absorbed from blocks.py (#740) -------------------
+# The block-correction paths used to open-code these. The block-level tests
+# (test_blocks_service.py) still pin the corrections end-to-end; these pin the
+# shared implementations at the interface, including the branches a correction
+# test never reaches (mixed nulls, a missing row, the transaction posture).
+
+
+def test_create_exchange_for_block_starts_a_clean_exchange(db):
+    ex = _exchange(db)
+    block = ex.block
+    db.delete(ex)
+    db.commit()
+
+    created = lifecycle.create_exchange_for_block(db, block)
+    db.flush()
+
+    assert created.block_id == block.id
+    assert created.user_id == block.user_id
+    for sentinel in lifecycle.STAGE_SENTINELS:
+        assert getattr(created, sentinel) is None
+    assert created.done_at is None
+
+
+def test_create_exchange_for_block_inherits_every_stage_sentinel(db):
+    # The split correction: the new half must start out already knowing what has been
+    # delivered, so a correction can never re-open delivery (ADR 0011).
+    stamp = datetime(2026, 5, 27, 10, 0, 0, tzinfo=timezone.utc)
+    source = _exchange(db, opened_at=stamp, opener_sent_at=stamp, fuller_sent_at=stamp)
+    target = _exchange(db)
+    block = target.block
+    db.delete(target)
+    db.commit()
+
+    created = lifecycle.create_exchange_for_block(db, block, inherit_from=source)
+    db.flush()
+
+    for sentinel in lifecycle.STAGE_SENTINELS:
+        assert getattr(created, sentinel) is not None, f"{sentinel} was not inherited"
+    assert lifecycle.is_closed(created) is True
+
+
+def test_create_exchange_for_block_does_not_inherit_the_done_tap(db):
+    # `done_at` is deliberately outside STAGE_SENTINELS: it is the runner's completion
+    # tap (#296), not a delivery stage. This pins the long-standing behaviour so a
+    # future change to the inherited set is a deliberate decision, not a silent one.
+    stamp = datetime(2026, 5, 27, 10, 0, 0, tzinfo=timezone.utc)
+    source = _exchange(db, opened_at=stamp, done_at=stamp)
+    target = _exchange(db)
+    block = target.block
+    db.delete(target)
+    db.commit()
+
+    created = lifecycle.create_exchange_for_block(db, block, inherit_from=source)
+    db.flush()
+
+    assert created.opened_at is not None  # a stage sentinel: inherited
+    assert created.done_at is None  # the tap: not inherited
+
+
+def test_create_exchange_for_block_does_not_commit(db):
+    # Structural, not a transition: the exchange must land with the rest of the
+    # caller's block work or not at all, so a correction that fails part-way through
+    # leaves no orphan exchange behind.
+    ex = _exchange(db)
+    block = ex.block
+    db.delete(ex)
+    db.commit()
+
+    savepoint = db.begin_nested()
+    created = lifecycle.create_exchange_for_block(db, block)
+    db.flush()
+    assert lifecycle.get_exchange_for_block(db, block.id) is created
+    savepoint.rollback()
+    db.expire_all()
+
+    assert lifecycle.get_exchange_for_block(db, block.id) is None
+
+
+def test_absorb_exchange_keeps_the_later_of_two_set_sentinels(db):
+    earlier = datetime(2026, 5, 27, 10, 0, 0, tzinfo=timezone.utc)
+    later = datetime(2026, 5, 27, 12, 0, 0, tzinfo=timezone.utc)
+    surviving = _exchange(db, opener_sent_at=earlier)
+    absorbed = _exchange(db, opener_sent_at=later)
+    # A merge reads both exchanges from the DB, so compare them as the DB returns
+    # them (SQLite drops the tz that Postgres preserves; a mixed in-memory/DB pair
+    # is not a shape the correction path can produce).
+    db.expire_all()
+
+    lifecycle.absorb_exchange(db, surviving, absorbed)
+
+    assert _aware(surviving.opener_sent_at) == later
+
+
+def test_absorb_exchange_takes_a_set_sentinel_from_either_side(db):
+    # The most-advanced value wins whichever side carries it: a merge must never
+    # re-fire a stage that EITHER block had already delivered.
+    stamp = datetime(2026, 5, 27, 10, 0, 0, tzinfo=timezone.utc)
+    surviving = _exchange(db, opened_at=stamp)  # absorbed side has the fuller
+    absorbed = _exchange(db, fuller_sent_at=stamp)
+
+    lifecycle.absorb_exchange(db, surviving, absorbed)
+
+    assert _aware(surviving.opened_at) == stamp  # kept its own
+    assert _aware(surviving.fuller_sent_at) == stamp  # took the absorbed side's
+    assert lifecycle.is_closed(surviving) is True
+
+
+def test_absorb_exchange_deletes_the_absorbed_row(db):
+    surviving = _exchange(db)
+    absorbed = _exchange(db)
+    absorbed_block_id = absorbed.block_id
+
+    lifecycle.absorb_exchange(db, surviving, absorbed)
+    db.flush()
+
+    assert lifecycle.get_exchange_for_block(db, absorbed_block_id) is None
+
+
+def test_delete_exchange_for_block_removes_the_row(db):
+    ex = _exchange(db)
+    block_id = ex.block_id
+
+    assert lifecycle.delete_exchange_for_block(db, block_id) is True
+    db.flush()
+    assert lifecycle.get_exchange_for_block(db, block_id) is None
+
+
+def test_delete_exchange_for_block_reports_when_there_was_none(db):
+    # The emptied-block cleanup must not assume a row exists; the caller only
+    # sequences its FK-ordering flush when something was actually deleted.
+    assert lifecycle.delete_exchange_for_block(db, uuid4()) is False
+
+
+def test_require_exchange_for_block_returns_the_row(db):
+    ex = _exchange(db)
+    assert lifecycle.require_exchange_for_block(db, ex.block_id) is ex
+
+
+def test_require_exchange_for_block_raises_when_absent(db):
+    # The correction paths treat a missing exchange as a broken invariant, and the
+    # blocks API catches only ValueError — so this must NOT degrade into a 422.
+    with pytest.raises(NoResultFound):
+        lifecycle.require_exchange_for_block(db, uuid4())
+
+
+# --- the fuller-turn claim/release dance (#740) -------------------------------
+
+
+def test_fuller_claim_kept_leaves_the_exchange_closed(db):
+    ex = _exchange(db, opened_at=datetime.now(timezone.utc))
+
+    with lifecycle.fuller_claim(db, ex) as claim:
+        assert claim.won is True
+        claim.keep()  # the send succeeded
+
+    db.refresh(ex)
+    assert ex.fuller_sent_at is not None
+    assert lifecycle.is_closed(ex) is True
+
+
+def test_fuller_claim_releases_when_the_turn_was_not_kept(db):
+    # No report / fallback report / no channel / send failure: the caller never keeps
+    # the claim, so the stage must stay re-sendable (#114).
+    ex = _exchange(db, opened_at=datetime.now(timezone.utc))
+
+    with lifecycle.fuller_claim(db, ex) as claim:
+        assert claim.won is True
+
+    db.refresh(ex)
+    assert ex.fuller_sent_at is None
+
+
+def test_fuller_claim_releases_on_a_raised_exception(db):
+    # The failure the claim was most likely to strand: a raise mid-generation (an RQ
+    # job timeout over the ~120-360s window) must not leave the exchange CLOSED with
+    # no notification, or the RQ retry's claim finds the sentinel set and bails.
+    ex = _exchange(db, opened_at=datetime.now(timezone.utc))
+
+    with pytest.raises(RuntimeError):
+        with lifecycle.fuller_claim(db, ex) as claim:
+            assert claim.won is True
+            raise RuntimeError("generation blew up")
+
+    db.refresh(ex)
+    assert ex.fuller_sent_at is None
+
+
+def test_losing_fuller_claim_never_releases_the_winners(db):
+    # The hazard the `won` guard exists for: the sentinel a loser finds set belongs to
+    # the winner, so releasing it would re-arm a turn somebody else is still running.
+    ex = _exchange(db, opened_at=datetime.now(timezone.utc))
+
+    with lifecycle.fuller_claim(db, ex) as winner:
+        assert winner.won is True
+
+        with lifecycle.fuller_claim(db, ex) as loser:
+            assert loser.won is False
+
+        db.refresh(ex)
+        assert ex.fuller_sent_at is not None, "the loser's exit cleared the winner's claim"
+        winner.keep()
+
+    db.refresh(ex)
+    assert ex.fuller_sent_at is not None
