@@ -96,6 +96,8 @@ Clerk production instance, and verification) is **[custom-domain.md](custom-doma
   not gated this way (it serves no HTTP). Belt-and-suspenders: set Railway's web Health Check Path to
   `/api/health` so the cutover also waits on readiness.
 - ADR 0005 originally planned magic-link sessions for this layer; that mechanism was superseded by Clerk social login (ADR 0022), which shipped in Phase 2. `BasicAuthMiddleware` was repurposed as the service secret rather than removed.
+- **Known gap (#626): production authenticates against a Clerk _development_ instance (`fine-octopus-89`), not a production one.** A dev instance serves its account UI from a different site than the app and stitches the session across origins with a URL token, so a fresh signup on a new device can strand on Clerk's own `accounts.dev` page with a "Development mode" banner. It also caps around 100 users and uses Clerk's shared OAuth credentials. The owner has accepted this up to ~100 signups, so it is tracked rather than blocking. The custom-domain prerequisite was met on 2026-07-16. Runbook: **[clerk-production-cutover.md](clerk-production-cutover.md)**.
+- The `azp` allowlist is armed by default with no extra env var: when `CLERK_AUTHORIZED_PARTIES` is unset, `clerk_authorized_parties_list` derives it from `CORS_ALLOWED_ORIGINS` plus `APP_BASE_URL`, so a token minted by the same Clerk instance for a different frontend origin is rejected (#707).
 
 ### Configuration (where each secret lives)
 
