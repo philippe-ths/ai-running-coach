@@ -17,7 +17,7 @@ default pack.
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, TypeVar
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, undefer
@@ -427,28 +427,31 @@ def _build_stance_context(
     )
 
 
-def _build_training_load_context(
-    db: Session, activity: Activity, as_of: datetime
-) -> Optional[TrainingLoadContext]:
-    """The P3 training-load readiness pack section (ADR 0016), or None.
+_ReadinessSectionT = TypeVar("_ReadinessSectionT", TrainingLoadContext, ReadinessContext)
 
-    A read-time history-scan signal behind the shared `ReadTimeSignal` seam (#492):
-    the `TRAINING_LOAD` gating is applied once in `gather`, so this `compute` is
-    reached ONLY under a training-load-aware prompt — the section is dropped from
-    serialization when None, exactly like `corpus`/`stance`/`block`. Computed at read
-    time (mirroring M9 calibration) as of this activity's LOCAL day (#507, the
-    `local_start` convention the volume signal uses), so this run is in the acute load,
-    the daily series agrees with the volume signal on the day boundary, and a regen of
-    an old activity reproduces the condition as of then. A tier-3 deterministic FACT the coach may cite, but it never
-    overrides the run's re-derived DerivedMetric or the safety floor (prompt rule 27).
-    Degrades to None when no history is available (build_readiness guards)."""
+
+def _build_readiness_section(
+    db: Session, activity: Activity, section_cls: type[_ReadinessSectionT]
+) -> Optional[_ReadinessSectionT]:
+    """The runner's current-condition readiness read, projected into `section_cls`.
+
+    ONE read behind the two keyed twins: `training_load` (P3/ADR 0016) and its ADR 0026
+    Slice 2 rename `right_now.readiness` carry byte-for-byte the same content under
+    different pack keys, so the read and the projection live here once and the two
+    builders below differ only in which model they fill (#704).
+
+    Computed at read time (mirroring M9 calibration) as of this activity's LOCAL day
+    (#507, the `local_start` convention the volume signal uses), so this run is in the
+    acute load, the daily series agrees with the volume signal on the day boundary, and
+    a regen of an old activity reproduces the condition as of then. Degrades to None when
+    no history is available (build_readiness guards)."""
     # #507: anchor on the runner's LOCAL day so the daily-load series buckets by local
     # calendar day, agreeing with the volume signal on the day boundary (a late-evening
     # run that rolled to the next UTC day stays on its local day across both signals).
     model = build_readiness(db, activity.user_id, activity.local_start)
     if model is None:
         return None
-    return TrainingLoadContext(
+    return section_cls(
         fitness=model.fitness,
         fatigue=model.fatigue,
         form=model.form,
@@ -459,6 +462,21 @@ def _build_training_load_context(
         warming_up=model.warming_up,
         sample_count=model.sample_count,
     )
+
+
+def _build_training_load_context(
+    db: Session, activity: Activity, as_of: datetime
+) -> Optional[TrainingLoadContext]:
+    """The P3 training-load readiness pack section (ADR 0016), or None.
+
+    A read-time history-scan signal behind the shared `ReadTimeSignal` seam (#492):
+    the `TRAINING_LOAD` gating is applied once in `gather`, so this `compute` is
+    reached ONLY under a training-load-aware prompt — the section is dropped from
+    serialization when None, exactly like `corpus`/`stance`/`block`. A tier-3
+    deterministic FACT the coach may cite, but it never overrides the run's re-derived
+    DerivedMetric or the safety floor (prompt rule 27). The read itself is
+    `_build_readiness_section`, shared with the `readiness` twin."""
+    return _build_readiness_section(db, activity, TrainingLoadContext)
 
 
 def _build_training_volume_context(
@@ -521,25 +539,12 @@ def _build_readiness_context(
     The renamed successor to `training_load` (identical content, coaching-question key),
     behind the shared `ReadTimeSignal` seam gated on `READINESS` — reached ONLY under a
     readiness-aware prompt (the new grouped prompt), so it is dropped from serialization
-    (byte-stable) under every prior prompt that still reads `training_load`. Same read as
-    `_build_training_load_context`: the runner's condition as of this run's LOCAL day, so
-    the run is in the acute load. A deterministic FACT the coach may cite; never overrides
-    the run's re-derived DerivedMetric or the safety floor. Degrades to None when no
-    history is available (build_readiness guards)."""
-    model = build_readiness(db, activity.user_id, activity.local_start)
-    if model is None:
-        return None
-    return ReadinessContext(
-        fitness=model.fitness,
-        fatigue=model.fatigue,
-        form=model.form,
-        ramp_rate=model.ramp_rate,
-        condition=model.condition,
-        trend=model.trend,
-        ramp_aggressive=model.ramp_aggressive,
-        warming_up=model.warming_up,
-        sample_count=model.sample_count,
-    )
+    (byte-stable) under every prior prompt that still reads `training_load`. Literally the
+    same read as `_build_training_load_context` — both delegate to
+    `_build_readiness_section` and differ only in the model they fill (#704) — so the two
+    keys can never drift apart while both are live. A deterministic FACT the coach may
+    cite; never overrides the run's re-derived DerivedMetric or the safety floor."""
+    return _build_readiness_section(db, activity, ReadinessContext)
 
 
 def _query_recent_checkins(db: Session, activity_ids: list) -> dict:

@@ -140,3 +140,24 @@ def test_grouped_v2_pack_strict_reparses(db):
         reloaded = CoachContextPack.load(shape)
         assert reloaded.recent_weeks is not None
         assert reloaded.readiness is not None
+
+
+def test_readiness_and_training_load_twins_carry_identical_content(db):
+    """#704: `readiness` is a keyed RENAME of `training_load` — same read, same fields,
+    different pack key. Both builders delegate to one `_build_readiness_section`, so this
+    pins the property that makes the fold safe: for the same activity, whichever key the
+    active prompt emits, the content is identical. If the two ever drift, one of the two
+    live prompt families is being fed a different condition read than the other."""
+    activity = _seed(db)
+
+    old = build_context_pack(db, activity, prompt_id="coach_message_lean_v1")
+    new = build_context_pack(db, activity, prompt_id="coach_message_lean_grouped_v2")
+
+    assert old.training_load is not None
+    assert new.readiness is not None
+    assert old.training_load.model_dump() == new.readiness.model_dump()
+    # And the serialized sections agree too, not just the models.
+    assert (
+        old.to_serializable_dict()["training_load"]
+        == new.to_serializable_dict()["readiness"]
+    )
