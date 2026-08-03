@@ -37,6 +37,20 @@ const plexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: 'AI Running Coach',
   description: 'Local-first running advice',
+  // #228 prerequisite. `appleWebApp.capable` emits
+  // <meta name="apple-mobile-web-app-capable" content="yes">, which is the one
+  // thing that makes iOS launch a home-screen icon in a standalone window
+  // instead of a Safari tab. Without it the #619 nudge told people to open from
+  // the home screen into an experience that was never actually standalone, and
+  // PwaOpenInAppBanner's `isStandalone()` could never return true, so the nudge
+  // showed inside the app it was pointing at.
+  // `statusBarStyle: 'default'` keeps the status bar opaque and matched to the
+  // page background; 'black-translucent' would slide content under the clock.
+  appleWebApp: {
+    capable: true,
+    title: 'Coach',
+    statusBarStyle: 'default',
+  },
 };
 
 // Lock the viewport so the app behaves like a native screen: no pinch-to-zoom
