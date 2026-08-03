@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.models import Activity, Block, CoachReport, Exchange, User
+from app.services.coach import exchange_lifecycle as lifecycle
 from app.services.blocks import activity_end as activity_end_of
 from app.services.blocks import (
     assign_activity_to_block,
@@ -248,6 +249,64 @@ def test_split_block_at_activity_corrects_grouping_without_refiring(db):
     new_exchange = db.query(Exchange).filter(Exchange.block_id == right.id).one()
     assert new_exchange.opener_sent_at is not None
     assert new_exchange.fuller_sent_at is not None
+
+
+def test_split_block_carries_the_done_tap_to_both_halves(db):
+    # #750: the defect window is tapped-done-but-not-yet-closed (the full report is
+    # scheduled, `fuller_sent_at` still null). Before the fix the new half started with
+    # `done_at` null, so a second tap read as the first and scheduled a SECOND
+    # generation. Both halves must now refuse that tap.
+    user = _make_user(db)
+    block, walk, run = _grouped_pair(db, user)
+    exchange = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+    exchange.opened_at = datetime.now(timezone.utc)
+    exchange.done_at = datetime.now(timezone.utc)
+    db.commit()
+
+    left, right = split_block(db, block, at_activity=run)
+
+    for half in (left, right):
+        ex = db.query(Exchange).filter(Exchange.block_id == half.id).one()
+        assert ex.done_at is not None, f"block {half.id} lost the done tap"
+        assert lifecycle.mark_done(db, ex) is False, "a second tap would re-schedule"
+
+
+def test_split_block_leaves_an_untapped_exchange_tappable(db):
+    # The complement: a correction on a session the runner never marked done must not
+    # invent a tap, or the new half could never trigger its own full report early.
+    user = _make_user(db)
+    block, walk, run = _grouped_pair(db, user)
+    exchange = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+    exchange.opened_at = datetime.now(timezone.utc)
+    db.commit()
+
+    left, right = split_block(db, block, at_activity=run)
+
+    for half in (left, right):
+        ex = db.query(Exchange).filter(Exchange.block_id == half.id).one()
+        assert ex.done_at is None
+        assert lifecycle.mark_done(db, ex) is True
+
+
+def test_merge_blocks_carries_the_done_tap_from_the_absorbed_side(db):
+    # #750: the tap lived on the block being absorbed, whose row is deleted by the
+    # merge. The survivor must take it, or the tap is lost with the row.
+    user = _make_user(db)
+    first = _make_activity(db, user, start=T0, elapsed=1500, type="Walk")
+    block1 = assign_activity_to_block(db, first, gap_seconds=GAP)
+    second_start = activity_end_of(first) + timedelta(seconds=GAP * 2)
+    second = _make_activity(db, user, start=second_start, elapsed=2400, type="Run")
+    block2 = assign_activity_to_block(db, second, gap_seconds=GAP)
+    ex2 = db.query(Exchange).filter(Exchange.block_id == block2.id).one()
+    ex2.opened_at = datetime.now(timezone.utc)
+    ex2.done_at = datetime.now(timezone.utc)
+    db.commit()
+
+    merged = merge_blocks(db, block1, block2)
+
+    survivor = db.query(Exchange).filter(Exchange.block_id == merged.id).one()
+    assert survivor.done_at is not None
+    assert lifecycle.mark_done(db, survivor) is False
 
 
 def test_merge_blocks_combines_members_without_refiring(db):
