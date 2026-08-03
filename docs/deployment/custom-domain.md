@@ -3,6 +3,19 @@
 Putting a custom domain in front of the frontend (Vercel) and backend (Railway)
 so user-visible URLs are stable for the multi-user rollout.
 
+> **Executed 2026-07-16.** Production runs on **pulsecoachai.com** (Cloudflare
+> registrar, apex canonical → Vercel, `www` 307 → apex; `APP_BASE_URL` and
+> `CORS_ALLOWED_ORIGINS` updated on Railway `web` + `worker`). The backend
+> intentionally stayed on its Railway URL, so the Strava callback and webhook
+> steps below were not run. Kept as the generic procedure for a future domain
+> change.
+>
+> The Clerk steps flagged "(Phase 2)" below are **not** done — production still
+> runs the Clerk *development* instance. They have moved to their own runbook:
+> **[clerk-production-cutover.md](clerk-production-cutover.md)** (#626). Follow
+> that rather than the one-line reminders here, which exist only to keep this
+> checklist self-consistent.
+
 ## The one thing to know: this is a config + DNS change, NOT a code change
 
 The codebase carries **no hardcoded production hostnames**. Every URL on the
