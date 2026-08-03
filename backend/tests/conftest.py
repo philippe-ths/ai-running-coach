@@ -1,13 +1,34 @@
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+import os
 
-from app.core.config import settings
-from app.main import app
-from app.db.session import get_db
-from app.db.base import Base
+# Pin the session to CI's environment BEFORE any app import (#752). `Settings` is
+# a module-level singleton built the moment `app.core.config` is imported, so
+# these must be set first — hence the imports below rather than at the top.
+#
+# A developer `backend/.env` carries prod-parity coach configuration (a lean
+# prompt id, the receipt cadence on, most COACH_*_ENABLED switches off) while a
+# large family of tests asserts the byte-stable behaviour of the DEFAULTS. That
+# disagreement made `make backend-test` report 99 failures locally and 0 in CI.
+# Opting out of the env file makes a local run resolve exactly what CI resolves.
+#
+# This covers the ENV FILE only. A variable exported in the developer's SHELL
+# still wins, which is why the notification and Clerk fixtures below remain.
+os.environ.setdefault("RUNNING_COACH_SKIP_DOTENV", "1")
+# The one setting with no default. CI supplies the same dummy; tests run against
+# the in-memory SQLite engine created below, so this URL is never dialled.
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql+psycopg://test:test@localhost/test"
+)
+
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy.orm import sessionmaker  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
+
+from app.core.config import settings  # noqa: E402
+from app.main import app  # noqa: E402
+from app.db.session import get_db  # noqa: E402
+from app.db.base import Base  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
