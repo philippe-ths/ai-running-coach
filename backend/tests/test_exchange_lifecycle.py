@@ -354,10 +354,12 @@ def test_create_exchange_for_block_inherits_every_stage_sentinel(db):
     assert lifecycle.is_closed(created) is True
 
 
-def test_create_exchange_for_block_does_not_inherit_the_done_tap(db):
-    # `done_at` is deliberately outside STAGE_SENTINELS: it is the runner's completion
-    # tap (#296), not a delivery stage. This pins the long-standing behaviour so a
-    # future change to the inherited set is a deliberate decision, not a silent one.
+def test_create_exchange_for_block_inherits_the_done_tap(db):
+    # #750: `done_at` stays outside STAGE_SENTINELS (it is the runner's completion tap,
+    # not a delivery stage) but IS inherited, because the window it guards is exactly
+    # the window a correction lands in: tapped done, full report scheduled, not yet
+    # sent. Dropping it there leaves the exchange reading as never-done, so a second
+    # tap schedules a SECOND generation.
     stamp = datetime(2026, 5, 27, 10, 0, 0, tzinfo=timezone.utc)
     source = _exchange(db, opened_at=stamp, done_at=stamp)
     target = _exchange(db)
@@ -369,7 +371,45 @@ def test_create_exchange_for_block_does_not_inherit_the_done_tap(db):
     db.flush()
 
     assert created.opened_at is not None  # a stage sentinel: inherited
-    assert created.done_at is None  # the tap: not inherited
+    assert _aware(created.done_at) == stamp  # the tap: inherited too (#750)
+
+
+def test_create_exchange_for_block_inherits_every_inherited_sentinel(db):
+    # The inherited set is INHERITED_SENTINELS (the delivery stages plus the tap), and
+    # a split must carry all of it so the new half can neither re-fire a delivered
+    # stage nor accept a duplicate "done".
+    stamp = datetime(2026, 5, 27, 10, 0, 0, tzinfo=timezone.utc)
+    source = _exchange(db, opened_at=stamp, opener_sent_at=stamp,
+                       fuller_sent_at=stamp, done_at=stamp)
+    target = _exchange(db)
+    block = target.block
+    db.delete(target)
+    db.commit()
+
+    created = lifecycle.create_exchange_for_block(db, block, inherit_from=source)
+    db.flush()
+
+    for sentinel in lifecycle.INHERITED_SENTINELS:
+        assert getattr(created, sentinel) is not None, f"{sentinel} was not inherited"
+    assert "done_at" in lifecycle.INHERITED_SENTINELS
+    assert "done_at" not in lifecycle.STAGE_SENTINELS  # not a delivery stage
+
+
+def test_create_exchange_for_block_leaves_an_untapped_source_untapped(db):
+    # Inheritance copies the tap, it never invents one: a correction on an exchange the
+    # runner never tapped must leave both sides freely tappable.
+    stamp = datetime(2026, 5, 27, 10, 0, 0, tzinfo=timezone.utc)
+    source = _exchange(db, opened_at=stamp)
+    target = _exchange(db)
+    block = target.block
+    db.delete(target)
+    db.commit()
+
+    created = lifecycle.create_exchange_for_block(db, block, inherit_from=source)
+    db.flush()
+
+    assert created.done_at is None
+    assert lifecycle.mark_done(db, created) is True  # still tappable
 
 
 def test_create_exchange_for_block_does_not_commit(db):
@@ -418,6 +458,34 @@ def test_absorb_exchange_takes_a_set_sentinel_from_either_side(db):
     assert _aware(surviving.opened_at) == stamp  # kept its own
     assert _aware(surviving.fuller_sent_at) == stamp  # took the absorbed side's
     assert lifecycle.is_closed(surviving) is True
+
+
+def test_absorb_exchange_takes_the_done_tap_from_the_absorbed_side(db):
+    # #750: the runner tapped "done" on the block that is being absorbed. The merged
+    # block is a superset of that session, so the survivor must read as done —
+    # otherwise a subsequent tap schedules a second full-report generation.
+    stamp = datetime(2026, 5, 27, 10, 0, 0, tzinfo=timezone.utc)
+    surviving = _exchange(db, opened_at=stamp)
+    absorbed = _exchange(db, opened_at=stamp, done_at=stamp)
+    db.expire_all()  # read both sides as the DB returns them (see the test above)
+
+    lifecycle.absorb_exchange(db, surviving, absorbed)
+    db.flush()  # structural: the caller's transaction is what lands the row
+
+    assert _aware(surviving.done_at) == stamp
+    assert lifecycle.mark_done(db, surviving) is False  # a later tap is a no-op
+
+
+def test_absorb_exchange_leaves_the_survivor_tappable_when_neither_side_tapped(db):
+    stamp = datetime(2026, 5, 27, 10, 0, 0, tzinfo=timezone.utc)
+    surviving = _exchange(db, opened_at=stamp)
+    absorbed = _exchange(db, opened_at=stamp)
+    db.expire_all()  # read both sides as the DB returns them (see the test above)
+
+    lifecycle.absorb_exchange(db, surviving, absorbed)
+
+    assert surviving.done_at is None
+    assert lifecycle.mark_done(db, surviving) is True
 
 
 def test_absorb_exchange_deletes_the_absorbed_row(db):

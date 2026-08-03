@@ -146,16 +146,24 @@ def ensure_exchange_for_block(db: Session, block: Block) -> Exchange:
 
 # --- structural row changes (the caller's transaction, no commit) -------------
 
-#: The stage sentinels a block CORRECTION carries across, so a split or merge can
-#: never re-open delivery: whatever had already been sent stays marked as sent on
+#: The DELIVERY stages. `done_at` is deliberately absent: it is the runner's completion
+#: tap (#296), not something the coach delivered, and the two are read differently
+#: everywhere else in this module.
+STAGE_SENTINELS = ("opened_at", "opener_sent_at", "fuller_sent_at")
+
+#: What a block CORRECTION carries across, so a split or merge can never re-open
+#: delivery and never re-accept a completion: whatever had already been sent stays
+#: marked as sent, and a session the runner already called finished stays finished, on
 #: every resulting exchange (ADR 0011 — corrections never re-fire).
 #:
-#: `done_at` is deliberately absent, preserving the behaviour these corrections have
-#: always had: it is the runner's completion tap (#296), not a delivery stage, and a
-#: dropped tap cannot cause a re-send (the `fuller_sent_at` inheritance is what stops
-#: a CLOSED exchange re-firing). Adding it would be a behaviour change — tracked
-#: separately rather than smuggled into a behaviour-preserving refactor.
-STAGE_SENTINELS = ("opened_at", "opener_sent_at", "fuller_sent_at")
+#: `done_at` joined this set in #750. It guards a narrow window — tapped done, full
+#: report scheduled, `fuller_sent_at` still null — but that is precisely the window a
+#: correction lands in. Dropping the tap there left the corrected exchange reading as
+#: never-done, so a second tap read as the first and scheduled a SECOND full-report
+#: generation (an extra LLM call and a possible duplicate report). Inheriting is also
+#: the safe direction on a split: the new half already inherits `opened_at`, so its
+#: report is in flight regardless, and nothing is gained by making it re-tappable.
+INHERITED_SENTINELS = STAGE_SENTINELS + ("done_at",)
 
 
 def create_exchange_for_block(
@@ -164,16 +172,17 @@ def create_exchange_for_block(
     """Construct the Exchange row for a block (A1: created WITH the block, so the
     one-exchange-per-block invariant is kept atomically at block creation).
 
-    `inherit_from` carries the `STAGE_SENTINELS` across from another exchange — the
+    `inherit_from` carries the `INHERITED_SENTINELS` across from another exchange — the
     split correction, where the new half must start out already knowing what has been
-    delivered so the correction cannot re-open delivery.
+    delivered and whether the runner called the session done, so the correction can
+    neither re-open delivery nor accept a duplicate "done" tap (#750).
 
     Structural: adds to the session but does NOT commit, so it lands with the rest of
     the caller's block work (or not at all).
     """
     exchange = Exchange(user_id=block.user_id, block_id=block.id)
     if inherit_from is not None:
-        for sentinel in STAGE_SENTINELS:
+        for sentinel in INHERITED_SENTINELS:
             setattr(exchange, sentinel, getattr(inherit_from, sentinel))
     db.add(exchange)
     return exchange
@@ -182,13 +191,14 @@ def create_exchange_for_block(
 def absorb_exchange(db: Session, surviving: Exchange, absorbed: Exchange) -> Exchange:
     """Fold one exchange into another and delete the absorbed row (the merge correction).
 
-    The survivor takes the MOST-ADVANCED value of each stage sentinel from either side,
-    so a merge can never re-fire a stage that either block had already delivered.
+    The survivor takes the MOST-ADVANCED value of each inherited sentinel from either
+    side, so a merge can never re-fire a stage that either block had already delivered,
+    and never loses a "done" tap with the absorbed row (#750).
 
     Structural: no commit — the merge is one transaction with the membership and bounds
     changes. Returns the survivor.
     """
-    for sentinel in STAGE_SENTINELS:
+    for sentinel in INHERITED_SENTINELS:
         setattr(
             surviving,
             sentinel,
