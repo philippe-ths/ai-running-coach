@@ -1,5 +1,19 @@
+import os
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The test session opts out of the env file (#752). `Settings` is a module-level
+# singleton built at import time, so a developer `backend/.env` — which carries
+# prod-parity coach configuration — silently redefines what the suite is testing:
+# `make backend-test` reported 99 failures locally against 0 in CI, and a local
+# red bar that means nothing is a red bar nobody reads. CI has no `.env`, so
+# skipping it makes a local run resolve exactly what CI resolves.
+#
+# Set by `backend/tests/conftest.py` before it imports the app, and by nothing
+# else. It cannot weaken a deployment: production sets no such variable, and an
+# env file is not how Railway supplies configuration in any case.
+_SKIP_DOTENV_ENV_VAR = "RUNNING_COACH_SKIP_DOTENV"
 
 class Settings(BaseSettings):
     # Core
@@ -504,7 +518,7 @@ class Settings(BaseSettings):
         }
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=None if os.getenv(_SKIP_DOTENV_ENV_VAR) else ".env",
         env_ignore_empty=True,
         extra="ignore"
     )
