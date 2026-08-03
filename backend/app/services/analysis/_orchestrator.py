@@ -52,11 +52,23 @@ def _coerce_uuid(value) -> uuid.UUID:
     return uuid.UUID(str(value))
 
 
-def compute_confidence(activity, streams_dict, check_in, interval_structure=None, workout_match=None):
+def compute_confidence(
+    activity,
+    streams_dict,
+    check_in,
+    interval_session: IntervalSession,
+    workout_match=None,
+):
     """
     Determine confidence level and reasons based on available data.
     Includes interval-specific sanity checks when applicable.
     Returns (level, reasons) tuple.
+
+    `interval_session` is the typed output of the ONE gate (#701/#739). Taking
+    the `IntervalSession` itself rather than a raw structure dict means this
+    function cannot re-derive "is this an interval session" independently, and
+    is required so a caller must have consulted the gate to call at all. Pass
+    `IntervalSession(structure=None)` for a non-interval activity.
     """
     reasons = []
 
@@ -72,12 +84,10 @@ def compute_confidence(activity, streams_dict, check_in, interval_structure=None
     # Interval-specific sanity checks. These reasons (no_intervals_detected,
     # rep variability, match mismatch) only describe an interval session, so
     # they must not lower the overall confidence of a non-interval activity
-    # (#169). `interval_structure` here is already the gated value from the
-    # single owner (IntervalSession, #701): it is non-None only for an interval
-    # session, so this function makes no independent session decision — its
-    # presence is the gate, and without it workout_match's reasons stay confined
-    # to workout_match.
-    if interval_structure and workout_match:
+    # (#169). The single owner's verdict (`IntervalSession.is_session`, #701) IS
+    # the gate: this function makes no independent session decision, and for a
+    # non-session workout_match's reasons stay confined to workout_match.
+    if interval_session.is_session and workout_match:
         match_reasons = workout_match.get("confidence_reasons", [])
         for r in match_reasons:
             if r not in reasons:
@@ -92,15 +102,16 @@ def compute_confidence(activity, streams_dict, check_in, interval_structure=None
     # runner's own ground-truth segmentation (#170), so "implausibly high" work
     # time is just a long session the runner marked, and a missing warmup means
     # they genuinely started at rep 1 — neither is a confidence deficiency.
-    if interval_structure and interval_structure.get("source") != "recorded_laps":
-        summary = interval_structure.get("summary", {})
+    structure = interval_session.structure
+    if interval_session.is_session and structure.get("source") != "recorded_laps":
+        summary = structure.get("summary", {})
         # Check for implausible total work time (> 45 min of hard running)
         total_work = summary.get("total_work_time_s", 0)
         if total_work > 2700:
             reasons.append("work_time_implausibly_high")
 
         # Check warmup/cooldown detection
-        if not interval_structure.get("warmup_duration_s"):
+        if not structure.get("warmup_duration_s"):
             reasons.append("no_warmup_detected")
 
     # Determine level — more reasons = lower confidence
@@ -328,12 +339,12 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     state.risk_score = risk_result["risk_score"]
     state.risk_reasons = risk_result["risk_reasons"]
 
-    # 9. Confidence (with interval sanity checks). Consumes the gated structure
-    # from the single owner (interval_session), so the interval-only reasons
-    # stay confined to an interval session (#169/#701).
+    # 9. Confidence (with interval sanity checks). Consumes the single owner's
+    # verdict itself (#701/#739), so the interval-only reasons stay confined to
+    # an interval session (#169) and the type flows the whole way through.
     confidence, confidence_reasons = compute_confidence(
         activity, streams_dict, check_in,
-        interval_structure=interval_session.structure,
+        interval_session=interval_session,
         workout_match=workout_match,
     )
     state.confidence = confidence

@@ -25,6 +25,7 @@ from app.models.activity_stream import ActivityStream
 from app.services.analysis import analyze
 from app.services.analysis import _orchestrator
 from app.services.analysis import baseline as baseline_mod
+from app.services.analysis.composition import IntervalSession
 
 
 BASE_DATE = datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc)
@@ -188,6 +189,76 @@ def test_interval_session_keeps_structure_and_kpis(db, monkeypatch):
     assert dm.structure == "intervals"
     assert dm.interval_structure == _LAP_STRUCTURE
     assert dm.interval_kpis is not None
+
+
+def _spy_on_confidence(monkeypatch):
+    """Capture the arguments `analyze` hands to compute_confidence, call through."""
+    captured = {}
+    real = _orchestrator.compute_confidence
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(_orchestrator, "compute_confidence", spy)
+    return captured
+
+
+def test_confidence_consumes_the_gates_own_session(db, monkeypatch):
+    """#739: compute_confidence receives the single gate's `IntervalSession`
+    itself, not a separately-derived structure, so the two cannot drift into
+    deciding "is this an interval session" independently."""
+    activity = _seed_run(db)
+
+    monkeypatch.setattr(_orchestrator, "detect_intervals_from_laps", lambda *a, **k: _LAP_STRUCTURE)
+    monkeypatch.setattr(_orchestrator, "detect_intervals", lambda *a, **k: None)
+
+    real_classify = _orchestrator.classify_activity
+
+    def force_intervals(*args, **kwargs):
+        c = real_classify(*args, **kwargs)
+        c.structure = "intervals"
+        return c
+
+    monkeypatch.setattr(_orchestrator, "classify_activity", force_intervals)
+    captured = _spy_on_confidence(monkeypatch)
+
+    dm = analyze(db, activity.id)
+
+    session = captured["interval_session"]
+    assert isinstance(session, IntervalSession)
+    assert session.is_session is True
+    # The very object the probe produced reaches the confidence stage (identity,
+    # not just equality), so there is one structure in play and not two. The
+    # persisted column compares by value: a JSON column re-serialises on commit.
+    assert session.structure is _LAP_STRUCTURE
+    assert dm.interval_structure == _LAP_STRUCTURE
+
+
+def test_confidence_sees_a_closed_gate_as_a_structureless_session(db, monkeypatch):
+    """The gated-out case reaches compute_confidence as an IntervalSession with
+    no structure, rather than as a bare None the function could interpret."""
+    activity = _seed_run(db)
+
+    monkeypatch.setattr(_orchestrator, "detect_intervals_from_laps", lambda *a, **k: _LAP_STRUCTURE)
+    monkeypatch.setattr(_orchestrator, "detect_intervals", lambda *a, **k: None)
+
+    real_classify = _orchestrator.classify_activity
+
+    def force_continuous(*args, **kwargs):
+        c = real_classify(*args, **kwargs)
+        c.structure = "continuous"
+        return c
+
+    monkeypatch.setattr(_orchestrator, "classify_activity", force_continuous)
+    captured = _spy_on_confidence(monkeypatch)
+
+    analyze(db, activity.id)
+
+    session = captured["interval_session"]
+    assert isinstance(session, IntervalSession)
+    assert session.is_session is False
+    assert session.structure is None
 
 
 # --- Invariant 3: commit-before-baseline ---
