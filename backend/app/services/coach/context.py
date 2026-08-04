@@ -39,6 +39,7 @@ from app.services.coach.prompt_features import PromptFeature
 from app.services.coach.prompts import (
     _describe_dial,
     is_corpus_prompt,
+    is_body_prompt,
     is_intensity_mix_prompt,
     is_intensity_read_prompt,
     is_stance_prompt,
@@ -88,6 +89,7 @@ from app.schemas.coach_context import (
     MetricsContext,
     NoveltyContext,
     PerceivedEffortContext,
+    BodyContext,
     ProfileContext,
     SafetyOverride,
     SafetyRules,
@@ -260,6 +262,13 @@ def build_context_pack(
         referral = ref.get("nudge") if isinstance(ref, dict) else None
         perceived_effort = None
         calibration = None
+    # #742: the runner's stated build reaches the coach ONLY under a body-aware prompt.
+    # The builder populates it unconditionally (it is a plain profile-row read, no
+    # scan), so the gate is one reassignment here and the nested drop in
+    # to_serializable_dict keeps every prior prompt's profile section byte-identical.
+    profile_ctx = b.profile
+    if profile_ctx.body is not None and not is_body_prompt(prompt_id):
+        profile_ctx = profile_ctx.model_copy(update={"body": None})
     # ADR 0026: build the grouped pack from flat section objects. from_sections wraps
     # each section into its coaching-question group (this_run/right_now/…); the flat
     # kwargs below are unchanged, so the gathering logic is untouched.
@@ -267,7 +276,7 @@ def build_context_pack(
         activity=f.activity,
         metrics=f.metrics,
         check_in=f.check_in,
-        profile=b.profile,
+        profile=profile_ctx,
         longitudinal=b.longitudinal,
         perceived_effort=perceived_effort,
         adherence=b.adherence,
@@ -1052,6 +1061,23 @@ def build_focus_payload(
     )
 
 
+def _build_body_context(profile: Optional[UserProfile]) -> Optional[BodyContext]:
+    """The runner's stated build (#742), or None when they have stated neither figure.
+
+    Abstains rather than partially filling: a body section present with both values
+    null would tell the coach "we asked and got nothing", which is noise. Absent means
+    absent. One figure alone IS emitted — a runner who has given only their weight has
+    still told the coach the thing that most changes how they should be trained.
+    """
+    if profile is None:
+        return None
+    weight = getattr(profile, "weight_kg", None)
+    height = getattr(profile, "height_cm", None)
+    if weight is None and height is None:
+        return None
+    return BodyContext(weight_kg=weight, height_cm=height)
+
+
 def build_b_baseline(
     db: Session, activity: Activity, *, profile: Optional[UserProfile] = None
 ) -> BBaseline:
@@ -1073,6 +1099,9 @@ def build_b_baseline(
             max_hr=profile.max_hr if profile else None,
             max_hr_source=getattr(profile, "max_hr_source", None) if profile else None,
             current_weekly_km=profile.current_weekly_km if profile else None,
+            # #742: built unconditionally here (like perceived_effort/calibration) and
+            # gated in build_context_pack, which is the layer that knows the prompt id.
+            body=_build_body_context(profile),
         ),
         longitudinal=_build_longitudinal_context(db, activity),
         perceived_effort=build_perceived_effort(

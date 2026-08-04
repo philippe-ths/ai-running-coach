@@ -267,6 +267,27 @@ EXPECTED_CAPABILITIES = {
         F.SALIENCE_DROPPED,
         F.PACK_COACH_VIEW,
     },
+    # #742: grouped_v8 = grouped_v7 + BODY. The first grouped version since v5 to ADD a
+    # capability rather than isolate a prose change, so its pack is NOT byte-identical to
+    # grouped_v5's -- it gains the nested `profile.body` signal. Ships INERT (v7 -> v8).
+    "coach_message_lean_grouped_v8": {
+        F.TWO_STAGE,
+        F.VOICE,
+        F.CORPUS,
+        F.STANCE,
+        F.READINESS,
+        F.USER_MATERIALS,
+        F.RECENT_WEEKS,
+        F.STREAM_VIEW,
+        F.TRAINING_HISTORY_2WK,
+        F.MEMORY,
+        F.INTENSITY_READ,
+        F.INTENSITY_MIX,
+        F.METRICS_COACH_FRAMED,
+        F.SALIENCE_DROPPED,
+        F.PACK_COACH_VIEW,
+        F.BODY,
+    },
 }
 
 # Ids that must carry NO capabilities (the inert-under-rollback set).
@@ -320,7 +341,7 @@ def test_memory_feature_is_active_on_v13():
         "coach_message_lean_grouped_v1", "coach_message_lean_grouped_v2",
         "coach_message_lean_grouped_v3", "coach_message_lean_grouped_v4",
         "coach_message_lean_grouped_v5", "coach_message_lean_grouped_v6",
-        "coach_message_lean_grouped_v7",
+        "coach_message_lean_grouped_v7", "coach_message_lean_grouped_v8",
     }
     assert prompts.is_memory_prompt("coach_message_v13") is True
     assert prompts.is_memory_prompt("coach_message_v12") is False
@@ -356,30 +377,33 @@ def test_derived_sets_match_captured_membership():
     # grouped_v7 = grouped_v5 + the personalisation prose bullet; SAME feature set as
     # grouped_v5/v6, so it joins exactly the same derived sets they belong to.
     GROUPED7 = "coach_message_lean_grouped_v7"
+    # #742: grouped_v8 = grouped_v7 + BODY. It joins every derived set grouped_v7 belongs
+    # to AND is the sole member of the new BODY set (asserted at the end).
+    GROUPED8 = "coach_message_lean_grouped_v8"
     assert prompts.TWO_STAGE_PROMPT_IDS == {
         "coach_message_v2", "coach_message_v3", "coach_message_v4",
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
         "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4,
-        GROUPED5, GROUPED6, GROUPED7,
+        GROUPED5, GROUPED6, GROUPED7, GROUPED8,
     }
     assert prompts.VOICE_PROMPT_IDS == {
         "coach_message_v3", "coach_message_v4", "coach_message_v5",
         "coach_message_v6", "coach_message_v7", "coach_message_v8", "coach_message_v9",
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7,
+        "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7, GROUPED8,
     }
     assert prompts.CORPUS_PROMPT_IDS == {
         "coach_message_v4", "coach_message_v5", "coach_message_v6",
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
-        LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7,
+        LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7, GROUPED8,
     }
     assert prompts.STANCE_PROMPT_IDS == {
         "coach_message_v5", "coach_message_v6", "coach_message_v7", "coach_message_v8",
         "coach_message_v9", "coach_message_v10", "coach_message_v11", "coach_message_v12",
         "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4,
-        GROUPED5, GROUPED6, GROUPED7,
+        GROUPED5, GROUPED6, GROUPED7, GROUPED8,
     }
     # Slice 2: grouped_v2..v6 REPLACE training_load with readiness, so they are NOT here.
     assert prompts.TRAINING_LOAD_PROMPT_IDS == {
@@ -390,7 +414,7 @@ def test_derived_sets_match_captured_membership():
     assert prompts.USER_MATERIALS_PROMPT_IDS == {
         "coach_message_v7", "coach_message_v8", "coach_message_v9", "coach_message_v10",
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
-        LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7,
+        LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7, GROUPED8,
     }
     # Slice 2: grouped_v2..v6 REPLACE volume + recent_training with recent_weeks, so they
     # are absent from both of these sets.
@@ -400,7 +424,7 @@ def test_derived_sets_match_captured_membership():
     }
     assert prompts.STREAM_VIEW_PROMPT_IDS == {
         "coach_message_v10", "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7,
+        "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7, GROUPED8,
     }
     assert prompts.RECENT_TRAINING_PROMPT_IDS == {
         "coach_message_v11", "coach_message_v12", "coach_message_v13", "coach_message_v14",
@@ -411,24 +435,27 @@ def test_derived_sets_match_captured_membership():
     assert prompts.TRAINING_HISTORY_PROMPT_IDS == {
         "coach_message_v12", "coach_message_v13", "coach_message_v14", LEAN, GROUPED,
     }
-    assert prompts.TRAINING_HISTORY_2WK_PROMPT_IDS == {GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7}
+    assert prompts.TRAINING_HISTORY_2WK_PROMPT_IDS == {GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7, GROUPED8}
     assert prompts.MEMORY_PROMPT_IDS == {
         "coach_message_v13", "coach_message_v14", LEAN, GROUPED, GROUPED2, GROUPED3, GROUPED4,
-        GROUPED5, GROUPED6, GROUPED7,
+        GROUPED5, GROUPED6, GROUPED7, GROUPED8,
     }
     # Slice 3: grouped_v3..v6 REPLACE INTENSITY with INTENSITY_READ + INTENSITY_MIX, so they
     # drop OUT of the intensity set and are the members of the two new ones.
     assert prompts.INTENSITY_PROMPT_IDS == {"coach_message_v14", LEAN, GROUPED, GROUPED2}
-    assert prompts.INTENSITY_READ_PROMPT_IDS == {GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7}
-    assert prompts.INTENSITY_MIX_PROMPT_IDS == {GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7}
+    assert prompts.INTENSITY_READ_PROMPT_IDS == {GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7, GROUPED8}
+    assert prompts.INTENSITY_MIX_PROMPT_IDS == {GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7, GROUPED8}
     # Slice 2's two sets: grouped_v2..v6 are the members.
-    assert prompts.READINESS_PROMPT_IDS == {GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7}
-    assert prompts.RECENT_WEEKS_PROMPT_IDS == {GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7}
+    assert prompts.READINESS_PROMPT_IDS == {GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7, GROUPED8}
+    assert prompts.RECENT_WEEKS_PROMPT_IDS == {GROUPED2, GROUPED3, GROUPED4, GROUPED5, GROUPED6, GROUPED7, GROUPED8}
     # Slice 4: grouped_v4..v6 carry the metrics-coach-framed view flag.
-    assert prompts.METRICS_COACH_FRAMED_PROMPT_IDS == {GROUPED4, GROUPED5, GROUPED6, GROUPED7}
+    assert prompts.METRICS_COACH_FRAMED_PROMPT_IDS == {GROUPED4, GROUPED5, GROUPED6, GROUPED7, GROUPED8}
     # Slice 5: grouped_v5 (flip target) + grouped_v6 carry the salience-dropped + coach-view flags.
-    assert prompts.SALIENCE_DROPPED_PROMPT_IDS == {GROUPED5, GROUPED6, GROUPED7}
-    assert prompts.PACK_COACH_VIEW_PROMPT_IDS == {GROUPED5, GROUPED6, GROUPED7}
+    assert prompts.SALIENCE_DROPPED_PROMPT_IDS == {GROUPED5, GROUPED6, GROUPED7, GROUPED8}
+    assert prompts.PACK_COACH_VIEW_PROMPT_IDS == {GROUPED5, GROUPED6, GROUPED7, GROUPED8}
+    # #742: BODY is carried by grouped_v8 alone, so the runner's stated build is inert
+    # under every other prompt and a rollback to grouped_v7 removes it with no code change.
+    assert prompts.BODY_PROMPT_IDS == {GROUPED8}
 
 
 def test_predicates_agree_with_has_feature():
@@ -481,10 +508,22 @@ def test_fullest_message_prompt_is_the_max_capability_id():
         F.INTENSITY_READ, F.INTENSITY_MIX, F.METRICS_COACH_FRAMED, F.SALIENCE_DROPPED,
         F.PACK_COACH_VIEW,
     }
+    # A third category (#742): ADDITIVE (it adds a pack section, so it is not an
+    # alternative) but carried only on the GROUPED lineage, which swapped five original
+    # additive features for alternatives and so can never win the additive ranking. The
+    # consequence is real and must not be waved through: a section here is NOT covered by
+    # the structural guards that build their pack under `fullest`, so each one owes a
+    # named guard of its own. `profile.body` -> tests/test_body_pack_section.py.
+    GROUPED_ONLY_ADDITIVE = {F.BODY}
     max_additive = max(len(set(f) - ALTERNATIVE_FEATURES) for f in PROMPT_FEATURES.values())
     assert len(set(PROMPT_FEATURES[fullest]) - ALTERNATIVE_FEATURES) == max_additive
     every_feature = set().union(*PROMPT_FEATURES.values())
-    assert set(PROMPT_FEATURES[fullest]) == every_feature - ALTERNATIVE_FEATURES
+    assert set(PROMPT_FEATURES[fullest]) == (
+        every_feature - ALTERNATIVE_FEATURES - GROUPED_ONLY_ADDITIVE
+    )
+    # Every grouped-only additive feature really is absent from `fullest` — otherwise the
+    # exemption above is stale and silently widening what the guards skip.
+    assert GROUPED_ONLY_ADDITIVE.isdisjoint(PROMPT_FEATURES[fullest])
 
 
 def test_manifest_ids_are_registered_prompts():

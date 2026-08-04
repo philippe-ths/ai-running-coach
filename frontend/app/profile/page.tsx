@@ -32,6 +32,11 @@ export default function ProfilePage() {
     upcoming_races: [],
     max_hr: 0, // New field state
     resting_hr: 0,
+    // #742: null, not 0. These post straight through to the coach pack, and the
+    // backend rejects a physiologically impossible figure rather than coaching on
+    // it — so the other fields' 0-means-empty sentinel would be a 422 here.
+    weight_kg: null as number | null,
+    height_cm: null as number | null,
     week_starts_on: 0 // 0=Monday (default), 6=Sunday (#676)
   });
 
@@ -51,6 +56,8 @@ export default function ProfilePage() {
             upcoming_races: data.upcoming_races || [],
             max_hr: data.max_hr || 0,
             resting_hr: data.resting_hr || 0,
+            weight_kg: data.weight_kg ?? null,
+            height_cm: data.height_cm ?? null,
             week_starts_on: data.week_starts_on ?? 0
         });
         setLoading(false);
@@ -77,11 +84,18 @@ export default function ProfilePage() {
     }
   };
 
+  // #742: clearing a body field must send null ("not stated"), never 0 — the coach
+  // pack drops an unstated build rather than reading it as a real figure.
+  const NULLABLE_NUMERIC = ['weight_kg', 'height_cm'];
+  const NUMERIC = ['weekly_days_available', 'current_weekly_km', 'max_hr', 'resting_hr', 'week_starts_on'];
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
         ...prev,
-        [name]: name === 'weekly_days_available' || name === 'current_weekly_km' || name === 'max_hr' || name === 'resting_hr' || name === 'week_starts_on' ? Number(value) : value
+        [name]: NULLABLE_NUMERIC.includes(name)
+          ? (value === '' ? null : Number(value))
+          : NUMERIC.includes(name) ? Number(value) : value
     }));
   };
 
@@ -174,6 +188,35 @@ export default function ProfilePage() {
                 />
                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     Your typical morning resting HR. Helps the coach read fatigue trends.
+                </p>
+            </div>
+
+            <div>
+                <label className="block text-sm font-medium mb-1">Weight (kg)</label>
+                <input
+                    type="number" min="20" max="300" step="0.1"
+                    name="weight_kg"
+                    value={formData.weight_kg ?? ''}
+                    onChange={handleChange}
+                    placeholder="e.g. 72.5"
+                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
+                />
+            </div>
+
+            <div>
+                <label className="block text-sm font-medium mb-1">Height (cm)</label>
+                <input
+                    type="number" min="100" max="250" step="0.5"
+                    name="height_cm"
+                    value={formData.height_cm ?? ''}
+                    onChange={handleChange}
+                    placeholder="e.g. 178"
+                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
+                />
+                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Optional. Your coach uses your build to judge how fast to ramp volume
+                    and how much strength work to prescribe &mdash; not to set a target
+                    weight. Leave blank and it simply won&apos;t be considered.
                 </p>
             </div>
 

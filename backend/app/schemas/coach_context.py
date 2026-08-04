@@ -92,6 +92,33 @@ class CheckInContext(BaseModel):
     notes: Optional[str]
 
 
+class BodyContext(BaseModel):
+    """The runner's build (#742), as STATED facts and nothing derived.
+
+    Why this exists: the coach is meant to coach this runner rather than the median
+    (North Star), but had no structured read of the body it was coaching. The only
+    channel that reached it was free-text `injury_notes`, and an A/B probe under
+    `coach_message_lean_grouped_v7` showed a "~109 kg, physio says prioritise
+    cadence and strength" note there produced a substantively identical report.
+
+    Why there is no BMI or any other index here: a ratio is a population formula,
+    and handing the model one invites it to swap our median for the textbook's. The
+    coaching-relevant fact is the load this specific body puts through a stride --
+    which the coach reasons about from the raw numbers plus everything else it knows
+    about this runner -- not a category the number sorts into. This mirrors the
+    `effort_score` lesson in the North Star: name what the number means, or the model
+    will guess.
+
+    Absent entirely when the runner has stated neither figure. Null is NOT average:
+    the section drops rather than letting the model fill the gap with a typical runner.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    weight_kg: Optional[float] = None
+    height_cm: Optional[float] = None
+
+
 class ProfileContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -102,6 +129,11 @@ class ProfileContext(BaseModel):
     max_hr: Optional[int]
     max_hr_source: Optional[str]
     current_weekly_km: Optional[int]
+    # #742: rides INSIDE profile (it IS profile data, and belongs in the same
+    # `the_runner` group) but gated to a body-aware prompt and dropped byte-stably
+    # otherwise, exactly like corpus's nested `user_materials`. Optional with a
+    # default so every pack STORED before #742 still parses under extra="forbid".
+    body: Optional[BodyContext] = None
 
 
 class TrainingPeriodSummary(BaseModel):
@@ -1792,6 +1824,17 @@ def _drop_corpus_user_materials(corpus: Dict[str, Any], _data: Dict[str, Any]) -
         corpus.pop("user_materials", None)
 
 
+def _drop_profile_body(profile: Dict[str, Any], _data: Dict[str, Any]) -> None:
+    """#742: `body` rides INSIDE the always-present profile section, but only under a
+    body-aware prompt (and only when the runner has stated a figure). When None --
+    every prior prompt, and any runner who has stated neither -- drop the nested key
+    entirely, so the profile section is byte-identical to its pre-#742 shape. Same
+    idiom as `_drop_corpus_user_materials`; `profile` is never None itself, so this
+    descriptor exists purely to carry the nested trim."""
+    if profile.get("body") is None:
+        profile.pop("body", None)
+
+
 def _drop_training_volume_rolling_current(
     tv: Dict[str, Any], data: Dict[str, Any]
 ) -> None:
@@ -1919,6 +1962,10 @@ PACK_SECTIONS: tuple[PackSection, ...] = (
     # recent_training via the #492 ReadTimeSignal seam, stream_view via the deep flag),
     # and dropped here when None to stay byte-stable.
     PackSection("block"),  # A1 (AC8): block-of-one emits nothing.
+    # #742: `profile` itself is always present (never dropped); this descriptor
+    # carries ONLY the nested `body` trim, which is why its gate feature is the
+    # documentary cross-link for the nested field rather than the section.
+    PackSection("profile", PromptFeature.BODY, nested_drop=_drop_profile_body),
     PackSection(
         "corpus", PromptFeature.CORPUS, nested_drop=_drop_corpus_user_materials
     ),  # AC1
