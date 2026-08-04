@@ -25,9 +25,14 @@ action (that set is server-minted and fixed, ADR 0027) and it cannot lower the
 safety floor — the deterministic validator runs over a skilled turn's reply
 exactly as it runs over any other.
 
-**Adding one.** Each skill earns its place from an OBSERVED failure, not an
-imagined taxonomy of requests. `make coach-review` pulls real chats into
-`docs/audit/` for exactly this. Record the failure in the skill's `earned_by`.
+**Adding one.** Every skill records WHY it exists in `earned_by`, and that field
+is expected to be honest: an observed failure with the request that produced it,
+or, where the house wanted coverage of a request kind before one appeared, that.
+The point is that a later reader can tell the difference and retire a skill that
+never earned its keep. `make coach-review` pulls real chats into `docs/audit/`,
+and driving a candidate request live before writing the procedure is the cheapest
+way to find out what actually needs fixing — two of the four skills here were
+written that way, and the probe changed what they say.
 """
 
 from __future__ import annotations
@@ -121,7 +126,158 @@ must not do, and it is the thing this request will tempt you into.""",
 )
 
 
-SKILLS: Tuple[CoachingSkill, ...] = (PLAN_THE_WEEK,)
+COMPARE_SESSIONS = CoachingSkill(
+    name="compare_sessions",
+    use_when=(
+        "the runner asks how two sessions stack up — was that better than last "
+        "week, how did today compare to the same route in June"
+    ),
+    procedure="""PROCEDURE — comparing two sessions.
+
+Work out WHICH two sessions first. Resolve them from their training history by
+the days the runner named, and check your reading of the calendar before you
+speak: naming the wrong day makes everything after it wrong.
+
+If the ask is genuinely ambiguous — several sessions on the day they mentioned —
+do not stall on it. Take the most likely pair (the two that are actually
+comparable, or the most recent), say which two you picked in a few words, and
+answer. If you must ask, ask ONE question and answer as much as you can
+alongside it. A runner who asked a simple question should not get a menu back.
+
+Then pull the full detail of BOTH sessions. A comparison drawn from a list of
+distances and paces is a guess: the differences that matter — heart rate at the
+same pace, drift, cadence, how each was structured — only exist in the detail.
+
+Answer in this order:
+
+1. The comparison itself, in a sentence. Which was the stronger run, or what
+   changed between them.
+2. The two or three numbers that carry it, side by side. Not every field you
+   fetched.
+3. What was NOT alike. Heat, hills, how far into a hard week each landed,
+   whether one was a workout and the other a plod. Name it before it can be
+   mistaken for progress or decline — the analysis already flags the ones it
+   detected, so use them rather than guessing at a confounder.
+
+If the two are not really comparable, say so plainly and compare what can be
+compared, rather than producing a difference that means nothing.
+
+What the difference MEANS for their training — whether an improvement is the
+kind worth chasing, whether a slower run matters — comes from your coaching
+corpus and this runner's goal, not from the size of the gap.""",
+    earned_by=(
+        "2026-08-04 probe, seeded production data: 'how did saturday's run "
+        "compare to the one on the 1st?'. The coach returned a multi-part "
+        "clarifying question instead of a comparison, mislabelled a weekday "
+        "('Saturday's run … do you mean the 9km on Monday the 3rd'), and never "
+        "fetched the detail of either session."
+    ),
+)
+
+
+EXPLAIN_A_METRIC = CoachingSkill(
+    name="explain_a_metric",
+    use_when=(
+        "the runner asks what a number means or whether theirs is any good — "
+        "what is HR drift, is my cadence bad, what counts as good efficiency"
+    ),
+    procedure="""PROCEDURE — explaining a metric.
+
+There are two questions in this one: what the number IS, and what THEIRS says.
+Answer both, in that order, and keep them apart.
+
+1. What it is, in one or two plain sentences. What it measures and why a coach
+   looks at it. No chain of definitions, no formula unless they asked for it.
+
+2. What theirs says — read against THIS runner, not a textbook. "Yours has sat
+   between 4 and 6% on easy runs since June, so today's 6% is ordinary for you"
+   is worth more than any published band, because the bands are drawn from a
+   population this runner may be nothing like.
+
+   Go and GET the figures. A metric like drift, cadence or efficiency lives in a
+   session's detail, not in a list of distances and paces — so pull the detail
+   of a handful of comparable sessions and read today's number against them.
+   Never tell the runner you could look it up if they want: they already asked.
+   Reach for a general range only when they genuinely have no comparable history,
+   and say that is what you are doing.
+
+Before you call a number good or bad, apply what the analysis already knows
+about that run: heat, hills, and the other confounders it flags exist precisely
+because they inflate or flatter a number. A drift figure the analysis has
+already discounted for a hot day is not evidence of fatigue, and saying it is
+contradicts the report you wrote them.
+
+Finish by telling them what would actually change the number, or what you would
+watch it for. A metric is worth explaining because it is actionable; if it is
+not, say that too.
+
+Never turn a metric into a verdict about the runner. It is one measurement of
+one run, and it never overrides how they are actually training or how they
+feel.""",
+    earned_by=(
+        "2026-08-04 probe, seeded production data: 'what does hr drift actually "
+        "mean and is mine bad?'. The coach explained it well but graded the "
+        "runner against a published population band ('<5% very controlled, "
+        "5-10% normal') rather than their own history, and called a 6.0% drift "
+        "'solid' on the very run whose report had flagged that figure as "
+        "inflated by 25C heat. The median, not this runner (north-star.md)."
+    ),
+)
+
+
+RACE_READINESS = CoachingSkill(
+    name="race_readiness",
+    use_when=(
+        "the runner asks about a race they have coming up — am I ready, can I "
+        "hit this time, what should the last weeks look like"
+    ),
+    procedure="""PROCEDURE — reading a runner against a race.
+
+Establish what you are answering against. The distance, how long until race day,
+and what they want from it — finishing, a particular time, or racing it. If the
+goal is not stated and you cannot infer it from what they have told you before,
+ask that one thing; the answer changes everything downstream.
+
+Then, in this order:
+
+1. Their record against the DEMAND of the distance. Not just total volume: the
+   longest they have gone recently, how often they run, and whether they have
+   done anything at the effort the race asks for.
+2. Their state right now — current load and how the last few weeks have gone.
+   A runner with the fitness and no freshness is a different answer from a
+   runner still building.
+3. The plain answer to the question they asked, before any plan. If they are
+   ready, say so. If the honest answer is "for the distance yes, for that time
+   no", say that — a runner deserves to know which of the two they are.
+4. The shape of the weeks remaining: what builds, what the last week does. Keep
+   it to the shape; they can ask for the detail.
+
+If something would gate the whole thing — a symptom they have mentioned, a load
+spike, a gap in the long runs — name it as the gating item rather than burying
+it in the plan. Where that thing is a symptom, it is not yours to name or reason
+about: say it needs a professional's eyes, and answer the training question
+around it.
+
+How to build toward a race, how long to taper, what the last hard session should
+be — take that from your coaching corpus, not from a template you improvise
+here.""",
+    earned_by=(
+        "Authored on the owner's instruction (2026-08-04) to cover the request "
+        "kinds ADR 0029 names, NOT an observed failure: the 'half marathon in 5 "
+        "weeks, am I ready?' probe against seeded production data was already "
+        "answered well (record vs demand, load, a gating symptom referred not "
+        "named, a week-by-week shape). This procedure holds that standard rather "
+        "than repairing a defect."
+    ),
+)
+
+
+SKILLS: Tuple[CoachingSkill, ...] = (
+    PLAN_THE_WEEK,
+    COMPARE_SESSIONS,
+    EXPLAIN_A_METRIC,
+    RACE_READINESS,
+)
 
 _BY_NAME: Dict[str, CoachingSkill] = {skill.name: skill for skill in SKILLS}
 

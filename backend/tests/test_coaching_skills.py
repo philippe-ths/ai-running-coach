@@ -23,6 +23,21 @@ class TestCatalogue:
             assert skill.use_when in catalogue
             assert skill.procedure not in catalogue
 
+    def test_the_always_on_cost_stays_far_below_what_it_holds_back(self):
+        """The property ADR 0029 says decides whether this mechanism is still
+        healthy in a year: growing the set must cost the turns that do not use
+        it almost nothing. If a `use_when` ever grows into a procedure, this is
+        the test that notices."""
+        catalogue = len(render_catalogue())
+        held_back = sum(len(s.procedure) for s in SKILLS)
+
+        assert held_back > catalogue * 5, (
+            f"catalogue {catalogue} chars vs {held_back} held back — the "
+            "triggers are drifting toward carrying the procedures themselves"
+        )
+        for skill in SKILLS:
+            assert len(skill.use_when) < 200, f"{skill.name}'s trigger is prose"
+
     def test_every_skill_records_the_failure_that_earned_it(self):
         """ADR 0029: a skill earns its place from an observed failure, not an
         imagined taxonomy. An empty `earned_by` means nobody can audit that."""
