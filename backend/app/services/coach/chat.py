@@ -119,6 +119,10 @@ class ChatStreamEvent:
     # count). Emitted AFTER the fetch, so it carries the result summary the pre-fetch
     # status frame cannot. None on every non-trace event.
     trace_entry: Optional[dict] = None
+    # #766: the thread announcement frame (`{thread_id, title}`) a thread turn
+    # emits first, so a client that started a NEW thread learns its id. None on
+    # every other event.
+    thread_meta: Optional[dict] = None
 
 
 # How often a keepalive heartbeat is emitted while the reply is being buffered
@@ -442,6 +446,125 @@ def get_chat_history(db: Session, activity_id: str) -> List[ChatMessageRead]:
     return [ChatMessageRead.model_validate(m) for m in messages]
 
 
+async def _buffered_tool_loop(
+    db: Session,
+    client,
+    *,
+    system_prompt: str,
+    llm_messages: List[dict],
+    owner_user_id,
+    out: dict,
+):
+    """The shared buffer-then-validate generation core (#340/#375/#648), used by
+    BOTH chat surfaces: the activity chat box and the thread turn (#766). Yields
+    heartbeat/status/trace events while running the bounded agentic tool loop,
+    and fills `out` with the RAW assembled reply (`assistant_text`), the failure
+    state, and the tool trace. Policy validation stays with the CALLER — the two
+    surfaces gate against different pack sources but share this loop verbatim,
+    so the safety-floor mechanics cannot drift between them."""
+    yield _heartbeat()
+    assistant_text = None
+    stream_failed = False
+    # The message served if the stream fails; the except may specialise it (#625).
+    stream_fail_message = "Sorry, I encountered an error. Please try again."
+    # #664: ordered, one-record-per-CALL trace of WHAT each tool fetched (tool name,
+    # friendly label, resolved window, result count), persisted for the UI's
+    # "looked up …" trace. NOT de-duped by name, so a multi-window turn shows every
+    # fetch rather than collapsing to one chip (the #648 f/u the issue asks for).
+    tool_trace: List[dict] = []
+    last_heartbeat = time.monotonic()
+    try:
+        for round_idx in range(_MAX_TOOL_ROUNDS):
+            # The final round runs tools-off, forcing a text answer rather than another
+            # fetch — the loop is guaranteed to terminate (#648, Q8).
+            tools_arg = CHAT_TOOLS if round_idx < _MAX_TOOL_ROUNDS - 1 else None
+            final_msg = None
+            async for delta in client.stream_chat_turn(
+                system=system_prompt,
+                messages=llm_messages,
+                tools=tools_arg,
+                max_tokens=1024,
+            ):
+                if delta.final is not None:
+                    final_msg = delta.final
+                else:
+                    now = time.monotonic()
+                    if now - last_heartbeat >= _HEARTBEAT_INTERVAL_SECONDS:
+                        last_heartbeat = now
+                        yield _heartbeat()
+
+            if final_msg is None:
+                stream_failed = True
+                break
+
+            if final_msg.stop_reason == "tool_use":
+                tool_uses = [
+                    b for b in final_msg.content_blocks
+                    if _block_attr(b, "type") == "tool_use"
+                ]
+                if not tool_uses:
+                    # tool_use stop with no block: nothing to fetch, take the text.
+                    assistant_text = _extract_block_text(final_msg.content_blocks)
+                    break
+                # Echo the assistant turn (carrying the tool_use blocks) so their ids
+                # match the tool_result blocks we append next.
+                llm_messages.append({
+                    "role": "assistant",
+                    "content": _blocks_to_message_params(final_msg.content_blocks),
+                })
+                tool_results = []
+                for blk in tool_uses:
+                    name = _block_attr(blk, "name")
+                    tool_input = _block_attr(blk, "input") or {}
+                    # Show the ephemeral affordance BEFORE the fetch runs (#648): the
+                    # spinner cannot yet know the result, so it stays present-tense.
+                    yield ChatStreamEvent(
+                        status_label=TOOL_STATUS_LABELS.get(name, "Looking that up…"),
+                        status_tool=name or "",
+                    )
+                    last_heartbeat = time.monotonic()
+                    result = execute_chat_tool(db, owner_user_id, name, tool_input)
+                    # #664: AFTER the fetch, derive the compact trace record of what it
+                    # returned (resolved window + count, all server-derived) and both
+                    # bank it and stream it, so the persistent trace shows what was
+                    # fetched, not just that a tool ran. One record per call.
+                    entry = summarize_tool_call(name, tool_input, result)
+                    tool_trace.append(entry)
+                    yield ChatStreamEvent(trace_entry=entry)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": _block_attr(blk, "id"),
+                        "content": json.dumps(result, default=str),
+                    })
+                llm_messages.append({"role": "user", "content": tool_results})
+                continue
+
+            # A plain text answer (end_turn / max_tokens): this is the reply.
+            assistant_text = _extract_block_text(final_msg.content_blocks)
+            break
+    except Exception as e:
+        import anthropic
+
+        # #625: an exhausted 429 (the bounded retry in stream_chat_turn gave up)
+        # gets a transparent "busy, try again" message rather than the generic
+        # error — consistent with how the report path degrades on rate limits. Any
+        # other transport error keeps the generic message.
+        rate_limited = isinstance(e, anthropic.RateLimitError)
+        logger.error("Chat streaming error (rate_limited=%s): %s", rate_limited, e)
+        stream_failed = True
+        stream_fail_message = (
+            "I'm getting a lot of requests right now, so I couldn't finish that "
+            "reply. Give me a moment and try again — your message is saved."
+            if rate_limited
+            else "Sorry, I encountered an error. Please try again."
+        )
+
+    out["assistant_text"] = assistant_text
+    out["stream_failed"] = stream_failed
+    out["stream_fail_message"] = stream_fail_message
+    out["tool_trace"] = tool_trace
+
+
 async def stream_chat_response(
     db: Session, activity_id: str, user_message: str
 ) -> AsyncIterator[ChatStreamEvent]:
@@ -605,10 +728,11 @@ async def stream_chat_response(
     # Build messages array for the LLM
     messages = [{"role": row.role, "content": row.content} for row in history_rows]
 
-    # Stream the response
+    # Stream the response (#766: conversational turns take the chat model —
+    # COACH_CHAT_MODEL_ID when set, else COACH_MODEL_ID, byte-identical default)
     client = AnthropicClient(
         api_key=settings.ANTHROPIC_API_KEY,
-        model=settings.COACH_MODEL_ID,
+        model=settings.chat_model_id,
     )
 
     # #340: buffer the LLM stream rather than forwarding raw tokens. A streamed
@@ -633,103 +757,17 @@ async def stream_chat_response(
     # activity's user_id, never a model-supplied id.
     owner_user_id = activity.user_id
 
-    yield _heartbeat()
-    llm_messages = messages  # mutated across tool rounds (assistant + tool_result turns)
-    assistant_text = None
-    stream_failed = False
-    # The message served if the stream fails; the except may specialise it (#625).
-    stream_fail_message = "Sorry, I encountered an error. Please try again."
-    # #664: ordered, one-record-per-CALL trace of WHAT each tool fetched (tool name,
-    # friendly label, resolved window, result count), persisted for the UI's
-    # "looked up …" trace. NOT de-duped by name, so a multi-window turn shows every
-    # fetch rather than collapsing to one chip (the #648 f/u the issue asks for).
-    tool_trace: List[dict] = []
-    last_heartbeat = time.monotonic()
-    try:
-        for round_idx in range(_MAX_TOOL_ROUNDS):
-            # The final round runs tools-off, forcing a text answer rather than another
-            # fetch — the loop is guaranteed to terminate (#648, Q8).
-            tools_arg = CHAT_TOOLS if round_idx < _MAX_TOOL_ROUNDS - 1 else None
-            final_msg = None
-            async for delta in client.stream_chat_turn(
-                system=system_prompt,
-                messages=llm_messages,
-                tools=tools_arg,
-                max_tokens=1024,
-            ):
-                if delta.final is not None:
-                    final_msg = delta.final
-                else:
-                    now = time.monotonic()
-                    if now - last_heartbeat >= _HEARTBEAT_INTERVAL_SECONDS:
-                        last_heartbeat = now
-                        yield _heartbeat()
+    out: dict = {}
+    async for event in _buffered_tool_loop(
+        db, client, system_prompt=system_prompt, llm_messages=messages,
+        owner_user_id=owner_user_id, out=out,
+    ):
+        yield event
+    assistant_text = out["assistant_text"]
+    stream_failed = out["stream_failed"]
+    stream_fail_message = out["stream_fail_message"]
+    tool_trace = out["tool_trace"]
 
-            if final_msg is None:
-                stream_failed = True
-                break
-
-            if final_msg.stop_reason == "tool_use":
-                tool_uses = [
-                    b for b in final_msg.content_blocks
-                    if _block_attr(b, "type") == "tool_use"
-                ]
-                if not tool_uses:
-                    # tool_use stop with no block: nothing to fetch, take the text.
-                    assistant_text = _extract_block_text(final_msg.content_blocks)
-                    break
-                # Echo the assistant turn (carrying the tool_use blocks) so their ids
-                # match the tool_result blocks we append next.
-                llm_messages.append({
-                    "role": "assistant",
-                    "content": _blocks_to_message_params(final_msg.content_blocks),
-                })
-                tool_results = []
-                for blk in tool_uses:
-                    name = _block_attr(blk, "name")
-                    tool_input = _block_attr(blk, "input") or {}
-                    # Show the ephemeral affordance BEFORE the fetch runs (#648): the
-                    # spinner cannot yet know the result, so it stays present-tense.
-                    yield ChatStreamEvent(
-                        status_label=TOOL_STATUS_LABELS.get(name, "Looking that up…"),
-                        status_tool=name or "",
-                    )
-                    last_heartbeat = time.monotonic()
-                    result = execute_chat_tool(db, owner_user_id, name, tool_input)
-                    # #664: AFTER the fetch, derive the compact trace record of what it
-                    # returned (resolved window + count, all server-derived) and both
-                    # bank it and stream it, so the persistent trace shows what was
-                    # fetched, not just that a tool ran. One record per call.
-                    entry = summarize_tool_call(name, tool_input, result)
-                    tool_trace.append(entry)
-                    yield ChatStreamEvent(trace_entry=entry)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": _block_attr(blk, "id"),
-                        "content": json.dumps(result, default=str),
-                    })
-                llm_messages.append({"role": "user", "content": tool_results})
-                continue
-
-            # A plain text answer (end_turn / max_tokens): this is the reply.
-            assistant_text = _extract_block_text(final_msg.content_blocks)
-            break
-    except Exception as e:
-        import anthropic
-
-        # #625: an exhausted 429 (the bounded retry in stream_chat_turn gave up)
-        # gets a transparent "busy, try again" message rather than the generic
-        # error — consistent with how the report path degrades on rate limits. Any
-        # other transport error keeps the generic message.
-        rate_limited = isinstance(e, anthropic.RateLimitError)
-        logger.error("Chat streaming error (rate_limited=%s): %s", rate_limited, e)
-        stream_failed = True
-        stream_fail_message = (
-            "I'm getting a lot of requests right now, so I couldn't finish that "
-            "reply. Give me a moment and try again — your message is saved."
-            if rate_limited
-            else "Sorry, I encountered an error. Please try again."
-        )
 
     if stream_failed:
         # A transport-level error message is safe by construction; no gating needed.

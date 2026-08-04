@@ -448,7 +448,11 @@ class AnthropicClient:
             model=self.model,
             max_tokens=max_tokens,
             temperature=0.3,
-            system=system,
+            # #766: the chat/thread system prefix is byte-identical across the
+            # tool rounds of one turn (and often across turns), so the #629
+            # cache breakpoint applies here too — tools render before system,
+            # so one breakpoint caches both.
+            system=_cacheable_system(system),
             messages=messages,
             timeout=_MESSAGE_TIMEOUT_SECONDS,
         )

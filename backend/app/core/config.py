@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     # Coach AI
     ANTHROPIC_API_KEY: str = ""
     COACH_MODEL_ID: str = "claude-sonnet-4-6"
+    # #766: the model for conversational turns (activity chat box + thread
+    # turns). Unset = COACH_MODEL_ID, so day-one behaviour is byte-identical and
+    # the lever exists without a deploy (the reversible-config-flip idiom).
+    COACH_CHAT_MODEL_ID: str = ""
+
+    @property
+    def chat_model_id(self) -> str:
+        return self.COACH_CHAT_MODEL_ID or self.COACH_MODEL_ID
 
     # Per-user LLM cost cap (P2.2, #122, Ring 3 of docs/vision/going-live-cost-control.md).
     # A Redis-backed running spend counter degrades coach generation to the
