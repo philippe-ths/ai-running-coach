@@ -201,6 +201,7 @@ export default function CoachSheet() {
   const [fetchingLabel, setFetchingLabel] = useState('');
   const [proposedAction, setProposedAction] = useState<ProposedActionFrame | null>(null);
   const [confirmingAction, setConfirmingAction] = useState(false);
+  const [actionError, setActionError] = useState('');
   const hasAutoOpenedThread = useRef(false);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -400,22 +401,30 @@ export default function CoachSheet() {
   const confirmProposedAction = useCallback(async () => {
     if (!proposedAction || confirmingAction) return;
     setConfirmingAction(true);
+    setActionError('');
     try {
       const res = await fetch('/api/coach/threads/actions/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: proposedAction.token }),
       });
-      if (!res.ok) throw new Error(`Confirm failed (${res.status})`);
+      if (!res.ok) throw new Error(String(res.status));
       setProposedAction(null);
+      // The write lands on the runner's record, not in the thread, so refresh
+      // the screen behind the sheet and leave the transcript where they are.
       router.refresh();
-      if (currentThreadId) void openThread(currentThreadId);
-    } catch {
-      // Keep the action visible so the runner can retry or leave it.
+    } catch (err) {
+      // A tap that changed nothing must say so. An offer is single-use and
+      // short-lived, so a 404 means it is spent or stale, not that it failed.
+      setActionError(
+        String((err as Error)?.message) === '404'
+          ? 'That offer has expired. Ask me again and I can redo it.'
+          : "That didn't go through. Try again in a moment.",
+      );
     } finally {
       setConfirmingAction(false);
     }
-  }, [confirmingAction, currentThreadId, openThread, proposedAction, router]);
+  }, [confirmingAction, proposedAction, router]);
 
   const renameThread = useCallback(
     async (id: string, title: string) => {
@@ -623,13 +632,19 @@ export default function CoachSheet() {
                     {confirmingAction ? 'Working...' : proposedAction.confirm_label}
                   </button>
                   <button
-                    onClick={() => setProposedAction(null)}
+                    onClick={() => {
+                      setProposedAction(null);
+                      setActionError('');
+                    }}
                     disabled={confirmingAction}
                     className="rounded-lg border border-gray-300 px-3 py-1.5 text-[12px] font-medium text-gray-500 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700/40"
                   >
                     {proposedAction.dismiss_label}
                   </button>
                 </div>
+                {actionError && (
+                  <div className="text-[11.5px] text-gray-500 dark:text-gray-400">{actionError}</div>
+                )}
               </div>
             )}
           </div>

@@ -577,11 +577,11 @@ async def _buffered_tool_loop(
                             mint_proposed_action,
                         )
 
-                        result = mint_proposed_action(db, owner_user_id, tool_input)
-                        if proposed_action is None and result.get("ok") and isinstance(
-                            result.get("frame"), dict
-                        ):
-                            proposed_action = result["frame"]
+                        # The model reads `result` (pending, tokenless); the runner's
+                        # client gets the `frame` that carries the one-shot token.
+                        result, frame = mint_proposed_action(db, owner_user_id, tool_input)
+                        if proposed_action is None and frame is not None:
+                            proposed_action = frame
                         tool_results.append(
                             {
                                 "type": "tool_result",

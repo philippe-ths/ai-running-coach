@@ -22,7 +22,7 @@ from app.core.queue import redis_conn
 from app.models import Activity, Block
 from app.schemas import CheckInCreate
 from app.services import activity_queries
-from app.services.blocks import merge_blocks, split_block
+from app.services.blocks import blocks_are_adjacent, merge_blocks, split_block
 from app.services.checkins import write_checkin
 from app.services.intents import write_activity_intent
 
@@ -32,6 +32,10 @@ _TOKEN_PREFIX = "coach-action:"
 _TOKEN_TTL_SECONDS = 1800
 _TOKEN_MAX_LENGTH = 64
 
+# The stated-intent vocabulary, mirroring the activity page's picker
+# (frontend/components/CheckInForm.tsx). The intent API itself takes free text,
+# so this list is what keeps a coach-proposed label round-trippable in the UI
+# the runner sees. The two copies must stay in step.
 INTENT_OPTIONS_BY_TYPE: dict[str, tuple[str, ...]] = {
     "Run": (
         "Easy Run",
@@ -112,13 +116,14 @@ class StoredProposedAction(BaseModel):
 PROPOSED_ACTION_TOOL: Dict[str, Any] = {
     "name": "offer_proposed_action",
     "description": (
-        "Offer ONE narrow, reversible action the runner may confirm in the thread. "
-        "The server validates it, mints the confirmation card, and the write only "
-        "happens if the runner taps confirm. Use this only for: logging a check-in "
-        "(RPE and/or pain), setting a stated intent on a session, splitting a wrong "
-        "block at a named member session, or merging two adjacent blocks. Use only "
-        "activity_id and block_id values already on screen or returned by your tools; "
-        "never invent ids or widen the set."
+        "Offer ONE narrow, reversible change to the runner's record for them to "
+        "confirm: logging a check-in (RPE and/or pain), naming a session's stated "
+        "intent, splitting a block at a named member session, or merging two "
+        "adjacent blocks. Offering is not doing — this puts a card in front of the "
+        "runner and nothing is written unless they tap it, so speak of it as "
+        "something you can do, never as done. Use only activity_id and block_id "
+        "values already in front of you or returned by your other tools; never "
+        "invent an id."
     ),
     "input_schema": {
         "type": "object",
@@ -130,7 +135,16 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
             "activity_id": {"type": "string"},
             "rpe": {"type": "integer", "minimum": 1, "maximum": 10},
             "pain_score": {"type": "integer", "minimum": 0, "maximum": 10},
-            "user_intent": {"type": "string"},
+            "user_intent": {
+                "type": "string",
+                "description": (
+                    "The runner's label for what the session was. For a run: "
+                    "Easy Run, Recovery, Long Run, Tempo, Intervals, Hills, "
+                    "Race, Treadmill. Other activity types take their own "
+                    "labels; offer the closest one and the tool will tell you "
+                    "the accepted set if it does not fit."
+                ),
+            },
             "block_id": {"type": "string"},
             "split_at_activity_id": {"type": "string"},
             "other_block_id": {"type": "string"},
@@ -147,27 +161,58 @@ def thread_tools(base_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def mint_proposed_action(
     db: Session, owner_user_id: UUID, tool_input: Dict[str, Any]
-) -> dict:
+) -> tuple[dict, Optional[dict]]:
     """Validate a model-authored offer and mint the user-scoped action token.
 
-    Returns a structured tool result for the model. On success that result
-    carries the user-facing frame; on failure it carries a structured error and
-    no frame is emitted.
+    Returns `(model_result, frame)`. The model_result is what the model reads
+    back before writing its reply: it says the offer is PENDING and carries no
+    token, so the coach can neither report the change as made nor quote the
+    runner's one-shot token into prose. The frame — token included — goes to the
+    client, which is where the runner's tap comes from. On any failure the frame
+    is None and nothing is minted.
     """
     try:
         request = ProposedActionRequest.model_validate(tool_input or {})
     except ValidationError as exc:
-        return {"ok": False, "error": "invalid_action", "detail": str(exc)}
+        return {"ok": False, "error": "invalid_action", "detail": str(exc)}, None
 
     try:
         frame, stored = _build_offer(db, owner_user_id, request)
     except LookupError as exc:
-        return {"ok": False, "error": "not_found", "detail": str(exc)}
+        return {"ok": False, "error": "not_found", "detail": str(exc)}, None
+    except _InvalidIntent as exc:
+        # A rejection the model can act on: the labels this activity type takes.
+        return (
+            {
+                "ok": False,
+                "error": "invalid_action",
+                "detail": str(exc),
+                "allowed": exc.allowed,
+            },
+            None,
+        )
     except ValueError as exc:
-        return {"ok": False, "error": "invalid_action", "detail": str(exc)}
+        return {"ok": False, "error": "invalid_action", "detail": str(exc)}, None
 
-    token = _mint_token(owner_user_id, stored)
-    return {"ok": True, "frame": frame.model_copy(update={"token": token}).model_dump()}
+    try:
+        token = _mint_token(owner_user_id, stored)
+    except Exception:  # noqa: BLE001 -- the card is a side affordance, not the reply
+        logger.exception("coach proposed-action mint failed")
+        return {"ok": False, "error": "unavailable"}, None
+
+    return (
+        {
+            "ok": True,
+            "offered": frame.action_type,
+            "shown_as": frame.description,
+            "status": (
+                "The card is in front of the runner and nothing is written yet — "
+                "it carries its own wording and button. Spend your reply coaching "
+                "them; do not describe the card or report the change as made."
+            ),
+        },
+        frame.model_copy(update={"token": token}).model_dump(),
+    )
 
 
 def consume_and_execute(db: Session, owner_user_id: UUID, token: str) -> dict:
@@ -234,18 +279,18 @@ def _build_offer(
 
     if request.action_type == "intent":
         activity = _require_owned_activity(db, owner_user_id, request.activity_id)
-        _validate_intent_for_activity(activity, request.user_intent)
+        intent = _canonical_intent(activity, request.user_intent)
         frame = ProposedActionFrame(
             action_type="intent",
             token="",
-            description=f"Mark {_activity_label(activity)} as {request.user_intent}",
+            description=f"Mark {_activity_label(activity)} as {intent}",
             confirm_label="Set it",
         )
         stored = StoredProposedAction(
             owner_user_id=owner_user_id,
             action_type="intent",
             activity_id=activity.id,
-            user_intent=request.user_intent,
+            user_intent=intent,
         )
         return frame, stored
 
@@ -343,10 +388,29 @@ def _require_owned_block(
     return block
 
 
-def _validate_intent_for_activity(activity: Activity, user_intent: Optional[str]) -> None:
-    options = INTENT_OPTIONS_BY_TYPE.get(activity.type, INTENT_OPTIONS_BY_TYPE["Default"])
-    if user_intent not in options:
-        raise ValueError("intent is not valid for this activity type")
+def intent_options_for(activity: Activity) -> tuple[str, ...]:
+    return INTENT_OPTIONS_BY_TYPE.get(activity.type, INTENT_OPTIONS_BY_TYPE["Default"])
+
+
+def _canonical_intent(activity: Activity, user_intent: Optional[str]) -> str:
+    """The picker's own label for what the coach named, or a rejection.
+
+    The runner's word for a session rarely matches the picker's casing, and the
+    coach echoes the runner. Matching loosely and storing the canonical label
+    keeps the stated intent one vocabulary with the activity page's selector.
+    """
+    options = intent_options_for(activity)
+    wanted = " ".join((user_intent or "").split()).casefold()
+    for option in options:
+        if option.casefold() == wanted:
+            return option
+    raise _InvalidIntent(options)
+
+
+class _InvalidIntent(ValueError):
+    def __init__(self, allowed: tuple[str, ...]):
+        super().__init__("intent is not valid for this activity type")
+        self.allowed = list(allowed)
 
 
 def _validate_split_offer(db: Session, block: Block, activity: Activity) -> None:
@@ -367,18 +431,7 @@ def _validate_split_offer(db: Session, block: Block, activity: Activity) -> None
 def _validate_merge_offer(db: Session, block: Block, other: Block) -> None:
     if block.id == other.id:
         raise ValueError("cannot merge a block with itself")
-    earlier, later = sorted([block, other], key=lambda b: b.start_date)
-    between = (
-        db.query(Block)
-        .filter(
-            Block.user_id == block.user_id,
-            Block.id.notin_([block.id, other.id]),
-            Block.start_date >= earlier.end_date,
-            Block.end_date <= later.start_date,
-        )
-        .count()
-    )
-    if between:
+    if not blocks_are_adjacent(db, block, other):
         raise ValueError("blocks are not adjacent")
 
 

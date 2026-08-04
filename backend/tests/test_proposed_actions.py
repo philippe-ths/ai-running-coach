@@ -5,6 +5,7 @@ and the narrow reversible action set: check-in, stated intent, block split, and
 block merge.
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import uuid4
@@ -62,7 +63,7 @@ def test_check_in_offer_executes_once_and_is_user_scoped(db):
     fake = _FakeRedis()
 
     with patch.object(proposed_actions, "redis_conn", fake):
-        offer = proposed_actions.mint_proposed_action(
+        result, frame = proposed_actions.mint_proposed_action(
             db,
             user.id,
             {
@@ -71,8 +72,8 @@ def test_check_in_offer_executes_once_and_is_user_scoped(db):
                 "rpe": 7,
             },
         )
-        assert offer["ok"] is True
-        token = offer["frame"]["token"]
+        assert result["ok"] is True
+        token = frame["token"]
 
         # Another user cannot redeem or burn the token.
         try:
@@ -104,7 +105,7 @@ def test_intent_offer_rejects_invalid_intent_for_activity_type(db):
     fake = _FakeRedis()
 
     with patch.object(proposed_actions, "redis_conn", fake):
-        offer = proposed_actions.mint_proposed_action(
+        result, frame = proposed_actions.mint_proposed_action(
             db,
             user.id,
             {
@@ -113,8 +114,38 @@ def test_intent_offer_rejects_invalid_intent_for_activity_type(db):
                 "user_intent": "Tempo",
             },
         )
-    assert offer["ok"] is False
-    assert offer["error"] == "invalid_action"
+    assert result["ok"] is False
+    assert result["error"] == "invalid_action"
+    assert frame is None
+    # The model cannot guess a vocabulary it was never shown, so a rejection
+    # hands back the labels this activity type accepts and it can offer again.
+    assert result["allowed"] == list(proposed_actions.INTENT_OPTIONS_BY_TYPE["Walk"])
+
+
+def test_intent_offer_accepts_the_label_as_the_runner_said_it(db):
+    """The runner says "tempo"; the picker's label is "Tempo". A casing or
+    spacing difference is not a reason to tell them the app cannot do this."""
+    user = _user(db)
+    activity = _activity(db, user)
+    fake = _FakeRedis()
+
+    with patch.object(proposed_actions, "redis_conn", fake):
+        result, frame = proposed_actions.mint_proposed_action(
+            db,
+            user.id,
+            {
+                "action_type": "intent",
+                "activity_id": str(activity.id),
+                "user_intent": " tempo ",
+            },
+        )
+        assert result["ok"] is True
+        assert "Tempo" in frame["description"]
+        with patch("app.services.intents.analysis.analyze"):
+            proposed_actions.consume_and_execute(db, user.id, frame["token"])
+
+    db.refresh(activity)
+    assert activity.user_intent == "Tempo", "the stored label is the picker's own"
 
 
 def test_intent_offer_executes_through_shared_write_path(db):
@@ -123,7 +154,7 @@ def test_intent_offer_executes_through_shared_write_path(db):
     fake = _FakeRedis()
 
     with patch.object(proposed_actions, "redis_conn", fake):
-        offer = proposed_actions.mint_proposed_action(
+        _result, frame = proposed_actions.mint_proposed_action(
             db,
             user.id,
             {
@@ -132,7 +163,7 @@ def test_intent_offer_executes_through_shared_write_path(db):
                 "user_intent": "Tempo",
             },
         )
-        token = offer["frame"]["token"]
+        token = frame["token"]
         with patch("app.services.intents.analysis.analyze"):
             result = proposed_actions.consume_and_execute(db, user.id, token)
     assert result["action_type"] == "intent"
@@ -149,7 +180,7 @@ def test_split_block_offer_executes_existing_service(db):
     fake = _FakeRedis()
 
     with patch.object(proposed_actions, "redis_conn", fake):
-        offer = proposed_actions.mint_proposed_action(
+        result, frame = proposed_actions.mint_proposed_action(
             db,
             user.id,
             {
@@ -158,8 +189,8 @@ def test_split_block_offer_executes_existing_service(db):
                 "split_at_activity_id": str(run.id),
             },
         )
-        assert offer["ok"] is True
-        token = offer["frame"]["token"]
+        assert result["ok"] is True
+        token = frame["token"]
         result = proposed_actions.consume_and_execute(db, user.id, token)
     assert result["action_type"] == "split_block"
     db.refresh(walk)
@@ -182,7 +213,7 @@ def test_merge_blocks_offer_executes_existing_service(db):
     fake = _FakeRedis()
 
     with patch.object(proposed_actions, "redis_conn", fake):
-        offer = proposed_actions.mint_proposed_action(
+        offer, frame = proposed_actions.mint_proposed_action(
             db,
             user.id,
             {
@@ -192,9 +223,111 @@ def test_merge_blocks_offer_executes_existing_service(db):
             },
         )
         assert offer["ok"] is True
-        token = offer["frame"]["token"]
+        token = frame["token"]
         result = proposed_actions.consume_and_execute(db, user.id, token)
     assert result["action_type"] == "merge_blocks"
     db.refresh(walk)
     db.refresh(run)
     assert walk.block_id == run.block_id
+
+
+def test_offer_cannot_reach_another_runners_activity(db):
+    """The model supplies the ids; the server owner-scopes them. An id belonging
+    to another runner reads as not-found, exactly like the API surfaces."""
+    user = _user(db)
+    other = _user(db)
+    theirs = _activity(db, other)
+    fake = _FakeRedis()
+
+    with patch.object(proposed_actions, "redis_conn", fake):
+        result, frame = proposed_actions.mint_proposed_action(
+            db,
+            user.id,
+            {
+                "action_type": "check_in",
+                "activity_id": str(theirs.id),
+                "rpe": 7,
+            },
+        )
+
+    assert result["ok"] is False
+    assert result["error"] == "not_found"
+    assert frame is None
+    assert fake._store == {}, "no token may be minted against another runner's data"
+
+
+def test_offer_cannot_reach_another_runners_block(db):
+    user = _user(db)
+    other = _user(db)
+    walk = _activity(db, other, start=T0, elapsed=720, type="Walk", distance_m=1200)
+    theirs = assign_activity_to_block(db, walk, gap_seconds=GAP)
+    run = _activity(db, other, start=T0 + timedelta(seconds=900), elapsed=2400)
+    assign_activity_to_block(db, run, gap_seconds=GAP)
+    fake = _FakeRedis()
+
+    with patch.object(proposed_actions, "redis_conn", fake):
+        result, frame = proposed_actions.mint_proposed_action(
+            db,
+            user.id,
+            {
+                "action_type": "split_block",
+                "block_id": str(theirs.id),
+                "split_at_activity_id": str(run.id),
+            },
+        )
+
+    assert result["ok"] is False
+    assert result["error"] == "not_found"
+    assert frame is None
+    assert fake._store == {}
+
+
+def test_model_is_told_the_offer_is_pending_and_never_sees_the_token(db):
+    """The tool result is what the model reads before writing its reply. It must
+    not read as a completed write, and the token is the runner's to spend, not
+    something for the model to quote back into prose."""
+    user = _user(db)
+    activity = _activity(db, user)
+    fake = _FakeRedis()
+
+    with patch.object(proposed_actions, "redis_conn", fake):
+        result, frame = proposed_actions.mint_proposed_action(
+            db,
+            user.id,
+            {
+                "action_type": "check_in",
+                "activity_id": str(activity.id),
+                "rpe": 7,
+            },
+        )
+
+    assert result["ok"] is True
+    assert "token" not in json.dumps(result)
+    assert frame["token"] not in json.dumps(result)
+    assert "nothing is written yet" in result["status"].lower()
+    assert db.query(CheckIn).count() == 0, "offering must write nothing"
+
+
+def test_a_redis_outage_costs_the_card_not_the_reply(db):
+    """Minting is a side affordance. If Redis is down the coach still answers —
+    the offer is simply dropped rather than taking the whole turn with it."""
+    user = _user(db)
+    activity = _activity(db, user)
+
+    class _DeadRedis:
+        def set(self, *_a, **_k):
+            raise ConnectionError("redis is down")
+
+    with patch.object(proposed_actions, "redis_conn", _DeadRedis()):
+        result, frame = proposed_actions.mint_proposed_action(
+            db,
+            user.id,
+            {
+                "action_type": "check_in",
+                "activity_id": str(activity.id),
+                "rpe": 7,
+            },
+        )
+
+    assert result["ok"] is False
+    assert frame is None

@@ -449,7 +449,7 @@ class TestThreadTurn:
 
         fake_redis = _FakeRedis()
         with patch.object(proposed_actions, "redis_conn", fake_redis):
-            offer = proposed_actions.mint_proposed_action(
+            _result, frame = proposed_actions.mint_proposed_action(
                 db,
                 user.id,
                 {
@@ -458,7 +458,7 @@ class TestThreadTurn:
                     "user_intent": "Tempo",
                 },
             )
-            token = offer["frame"]["token"]
+            token = frame["token"]
             with patch("app.services.intents.analysis.analyze"):
                 resp = client.post(
                     "/api/coach/threads/actions/confirm",

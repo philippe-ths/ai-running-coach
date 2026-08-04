@@ -181,6 +181,27 @@ def split_block(db: Session, block: Block, *, at_activity: Activity) -> tuple[Bl
     return block, new_block
 
 
+def blocks_are_adjacent(db: Session, first: Block, second: Block) -> bool:
+    """Whether two of a runner's blocks are neighbours in time.
+
+    Adjacent means no other block of theirs lies between the two, which is the
+    precondition every merge caller checks — the correction API and the coach's
+    proposed merge alike — so the rule lives here rather than in each of them.
+    """
+    earlier, later = sorted([first, second], key=lambda b: b.start_date)
+    between = (
+        db.query(Block)
+        .filter(
+            Block.user_id == first.user_id,
+            Block.id.notin_([first.id, second.id]),
+            Block.start_date >= earlier.end_date,
+            Block.end_date <= later.start_date,
+        )
+        .count()
+    )
+    return between == 0
+
+
 def merge_blocks(db: Session, first: Block, second: Block) -> Block:
     """Merge two of a user's blocks into the first.
 
