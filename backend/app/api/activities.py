@@ -14,6 +14,7 @@ from app.models.user_profile import UserProfile
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead, TrainingLoadRead
 from app.services import activity_queries, analysis
 from app.services.checkins import write_checkin
+from app.services.intents import write_activity_intent
 from app.services.analysis.classifier import Classification, compose_headline
 from app.services.analysis.splits import calculate_splits
 from app.services.laps import project_laps
@@ -111,15 +112,7 @@ def update_activity_intent(
     """
     activity = _require_owned_activity(db, activity_id, user)
 
-    activity.user_intent = payload.user_intent
-    db.add(activity)
-    db.commit()
-    db.refresh(activity)
-    
-    # Re-run processing pipeline with new intent
-    analysis.analyze(db, str(activity_id))
-    
-    return activity
+    return write_activity_intent(db, activity, user_intent=payload.user_intent)
 
 # Default sync window (days). Sync imports summaries for this window in-request
 # and defers all stream fetching to the gated background backfill (#596), so the

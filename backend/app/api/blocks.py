@@ -16,7 +16,7 @@ from app.core.clerk_auth import require_current_user
 from app.db.session import get_db
 from app.models import Activity, Block, User
 from app.schemas.block import BlockMergeRequest, BlockRead, BlockSplitRequest
-from app.services.blocks import merge_blocks, split_block
+from app.services.blocks import blocks_are_adjacent, merge_blocks, split_block
 
 router = APIRouter()
 
@@ -68,18 +68,7 @@ def merge(
     block = _get_block(db, block_id, user)
     other = _get_block(db, request.other_block_id, user)
 
-    earlier, later = sorted([block, other], key=lambda b: b.start_date)
-    between = (
-        db.query(Block)
-        .filter(
-            Block.user_id == block.user_id,
-            Block.id.notin_([block.id, other.id]),
-            Block.start_date >= earlier.end_date,
-            Block.end_date <= later.start_date,
-        )
-        .count()
-    )
-    if between:
+    if not blocks_are_adjacent(db, block, other):
         raise HTTPException(status_code=422, detail="Blocks are not adjacent")
 
     try:

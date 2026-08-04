@@ -47,6 +47,8 @@ from app.services.coach.screen_context import (
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.memory_store import get_memory
 from app.services.coach.prompts import render_voice_block
+from app.services.coach.proposed_actions import thread_tools
+from app.services.coach.query_tools import CHAT_TOOLS
 from app.services.coach.voice import resolve_voice
 from app.services.readiness import build_readiness
 
@@ -96,6 +98,10 @@ What is above is a lean baseline, not their record. When a question turns on dat
 - get_session_detail: one past session's full detail by its activity_id (pace, HR, cadence, HR drift, and whether its intervals came from the runner's own recorded laps).
 - get_training_summary: computed totals, a by-type breakdown, and a vs-typical read over a named window.
 Pick the window whose NAME matches how the runner spoke; never work out dates yourself — the tools resolve and report the exact range they used, so ground your answer in that. Only tell the runner you cannot answer once the tools have come up empty too.
+
+OFFERING AN ACTION — THE RUNNER'S CALL:
+When the conversation itself settles a small correction to their record — how a session felt, what a session actually was, or a session grouped wrongly with its neighbours — offer to make it with offer_proposed_action rather than sending them off to tap through the app. Offer only what the conversation reached, with ids already in front of you, and at most one per reply.
+The card states the change and carries its own button, so let it speak for itself: spend your reply coaching them, and never describe the card, narrate the tap, or report the change as made. Nothing is written unless they confirm it. Write "That was a tempo by any read — 6:00/km at 150bpm is not an easy-day effort.", not "I've put a card up — confirm it and I'll update your record."
 
 RULES:
 1. Ground every claim in the data above and anything you fetch with your tools, citing the specific numbers (pace, HR, effort score) when they carry the point. Never invent facts.
@@ -391,6 +397,7 @@ async def stream_thread_turn(
         llm_messages=llm_messages,
         owner_user_id=user.id,
         out=out,
+        tools=thread_tools(CHAT_TOOLS),
     ):
         yield event
 
@@ -432,6 +439,9 @@ async def stream_thread_turn(
 
     for piece in _slice_for_stream(assistant_text):
         yield ChatStreamEvent(text=piece)
+
+    if out.get("proposed_action") is not None:
+        yield ChatStreamEvent(proposed_action=out["proposed_action"])
 
     assistant_msg = CoachChatMessage(
         thread_id=thread.id,

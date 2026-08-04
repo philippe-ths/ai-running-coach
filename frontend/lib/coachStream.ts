@@ -7,6 +7,7 @@
 // the ephemeral fetching affordance), 'tool_trace' (#664: what a tool fetched).
 
 import { ToolTraceEntry } from "./types/chat";
+import { ProposedActionFrame } from "./types/thread";
 
 export interface ThreadFrame {
   thread_id: string;
@@ -17,6 +18,7 @@ export interface ThreadFrame {
 export interface CoachStreamHandlers {
   onText: (piece: string) => void;
   onThread?: (frame: ThreadFrame) => void;
+  onProposedAction?: (frame: ProposedActionFrame) => void;
   onStatus?: (label: string) => void;
   onToolTrace?: (entry: ToolTraceEntry) => void;
 }
@@ -43,6 +45,8 @@ export async function readCoachStream(
         } else if (parsed && typeof parsed === "object") {
           if (parsed.type === "thread" && parsed.thread_id) {
             handlers.onThread?.(parsed as ThreadFrame);
+          } else if (parsed.type === "proposed_action" && parsed.token) {
+            handlers.onProposedAction?.(parsed as ProposedActionFrame);
           } else if (parsed.type === "status") {
             handlers.onStatus?.(parsed.label ?? "");
           } else if (parsed.type === "tool_trace" && parsed.entry) {
