@@ -7,7 +7,7 @@ moment it has one turn in it.
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -59,6 +59,25 @@ class ThreadRename(BaseModel):
     title: str = Field(min_length=1, max_length=TITLE_MAX_LENGTH)
 
 
+class ScreenPointer(BaseModel):
+    """Which screen the runner is on and their view selections (#767, ADR 0028).
+
+    A POINTER, not a payload: selections are the runner's input and are trusted
+    as such; every number is recomputed server-side by the same builders that
+    produced the screen. Deliberately no free-form or numeric fields — a fact
+    can never travel from the client through this shape.
+    """
+
+    screen: Literal["home", "activities", "activity", "load", "trends", "profile"]
+    # activity screens: which run is on screen (owner-verified at resolution).
+    activity_id: Optional[UUID] = None
+    # trends screens: the selected range and activity-type filter.
+    range: Optional[Literal["7D", "30D", "3M", "6M", "1Y"]] = None
+    types: Optional[List[str]] = Field(default=None, max_length=10)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class ThreadMessageSend(BaseModel):
     message: str = Field(min_length=1)
     # Continue this thread; absent = start a new one with this message.
@@ -67,6 +86,10 @@ class ThreadMessageSend(BaseModel):
     # activity whose page the thread was born on. A framing hint, never a data
     # boundary (ADR 0027).
     anchor_activity_id: Optional[UUID] = None
-    # The label of the screen the turn was asked from (provenance only; the
-    # resolved screen view is slice 3, ADR 0028).
+    # The screen pointer this turn was asked from (#767): resolved server-side
+    # into the "looking at" view. Optional — a turn without one simply carries
+    # no screen context.
+    screen: Optional[ScreenPointer] = None
+    # Fallback provenance label for clients not yet sending a pointer; when
+    # `screen` is present the label derives from it and this is ignored.
     asked_from: Optional[str] = Field(default=None, max_length=ASKED_FROM_MAX_LENGTH)

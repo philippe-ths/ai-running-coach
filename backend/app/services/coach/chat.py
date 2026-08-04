@@ -93,6 +93,52 @@ def _validate_chat_text(text: str, context_pack: dict) -> List[PolicyViolation]:
     return violations
 
 
+def _validate_conversational_text(
+    text: str, *, zones_calibrated: bool, sessions_in_play: List[dict]
+) -> List[PolicyViolation]:
+    """The conversational policy floor re-sourced from the TURN'S OWN FACTS
+    (#767, ADR 0028) instead of a stored report pack: medical scope (rule 5,
+    unconditional as ever), zone language against the runner's own calibration
+    (rule 2 — resolved from their profile, which is where calibration always
+    lived), and interval-execution claims against the sessions actually fetched
+    or shown this turn (rule 4 — each carrying its own detection confidence).
+    Used by the thread turn always, and by the activity chat when its stored
+    pack will not parse — the floor gets stronger, not weaker, off the pack."""
+    violations: List[PolicyViolation] = []
+    violations += check_medical_overreach(text)
+    violations += check_uncalibrated_zones(zones_calibrated, text)
+    for session_facts in sessions_in_play:
+        violations += check_ungated_interval_claim(session_facts, text)
+        if any(v.rule == "ungated_interval_claim" for v in violations):
+            break  # one gated claim is enough; no need to re-match per session
+    return violations
+
+
+def sessions_in_play_from_tool_results(tool_results: List[tuple]) -> List[dict]:
+    """The interval-claim facts (rule 4) carried by this turn's raw tool
+    results: every session the coach actually pulled detail on, in the
+    `workout_match` shape the rule gates on. A fetched session with no detected
+    structure gates as low-confidence — a specific execution claim about it
+    cannot be grounded."""
+    sessions: List[dict] = []
+    for name, result in tool_results:
+        if name != "get_session_detail" or not isinstance(result, dict):
+            continue
+        if result.get("error"):
+            continue
+        interval = result.get("interval")
+        if isinstance(interval, dict):
+            sessions.append(
+                {
+                    "detection_confidence": interval.get("detection_confidence") or "low",
+                    "source": interval.get("source"),
+                }
+            )
+        else:
+            sessions.append({"detection_confidence": "low"})
+    return sessions
+
+
 def _slice_for_stream(text: str) -> List[str]:
     """Split the validated reply into modest slices for re-streaming (#340)."""
     return [text[i:i + _STREAM_SLICE_CHARS] for i in range(0, len(text), _STREAM_SLICE_CHARS)]
@@ -472,6 +518,10 @@ async def _buffered_tool_loop(
     # "looked up …" trace. NOT de-duped by name, so a multi-window turn shows every
     # fetch rather than collapsing to one chip (the #648 f/u the issue asks for).
     tool_trace: List[dict] = []
+    # #767: the RAW results of each tool call this turn, banked so the caller's
+    # policy floor can gate claims against the sessions actually in play (rule 4
+    # re-sourced from the turn's own facts rather than a stored pack).
+    raw_tool_results: List[tuple] = []
     last_heartbeat = time.monotonic()
     try:
         for round_idx in range(_MAX_TOOL_ROUNDS):
@@ -524,6 +574,7 @@ async def _buffered_tool_loop(
                     )
                     last_heartbeat = time.monotonic()
                     result = execute_chat_tool(db, owner_user_id, name, tool_input)
+                    raw_tool_results.append((name, result))
                     # #664: AFTER the fetch, derive the compact trace record of what it
                     # returned (resolved window + count, all server-derived) and both
                     # bank it and stream it, so the persistent trace shows what was
@@ -563,6 +614,7 @@ async def _buffered_tool_loop(
     out["stream_failed"] = stream_failed
     out["stream_fail_message"] = stream_fail_message
     out["tool_trace"] = tool_trace
+    out["tool_results"] = raw_tool_results
 
 
 async def stream_chat_response(
@@ -781,7 +833,31 @@ async def stream_chat_response(
         # redirect (the chat analogue of the report path's forced fallback). Soft
         # violations (zone language, ungated interval claims) are logged and let
         # through, mirroring the report path's tolerate-non-medical behaviour.
-        violations = _validate_chat_text(assistant_text, context_pack)
+        try:
+            CoachContextPack.load(context_pack)
+            pack_parses = True
+        except Exception:
+            pack_parses = False
+        if pack_parses:
+            violations = _validate_chat_text(assistant_text, context_pack)
+        else:
+            # #767 (ADR 0028): no usable stored pack (#685's no-report window, or
+            # a pre-pack row) no longer degrades rules 2/4 off — they re-source
+            # from the turn's own facts: the runner's profile calibration, this
+            # activity's own workout-match facts, and any sessions fetched.
+            from app.services.coach.context import zones_calibration
+
+            zones_calibrated, _basis = zones_calibration(profile)
+            sessions = sessions_in_play_from_tool_results(out.get("tool_results", []))
+            metrics_row = getattr(activity, "metrics", None)
+            own_match = getattr(metrics_row, "workout_match", None)
+            if isinstance(own_match, dict):
+                sessions.append(own_match)
+            violations = _validate_conversational_text(
+                assistant_text,
+                zones_calibrated=zones_calibrated,
+                sessions_in_play=sessions,
+            )
         if any(v.rule == "medical_overreach" for v in violations):
             logger.warning(
                 "chat reply gated for medical overreach (activity %s): %s",

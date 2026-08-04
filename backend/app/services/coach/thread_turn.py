@@ -29,13 +29,20 @@ from app.models.thread import Thread
 from app.models.user import User
 from app.models.user_profile import UserProfile
 from app.services.coach import threads as thread_service
+from app.schemas.thread import ScreenPointer
 from app.services.coach.chat import (
     ChatStreamEvent,
     MEDICAL_REDIRECT_MESSAGE,
     _buffered_tool_loop,
     _render_authority_tiering,
     _slice_for_stream,
-    _validate_chat_text,
+    _validate_conversational_text,
+    sessions_in_play_from_tool_results,
+)
+from app.services.coach.screen_context import (
+    ScreenView,
+    resolve_screen_view,
+    sessions_in_play_from_view,
 )
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.memory_store import get_memory
@@ -82,8 +89,7 @@ THREAD_SYSTEM_TEMPLATE = """You are a running coach in an ongoing conversation w
 
 THE RUNNER:
 {profile_json}
-{baseline_block}{anchor_block}{voice_block}{cross_thread_block}
-
+{baseline_block}{anchor_block}{voice_block}{cross_thread_block}{looking_at_block}
 YOUR TOOLS — LOOKING UP THEIR TRAINING:
 What is above is a lean baseline, not their record. When a question turns on data that is not already in front of you — a specific run, how something has trended, how much they have trained — LOOK IT UP with your tools instead of asking the runner for it. You have their whole training record:
 - list_activities_in_range: their past sessions (any activity type, newest first) over a named window, each with distance, pace, effort, and shape.
@@ -244,7 +250,35 @@ def _resolve_voice_block_for_user(db: Session, user_id) -> str:
     return render_voice_block(settings.COACH_PROMPT_ID, voice)
 
 
-def build_thread_system_prompt(db: Session, user: User, thread: Thread) -> str:
+def _render_looking_at_block(screen_view: Optional[ScreenView]) -> str:
+    """The one live screen view (#767, ADR 0028): the CURRENT screen only, never
+    an accumulation — past turns keep their label, not their view. The view is
+    the same data the pack's sections already carry, so it inherits their place
+    in the authority tiering: citable, never overriding measured data or the
+    safety floor."""
+    if screen_view is None:
+        return ""
+    lines = [
+        "\nLOOKING AT — the screen the runner is on right now (server-resolved; "
+        "their view selections, your recomputed numbers):",
+        f"Screen: {screen_view.label}",
+    ]
+    if screen_view.view is not None:
+        lines.append(json.dumps(screen_view.view, default=str))
+    lines.append(
+        'When the runner says "this" or "here", they usually mean this screen. '
+        "It is the same data as your other context: citable, never overriding "
+        "measured data or the safety floor.\n"
+    )
+    return "\n".join(lines)
+
+
+def build_thread_system_prompt(
+    db: Session,
+    user: User,
+    thread: Thread,
+    screen_view: Optional[ScreenView] = None,
+) -> str:
     profile = (
         db.query(UserProfile).filter(UserProfile.user_id == user.id).first()
     )
@@ -269,6 +303,7 @@ def build_thread_system_prompt(db: Session, user: User, thread: Thread) -> str:
         anchor_block=_render_anchor_block(thread),
         voice_block=voice_block,
         cross_thread_block=cross_thread_block,
+        looking_at_block=_render_looking_at_block(screen_view),
         tiering_block=tiering_block,
     )
 
@@ -281,10 +316,13 @@ async def stream_thread_turn(
     thread: Optional[Thread] = None,
     anchor_activity: Optional[Activity] = None,
     asked_from: Optional[str] = None,
+    screen: Optional[ScreenPointer] = None,
 ) -> AsyncIterator[ChatStreamEvent]:
     """One thread turn: create/continue the thread, stream the coach's reply.
 
-    The caller has already owner-verified `thread` / `anchor_activity`.
+    The caller has already owner-verified `thread` / `anchor_activity`. The
+    `screen` pointer (#767) resolves server-side, owner-scoped; when present it
+    also supplies the turn's provenance label.
     """
     # Spend cap first, before any row is written: the decline is an answer, not
     # a turn (mirrors the activity chat's gate).
@@ -304,6 +342,11 @@ async def stream_thread_turn(
         db.commit()
         db.refresh(thread)
         created = True
+
+    # The pointer supplies the provenance label (past turns keep the label of
+    # where they were asked, never the resolved view — ADR 0028).
+    if screen is not None:
+        asked_from = screen.screen
 
     user_msg = CoachChatMessage(
         thread_id=thread.id,
@@ -327,7 +370,10 @@ async def stream_thread_turn(
         }
     )
 
-    system_prompt = build_thread_system_prompt(db, user, thread)
+    screen_view = (
+        resolve_screen_view(db, user.id, screen) if screen is not None else None
+    )
+    system_prompt = build_thread_system_prompt(db, user, thread, screen_view)
 
     history = thread_service.thread_messages(db, thread)[-_MAX_LLM_HISTORY_TURNS:]
     llm_messages = [{"role": row.role, "content": row.content} for row in history]
@@ -352,11 +398,24 @@ async def stream_thread_turn(
         assistant_text = out["stream_fail_message"]
     else:
         assistant_text = out["assistant_text"] or ""
-        # The same deterministic floor as the activity chat. There is no stored
-        # pack for a thread turn, so the pack-dependent rules degrade off and
-        # rule 5 (medical scope) runs unconditionally; slice 3 (#767) re-sources
-        # rules 2/4 from the turn's own facts.
-        violations = _validate_chat_text(assistant_text, {})
+        # The deterministic floor, re-sourced from the TURN'S OWN FACTS (#767,
+        # ADR 0028): medical scope unconditional; zone language from the
+        # runner's profile calibration; interval-execution claims gated against
+        # the sessions actually fetched or shown this turn.
+        from app.services.coach.context import zones_calibration
+
+        profile_row = (
+            db.query(UserProfile).filter(UserProfile.user_id == user.id).first()
+        )
+        zones_calibrated, _basis = zones_calibration(profile_row)
+        sessions_in_play = sessions_in_play_from_tool_results(
+            out.get("tool_results", [])
+        ) + sessions_in_play_from_view(screen_view)
+        violations = _validate_conversational_text(
+            assistant_text,
+            zones_calibrated=zones_calibrated,
+            sessions_in_play=sessions_in_play,
+        )
         if any(v.rule == "medical_overreach" for v in violations):
             logger.warning(
                 "thread reply gated for medical overreach (thread %s): %s",

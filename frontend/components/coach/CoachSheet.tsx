@@ -60,8 +60,65 @@ const SCREEN_LABELS: Record<string, string> = {
   profile: 'Profile',
 };
 
+const RIBBON_LABELS: Record<string, string> = {
+  home: 'Home',
+  activities: 'Activities',
+  activity: 'This run',
+  load: 'Load',
+  trends: 'Trends',
+  profile: 'Profile',
+};
+
 function askedFromLabel(key: string): string {
   return SCREEN_LABELS[key] ?? key;
+}
+
+// #767: the ranges the server pointer accepts; the Trends page's "ALL" has no
+// bounded server view, so it travels as identity only.
+const POINTER_RANGES = new Set(['7D', '30D', '3M', '6M', '1Y']);
+
+// The context ribbon: names what the coach is looking at with the runner, and
+// is the only thing that animates on navigation — a short cross-fade of its
+// text, so the change reads as the coach glancing up rather than the sheet
+// reloading. It is honest by construction: the server resolves the pointer, so
+// the ribbon never claims sight of something the coach cannot see (ADR 0028).
+function ContextRibbon({
+  screenKey,
+  selections,
+}: {
+  screenKey: string;
+  selections: { range?: string; types?: string[] } | null;
+}) {
+  const parts = [RIBBON_LABELS[screenKey] ?? screenKey];
+  if (selections?.range) parts.push(selections.range);
+  if (selections?.types?.length) parts.push(selections.types.join(', '));
+  const text = parts.join(' · ');
+  const [shown, setShown] = useState(text);
+  const [faded, setFaded] = useState(false);
+  useEffect(() => {
+    if (text === shown) return;
+    setFaded(true);
+    const t = setTimeout(() => {
+      setShown(text);
+      setFaded(false);
+    }, 150);
+    return () => clearTimeout(t);
+  }, [text, shown]);
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-b border-gray-100 px-3.5 pb-2 dark:border-gray-700/60">
+      <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.12em] text-gray-400 dark:text-gray-500">
+        Looking at
+      </span>
+      <span
+        className={`truncate text-[12px] text-gray-800 transition-opacity duration-150 motion-reduce:transition-none dark:text-gray-200 ${
+          faded ? 'opacity-0 motion-reduce:opacity-100' : 'opacity-100'
+        }`}
+      >
+        <b className="font-semibold">{shown.split(' · ')[0]}</b>
+        {shown.includes(' · ') ? ` · ${shown.split(' · ').slice(1).join(' · ')}` : ''}
+      </span>
+    </div>
+  );
 }
 
 // Size the sheet to the VISUAL viewport while the keyboard is up: a fixed
@@ -122,7 +179,7 @@ const coachProseClasses =
   'prose prose-sm prose-gray dark:prose-invert max-w-none leading-relaxed font-serif prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm';
 
 export default function CoachSheet() {
-  const { isOpen, close, screen } = useCoachSheet();
+  const { isOpen, close, screen, selections } = useCoachSheet();
   const vvBox = useVisualViewportBox();
 
   const [threads, setThreads] = useState<ThreadListItem[]>([]);
@@ -270,7 +327,17 @@ export default function CoachSheet() {
             thread_id: currentThreadId ?? undefined,
             anchor_activity_id:
               currentThreadId === null ? anchorActivityId ?? undefined : undefined,
-            asked_from: screen.key,
+            // #767: the screen POINTER — identity + the runner's selections
+            // only; the server recomputes every number (ADR 0028).
+            screen: {
+              screen: screen.key,
+              activity_id: screen.activityId ?? undefined,
+              range:
+                selections?.range && POINTER_RANGES.has(selections.range)
+                  ? selections.range
+                  : undefined,
+              types: selections?.types?.length ? selections.types : undefined,
+            },
           }),
         });
         if (!res.ok) throw new Error(`Thread turn failed (${res.status})`);
@@ -318,7 +385,7 @@ export default function CoachSheet() {
         setStreamingTools([]);
       }
     },
-    [input, streaming, currentThreadId, anchorActivityId, screen.key, refreshThreads, scrollToBottom],
+    [input, streaming, currentThreadId, anchorActivityId, screen.key, screen.activityId, selections, refreshThreads, scrollToBottom],
   );
 
   const renameThread = useCallback(
@@ -413,6 +480,9 @@ export default function CoachSheet() {
         </div>
       </div>
 
+      {/* Context ribbon (#767): what the coach is looking at with the runner. */}
+      <ContextRibbon screenKey={screen.key} selections={selections} />
+
       {/* Transcript region (the switcher drops over it). */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         {switcherOpen && (
@@ -429,7 +499,7 @@ export default function CoachSheet() {
 
         <div
           ref={messagesContainerRef}
-          className="chat-scroll flex-1 overflow-y-auto border-t border-gray-100 px-4 py-3.5 dark:border-gray-700/60"
+          className="chat-scroll flex-1 overflow-y-auto px-4 py-3.5"
         >
           {/* Anchored thread: the run's report at the head, a read-time
               projection of the stored report (ADR 0027). */}

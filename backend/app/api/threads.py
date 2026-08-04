@@ -84,6 +84,7 @@ async def post_thread_message(
                 thread=thread,
                 anchor_activity=anchor_activity,
                 asked_from=body.asked_from,
+                screen=body.screen,
             ):
                 if event.is_heartbeat:
                     yield ": hb\n\n"
