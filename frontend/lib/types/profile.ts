@@ -8,6 +8,10 @@ export interface UserProfile {
   max_hr?: number;
   max_hr_source?: string | null;  // "user_entered" | "race_estimate" | "lab_test"
   resting_hr?: number;  // manual resting HR (bpm), interim source for #555
+  // #742: the runner's build. Null/absent means NOT STATED, and the coach pack drops
+  // the signal rather than substituting a typical runner — so never coerce these to 0.
+  weight_kg?: number | null;
+  height_cm?: number | null;
   week_starts_on?: number;  // 0=Monday (default), 6=Sunday (#676)
   upcoming_races: { name: string; date: string; distance_km: number }[];
   injury_notes?: string;

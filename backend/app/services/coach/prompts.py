@@ -1164,6 +1164,38 @@ SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V7 = _regroup_lean_prompt(
 )
 
 
+# Body (#742): grouped_v7 shipped the "coach the runner in front of me" disposition and an
+# A/B probe found it inert — a ~109 kg note in free-text `injury_notes` produced a
+# substantively identical report, because the coach had no structured read of the build.
+# grouped_v8 pairs that disposition with the `profile.body` pack signal and one bullet
+# defining its lane. The bullet deliberately carries no threshold and no formula: a rule
+# keyed to a weight would be the population median in prompt form, which is the thing the
+# personalisation disposition exists to refuse.
+#
+# It also closes a floor gap. Surfacing weight makes body composition salient, and the
+# medical-scope validator polices dose advice, diagnosis verbs, medication directives and
+# asserted clinical conditions — not "you should lose weight". The final clause is that
+# boundary, stated as one class-level rule rather than a list of forbidden topics.
+#
+# FULLER only; the opener carries no advice, so its prose stays byte-identical to
+# grouped_v3/v5/v7 (and prod's receipt cadence runs no LLM opener at all).
+_LEAN_BODY_BULLET = (
+    "- Their build tells me what their training has to survive, not what they should look "
+    "like. Weight and height change the method — how fast volume climbs, how much of the "
+    "week earns strength work, how long recovery really takes — because the standard ramp "
+    "quietly assumes a body that may not be theirs. These are figures they gave me, not "
+    "something I measured, and a number is not a category: changing their body is never my "
+    "advice to give, only how I train the one they have.\n"
+)
+SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V8 = _regroup_lean_prompt(
+    SYSTEM_PROMPT_MESSAGE_LEAN_V1.replace(
+        _LEAN_PERSONALISATION_ANCHOR,
+        _LEAN_PERSONALISATION_BULLET + _LEAN_BODY_BULLET + _LEAN_PERSONALISATION_ANCHOR,
+    ),
+    _GROUP_ORIENTATION_V3,
+)
+
+
 PROMPT_VERSIONS = {
     "coach_report_v1": SYSTEM_PROMPT_V1,
     "coach_report_v2": SYSTEM_PROMPT_V2,
@@ -1246,6 +1278,11 @@ PROMPT_VERSIONS = {
     # TEXT differs. A SIBLING of grouped_v6 (each isolates one change off grouped_v5), so
     # flipping grouped_v5 -> grouped_v7 is a pure A/B on personalisation. Ships INERT.
     "coach_message_lean_grouped_v7": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V7,
+    # grouped_v8 = grouped_v7 + the BODY bullet AND the `profile.body` pack signal. The
+    # first grouped version since v5 to add a CAPABILITY rather than isolate a prose
+    # change, so its pack differs from grouped_v5/v6/v7 by that one nested field. Ships
+    # INERT (flip target: grouped_v7 -> grouped_v8).
+    "coach_message_lean_grouped_v8": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V8,
 }
 
 # Prompt-id prefixes that select the A3 prose-message output family (schema 2.x).
@@ -1297,6 +1334,9 @@ _OPENER_PROMPTS = {
     # grouped_v7: the personalisation bullet is a fuller-only disposition (the opener makes no
     # recommendations), so grouped_v7's opener is byte-identical to grouped_v3/v5.
     "coach_message_lean_grouped_v7": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
+    # grouped_v8: the body bullet is a fuller-only disposition (the opener makes no
+    # recommendations), so grouped_v8's opener is byte-identical to grouped_v3/v5.
+    "coach_message_lean_grouped_v8": SYSTEM_PROMPT_MESSAGE_LEAN_GROUPED_V3_OPENER,
 }
 
 # ADR 0026 Slice 1: the prompt ids that receive the GROUPED pack serialization
@@ -1313,6 +1353,7 @@ GROUPED_PACK_PROMPT_IDS: frozenset[str] = frozenset(
         "coach_message_lean_grouped_v5",
         "coach_message_lean_grouped_v6",
         "coach_message_lean_grouped_v7",
+        "coach_message_lean_grouped_v8",
     }
 )
 
@@ -1401,6 +1442,11 @@ INTENSITY_READ_PROMPT_IDS = ids_with(PromptFeature.INTENSITY_READ)
 # distribution + trend `intensity_mix` (the "how hard lately" half of the retired
 # intensity section).
 INTENSITY_MIX_PROMPT_IDS = ids_with(PromptFeature.INTENSITY_MIX)
+
+# #742: prompt ids that carry the BODY clause AND the nested `profile.body` signal
+# (the runner's stated build). Gates both, so under every prior prompt the profile
+# section keeps its pre-#742 shape byte-for-byte.
+BODY_PROMPT_IDS = ids_with(PromptFeature.BODY)
 
 # ADR 0026 Slice 4 (#680): prompt ids whose OUTGOING LLM pack view is reframed to
 # coach-native units/precision (coach_framing.frame_pack). A presentation-only flag over
@@ -1519,6 +1565,14 @@ def is_intensity_read_prompt(prompt_id: Optional[str]) -> bool:
     every prior prompt, which still reads those four lenses instead — so the two shapes
     never both emit and the pack stays byte-stable under a rollback."""
     return has_feature(prompt_id, PromptFeature.INTENSITY_READ)
+
+
+def is_body_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt reads the runner's stated build (#742): its pack
+    carries the nested `profile.body` signal and its system prompt carries the BODY
+    clause. False for every prior prompt, so the build stays wholly inert under a
+    rollback and the profile section is byte-identical to its pre-#742 shape."""
+    return has_feature(prompt_id, PromptFeature.BODY)
 
 
 def is_intensity_mix_prompt(prompt_id: Optional[str]) -> bool:

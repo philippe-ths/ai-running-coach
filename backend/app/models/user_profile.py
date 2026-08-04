@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, date
 from typing import Optional
 
-from sqlalchemy import String, Integer, ForeignKey, DateTime, Date, Text, JSON, Boolean
+from sqlalchemy import String, Integer, Float, ForeignKey, DateTime, Date, Text, JSON, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -25,6 +25,14 @@ class UserProfile(Base):
     # (#555). Null until the runner enters it; the referral layer abstains while
     # absent, and #166's sustained-rise red flag activates once a trend source lands.
     resting_hr: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # The runner's build (#742). Null means NOT STATED, which is not the same as
+    # average: the coach pack drops the signal entirely rather than substituting a
+    # typical runner. Raw facts only -- no BMI or other derived index is stored or
+    # computed anywhere, because a ratio invites the population formula the North
+    # Star's "coach this runner, not the median" exists to refuse. Float because a
+    # runner who tracks 78.4 kg should not be rounded to an integer.
+    weight_kg: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    height_cm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # The runner's own HR-zone lower bounds (5 ascending bpm values), pulled from
     # their Strava athlete zones so time-in-zone matches what Strava shows (#297).
     # Null until first synced; analysis then falls back to the %-of-max-HR scheme.

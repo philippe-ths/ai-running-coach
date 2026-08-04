@@ -35,3 +35,44 @@ def test_get_and_update_profile(client: TestClient, db):
     body = response.json()
     assert body["injury_notes"] == "Left knee soreness"
     assert body["resting_hr"] == 48
+
+
+def test_body_metrics_round_trip(client: TestClient, db):
+    """#742: the runner's build is captured on the profile, which is the channel that
+    reaches the coach pack. Before this the only route was free-text injury_notes, and
+    an A/B probe showed the coach could not act on it."""
+    response = client.put("/api/profile", json={
+        "goal_type": "general",
+        "experience_level": "intermediate",
+        "weekly_days_available": 4,
+        "weight_kg": 109.4,
+        "height_cm": 193.0,
+    })
+
+    assert response.status_code == 200
+    assert response.json()["weight_kg"] == 109.4
+    assert client.get("/api/profile").json()["height_cm"] == 193.0
+
+
+def test_body_metrics_default_to_unstated(client: TestClient, db):
+    # Not stated is not average: the field stays null so the coach pack drops the
+    # signal rather than substituting a typical runner.
+    body = client.get("/api/profile").json()
+
+    assert body["weight_kg"] is None
+    assert body["height_cm"] is None
+
+
+def test_a_unit_slip_is_rejected_rather_than_coached_on(client: TestClient, db):
+    """Pounds typed into a kg field reads as ~240 and inches into a cm field as ~74.
+    Either would reach the coach as a FACT about the runner's build and skew every
+    method judgement made from it, so the envelope rejects them at the edge."""
+    base = {
+        "goal_type": "general", "experience_level": "intermediate",
+        "weekly_days_available": 4,
+    }
+
+    assert client.put("/api/profile", json={**base, "weight_kg": 240.0}).status_code == 200
+    assert client.put("/api/profile", json={**base, "weight_kg": 400.0}).status_code == 422
+    assert client.put("/api/profile", json={**base, "height_cm": 74.0}).status_code == 422
+    assert client.put("/api/profile", json={**base, "height_cm": 1.87}).status_code == 422

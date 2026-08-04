@@ -129,8 +129,9 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
     """A report that violates every rubric dimension: no headline, ignores a fired
     confound, medical overreach, parrots the prior report, claims an ungrounded
     trend, frames advice away from what the runner acts on, narrates the cumulative
-    load number as an intensity verdict (#168), and leads with a low detection-
-    confidence caveat instead of coaching the present per-rep data (#171)."""
+    load number as an intensity verdict (#168), leads with a low detection-
+    confidence caveat instead of coaching the present per-rep data (#171), and
+    advises on the runner's body rather than on training it (#742)."""
     content = CoachReportContent(
         headline=None,  # (1) no lead verdict
         # (5) ungrounded trend AND (8) leads with a low-confidence detection caveat
@@ -146,6 +147,8 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
             # (11) a binary non-compliance verdict / nag about the runner's behaviour —
             # the retired belief loop's symptom (ADR 0025, G2/G3).
             CoachTakeaway(text="And you keep ignoring my easy-day guidance, as I keep telling you."),
+            # (14) advises on the BODY rather than on how to train it (#742).
+            CoachTakeaway(text="At your BMI you would run faster if you lost 10kg."),
         ],
         next_steps=[CoachNextStep(
             action="Add a long run",
@@ -174,6 +177,9 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
         # voice sensor and the P1.2 corpus sensor (both are parallel floor-preserved
         # sensors over the same referral surface, for the two steering inputs).
         calibration={"referral": {"nudge": "Consider a check-in with a healthcare professional.", "basis": "illness_or_extreme_fatigue"}},
+        # (14) a build was surfaced and the report advises on the BODY rather than on
+        # how to train it — the #742 failure the BODY clause exists to prevent.
+        profile={"body": {"weight_kg": 109.0, "height_cm": 193.0}},
     )
     return content, pack
 
@@ -218,8 +224,9 @@ def deliberately_bad_message_report() -> Tuple[CoachMessageReport, CoachContextP
     """A prose message that violates every rubric dimension: no headline label,
     ignores a fired confound, medical overreach, opens by parroting the prior lead,
     claims an ungrounded trend, frames advice away from what the runner acts on,
-    narrates the cumulative load number as an intensity verdict (#168), and leads
-    with a low detection-confidence caveat instead of coaching the rep data (#171)."""
+    narrates the cumulative load number as an intensity verdict (#168), leads
+    with a low detection-confidence caveat instead of coaching the rep data (#171),
+    and advises on the runner's body rather than on training it (#742)."""
     content = CoachMessageReport(
         # The opening sentence both (4) parrots the prior lead AND (8) leads with a
         # detection caveat though per-rep data is present.
@@ -230,7 +237,7 @@ def deliberately_bad_message_report() -> Tuple[CoachMessageReport, CoachContextP
             "would diagnose this as chronic fatigue. An effort score of 265.6 "
             "confirms this stayed in true recovery territory, well below moderate "
             "intensity thresholds. And you keep ignoring my easy-day guidance, as "
-            "I keep telling you."
+            "I keep telling you. At your BMI you would run faster if you lost 10kg."
         ),
         headline=None,  # (1) no lead verdict label, tail not degraded
         next_steps=[CoachNextStep(
@@ -257,5 +264,8 @@ def deliberately_bad_message_report() -> Tuple[CoachMessageReport, CoachContextP
         # consult prompt — the safety floor was dropped. Drives both the P1.1 voice
         # sensor and the P1.2 corpus sensor (parallel floor-preserved sensors).
         calibration={"referral": {"nudge": "Consider a check-in with a healthcare professional.", "basis": "illness_or_extreme_fatigue"}},
+        # (14) a build was surfaced and the report advises on the BODY rather than on
+        # how to train it — the #742 failure the BODY clause exists to prevent.
+        profile={"body": {"weight_kg": 109.0, "height_cm": 193.0}},
     )
     return content, pack
