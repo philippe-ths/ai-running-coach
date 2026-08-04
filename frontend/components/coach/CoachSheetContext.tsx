@@ -54,6 +54,14 @@ interface CoachSheetState {
   open: () => void;
   close: () => void;
   toggle: () => void;
+  // #770: open the sheet with a question already in the composer — the report's
+  // conversational options are the caller. Prefilled rather than sent, so the
+  // send waits for the sheet to resolve which thread it is in (sending first
+  // would create a second thread the auto-open then navigates away from), and
+  // the runner can edit the question before it goes.
+  openWith: (prompt?: string) => void;
+  pendingPrompt: string | null;
+  consumePendingPrompt: () => void;
   screen: ScreenIdentity;
   selections: ScreenSelections | null;
   publishSelections: (sel: ScreenSelections | null) => void;
@@ -66,9 +74,16 @@ export function CoachSheetProvider({ children }: { children: React.ReactNode }) 
   const [selections, setSelections] = useState<ScreenSelections | null>(null);
   const pathname = usePathname();
 
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+
   const open = useCallback(() => setIsOpen(true), []);
   const close = useCallback(() => setIsOpen(false), []);
   const toggle = useCallback(() => setIsOpen(v => !v), []);
+  const openWith = useCallback((prompt?: string) => {
+    setPendingPrompt(prompt?.trim() || null);
+    setIsOpen(true);
+  }, []);
+  const consumePendingPrompt = useCallback(() => setPendingPrompt(null), []);
   const publishSelections = useCallback(
     (sel: ScreenSelections | null) => setSelections(sel),
     [],
@@ -81,8 +96,30 @@ export function CoachSheetProvider({ children }: { children: React.ReactNode }) 
   // pathname-watching is needed here (a parent-effect clear would run AFTER
   // the child page's publish on mount and wipe it).
   const value = useMemo(
-    () => ({ isOpen, open, close, toggle, screen, selections, publishSelections }),
-    [isOpen, open, close, toggle, screen, selections, publishSelections],
+    () => ({
+      isOpen,
+      open,
+      close,
+      toggle,
+      openWith,
+      pendingPrompt,
+      consumePendingPrompt,
+      screen,
+      selections,
+      publishSelections,
+    }),
+    [
+      isOpen,
+      open,
+      close,
+      toggle,
+      openWith,
+      pendingPrompt,
+      consumePendingPrompt,
+      screen,
+      selections,
+      publishSelections,
+    ],
   );
 
   return (

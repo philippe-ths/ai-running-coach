@@ -1750,10 +1750,10 @@ def render_voice_block(base_prompt_id: str, voice=None) -> str:
         return ""
 
     # #522: the runner-facing voice block is globally kill-switchable. Enforced HERE,
-    # in the one render both the report (build_system_prompt) and chat
-    # (_resolve_voice_block) go through, so no call site can bypass it. It previously
-    # lived only in build_system_prompt, which the chat voice path does not call, so a
-    # disabled voice still reached chat.
+    # in the one render both the report (build_system_prompt) and the conversational
+    # turn (thread_turn._resolve_voice_block_for_user) go through, so no call site can
+    # bypass it. It previously lived only in build_system_prompt, which the
+    # conversational voice path does not call, so a disabled voice still reached chat.
     if not settings.COACH_VOICE_BLOCK_ENABLED:
         return ""
 

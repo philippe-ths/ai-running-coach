@@ -164,21 +164,31 @@ async def test_under_budget_user_unaffected(db, _single_shot_prompt, _capped_gat
 
 
 @pytest.mark.asyncio
-async def test_chat_declines_over_budget_without_calling_llm(db, _capped_gate):
-    """Chat resends the full context every turn (an unbounded input-token lever),
-    so at the cap it declines with a plain message and never calls the LLM."""
+async def test_conversation_declines_over_budget_without_calling_llm(db, _capped_gate):
+    """A conversational turn resends the full context every time (an unbounded
+    input-token lever), so at the cap it declines with a plain message that says
+    what still works, and never calls the LLM."""
+    from app.models import User
     from tests.test_coach_chat_stream import _seed_activity_with_report
-    from app.services.coach.chat import stream_chat_response
     from app.services.coach.llm import AnthropicClient
+    from app.services.coach.thread_turn import (
+        THREAD_BUDGET_PAUSED_MESSAGE,
+        stream_thread_turn,
+    )
 
     activity = _seed_activity_with_report(db)
     _capped_gate.record(str(activity.user_id), "claude-opus-4-8", 1_000_000, 0)
+    user = db.query(User).filter(User.id == activity.user_id).one()
 
     with patch.object(
         AnthropicClient, "stream_chat_turn", side_effect=AssertionError("LLM must not be called")
     ):
         events = [
-            ev async for ev in stream_chat_response(db, str(activity.id), "How did I do?")
+            ev
+            async for ev in stream_thread_turn(
+                db, user, message="How did I do?", anchor_activity=activity
+            )
         ]
     text = "".join(ev.text for ev in events if ev.text)
-    assert "usage limit" in text.lower()
+    assert text == THREAD_BUDGET_PAUSED_MESSAGE
+    assert "still sync" in text  # degrades with direction, not silence

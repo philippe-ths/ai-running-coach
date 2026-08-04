@@ -1,10 +1,13 @@
-"""#648: the coach-chat agentic tool loop inside `stream_chat_response`.
+"""#648: the agentic tool loop inside the shared `_buffered_tool_loop`.
 
 Drives the streaming coroutine directly (TestClient buffers the SSE body, so it is
 blind to the intermediate status frames these tests inspect). Uses a scripted
 `stream_chat_turn` stub to pin the loop mechanics WITHOUT a real LLM: a tool round
 executes owner-scoped and feeds its result back, the final round runs tools-off so
 the loop terminates, and the medical-scope floor still gates the final reply.
+
+Driven through the thread turn, the surviving conversational surface (#770): the
+loop is shared, so these pins hold wherever it is used.
 """
 
 from datetime import datetime, timedelta, date
@@ -13,13 +16,13 @@ from uuid import uuid4
 
 import pytest
 
-from app.models import Activity, CoachChatMessage, DerivedMetric
+from app.models import Activity, CoachChatMessage, DerivedMetric, User
 from app.services.coach.chat import (
     _MAX_TOOL_ROUNDS,
     MEDICAL_REDIRECT_MESSAGE,
     get_chat_history,
-    stream_chat_response,
 )
+from app.services.coach.thread_turn import stream_thread_turn
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.query_tools import CHAT_TOOLS
 from tests._chat_stubs import chat_tool_loop_stub
@@ -47,8 +50,16 @@ def _past_run(db, user_id, *, days_ago, distance_m=8000, moving_time_s=2400):
     return a
 
 
-async def _drain(db, activity_id, message):
-    return [ev async for ev in stream_chat_response(db, str(activity_id), message)]
+async def _drain(db, activity, message):
+    """One thread turn anchored to the activity: the thread dual-writes
+    `activity_id`, so the activity-scoped history read still sees the turn."""
+    user = db.query(User).filter(User.id == activity.user_id).one()
+    return [
+        ev
+        async for ev in stream_thread_turn(
+            db, user, message=message, anchor_activity=activity
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -63,7 +74,7 @@ async def test_tool_loop_fetches_then_answers(db):
     ], capture=capture)
 
     with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
-        events = await _drain(db, activity.id, "How far was my longest run?")
+        events = await _drain(db, activity, "How far was my longest run?")
 
     # the ephemeral affordance for the list tool surfaced during the fetch
     assert any(ev.status_label == "Checking your training history…" for ev in events)
@@ -95,11 +106,13 @@ async def test_final_round_runs_tools_off(db):
     stub = chat_tool_loop_stub(rounds, capture=capture)
 
     with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
-        events = await _drain(db, activity.id, "tell me everything")
+        events = await _drain(db, activity, "tell me everything")
 
     tools_seen = capture["tools_seen"]
     assert len(tools_seen) == _MAX_TOOL_ROUNDS
-    assert all(t is CHAT_TOOLS for t in tools_seen[:-1])
+    fetch_tools = {t["name"] for t in CHAT_TOOLS}
+    for offered in tools_seen[:-1]:
+        assert fetch_tools <= {t["name"] for t in offered}
     assert tools_seen[-1] is None  # final round: tools off
     assert "Here's the summary." in "".join(ev.text for ev in events if ev.text)
 
@@ -117,7 +130,7 @@ async def test_medical_floor_holds_after_a_tool_round(db):
         bad,
     ])
     with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
-        events = await _drain(db, activity.id, "my shin hurts")
+        events = await _drain(db, activity, "my shin hurts")
 
     text = "".join(ev.text for ev in events if ev.text)
     assert text == MEDICAL_REDIRECT_MESSAGE
@@ -131,7 +144,7 @@ async def test_direct_answer_without_a_tool_call(db):
     activity = _seed_activity_with_report(db)
     stub = chat_tool_loop_stub(["Nice easy run today, well controlled."])
     with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
-        events = await _drain(db, activity.id, "how did I do?")
+        events = await _drain(db, activity, "how did I do?")
 
     assert not any(ev.status_label for ev in events)
     assert "Nice easy run today, well controlled." in "".join(ev.text for ev in events if ev.text)
@@ -151,7 +164,7 @@ async def test_tools_used_persisted_and_returned_in_history(db):
         "Your longest recent run was 12.0 km.",
     ])
     with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
-        events = await _drain(db, activity.id, "how far was my longest run?")
+        events = await _drain(db, activity, "how far was my longest run?")
 
     # a tool_trace event carries WHAT was fetched: resolved window + count (#664),
     # all server-derived, so the runner can sanity-check the coach's data.
@@ -202,7 +215,7 @@ async def test_multi_window_fetch_shows_one_record_per_call(db):
         "You did one run this week and two in the last 90 days.",
     ])
     with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
-        await _drain(db, activity.id, "how much have I run lately?")
+        await _drain(db, activity, "how much have I run lately?")
 
     saved = (
         db.query(CoachChatMessage)
@@ -251,7 +264,7 @@ async def test_tools_used_null_when_no_fetch(db):
     activity = _seed_activity_with_report(db)
     stub = chat_tool_loop_stub(["Nice easy run, nothing to fetch."])
     with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
-        await _drain(db, activity.id, "how did I do?")
+        await _drain(db, activity, "how did I do?")
 
     saved = (
         db.query(CoachChatMessage)

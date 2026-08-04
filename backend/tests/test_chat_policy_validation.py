@@ -2,9 +2,10 @@
 
 Chat is the one place coach prose reached the runner UNVALIDATED — the report path
 validates before storing, retries, and forces a fallback on surviving medical
-overreach, but `stream_chat_response` streamed raw LLM tokens straight through.
+overreach, but the conversational path streamed raw LLM tokens straight through.
 
-These tests pin the chat-side severity model (which mirrors the report path):
+These tests pin the conversational severity model (which mirrors the report path),
+driven through the thread turn — the surviving conversational surface (#770):
 - medical overreach is the hard floor — the raw turn is withheld and replaced with
   a safe, non-diagnostic redirect (the chat analogue of the report's forced
   fallback), and the redirect is what gets streamed AND persisted.
@@ -24,7 +25,7 @@ from uuid import uuid4
 from app.models import Activity, DerivedMetric, StravaAccount, User, UserProfile
 from app.models.coach_chat_message import CoachChatMessage
 from app.models.coach_report import CoachReport
-from app.services.coach.chat import MEDICAL_REDIRECT_MESSAGE, _validate_chat_text
+from app.services.coach.chat import MEDICAL_REDIRECT_MESSAGE
 from app.services.coach.validator import check_medical_overreach
 from tests.test_policy_validator import _make_pack
 
@@ -74,8 +75,11 @@ def _post_chat_with_chunks(client, activity, chunks):
         new=chat_turn_stub(list(chunks)),
     ):
         return client.post(
-            f"/api/activities/{activity.id}/coach-chat",
-            json={"message": "How did I do?"},
+            "/api/coach/threads/messages",
+            json={
+                "message": "How did I do?",
+                "anchor_activity_id": str(activity.id),
+            },
         )
 
 
@@ -95,8 +99,11 @@ def _post_chat_raising(client, activity):
         new=chat_raising_stub(before="Let me think..."),
     ):
         return client.post(
-            f"/api/activities/{activity.id}/coach-chat",
-            json={"message": "How did I do?"},
+            "/api/coach/threads/messages",
+            json={
+                "message": "How did I do?",
+                "anchor_activity_id": str(activity.id),
+            },
         )
 
 
@@ -114,7 +121,9 @@ def _streamed_text(resp) -> str:
         payload = line[len("data: "):]
         if payload == "[DONE]":
             continue
-        out.append(json.loads(payload))
+        frame = json.loads(payload)
+        if isinstance(frame, str):  # object frames (thread meta) are not reply text
+            out.append(frame)
     return "".join(out)
 
 
@@ -183,20 +192,6 @@ def test_medical_redirect_message_passes_the_validator():
     """The redirect that stands in for a gated turn must not itself trip the very
     rule it replaces — guards against a future reword shipping overreach."""
     assert check_medical_overreach(MEDICAL_REDIRECT_MESSAGE) == []
-
-
-def test_validate_chat_text_degrades_safely_without_a_pack():
-    """Rule 5 (medical scope) is pack-independent, so the floor holds even when the
-    stored pack is empty/unparseable; the soft rules simply do not run."""
-    medical = "You have a stress fracture; take 200mg ibuprofen."
-    medical_rules = [v.rule for v in _validate_chat_text(medical, {})]
-    assert "medical_overreach" in medical_rules
-
-    clean = "Good steady run, your effort looked well controlled."
-    assert _validate_chat_text(clean, {}) == []
-
-
-# --- threat model: dangerous output must not reach the runner ---------------------
 
 
 def test_overreach_split_across_chunks_is_still_gated(client, db):

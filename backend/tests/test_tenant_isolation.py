@@ -194,11 +194,12 @@ def test_delete_chat_on_other_users_activity_is_404(client, two_users, db):
     ).count() == 1
 
 
-def test_post_chat_on_other_users_activity_is_404(client, two_users):
+def test_thread_turn_anchored_to_another_users_activity_is_404(client, two_users):
     a, b = two_users
     _act_as(a.user)
     resp = client.post(
-        f"/api/activities/{b.activity.id}/coach-chat", json={"message": "hi"}
+        "/api/coach/threads/messages",
+        json={"message": "hi", "anchor_activity_id": str(b.activity.id)},
     )
     assert resp.status_code == 404
 

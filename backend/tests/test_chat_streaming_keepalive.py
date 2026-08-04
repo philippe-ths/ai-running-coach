@@ -38,8 +38,8 @@ async def _stream_sse_lines(activity_id, message):
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
         async with ac.stream(
             "POST",
-            f"/api/activities/{activity_id}/coach-chat",
-            json={"message": message},
+            "/api/coach/threads/messages",
+            json={"message": message, "anchor_activity_id": str(activity_id)},
         ) as resp:
             assert resp.status_code == 200
             async for line in resp.aiter_lines():
@@ -52,10 +52,16 @@ def _heartbeat_indices(lines):
 
 
 def _content_indices(lines):
-    return [
-        i for i, ln in enumerate(lines)
-        if ln.startswith("data: ") and ln.strip() != "data: [DONE]"
-    ]
+    """Frames carrying reply text. A thread turn also emits object frames (its
+    thread announcement, status, trace) before the reply is buffered; those are
+    not content, and counting them would hide the very gap under test."""
+    out = []
+    for i, ln in enumerate(lines):
+        if not ln.startswith("data: ") or ln.strip() == "data: [DONE]":
+            continue
+        if isinstance(json.loads(ln[len("data: "):]), str):
+            out.append(i)
+    return out
 
 
 @pytest.mark.asyncio

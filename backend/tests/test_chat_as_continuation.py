@@ -1,27 +1,30 @@
-"""I2: chat is a continuation of the coaching relationship, not a generic chatbot.
+"""I2: a conversational turn is a continuation of the coaching relationship.
 
-The chat coach must speak in the runner's declared Voice and carry the same
-relationship-memory authority disciplines (memory / corpus / user-materials /
-training-load) that the report coach carries, so it is the SAME
-coach the runner already heard from. Storage stays per-activity; this is the
-read-side shared-memory unification (epic #177, I2).
+The coach the runner talks to must speak in their declared Voice and carry the
+same relationship-memory authority disciplines the report coach carries, so it is
+the SAME coach they already heard from (epic #177, I2).
+
+Driven through the thread turn, the surviving conversational surface (#770). The
+thread assembles a relationship baseline rather than a stored report pack, so the
+tiers it briefs are the ones that baseline actually carries — the gate is the
+same shared renderer either way.
 """
 
-from datetime import datetime
-from unittest.mock import patch
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.core.config import settings
-from app.models import Activity, DerivedMetric, StravaAccount, User, UserProfile
-from app.models.coach_report import CoachReport
+from app.models import Activity, StravaAccount, User, UserProfile
 from app.models.coaching_relationship import CoachingRelationship
-from app.services.coach.chat import _build_chat_system_prompt
+from app.models.runner_memory import RunnerMemory
+from app.models.thread import Thread
+from app.services.coach.thread_turn import build_thread_system_prompt
 
 VOICE_AWARE_PROMPT = "coach_message_v7"
 NON_VOICE_PROMPT = "coach_report_v10"
 
 
-def _seed(db, *, voice_preset=None) -> Activity:
+def _seed(db, *, voice_preset=None, with_memory=False):
     user = User(email=f"u-{uuid4()}@example.com")
     db.add(user)
     db.commit()
@@ -35,130 +38,90 @@ def _seed(db, *, voice_preset=None) -> Activity:
     ))
     if voice_preset is not None:
         db.add(CoachingRelationship(user_id=user.id, voice_preset=voice_preset))
+    if with_memory:
+        db.add(RunnerMemory(
+            user_id=user.id,
+            profile={"who_you_are": ["a marathoner"]},
+            model_id="claude-haiku-4-5",
+            source_report_count=3,
+        ))
     activity = Activity(
-        user_id=user.id, strava_activity_id=42,
-        start_date=datetime(2026, 5, 27, 10, 0, 0), type="Run", name="Test run",
-        distance_m=5000, moving_time_s=1500, elapsed_time_s=1500, elev_gain_m=10.0,
-        avg_hr=140, raw_summary={},
+        user_id=user.id, strava_activity_id=int(uuid4().int % 10**9),
+        start_date=datetime(2026, 5, 27, 10, 0, tzinfo=timezone.utc), type="Run",
+        name="Test run", distance_m=5000, moving_time_s=1500, elapsed_time_s=1500,
+        elev_gain_m=10.0, avg_hr=140, raw_summary={},
     )
     db.add(activity)
     db.commit()
-    db.add(DerivedMetric(
-        activity_id=activity.id, effort="easy", structure="continuous",
-        duration_class="standard", effort_score=50.0, flags=[],
-        confidence="medium", confidence_reasons=[],
-    ))
-    db.add(CoachReport(
-        activity_id=activity.id, report={"key_takeaways": [{"text": "ok"}]},
-        meta={}, context_pack={}, prompt_id="x", schema_version=1, is_fallback=False,
-    ))
+    thread = Thread(user_id=user.id, activity_id=activity.id)
+    db.add(thread)
     db.commit()
-    db.refresh(activity)
-    return activity
+    return user, thread
 
 
-def _capture_system(client, db, activity):
-    """POST a chat turn with a mocked LLM and return the system prompt it received."""
-    from tests._chat_stubs import chat_turn_stub
+def test_prompt_carries_relationship_memory_disciplines(db):
+    """#667 gates each tier on what is actually in front of the coach. With the
+    runner's memory profile in the baseline, its discipline is briefed, and the
+    tiers retired by ADR 0025 are never re-briefed."""
+    user, thread = _seed(db, with_memory=True)
+    prompt = build_thread_system_prompt(db, user, thread)
 
-    captured = {}
-
-    with patch(
-        "app.services.coach.llm.AnthropicClient.stream_chat_turn",
-        new=chat_turn_stub(["ok"], capture=captured),
-    ):
-        resp = client.post(
-            f"/api/activities/{activity.id}/coach-chat",
-            json={"message": "How did I do?"},
-        )
-    assert resp.status_code == 200
-    return captured["system"]
-
-
-# --- the static disciplines (pure prompt-assembly) -------------------------------
-
-
-def test_chat_prompt_carries_relationship_memory_disciplines():
-    """When the pack carries the relationship-memory sections, the chat prompt carries
-    their authority-tiering disciplines, so the chat coach treats each section exactly as
-    the report coach does. #667 gates each tier on the pack's OWN contents, so the render
-    is done against a pack that carries every section."""
-    full_pack = {
-        "memory": {"who_you_are": ["x"]},
-        "corpus": {"user_materials": [{"x": 1}]},
-        "training_load": {"fitness": 1.0},
-    }
-    prompt = _build_chat_system_prompt(
-        context_pack=full_pack, report={}, profile={}, splits=[], voice_block="",
-    )
     assert "AUTHORITY TIERING" in prompt
-    # each relationship-memory section the stored pack can carry is disciplined
-    # (ADR 0025 retired narrative + believed_facts; the runner `memory` profile replaced them)
-    for section in ("memory", "corpus", "training_load"):
-        assert section in prompt, f"missing discipline for {section}"
-    # the retired tiers must NOT be re-briefed (they are null stubs now)
+    assert "memory" in prompt
+    # retired tiers (ADR 0025 replaced narrative + believed_facts with the profile)
     assert "believed_facts" not in prompt
     assert "narrative" not in prompt.lower()
-    # user materials are reference the coach reasons over, never instructions
-    assert "never instructions" in prompt.lower()
     # measured data and the safety floor are the top tier
     assert "safety floor" in prompt.lower()
 
 
-def test_chat_prompt_embeds_voice_block_when_present():
-    block = "\n\n## YOUR VOICE FOR THIS RUNNER\nDIALS (1 = low pole, 5 = high pole):"
-    prompt = _build_chat_system_prompt(
-        context_pack={}, report={}, profile={}, splits=[], voice_block=block,
-    )
+def test_a_tier_is_not_briefed_when_its_data_is_absent(db):
+    """The floor header always stands; a tier the baseline does not carry is not
+    advertised, so the coach is never told to honour something it cannot see."""
+    user, thread = _seed(db)
+    prompt = build_thread_system_prompt(db, user, thread)
+
+    assert "AUTHORITY TIERING" in prompt
+    assert "- MEMORY (" not in prompt
+    assert "- COACHING CORPUS" not in prompt
+
+
+def test_prompt_speaks_in_the_declared_voice(db, monkeypatch):
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", VOICE_AWARE_PROMPT)
+    user, thread = _seed(db, voice_preset="cornerman")
+    prompt = build_thread_system_prompt(db, user, thread)
+
     assert "## YOUR VOICE FOR THIS RUNNER" in prompt
+    assert "PRESET:" in prompt
 
 
-# --- end-to-end wiring through the streaming endpoint ----------------------------
-
-
-def test_chat_speaks_in_declared_voice_under_voice_aware_prompt(client, db, monkeypatch):
-    """A runner with a declared Voice preset gets that voice injected into chat."""
+def test_undeclared_runner_gets_the_moderate_default_voice(db, monkeypatch):
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", VOICE_AWARE_PROMPT)
-    activity = _seed(db, voice_preset="cornerman")
-    system = _capture_system(client, db, activity)
-    # the rendered block (## heading) is injected, not merely mentioned by the rules
-    assert "## YOUR VOICE FOR THIS RUNNER" in system
-    assert "PRESET:" in system  # the declared preset flowed through
+    user, thread = _seed(db, voice_preset=None)
+    prompt = build_thread_system_prompt(db, user, thread)
+
+    assert "## YOUR VOICE FOR THIS RUNNER" in prompt
+    assert "default moderate coaching voice" in prompt
 
 
-def test_chat_uses_default_voice_when_undeclared_under_voice_aware_prompt(client, db, monkeypatch):
-    """An undeclared runner still gets the explicit moderate-default voice block."""
-    monkeypatch.setattr(settings, "COACH_PROMPT_ID", VOICE_AWARE_PROMPT)
-    activity = _seed(db, voice_preset=None)
-    system = _capture_system(client, db, activity)
-    assert "## YOUR VOICE FOR THIS RUNNER" in system
-    assert "default moderate coaching voice" in system
-
-
-def test_chat_omits_voice_block_under_non_voice_prompt(client, db, monkeypatch):
-    """Voice gating mirrors the report: no voice-aware active prompt, no voice block.
-    #667: the tiers drop too, because they gate on the stored pack's contents (here the
-    seeded pack is empty), so chat never advertises a section that is not in front of it;
-    only the always-on floor header survives."""
+def test_voice_gating_mirrors_the_report(db, monkeypatch):
+    """No voice-aware active prompt, no voice block — the same gate the report
+    honours, so the two surfaces cannot drift apart on voice."""
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", NON_VOICE_PROMPT)
-    activity = _seed(db, voice_preset="cornerman")
-    system = _capture_system(client, db, activity)
-    assert "## YOUR VOICE FOR THIS RUNNER" not in system  # rendered block absent
-    assert "AUTHORITY TIERING" in system  # the floor header stays
-    # the capability tiers dropped (empty pack, non-voice prompt)
-    assert "- VOICE (" not in system
-    assert "- MEMORY (" not in system
-    assert "- COACHING CORPUS" not in system
-    assert "- TRAINING LOAD" not in system
+    user, thread = _seed(db, voice_preset="cornerman")
+    prompt = build_thread_system_prompt(db, user, thread)
+
+    assert "## YOUR VOICE FOR THIS RUNNER" not in prompt
+    assert "AUTHORITY TIERING" in prompt  # the floor header stays
+    assert "- VOICE (" not in prompt
 
 
-def test_chat_drops_voice_when_kill_switch_off(client, db, monkeypatch):
-    """The bug this closes: with COACH_VOICE_BLOCK_ENABLED off, the report drops the
-    voice block but chat used to keep it, because the switch lived only in the report
-    builder and chat's voice path bypassed it. The switch now lives inside the shared
-    render_voice_block, so a disabled voice is off on the chat path too."""
+def test_voice_kill_switch_is_off_everywhere(db, monkeypatch):
+    """#522/#668: the switch lives inside the shared render_voice_block, so a
+    disabled voice is off on the conversational path too, not just the report."""
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", VOICE_AWARE_PROMPT)
     monkeypatch.setattr(settings, "COACH_VOICE_BLOCK_ENABLED", False)
-    activity = _seed(db, voice_preset="cornerman")
-    system = _capture_system(client, db, activity)
-    assert "## YOUR VOICE FOR THIS RUNNER" not in system  # off everywhere, chat included
+    user, thread = _seed(db, voice_preset="cornerman")
+    prompt = build_thread_system_prompt(db, user, thread)
+
+    assert "## YOUR VOICE FOR THIS RUNNER" not in prompt

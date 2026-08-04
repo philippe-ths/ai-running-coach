@@ -1,31 +1,31 @@
 'use client';
 
-import { useRef } from 'react';
 import CoachReportPanel from '@/components/CoachReportPanel';
-import CoachChat, { CoachChatHandle } from '@/components/CoachChat';
+import { useCoachSheet } from '@/components/coach/CoachSheetContext';
 
 interface Props {
   activityId: string;
   hasMetrics: boolean;
 }
 
-// Bridges the coach report and the coach chat: the report's conversational
-// question options (reply/dispute/custom) start the chat below via an imperative
-// handle, so the two siblings coordinate without lifting the chat's state up.
-// The chat only exists when the activity has metrics (matching the previous
-// page-level gate), so the report's chips fall back to non-interactive when it
-// is absent.
+// The activity page's coach surface: the report, and one way to talk about it.
+// Tapping a conversational question option opens the coach sheet — which lands
+// in this activity's own thread and carries the report at its head — with the
+// question in the composer (#770, ADR 0027). The page had its own chat box until
+// the thread surface shipped; two boxes over one relationship meant a runner who
+// asked in the wrong one met a coach that had not heard the other. The options
+// stay live whether or not the activity has metrics, since the thread no longer
+// depends on this page having a chat to start.
 export default function CoachSection({ activityId, hasMetrics }: Props) {
-  const chatRef = useRef<CoachChatHandle>(null);
+  const { openWith } = useCoachSheet();
 
   return (
     <div className="space-y-6">
       <CoachReportPanel
         activityId={activityId}
         hasMetrics={hasMetrics}
-        onStartChat={hasMetrics ? (text) => chatRef.current?.ask(text) : undefined}
+        onStartChat={text => openWith(text)}
       />
-      {hasMetrics && <CoachChat ref={chatRef} activityId={activityId} />}
     </div>
   );
 }
