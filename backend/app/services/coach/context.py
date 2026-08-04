@@ -193,6 +193,34 @@ class WorkingContext:
     focus: FocusPayload
 
 
+def zones_calibration(profile) -> tuple:
+    """Zone calibration, resolved from the runner's PROFILE (never a stored
+    pack): calibrated when the runner has Strava-sourced HR zones (the actual
+    time-in-zone binning basis, #297/#458) OR explicitly set max_hr with a known
+    source. Strava zones take precedence as the basis and are never discounted;
+    the analysis pipeline already treats them as calibrated for interval KPIs.
+
+    Shared by the pack build and the conversational policy floor (#767, ADR
+    0028: zone calibration was never activity-scoped — it only lived on the pack
+    because that was the nearest copy). Returns (zones_calibrated, zones_basis).
+    """
+    has_strava_zones = bool(profile and getattr(profile, "hr_zones", None))
+    has_explicit_max_hr = bool(
+        profile
+        and profile.max_hr
+        and profile.max_hr > 100
+        and getattr(profile, "max_hr_source", None)  # must have a source
+    )
+    zones_calibrated = has_strava_zones or has_explicit_max_hr
+    if has_strava_zones:
+        zones_basis = "strava_zones"
+    elif has_explicit_max_hr:
+        zones_basis = f"user_{profile.max_hr_source}"
+    else:
+        zones_basis = "uncalibrated"
+    return zones_calibrated, zones_basis
+
+
 def build_context_pack(
     db: Session,
     activity: Activity,
@@ -958,25 +986,7 @@ def build_focus_payload(
     if profile is None:
         profile = _load_profile(db, subject.user_id)
 
-    # Zone calibration: calibrated when the runner has Strava-sourced HR zones
-    # (the actual time-in-zone binning basis, #297/#458) OR explicitly set max_hr
-    # with a known source. Strava zones take precedence as the basis and are never
-    # discounted; the analysis pipeline already treats them as calibrated for
-    # interval KPIs, and this gate keeps the coach pack consistent.
-    has_strava_zones = bool(profile and getattr(profile, "hr_zones", None))
-    has_explicit_max_hr = bool(
-        profile
-        and profile.max_hr
-        and profile.max_hr > 100
-        and getattr(profile, "max_hr_source", None)  # must have a source
-    )
-    zones_calibrated = has_strava_zones or has_explicit_max_hr
-    if has_strava_zones:
-        zones_basis = "strava_zones"
-    elif has_explicit_max_hr:
-        zones_basis = f"user_{profile.max_hr_source}"
-    else:
-        zones_basis = "uncalibrated"
+    zones_calibrated, zones_basis = zones_calibration(profile)
 
     # Training context: the recovery-recency signals (days_since_last_hard /
     # hard_sessions_this_week) the coach uses for recovery advice. The redundant,

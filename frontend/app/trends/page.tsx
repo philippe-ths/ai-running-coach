@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState, useCallback } from "react";
+import { usePublishScreenSelections } from "@/components/coach/CoachSheetContext";
 import { TrendsData, TrendsRange, TrendsGranularity } from "@/lib/types";
 import { formatDistanceKm, formatDuration } from "@/lib/format";
 import { fetchFromAPI } from "@/lib/api";
@@ -75,6 +76,13 @@ export default function TrendsPage() {
 
   // Calendar mode has no meaning for the unbounded "All" range.
   const effectiveMode: WindowMode = range === "ALL" ? "rolling" : mode;
+
+  // #767: publish this page's view selections for the coach sheet's screen
+  // pointer + ribbon (selections only — the server recomputes the numbers).
+  usePublishScreenSelections({
+    range,
+    types: selectedTypes.length ? selectedTypes : undefined,
+  });
 
   const fetchTrends = useCallback(
     async (r: TrendsRange, types: string[], m: WindowMode) => {
