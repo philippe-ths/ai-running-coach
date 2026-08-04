@@ -87,9 +87,9 @@ interface Props {
   activityId: string;
   hasMetrics: boolean;
   // I2 (chat-as-continuation): tapping a conversational question option
-  // (reply/dispute/custom) starts the coach chat. Wired by the parent that also
-  // renders CoachChat; undefined when there is no chat to start (the option then
-  // falls back to a non-interactive chip).
+  // (reply/dispute/custom) carries it into the coach thread. Wired by the parent,
+  // which opens the sheet on this activity with the question in the composer;
+  // undefined leaves the option as a non-interactive chip.
   onStartChat?: (text?: string) => void;
 }
 

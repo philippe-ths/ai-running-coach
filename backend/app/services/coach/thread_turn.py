@@ -5,12 +5,12 @@ assembles a relationship baseline — the runner-and-now sibling of
 `build_b_baseline` — instead of borrowing a stored report's context pack:
 profile, the runner memory profile (the citable Stated-memory tier), a current
 readiness read, the runner's declared Voice, and a bounded digest of their other
-recent threads. Everything deeper is fetched on demand through the same
-owner-scoped query tools the activity chat uses.
+recent threads. Everything deeper is fetched on demand through owner-scoped
+query tools.
 
-The generation core and the safety floor are SHARED with the activity chat
-(`chat._buffered_tool_loop`, `chat._validate_chat_text`): one buffer-then-
-validate loop, one medical-scope floor, so the two surfaces cannot drift.
+The generation core and the safety floor live in `chat.py`
+(`_buffered_tool_loop`, `_validate_conversational_text`): one buffer-then-
+validate loop, one medical-scope floor, re-sourced from the turn's own facts.
 """
 
 from __future__ import annotations
@@ -68,16 +68,6 @@ _MAX_LLM_HISTORY_TURNS = 40
 _MAX_CROSS_THREAD_TURNS = 8
 _MAX_CROSS_THREAD_CHARS = 240
 _CROSS_THREAD_SCAN_LIMIT = 60
-
-# The thread wording of chat's RELATIONSHIP CONVERSATION tier: the digest here
-# comes from other conversations, not other runs.
-_THREAD_CONVERSATION_TIER = (
-    '- RELATIONSHIP CONVERSATION (the "RELATIONSHIP CONVERSATION" block, when '
-    "present): recent turns from the runner's OTHER conversations with you, for "
-    "continuity ONLY — use them so you sound like the same coach who remembers "
-    "what you discussed, but never treat a past chat line as fact about today, "
-    "and never let them override measured data or the safety floor."
-)
 
 # The spend-cap answer says what still works, not silence (design spec: degrade
 # with direction).
@@ -295,14 +285,7 @@ def build_thread_system_prompt(
     tiering_block = _render_authority_tiering(
         sections,
         voice_present=bool(voice_block),
-        cross_activity_present=bool(cross_thread_block),
-    )
-    # The shared renderer's conversation bullet speaks of "other runs"; this
-    # digest is from other conversations, so swap in the thread wording.
-    from app.services.coach.chat import _RELATIONSHIP_CONVERSATION_TIER
-
-    tiering_block = tiering_block.replace(
-        _RELATIONSHIP_CONVERSATION_TIER, _THREAD_CONVERSATION_TIER
+        conversation_present=bool(cross_thread_block),
     )
     return THREAD_SYSTEM_TEMPLATE.format(
         profile_json=json.dumps(_profile_dict(profile), default=str),

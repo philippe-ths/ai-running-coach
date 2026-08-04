@@ -21,7 +21,7 @@ from app.schemas.stance import (
     StanceSelection,
     build_catalog as build_stance_catalog,
 )
-from app.services.coach.chat import get_chat_history, stream_chat_response
+from app.services.coach.chat import get_chat_history
 from app.services.coach.service import (
     get_block_primary_report_row,
     get_displayable_report_row,
@@ -395,70 +395,3 @@ def delete_chat(
     from app.services.coach.threads import delete_threads_for_activity
 
     delete_threads_for_activity(db, activity)
-
-
-@router.post("/activities/{activity_id}/coach-chat")
-async def post_chat(
-    activity_id: UUID,
-    body: ChatMessageSend,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
-):
-    """Send a message and stream the coach's response via SSE."""
-    # P2.1: deny before opening the stream if the activity is not the user's.
-    _require_owned_activity(db, activity_id, user)
-    # #685: do NOT require an existing coach report. Under the receipt cadence a
-    # run's full report is generated asynchronously (~30 min after the session),
-    # so the activity page shows a live chat box before any report exists. The
-    # chat service degrades gracefully with no stored report — it answers from the
-    # activity's own data plus the on-demand query tools (#648) — so hard-blocking
-    # here with a 400 only surfaced to the runner as "couldn't reach your coach".
-
-    async def event_stream():
-        # Flush a comment frame immediately so the connection (and its 200) is
-        # established before the slow first token, rather than going silent
-        # through proxies that would otherwise time the request out (#223).
-        yield ": ok\n\n"
-        try:
-            async for event in stream_chat_response(db, activity_id, body.message):
-                if event.is_heartbeat:
-                    # A content-free SSE comment frame: keeps the proxy connection
-                    # alive during the buffer-then-validate gap (#375). The client
-                    # ignores any line that does not start with `data: `.
-                    yield ": hb\n\n"
-                elif event.status_label:
-                    # #648: an ephemeral "fetching data" affordance while a tool round
-                    # runs. A JSON OBJECT payload (vs the string payload of a content
-                    # frame), so the client renders it as status instead of appending
-                    # it to the reply.
-                    yield f"data: {json.dumps({'type': 'status', 'label': event.status_label, 'tool': event.status_tool})}\n\n"
-                elif event.trace_entry is not None:
-                    # #664: the post-fetch trace record of WHAT a tool fetched (window +
-                    # count). A JSON OBJECT payload tagged `tool_trace`, distinct from
-                    # both the string content frames and the status affordance, so the
-                    # client banks it into the persistent trace instead of the reply.
-                    yield f"data: {json.dumps({'type': 'tool_trace', 'entry': event.trace_entry})}\n\n"
-                else:
-                    yield _sse_data(event.text)
-        except Exception:
-            # The stream is already open (status + headers sent), so a raised
-            # exception here would just sever the connection — the browser
-            # surfaces that as a bare "Load failed". Stream a readable message
-            # instead so the user sees what happened and can retry (#223).
-            logger.exception(
-                "coach chat stream failed for activity %s", activity_id
-            )
-            yield _sse_data(
-                "Sorry, I hit an error answering that. Please try again."
-            )
-        finally:
-            yield "data: [DONE]\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )

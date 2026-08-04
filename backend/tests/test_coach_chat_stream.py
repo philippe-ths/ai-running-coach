@@ -1,6 +1,6 @@
 """Repro for #223: 'Chat with Coach' streaming.
 
-Exercises the POST /api/activities/{id}/coach-chat SSE endpoint end to end with
+Exercises the POST /api/coach/threads/messages SSE endpoint end to end with
 a mocked LLM, then reconstructs the client-visible text from the SSE frames the
 way the frontend does. The coach prompt explicitly asks for multi-paragraph
 markdown, so the LLM emits text deltas containing newlines; the wire format must
@@ -82,7 +82,11 @@ def _reconstruct_from_sse(raw: str) -> str:
             data = line[len("data: "):]
             if data == "[DONE]":
                 continue
-            out.append(json.loads(data))
+            frame = json.loads(data)
+            # Object frames (the thread announcement, status, trace) are not
+            # reply text; the runner-visible reply is the string frames.
+            if isinstance(frame, str):
+                out.append(frame)
     return "".join(out)
 
 
@@ -101,8 +105,11 @@ def test_chat_stream_preserves_multiline_markdown(client, db):
 
     with patch("app.services.coach.llm.AnthropicClient.stream_chat_turn", new=stub):
         resp = client.post(
-            f"/api/activities/{activity.id}/coach-chat",
-            json={"message": "How did I do?"},
+            "/api/coach/threads/messages",
+            json={
+                "message": "How did I do?",
+                "anchor_activity_id": str(activity.id),
+            },
         )
 
     assert resp.status_code == 200
@@ -136,8 +143,8 @@ def test_chat_works_before_a_report_exists(client, db):
     stub = chat_turn_stub(["Nice steady effort. ", "Let's talk about it."])
     with patch("app.services.coach.llm.AnthropicClient.stream_chat_turn", new=stub):
         resp = client.post(
-            f"/api/activities/{activity.id}/coach-chat",
-            json={"message": "How did that run go?"},
+            "/api/coach/threads/messages",
+            json={"message": "How did that run go?", "anchor_activity_id": str(activity.id)},
         )
 
     assert resp.status_code == 200
@@ -177,8 +184,11 @@ def test_chat_degrades_gracefully_on_exhausted_rate_limit(client, db):
 
     with patch("app.services.coach.llm.AnthropicClient.stream_chat_turn", new=_stub):
         resp = client.post(
-            f"/api/activities/{activity.id}/coach-chat",
-            json={"message": "How did I do?"},
+            "/api/coach/threads/messages",
+            json={
+                "message": "How did I do?",
+                "anchor_activity_id": str(activity.id),
+            },
         )
 
     assert resp.status_code == 200
@@ -195,8 +205,11 @@ def test_chat_stream_reports_error_without_breaking_connection(client, db):
 
     with patch("app.services.coach.llm.AnthropicClient.stream_chat_turn", new=chat_raising_stub()):
         resp = client.post(
-            f"/api/activities/{activity.id}/coach-chat",
-            json={"message": "How did I do?"},
+            "/api/coach/threads/messages",
+            json={
+                "message": "How did I do?",
+                "anchor_activity_id": str(activity.id),
+            },
         )
 
     assert resp.status_code == 200

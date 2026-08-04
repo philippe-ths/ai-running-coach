@@ -1,16 +1,16 @@
-"""Pins for the chat system prompt (`CHAT_SYSTEM_TEMPLATE`).
+"""Pins for the conversational system prompt (`THREAD_SYSTEM_TEMPLATE`) and the
+shared authority-tiering renderer it composes.
 
-The chat surface is NOT version-gated like the report prompts (lean_v1/v2); editing
-the template changes prod chat on the next deploy. These pins guard the load-bearing
-surface and the #653 week-frame discipline against silent loss, and prove the template
-still renders (a stray brace would break the `.format()` assembly).
+The conversational surface is NOT version-gated like the report prompts; editing
+the template changes production on the next deploy. These pins guard the
+load-bearing safety surface and the #653 week-frame discipline against silent
+loss, and prove the template still renders (a stray brace would break the
+`.format()` assembly).
 """
 
-from app.services.coach.chat import (
-    CHAT_SYSTEM_TEMPLATE,
-    _build_chat_system_prompt,
-    _render_authority_tiering,
-)
+from app.services.coach.chat import _render_authority_tiering
+from app.services.coach.coaching_skills import render_catalogue
+from app.services.coach.thread_turn import THREAD_SYSTEM_TEMPLATE
 
 # A pack with every relationship-memory section present (prod's full-feature pack).
 FULL_PACK = {
@@ -21,11 +21,11 @@ FULL_PACK = {
 
 
 def _full_tiering():
-    return _render_authority_tiering(FULL_PACK, voice_present=True, cross_activity_present=True)
+    return _render_authority_tiering(FULL_PACK, voice_present=True, conversation_present=True)
 
 
 # The SAME pack, ADR 0026-grouped: memory under the_runner, corpus under how_to_coach,
-# training_load under right_now. The chat tiering gate must read it identically.
+# training_load under right_now. The conversational tiering gate must read it identically.
 GROUPED_FULL_PACK = {
     "the_runner": {"memory": {"who_you_are": ["marathoner"]}},
     "how_to_coach": {"corpus": {"school": {"stance": "aerobic"}, "user_materials": [{"stance": "x"}]}},
@@ -33,52 +33,55 @@ GROUPED_FULL_PACK = {
 }
 
 
-def test_chat_tiering_reads_grouped_and_flat_packs_identically():
+def test_tiering_reads_grouped_and_flat_packs_identically():
     """ADR 0026: a grouped stored pack nests the tiered sections under their groups.
     The gate (via unnest_pack) must brief the same tiers for both shapes, so a
     grouped-prompt report's chat carries the same authority-tiering as a flat one."""
-    flat = _render_authority_tiering(FULL_PACK, voice_present=True, cross_activity_present=True)
+    flat = _render_authority_tiering(FULL_PACK, voice_present=True, conversation_present=True)
     grouped = _render_authority_tiering(
-        GROUPED_FULL_PACK, voice_present=True, cross_activity_present=True
+        GROUPED_FULL_PACK, voice_present=True, conversation_present=True
     )
     assert grouped == flat
 
 
-def test_chat_template_renders_without_brace_errors():
+def test_template_renders_without_brace_errors():
     """`.format()` must survive — a literal `{`/`}` in the template would raise here."""
-    rendered = _build_chat_system_prompt(
-        context_pack={"training_volume": {"calendar_week": {}}},
-        report={},
-        profile={},
-        splits=[],
+    rendered = THREAD_SYSTEM_TEMPLATE.format(
+        profile_json="{}",
+        baseline_block="",
+        anchor_block="",
         voice_block="",
-        cross_activity_block="",
+        cross_thread_block="",
+        looking_at_block="",
+        skills_block=render_catalogue(),
+        tiering_block="",
     )
     assert "running coach" in rendered.lower()
     # the injected context placeholders were filled, none left dangling
-    assert "{context_pack_json}" not in rendered
+    assert "{profile_json}" not in rendered
 
 
-def test_chat_carries_the_week_frame_mirroring_discipline():
+def test_carries_the_week_frame_mirroring_discipline():
     """#653 extended to chat: mirror the runner's calendar-week frame, read a partial
     week as on-pace not a shortfall, keep rolling-7d as the trailing-load read."""
-    t = CHAT_SYSTEM_TEMPLATE.lower()
+    t = THREAD_SYSTEM_TEMPLATE.lower()
     assert "calendar-week frame" in t
-    assert "training_volume.calendar_week" in t
     assert "on-pace" in t
-    assert "not their week" in t
+    # the frame comes from the tool windows here: a thread turn fetches its own
+    # data rather than replaying a stored pack's calendar_week section.
+    assert "the tools' calendar windows are that frame" in t
 
 
-def test_chat_carries_the_personalisation_disposition():
+def test_carries_the_personalisation_disposition():
     """The coach adapts to THIS runner, not the median: their build/history/stated facts
     shape the advice, and what's right for a typical runner can be wrong for this one.
     Mirrors the report prompt's "coach this runner, not the median" disposition."""
-    t = CHAT_SYSTEM_TEMPLATE.lower()
+    t = THREAD_SYSTEM_TEMPLATE.lower()
     assert "this particular runner, not the average one" in t
     assert "wrong for this one" in t
 
 
-def test_chat_tiering_cites_memory_not_the_retired_sections():
+def test_tiering_cites_memory_not_the_retired_sections():
     """ADR 0025 retired the narrative + believed_facts sections (now null stubs); the
     runner `memory` profile replaced them. When the pack carries a `memory` section the
     chat authority-tiering must brief the live `memory` tier as the citable Stated-memory
@@ -91,14 +94,14 @@ def test_chat_tiering_cites_memory_not_the_retired_sections():
     assert "narrative" not in t
 
 
-def test_chat_tiering_gated_on_pack_contents():
+def test_tiering_gated_on_pack_contents():
     """#667: chat replays the report's STORED pack, so it must brief only the tiers whose
     section is actually IN that pack. A section dropped by a COACH_PROMPT_ID rollback OR a
     kill switch drops its key byte-stably (#493), so gating on the pack contents un-briefs
     it everywhere at once — the fix for chat advertising sections the pack no longer has."""
     full = _full_tiering()
     # empty pack, no voice, no cross-activity: only the floor header survives.
-    bare = _render_authority_tiering({}, voice_present=False, cross_activity_present=False)
+    bare = _render_authority_tiering({}, voice_present=False, conversation_present=False)
 
     # The floor header (measured data + safety win) is always emitted.
     for text in (full, bare):
@@ -115,53 +118,53 @@ def test_chat_tiering_gated_on_pack_contents():
         assert tier not in bare, f"empty pack must NOT brief {tier}"
 
 
-def test_chat_tiering_drops_tier_gated_off_even_when_prompt_would_carry_it():
+def test_tiering_drops_tier_gated_off_even_when_prompt_would_carry_it():
     """The kill-switch / frozen-pack case: the memory tier is briefed off the pack's OWN
     `memory` key, not the prompt version — so a pack whose memory section was dropped
     (COACH_MEMORY_ENABLED off, or a stale pre-memory report) is NOT briefed on memory,
     while the sections it DOES carry still are."""
     pack = {"corpus": {"user_materials": [{"x": 1}]}, "training_load": {"fitness": 1.0}}
-    t = _render_authority_tiering(pack, voice_present=True, cross_activity_present=False)
+    t = _render_authority_tiering(pack, voice_present=True, conversation_present=False)
     assert "- MEMORY" not in t                          # dropped: no memory in the pack
     assert "- COACHING CORPUS & USER MATERIALS" in t     # kept: present
     assert "- TRAINING LOAD" in t                        # kept: present
     assert "- RELATIONSHIP CONVERSATION" not in t        # no cross-activity digest
 
 
-def test_chat_tiering_corpus_without_user_materials():
+def test_tiering_corpus_without_user_materials():
     """A pack carrying the corpus school but no uploaded materials briefs the corpus tier
     without claiming materials the pack does not carry."""
     t = _render_authority_tiering(
-        {"corpus": {"school": {"stance": "x"}}}, voice_present=False, cross_activity_present=False
+        {"corpus": {"school": {"stance": "x"}}}, voice_present=False, conversation_present=False
     )
     assert "- COACHING CORPUS (" in t  # corpus-only variant
     assert "USER MATERIALS" not in t
     assert "- MEMORY" not in t
 
 
-def test_chat_voice_tier_follows_the_voice_block_presence():
+def test_voice_tier_follows_the_voice_block_presence():
     """Voice is not a pack section, so its tier follows the rendered voice block. When the
     block is absent (voice not active / kill-switched), the voice tier drops too."""
-    off = _render_authority_tiering(FULL_PACK, voice_present=False, cross_activity_present=True)
+    off = _render_authority_tiering(FULL_PACK, voice_present=False, conversation_present=True)
     assert "- VOICE" not in off
-    on = _render_authority_tiering(FULL_PACK, voice_present=True, cross_activity_present=True)
+    on = _render_authority_tiering(FULL_PACK, voice_present=True, conversation_present=True)
     assert "- VOICE" in on
 
 
-def test_chat_keeps_the_load_bearing_safety_surface():
+def test_keeps_the_load_bearing_safety_surface():
     """The week-frame addition did not disturb the floor: no-diagnose, zone language,
     ground-every-claim, and conservative volume all still present."""
-    t = CHAT_SYSTEM_TEMPLATE.lower()
+    t = THREAD_SYSTEM_TEMPLATE.lower()
     assert "never diagnose" in t
-    assert "zones_calibrated" in t
+    assert "hr zones are calibrated" in t
     assert "ground every claim" in t
     assert "risky volume jumps" in t
 
 
-def test_chat_rules_deduped_without_losing_intent():
+def test_rules_deduped_without_losing_intent():
     """#668: the overlapping RULES were folded, not just cut. The restatements are gone;
     their intent survives in the load-bearing rule (or the TOOLS section) they doubled."""
-    t = CHAT_SYSTEM_TEMPLATE
+    t = THREAD_SYSTEM_TEMPLATE
     # the three restating rules are removed
     assert "Reference specific numbers from the data when relevant" not in t
     assert "Keep answers conversational but grounded" not in t
@@ -170,6 +173,6 @@ def test_chat_rules_deduped_without_losing_intent():
     assert "citing the specific numbers" in t          # folded into ground-every-claim
     assert "conversational, a knowledgeable coach" in t  # folded into be-concise
     assert "once the tools have come up empty" in t     # folded into the TOOLS section
-    # the list is now nine rules (no stray tenth after the fold)
-    assert "\n9. WEEKLY FRAME" in t
-    assert "\n10." not in t
+    # the week frame is the last rule; nothing dangles past it
+    assert "7. WEEKLY FRAME" in t
+    assert "\n8." not in t

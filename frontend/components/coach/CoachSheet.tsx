@@ -182,7 +182,8 @@ const coachProseClasses =
 
 export default function CoachSheet() {
   const router = useRouter();
-  const { isOpen, close, screen, selections } = useCoachSheet();
+  const { isOpen, close, screen, selections, pendingPrompt, consumePendingPrompt } =
+    useCoachSheet();
   const vvBox = useVisualViewportBox();
 
   const [threads, setThreads] = useState<ThreadListItem[]>([]);
@@ -295,6 +296,15 @@ export default function CoachSheet() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, streamingText, scrollToBottom]);
+
+  // #770: a question handed over by the report's conversational options lands in
+  // the composer, ready to send or edit.
+  useEffect(() => {
+    if (!isOpen || !pendingPrompt) return;
+    setInput(pendingPrompt);
+    consumePendingPrompt();
+    inputRef.current?.focus({ preventScroll: true });
+  }, [isOpen, pendingPrompt, consumePendingPrompt]);
 
   // Auto-grow the composer (capped ~6 lines), reset when cleared.
   useEffect(() => {

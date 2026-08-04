@@ -67,22 +67,24 @@ def _seed_activity(db, *, strava_id: int = 42) -> Activity:
     return activity
 
 
-def _post_chat(client, activity, message: str = "how was my pacing?"):
+def _post_chat(client, activity, message: str = "how was my pacing?", thread_id=None):
+    body = {"message": message, "asked_from": "activity"}
+    if thread_id is None:
+        body["anchor_activity_id"] = str(activity.id)
+    else:
+        body["thread_id"] = str(thread_id)
     with patch(
         "app.services.coach.llm.AnthropicClient.stream_chat_turn",
         new=chat_turn_stub(["Looked ", "steady."]),
     ):
-        resp = client.post(
-            f"/api/activities/{activity.id}/coach-chat",
-            json={"message": message},
-        )
+        resp = client.post("/api/coach/threads/messages", json=body)
     assert resp.status_code == 200
     # Drain the SSE body so the generator runs to completion and persists rows.
     resp.read()
     return resp
 
 
-class TestChatWritesThroughThread:
+class TestTurnsWriteThroughThread:
     def test_first_message_creates_activity_anchored_thread(self, client, db):
         activity = _seed_activity(db)
 
@@ -100,19 +102,22 @@ class TestChatWritesThroughThread:
         # SQLite's second-precision CURRENT_TIMESTAMP ties same-second rows).
         assert sorted(r.role for r in rows) == ["assistant", "user"]
         assert all(r.thread_id == thread.id for r in rows)
-        # The activity chat box is the activity screen; every turn records where
-        # it was asked from (ADR 0028: past turns retain the label only).
+        # Every turn records where it was asked from (ADR 0028: past turns
+        # retain the label only).
         assert all(r.asked_from == "activity" for r in rows)
-        # Dual-write: activity_id stays populated so the existing activity-scoped
-        # readers (memory sources, adherence pushback, fuller-turn continuity)
-        # keep working unchanged in this slice.
+        # Dual-write: activity_id stays populated so the activity-scoped readers
+        # (memory sources, adherence pushback, fuller-turn continuity, and the
+        # activity-scoped history read) keep working.
         assert all(r.activity_id == activity.id for r in rows)
 
-    def test_second_message_reuses_the_thread(self, client, db):
+    def test_continuing_the_thread_keeps_one_conversation(self, client, db):
+        """The surface carries the thread id forward, so a follow-up lands in the
+        same conversation rather than starting a second one on the same run."""
         activity = _seed_activity(db)
 
         _post_chat(client, activity, "first question")
-        _post_chat(client, activity, "second question")
+        thread = db.query(Thread).one()
+        _post_chat(client, activity, "second question", thread_id=thread.id)
 
         assert db.query(Thread).count() == 1
         thread = db.query(Thread).first()
