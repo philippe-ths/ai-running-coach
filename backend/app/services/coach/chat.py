@@ -417,12 +417,25 @@ def _resolve_voice_block(db: Session, activity: Activity) -> str:
 
 
 def get_chat_history(db: Session, activity_id: str) -> List[ChatMessageRead]:
-    """Return all chat messages for an activity, ordered chronologically."""
-    from app.services.coach.service import _coerce_uuid
+    """Return the activity-anchored thread's messages, chronologically (#765).
 
+    The activity chat box reads through the `Thread` unit (ADR 0027): resolve
+    the thread anchored to this activity (created on demand only when orphan
+    pre-thread rows exist, so legacy history is never invisible), then list its
+    messages. No thread and no orphans means no history.
+    """
+    from app.services.coach.service import _coerce_uuid
+    from app.services.coach.threads import resolve_thread_for_activity
+
+    activity = db.query(Activity).filter(Activity.id == _coerce_uuid(activity_id)).first()
+    if activity is None:
+        return []
+    thread = resolve_thread_for_activity(db, activity)
+    if thread is None:
+        return []
     messages = (
         db.query(CoachChatMessage)
-        .filter(CoachChatMessage.activity_id == _coerce_uuid(activity_id))
+        .filter(CoachChatMessage.thread_id == thread.id)
         .order_by(CoachChatMessage.created_at.asc())
         .all()
     )
@@ -556,13 +569,22 @@ async def stream_chat_response(
         prompt_id=report_row.prompt_id if report_row else settings.COACH_PROMPT_ID,
     )
 
-    # Save the user message
+    # Save the user message through the activity's thread (#765). Dual-write:
+    # activity_id stays populated so the activity-scoped readers (memory
+    # sources, adherence pushback, fuller-turn continuity, cross-activity
+    # digest) keep working unchanged in this slice.
+    from app.services.coach.threads import resolve_thread_for_activity, touch_thread
+
+    thread = resolve_thread_for_activity(db, activity, create=True)
     user_msg = CoachChatMessage(
+        thread_id=thread.id,
         activity_id=activity_id,
         role="user",
         content=user_message,
+        asked_from="activity",
     )
     db.add(user_msg)
+    touch_thread(db, thread)
     db.commit()
 
     # A4: a chat reply is a reply — if the two-stage exchange is still open, fire
@@ -575,7 +597,7 @@ async def stream_chat_response(
     # Load conversation history (including the message we just saved)
     history_rows = (
         db.query(CoachChatMessage)
-        .filter(CoachChatMessage.activity_id == activity_id)
+        .filter(CoachChatMessage.thread_id == thread.id)
         .order_by(CoachChatMessage.created_at.asc())
         .all()
     )
@@ -745,10 +767,13 @@ async def stream_chat_response(
     # the trace of what the data tools fetched this turn so the UI can show a
     # persistent "looked up …" trace that survives a reload (#648 f/u, #664).
     assistant_msg = CoachChatMessage(
+        thread_id=thread.id,
         activity_id=activity_id,
         role="assistant",
         content=assistant_text,
         tools_used=tool_trace or None,
+        asked_from="activity",
     )
     db.add(assistant_msg)
+    touch_thread(db, thread)
     db.commit()

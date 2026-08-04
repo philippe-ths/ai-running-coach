@@ -27,6 +27,7 @@ from app.models import (
     RunnerMemory,
     StravaAccount,
     StravaImport,
+    Thread,
     User,
     UserMaterial,
     UserProfile,
@@ -75,6 +76,13 @@ def _seed_full_user(db, *, email, athlete_id, strava_activity_id, hash_suffix):
         prompt_id="x", schema_version="2.0", is_fallback=False,
     ))
     db.add(CoachChatMessage(activity_id=activity.id, role="user", content="hi"))
+    # #765: an activity-anchored thread with a thread-only message (no
+    # activity_id — the shape a screen-launched thread turn takes), proving the
+    # cascade reaches rows that only a thread owns.
+    thread = Thread(user_id=user.id, activity_id=activity.id)
+    db.add(thread)
+    db.commit()
+    db.add(CoachChatMessage(thread_id=thread.id, role="user", content="from trends"))
     block = Block(
         user_id=user.id, start_date=activity.start_date,
         end_date=activity.start_date + timedelta(seconds=1500),
@@ -93,6 +101,7 @@ def _seed_full_user(db, *, email, athlete_id, strava_activity_id, hash_suffix):
     return SimpleNamespace(
         user=user, activity=activity, block=block,
         user_id=user.id, activity_id=activity.id, email=user.email,
+        thread_id=thread.id,
     )
 
 
@@ -102,7 +111,7 @@ _USER_SCOPED = [
     (CoachingRelationship, "user_id"), (RunnerBaseline, "user_id"),
     (RunnerMemory, "user_id"),
     (UserMaterial, "user_id"), (Activity, "user_id"), (Block, "user_id"),
-    (Exchange, "user_id"),
+    (Exchange, "user_id"), (Thread, "user_id"),
 ]
 _ACTIVITY_SCOPED = [DerivedMetric, ActivityStream, CheckIn, CoachReport, CoachChatMessage]
 
@@ -115,6 +124,12 @@ def _residual_rows(db, ctx) -> int:
         total += db.query(model).filter(getattr(model, col) == ctx.user_id).count()
     for model in _ACTIVITY_SCOPED:
         total += db.query(model).filter(model.activity_id == ctx.activity_id).count()
+    # Thread-only messages carry no activity_id; count them via their thread.
+    total += (
+        db.query(CoachChatMessage)
+        .filter(CoachChatMessage.thread_id == ctx.thread_id)
+        .count()
+    )
     total += db.query(User).filter(User.id == ctx.user_id).count()
     return total
 

@@ -390,14 +390,11 @@ def delete_chat(
     db: Session = Depends(get_db),
     user: User = Depends(require_current_user),
 ):
-    """Clear conversation history for an activity."""
-    _require_owned_activity(db, activity_id, user)
-    from app.models.coach_chat_message import CoachChatMessage
+    """Clear conversation history for an activity (through its thread, #765)."""
+    activity = _require_owned_activity(db, activity_id, user)
+    from app.services.coach.threads import delete_threads_for_activity
 
-    db.query(CoachChatMessage).filter(
-        CoachChatMessage.activity_id == activity_id
-    ).delete()
-    db.commit()
+    delete_threads_for_activity(db, activity)
 
 
 @router.post("/activities/{activity_id}/coach-chat")
