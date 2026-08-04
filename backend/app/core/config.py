@@ -272,6 +272,18 @@ class Settings(BaseSettings):
     COACH_SALIENCE_ENABLED: bool = True              # the pack.salience section (the deterministic fuller-turn scheduling logic is untouched)
     COACH_CONTINUITY_ENABLED: bool = True            # the pack.continuity section
     COACH_PREVIOUS_30D_ENABLED: bool = True          # the previous_30d window inside pack.recent_training (the vs-prev comparisons are unaffected)
+
+    # #784: the coach thread surface (ADR 0027), off from the environment. Unlike
+    # the switches above, which remove one item from what the coach RECEIVES, this
+    # one takes down a SURFACE: every /api/coach/threads route refuses with 503 and
+    # the frontend stops rendering the launcher, sheet and the report's
+    # conversational options, so a runner is never offered a way in that leads
+    # nowhere. It is the fastest lever if the coach's proposed actions (its first
+    # self-initiated WRITE path) or a coaching skill misbehave, since the
+    # alternative is a revert and a redeploy. Off does not touch stored threads,
+    # the activity-scoped history read, the report pipeline, receipts or
+    # notifications — the conversation is hidden, never deleted.
+    COACH_THREADS_ENABLED: bool = True
     # #561: an independent off-switch for the multi-year training-history section
     # (the LOD volume ladder + durability traits). Unlike the #522 switches above it
     # gates a PROMPT-version section and has no UI input, so it is NOT part of the
@@ -523,6 +535,9 @@ class Settings(BaseSettings):
             "sleep_quality": self.COACH_SLEEP_QUALITY_ENABLED,
             "stops_analysis": self.COACH_STOPS_ANALYSIS_ENABLED,
             "memory": self.COACH_MEMORY_ENABLED,
+            # #784: not a coach INPUT but a surface — the frontend reads it to
+            # decide whether to render the launcher and sheet at all.
+            "threads": self.COACH_THREADS_ENABLED,
         }
 
     model_config = SettingsConfigDict(

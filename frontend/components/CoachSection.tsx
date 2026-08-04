@@ -17,14 +17,17 @@ interface Props {
 // stay live whether or not the activity has metrics, since the thread no longer
 // depends on this page having a chat to start.
 export default function CoachSection({ activityId, hasMetrics }: Props) {
-  const { openWith } = useCoachSheet();
+  const { enabled, openWith } = useCoachSheet();
 
   return (
     <div className="space-y-6">
       <CoachReportPanel
         activityId={activityId}
         hasMetrics={hasMetrics}
-        onStartChat={text => openWith(text)}
+        // #784: with the thread surface switched off there is nothing to open,
+        // so the options fall back to non-interactive chips (the panel's own
+        // undefined-handler path) rather than offering a tap that goes nowhere.
+        onStartChat={enabled ? text => openWith(text) : undefined}
       />
     </div>
   );

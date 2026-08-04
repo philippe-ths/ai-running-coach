@@ -12,10 +12,10 @@ import useKeyboardOpen from '@/lib/useKeyboardOpen';
 import { useCoachSheet } from './CoachSheetContext';
 
 export default function CoachLauncher() {
-  const { isOpen, open } = useCoachSheet();
+  const { enabled, isOpen, open } = useCoachSheet();
   const keyboardOpen = useKeyboardOpen();
 
-  if (isOpen || keyboardOpen) return null;
+  if (!enabled || isOpen || keyboardOpen) return null;
 
   return (
     <button

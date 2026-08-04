@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.clerk_auth import require_current_user
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.chat import ChatMessageRead
@@ -29,7 +30,28 @@ from app.services.coach import threads as thread_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/coach/threads")
+
+def require_threads_enabled() -> None:
+    """#784: the thread surface's kill switch, applied to the whole router.
+
+    Attached as a router-level dependency rather than per route, so a route added
+    later cannot forget it — the switch has to hold for every way in, including
+    the turn and the proposed-action confirm, or it is not a kill switch.
+    """
+    if not settings.COACH_THREADS_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The coach conversation is temporarily unavailable. Your runs "
+                "still sync, your analysis still updates, and your reports still "
+                "arrive after each session."
+            ),
+        )
+
+
+router = APIRouter(
+    prefix="/coach/threads", dependencies=[Depends(require_threads_enabled)]
+)
 
 
 def _owned_thread_or_404(db: Session, thread_id: UUID, user: User):

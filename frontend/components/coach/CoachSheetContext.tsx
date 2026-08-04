@@ -14,6 +14,7 @@ import {
   useState,
 } from 'react';
 import { usePathname } from 'next/navigation';
+import { useCoachFeatureFlags } from '@/lib/useCoachFeatureFlags';
 
 // The screen identity the sheet knows client-side (ADR 0028: identity and
 // selections only — labels, never numbers; the server resolves facts). Slice 2
@@ -50,6 +51,9 @@ export type ScreenSelections = {
 };
 
 interface CoachSheetState {
+  // #784: false when COACH_THREADS_ENABLED is off. Every entry point reads this
+  // and renders nothing, so the runner is never offered a way in that 503s.
+  enabled: boolean;
   isOpen: boolean;
   open: () => void;
   close: () => void;
@@ -75,6 +79,7 @@ export function CoachSheetProvider({ children }: { children: React.ReactNode }) 
   const pathname = usePathname();
 
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+  const enabled = useCoachFeatureFlags().threads;
 
   const open = useCallback(() => setIsOpen(true), []);
   const close = useCallback(() => setIsOpen(false), []);
@@ -97,6 +102,7 @@ export function CoachSheetProvider({ children }: { children: React.ReactNode }) 
   // the child page's publish on mount and wipe it).
   const value = useMemo(
     () => ({
+      enabled,
       isOpen,
       open,
       close,
@@ -109,6 +115,7 @@ export function CoachSheetProvider({ children }: { children: React.ReactNode }) 
       publishSelections,
     }),
     [
+      enabled,
       isOpen,
       open,
       close,
