@@ -47,6 +47,7 @@ from app.services.coach.screen_context import (
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.memory_store import get_memory
 from app.services.coach.prompts import render_voice_block
+from app.services.coach.coaching_skills import LOAD_SKILL_TOOL, render_catalogue
 from app.services.coach.proposed_actions import thread_tools
 from app.services.coach.query_tools import CHAT_TOOLS
 from app.services.coach.voice import resolve_voice
@@ -91,7 +92,7 @@ THREAD_SYSTEM_TEMPLATE = """You are a running coach in an ongoing conversation w
 
 THE RUNNER:
 {profile_json}
-{baseline_block}{anchor_block}{voice_block}{cross_thread_block}{looking_at_block}
+{baseline_block}{anchor_block}{voice_block}{cross_thread_block}{looking_at_block}{skills_block}
 YOUR TOOLS — LOOKING UP THEIR TRAINING:
 What is above is a lean baseline, not their record. When a question turns on data that is not already in front of you — a specific run, how something has trended, how much they have trained — LOOK IT UP with your tools instead of asking the runner for it. You have their whole training record:
 - list_activities_in_range: their past sessions (any activity type, newest first) over a named window, each with distance, pace, effort, and shape.
@@ -310,6 +311,7 @@ def build_thread_system_prompt(
         voice_block=voice_block,
         cross_thread_block=cross_thread_block,
         looking_at_block=_render_looking_at_block(screen_view),
+        skills_block=render_catalogue(),
         tiering_block=tiering_block,
     )
 
@@ -397,7 +399,7 @@ async def stream_thread_turn(
         llm_messages=llm_messages,
         owner_user_id=user.id,
         out=out,
-        tools=thread_tools(CHAT_TOOLS),
+        tools=[*thread_tools(CHAT_TOOLS), LOAD_SKILL_TOOL],
     ):
         yield event
 
@@ -449,6 +451,7 @@ async def stream_thread_turn(
         role="assistant",
         content=assistant_text,
         tools_used=out["tool_trace"] or None,
+        skills_used=out.get("skills_used") or None,
         asked_from=asked_from,
     )
     db.add(assistant_msg)

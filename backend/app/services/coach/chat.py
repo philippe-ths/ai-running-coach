@@ -190,7 +190,11 @@ def _heartbeat() -> ChatStreamEvent:
 # several parallel tool calls, executed together). Bounded so a chat turn cannot
 # loop or cost without limit; the final round runs tools-off so the model MUST
 # answer in text rather than loop forever.
-_MAX_TOOL_ROUNDS = 3
+#
+# #769/ADR 0029: 4 rather than 3, so a turn that loads a coaching skill still has
+# the fetch rounds it would have had without one. Loading rides the same round as
+# a fetch, so the extra round is slack, not a licence to keep looking things up.
+_MAX_TOOL_ROUNDS = 4
 
 
 def _block_attr(block, key):
@@ -526,6 +530,8 @@ async def _buffered_tool_loop(
     # policy floor can gate claims against the sessions actually in play (rule 4
     # re-sourced from the turn's own facts rather than a stored pack).
     raw_tool_results: List[tuple] = []
+    # #769: which house procedures this turn ran to, stored as provenance.
+    skills_used: List[str] = []
     proposed_action = None
     last_heartbeat = time.monotonic()
     try:
@@ -572,6 +578,26 @@ async def _buffered_tool_loop(
                 for blk in tool_uses:
                     name = _block_attr(blk, "name")
                     tool_input = _block_attr(blk, "input") or {}
+                    if name == "load_coaching_skill":
+                        # A procedure, not a lookup: no status affordance, no
+                        # trace chip, and it rides the same round as the fetches
+                        # beside it (ADR 0029), so a skilled turn keeps its data
+                        # rounds. Recorded as provenance on the assistant row.
+                        from app.services.coach.coaching_skills import (
+                            skill_tool_result,
+                        )
+
+                        result = skill_tool_result(tool_input.get("name", ""))
+                        if result.get("ok"):
+                            skills_used.append(result["name"])
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": _block_attr(blk, "id"),
+                                "content": json.dumps(result, default=str),
+                            }
+                        )
+                        continue
                     if name == "offer_proposed_action":
                         from app.services.coach.proposed_actions import (
                             mint_proposed_action,
@@ -639,6 +665,7 @@ async def _buffered_tool_loop(
     out["stream_fail_message"] = stream_fail_message
     out["tool_trace"] = tool_trace
     out["tool_results"] = raw_tool_results
+    out["skills_used"] = skills_used
     out["proposed_action"] = proposed_action
 
 
