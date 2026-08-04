@@ -72,3 +72,9 @@ export type {
   UserMaterial,
 } from "./types/material";
 
+export type {
+  ThreadAnchor,
+  ThreadListItem,
+  ThreadDetail,
+  ThreadMessageSend,
+} from "./types/thread";

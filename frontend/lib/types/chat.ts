@@ -17,12 +17,18 @@ export interface ToolTraceEntry {
 
 export interface ChatMessage {
   id: string;
-  activity_id: string;
+  // #765: null for a thread-only turn (a thread need not be anchored to an
+  // activity); the activity chat box's rows always carry it.
+  activity_id?: string | null;
   role: "user" | "assistant";
   content: string;
   // #648 f/u / #664: the on-demand data tools the coach ran for this assistant turn
   // (null/absent when none), so the UI can show a persistent "looked up …" trace
   // that survives a reload. User turns never carry it.
   tools_used?: ToolTraceEntry[] | null;
+  // #766: the label of the screen this turn was asked from (ADR 0028: past turns
+  // retain the label only), rendered as the quiet "asked from …" note when it
+  // differs from the screen the sheet is on now.
+  asked_from?: string | null;
   created_at: string;
 }

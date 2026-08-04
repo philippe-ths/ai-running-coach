@@ -6,6 +6,9 @@ import NavBar from '@/components/NavBar';
 import BottomNav from '@/components/BottomNav';
 import PwaOpenInAppBanner from '@/components/PwaOpenInAppBanner';
 import ThemeProvider from '@/components/ThemeProvider';
+import { CoachSheetProvider } from '@/components/coach/CoachSheetContext';
+import CoachSheet from '@/components/coach/CoachSheet';
+import CoachLauncher from '@/components/coach/CoachLauncher';
 import { clerkEnabled } from '@/lib/authMode';
 
 // Clerk wraps the app only when `clerkEnabled` (a publishable key configured and
@@ -78,12 +81,19 @@ export default function RootLayout({
     >
       <body className="font-sans min-h-screen flex flex-col">
         <ThemeProvider>
-          <NavBar />
-          <PwaOpenInAppBanner />
-          <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-8 pb-[calc(4rem+env(safe-area-inset-bottom)+1rem)] md:pb-8">
-            {children}
-          </main>
-          <BottomNav />
+          {/* #766: the coach sheet mounts at the layout level, inside one
+              app-wide provider, so its conversation (and an in-flight reply)
+              survives route navigation. */}
+          <CoachSheetProvider>
+            <NavBar />
+            <PwaOpenInAppBanner />
+            <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-8 pb-[calc(4rem+env(safe-area-inset-bottom)+1rem)] md:pb-8">
+              {children}
+            </main>
+            <BottomNav />
+            <CoachLauncher />
+            <CoachSheet />
+          </CoachSheetProvider>
         </ThemeProvider>
       </body>
     </html>
