@@ -32,6 +32,7 @@ from app.models import (
     RunnerMemory,
     StravaAccount,
     StravaImport,
+    Thread,
     User,
     UserMaterial,
     UserProfile,
@@ -69,6 +70,21 @@ def delete_user_account(db: Session, user_id) -> dict:
     # 1. Exchanges (FK -> blocks, users) — nothing references them.
     counts["exchanges"] = (
         db.query(Exchange).filter(Exchange.user_id == user_id)
+        .delete(synchronize_session=False)
+    )
+
+    # 1b. Thread messages, then threads (#765). Messages are deleted by thread
+    # scope FIRST because a thread turn need not carry an activity_id (the
+    # activity-children sweep below catches the rest); threads FK -> activities,
+    # so they go before the activities themselves.
+    thread_ids = select(Thread.id).where(Thread.user_id == user_id)
+    counts["coach_thread_messages"] = (
+        db.query(CoachChatMessage)
+        .filter(CoachChatMessage.thread_id.in_(thread_ids))
+        .delete(synchronize_session=False)
+    )
+    counts["coach_threads"] = (
+        db.query(Thread).filter(Thread.user_id == user_id)
         .delete(synchronize_session=False)
     )
 

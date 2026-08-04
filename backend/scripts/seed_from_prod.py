@@ -60,6 +60,7 @@ from app.models import (  # noqa: E402
     RunnerBaseline,
     RunnerMemory,
     StravaAccount,
+    Thread,
     User,
     UserProfile,
 )
@@ -76,11 +77,13 @@ USER_MODELS = [
 # activities.block_id <-> blocks.primary_activity_id is circular (A1), so
 # activities are inserted with block_id nulled, blocks/exchanges follow, and
 # block_id is backfilled last (see seed()).
-ACTIVITY_MODELS = [Activity, Block, Exchange, ActivityStream, DerivedMetric, CoachReport, CoachChatMessage, CheckIn]
+ACTIVITY_MODELS = [Activity, Block, Exchange, ActivityStream, DerivedMetric, CoachReport, Thread, CoachChatMessage, CheckIn]
 ORDERED_MODELS = USER_MODELS + ACTIVITY_MODELS
 
 # Tables keyed off activity_id, filtered when --activities limits the snapshot.
-ACTIVITY_CHILD_MODELS = [ActivityStream, DerivedMetric, CoachReport, CoachChatMessage, CheckIn]
+# Thread and CoachChatMessage are filtered separately (#765): a thread's
+# activity anchor is optional, and a thread-only message carries no activity_id.
+ACTIVITY_CHILD_MODELS = [ActivityStream, DerivedMetric, CoachReport, CheckIn]
 
 REDACTED_TOKEN = "dev-redacted-not-a-real-token"
 INSERT_CHUNK = 500
@@ -106,7 +109,13 @@ def _read_rows(engine: Engine, model) -> list[dict]:
     so they must be nullable/defaulted for prod's own deploy anyway).
     """
     with engine.connect() as conn:
-        source_cols = {c["name"] for c in sa_inspect(conn).get_columns(model.__tablename__)}
+        inspector = sa_inspect(conn)
+        if not inspector.has_table(model.__tablename__):
+            # A branch that adds a whole table (e.g. coach_threads, #765) seeds
+            # cleanly from a prod that has not run the migration yet: the table
+            # simply arrives empty and the local upgrade path backfills it.
+            return []
+        source_cols = {c["name"] for c in inspector.get_columns(model.__tablename__)}
         cols = [c for c in model.__table__.columns if c.name in source_cols]
         return [dict(r) for r in conn.execute(select(*cols)).mappings()]
 
@@ -167,6 +176,22 @@ def seed(source_url: str, target_url: str, activities_limit: int, with_live_toke
     snapshot[Activity] = [r for r in snapshot[Activity] if r["id"] in keep_activity_ids]
     for model in ACTIVITY_CHILD_MODELS:
         snapshot[model] = [r for r in snapshot[model] if r["activity_id"] in keep_activity_ids]
+
+    # #765: a thread survives when unanchored or anchored to a kept activity; a
+    # message survives via its kept activity, or (thread-only rows, no
+    # activity_id) via its kept thread.
+    snapshot[Thread] = [
+        r
+        for r in snapshot[Thread]
+        if r.get("activity_id") is None or r["activity_id"] in keep_activity_ids
+    ]
+    keep_thread_ids = {r["id"] for r in snapshot[Thread]}
+    snapshot[CoachChatMessage] = [
+        r
+        for r in snapshot[CoachChatMessage]
+        if r.get("activity_id") in keep_activity_ids
+        or (r.get("activity_id") is None and r.get("thread_id") in keep_thread_ids)
+    ]
 
     # Blocks survive only when their primary activity does; exchanges follow
     # their block. Activities are inserted with block_id nulled (circular FK
