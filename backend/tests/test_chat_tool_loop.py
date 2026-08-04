@@ -15,6 +15,7 @@ import pytest
 
 from app.models import Activity, CoachChatMessage, DerivedMetric
 from app.services.coach.chat import (
+    _MAX_TOOL_ROUNDS,
     MEDICAL_REDIRECT_MESSAGE,
     get_chat_history,
     stream_chat_response,
@@ -85,19 +86,21 @@ async def test_final_round_runs_tools_off(db):
     tools so the model must answer in text rather than fetch again."""
     activity = _seed_activity_with_report(db)
     capture = {}
-    stub = chat_tool_loop_stub([
-        [{"name": "list_activities_in_range", "input": {"window": "last_7_days"}}],
-        [{"name": "list_activities_in_range", "input": {"window": "last_30_days"}}],
-        "Here's the summary.",
-    ], capture=capture)
+    # Keep fetching for the whole budget, whatever the budget is: the guarantee
+    # under test is that the LAST round carries no tools, not that there are N.
+    rounds = [
+        [{"name": "list_activities_in_range", "input": {"window": "last_7_days"}}]
+        for _ in range(_MAX_TOOL_ROUNDS - 1)
+    ] + ["Here's the summary."]
+    stub = chat_tool_loop_stub(rounds, capture=capture)
 
     with patch.object(AnthropicClient, "stream_chat_turn", new=stub):
         events = await _drain(db, activity.id, "tell me everything")
 
     tools_seen = capture["tools_seen"]
-    assert tools_seen[0] is CHAT_TOOLS
-    assert tools_seen[1] is CHAT_TOOLS
-    assert tools_seen[2] is None  # final round: tools off
+    assert len(tools_seen) == _MAX_TOOL_ROUNDS
+    assert all(t is CHAT_TOOLS for t in tools_seen[:-1])
+    assert tools_seen[-1] is None  # final round: tools off
     assert "Here's the summary." in "".join(ev.text for ev in events if ev.text)
 
 

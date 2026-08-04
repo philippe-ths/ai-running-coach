@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from app.core.clerk_auth import verify_clerk_session
 from app.main import app
+from app.services.coach.chat import MEDICAL_REDIRECT_MESSAGE
 from app.models import Activity, StravaAccount, User, UserProfile
 from app.models.coach_chat_message import CoachChatMessage
 from app.models.thread import Thread
@@ -428,6 +429,80 @@ class TestThreadTurn:
         assert actions[0]["confirm_label"] == "Set it"
         assert "Mark" in actions[0]["description"]
         assert actions[0]["token"]
+
+    def test_a_loaded_skill_is_recorded_on_the_turn_and_costs_no_lookup(
+        self, client, db
+    ):
+        """#769: the procedure rides the same round as the fetch beside it, and
+        the assistant row records which procedure the turn ran to."""
+        user = _seed_user(db)
+        _seed_activity(db, user)
+        _act_as(user)
+
+        capture = {}
+        rounds = [
+            [
+                {"name": "load_coaching_skill", "input": {"name": "plan_the_week"}},
+                {
+                    "name": "get_training_summary",
+                    "input": {"window": "last_7_days"},
+                },
+            ],
+            "Three easy runs, hold the long run where it is.",
+        ]
+        with patch(
+            "app.services.coach.llm.AnthropicClient.stream_chat_turn",
+            new=chat_tool_loop_stub(rounds, capture=capture),
+        ):
+            resp = client.post(
+                "/api/coach/threads/messages",
+                json={"message": "plan my week", "asked_from": "home"},
+            )
+
+        assert resp.status_code == 200
+        text, objects = _parse_sse(resp.text)
+        assert "Three easy runs" in text
+
+        # The load is not a lookup: no status affordance, no trace chip for it.
+        traces = [o for o in objects if o.get("type") == "tool_trace"]
+        assert all(t["entry"]["tool"] != "load_coaching_skill" for t in traces)
+        assert any(t["entry"]["tool"] == "get_training_summary" for t in traces)
+
+        # And the procedure reached the model in the same round as the fetch.
+        assert len(capture["tools_seen"]) == 2
+
+        row = (
+            db.query(CoachChatMessage)
+            .filter(CoachChatMessage.role == "assistant")
+            .order_by(CoachChatMessage.created_at.desc())
+            .first()
+        )
+        assert row.skills_used == ["plan_the_week"]
+
+    def test_a_skilled_turn_does_not_lower_the_safety_floor(self, client, db):
+        """ADR 0029: a skill cannot widen what the coach may write. A reply that
+        overreaches is withheld whether or not a procedure shaped the turn."""
+        user = _seed_user(db)
+        _seed_activity(db, user)
+        _act_as(user)
+
+        rounds = [
+            [{"name": "load_coaching_skill", "input": {"name": "plan_the_week"}}],
+            "That knee pain is patellar tendinopathy. Take 400mg of ibuprofen first.",
+        ]
+        with patch(
+            "app.services.coach.llm.AnthropicClient.stream_chat_turn",
+            new=chat_tool_loop_stub(rounds),
+        ):
+            resp = client.post(
+                "/api/coach/threads/messages",
+                json={"message": "knee hurts, plan my week", "asked_from": "home"},
+            )
+
+        text, _objects = _parse_sse(resp.text)
+        assert "patellar" not in text
+        assert "ibuprofen" not in text
+        assert MEDICAL_REDIRECT_MESSAGE in text
 
     def test_confirm_endpoint_executes_and_is_single_use(self, client, db):
         from app.services.coach import proposed_actions
