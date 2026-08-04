@@ -20,7 +20,7 @@ from app.main import app
 from app.models import Activity, StravaAccount, User, UserProfile
 from app.models.coach_chat_message import CoachChatMessage
 from app.models.thread import Thread
-from tests._chat_stubs import chat_turn_stub
+from tests._chat_stubs import chat_tool_loop_stub, chat_turn_stub
 
 
 def _act_as(user):
@@ -375,6 +375,104 @@ class TestThreadTurn:
         # Scrollback is untouched: full history still served.
         detail = client.get(f"/api/coach/threads/{thread.id}").json()
         assert len(detail["messages"]) == 62
+
+    def test_thread_turn_streams_a_proposed_action_frame(self, client, db):
+        user = _seed_user(db)
+        activity = _seed_activity(db, user)
+        _act_as(user)
+
+        class _FakeRedis:
+            def __init__(self):
+                self._store = {}
+
+            def set(self, key, value, ex=None):
+                self._store[key] = value
+                return True
+
+            def getdel(self, key):
+                return self._store.pop(key, None)
+
+        fake_redis = _FakeRedis()
+        rounds = [
+            [
+                {
+                    "name": "offer_proposed_action",
+                    "input": {
+                        "action_type": "intent",
+                        "activity_id": str(activity.id),
+                        "user_intent": "Tempo",
+                    },
+                }
+            ],
+            "That fits better.",
+        ]
+        with patch(
+            "app.services.coach.llm.AnthropicClient.stream_chat_turn",
+            new=chat_tool_loop_stub(rounds),
+        ), patch("app.services.coach.proposed_actions.redis_conn", fake_redis):
+            resp = client.post(
+                "/api/coach/threads/messages",
+                json={
+                    "message": "this wasn't easy",
+                    "anchor_activity_id": str(activity.id),
+                    "asked_from": "activity",
+                },
+            )
+
+        assert resp.status_code == 200
+        text, objects = _parse_sse(resp.text)
+        assert text == "That fits better."
+        actions = [o for o in objects if o.get("type") == "proposed_action"]
+        assert len(actions) == 1
+        assert actions[0]["action_type"] == "intent"
+        assert actions[0]["confirm_label"] == "Set it"
+        assert "Mark" in actions[0]["description"]
+        assert actions[0]["token"]
+
+    def test_confirm_endpoint_executes_and_is_single_use(self, client, db):
+        from app.services.coach import proposed_actions
+
+        user = _seed_user(db)
+        activity = _seed_activity(db, user)
+        _act_as(user)
+
+        class _FakeRedis:
+            def __init__(self):
+                self._store = {}
+
+            def set(self, key, value, ex=None):
+                self._store[key] = value
+                return True
+
+            def getdel(self, key):
+                return self._store.pop(key, None)
+
+        fake_redis = _FakeRedis()
+        with patch.object(proposed_actions, "redis_conn", fake_redis):
+            offer = proposed_actions.mint_proposed_action(
+                db,
+                user.id,
+                {
+                    "action_type": "intent",
+                    "activity_id": str(activity.id),
+                    "user_intent": "Tempo",
+                },
+            )
+            token = offer["frame"]["token"]
+            with patch("app.services.intents.analysis.analyze"):
+                resp = client.post(
+                    "/api/coach/threads/actions/confirm",
+                    json={"token": token},
+                )
+            assert resp.status_code == 200
+            db.refresh(activity)
+            assert activity.user_intent == "Tempo"
+
+            again = client.post(
+                "/api/coach/threads/actions/confirm",
+                json={"token": token},
+            )
+            assert again.status_code == 404
 
 
 class TestThreadMaintenance:

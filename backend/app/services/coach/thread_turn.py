@@ -47,6 +47,8 @@ from app.services.coach.screen_context import (
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.memory_store import get_memory
 from app.services.coach.prompts import render_voice_block
+from app.services.coach.proposed_actions import thread_tools
+from app.services.coach.query_tools import CHAT_TOOLS
 from app.services.coach.voice import resolve_voice
 from app.services.readiness import build_readiness
 
@@ -391,6 +393,7 @@ async def stream_thread_turn(
         llm_messages=llm_messages,
         owner_user_id=user.id,
         out=out,
+        tools=thread_tools(CHAT_TOOLS),
     ):
         yield event
 
@@ -432,6 +435,9 @@ async def stream_thread_turn(
 
     for piece in _slice_for_stream(assistant_text):
         yield ChatStreamEvent(text=piece)
+
+    if out.get("proposed_action") is not None:
+        yield ChatStreamEvent(proposed_action=out["proposed_action"])
 
     assistant_msg = CoachChatMessage(
         thread_id=thread.id,

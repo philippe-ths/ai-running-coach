@@ -31,6 +31,14 @@ export interface ThreadDetail {
   messages: ChatMessage[];
 }
 
+export interface ProposedActionFrame {
+  action_type: "check_in" | "intent" | "split_block" | "merge_blocks";
+  token: string;
+  description: string;
+  confirm_label: string;
+  dismiss_label: string;
+}
+
 export interface ThreadMessageSend {
   message: string;
   thread_id?: string;

@@ -22,6 +22,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   ChatMessage,
+  ProposedActionFrame,
   ThreadDetail,
   ThreadListItem,
   ToolTraceEntry,
@@ -29,6 +30,7 @@ import {
 import { readCoachStream } from '@/lib/coachStream';
 import { useCoachSheet } from './CoachSheetContext';
 import ThreadSwitcher from './ThreadSwitcher';
+import { useRouter } from 'next/navigation';
 
 // Per-screen conversation starters (design spec: drawn from the screen the
 // runner is on; screens without three good questions get none — three weak
@@ -179,6 +181,7 @@ const coachProseClasses =
   'prose prose-sm prose-gray dark:prose-invert max-w-none leading-relaxed font-serif prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm';
 
 export default function CoachSheet() {
+  const router = useRouter();
   const { isOpen, close, screen, selections } = useCoachSheet();
   const vvBox = useVisualViewportBox();
 
@@ -196,6 +199,8 @@ export default function CoachSheet() {
   const [streamingText, setStreamingText] = useState('');
   const [streamingTools, setStreamingTools] = useState<ToolTraceEntry[]>([]);
   const [fetchingLabel, setFetchingLabel] = useState('');
+  const [proposedAction, setProposedAction] = useState<ProposedActionFrame | null>(null);
+  const [confirmingAction, setConfirmingAction] = useState(false);
   const hasAutoOpenedThread = useRef(false);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -225,6 +230,7 @@ export default function CoachSheet() {
     setSwitcherOpen(false);
     setCurrentThreadId(id);
     setHeadReport(null);
+    setProposedAction(null);
     try {
       const res = await fetch(`/api/coach/threads/${id}`);
       if (!res.ok) return;
@@ -260,6 +266,7 @@ export default function CoachSheet() {
     setCurrentTitle('New thread');
     setMessages([]);
     setHeadReport(null);
+    setProposedAction(null);
     // Born on an activity page, a new thread anchors to that run (a framing
     // hint, never a data boundary — ADR 0027).
     setAnchorActivityId(screen.activityId ?? null);
@@ -305,6 +312,7 @@ export default function CoachSheet() {
       setStreamingText('');
       setStreamingTools([]);
       setFetchingLabel('');
+      setProposedAction(null);
 
       const optimistic: ChatMessage = {
         id: crypto.randomUUID(),
@@ -352,6 +360,7 @@ export default function CoachSheet() {
             setCurrentThreadId(frame.thread_id);
             if (frame.title) setCurrentTitle(frame.title);
           },
+          onProposedAction: frame => setProposedAction(frame),
           onStatus: label => setFetchingLabel(label),
           onToolTrace: entry => {
             toolsUsed.push(entry);
@@ -387,6 +396,26 @@ export default function CoachSheet() {
     },
     [input, streaming, currentThreadId, anchorActivityId, screen.key, screen.activityId, selections, refreshThreads, scrollToBottom],
   );
+
+  const confirmProposedAction = useCallback(async () => {
+    if (!proposedAction || confirmingAction) return;
+    setConfirmingAction(true);
+    try {
+      const res = await fetch('/api/coach/threads/actions/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: proposedAction.token }),
+      });
+      if (!res.ok) throw new Error(`Confirm failed (${res.status})`);
+      setProposedAction(null);
+      router.refresh();
+      if (currentThreadId) void openThread(currentThreadId);
+    } catch {
+      // Keep the action visible so the runner can retry or leave it.
+    } finally {
+      setConfirmingAction(false);
+    }
+  }, [confirmingAction, currentThreadId, openThread, proposedAction, router]);
 
   const renameThread = useCallback(
     async (id: string, title: string) => {
@@ -574,6 +603,33 @@ export default function CoachSheet() {
               <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 {fetchingLabel || 'Thinking...'}
+              </div>
+            )}
+
+            {proposedAction && (
+              <div className="flex flex-col gap-2 rounded-xl border border-blue-600 bg-white px-3 py-3 dark:bg-gray-800">
+                <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-blue-600">
+                  Your call
+                </div>
+                <div className="text-[12.5px] leading-relaxed text-gray-800 dark:text-gray-100">
+                  {proposedAction.description}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => void confirmProposedAction()}
+                    disabled={confirmingAction}
+                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {confirmingAction ? 'Working...' : proposedAction.confirm_label}
+                  </button>
+                  <button
+                    onClick={() => setProposedAction(null)}
+                    disabled={confirmingAction}
+                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-[12px] font-medium text-gray-500 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700/40"
+                  >
+                    {proposedAction.dismiss_label}
+                  </button>
+                </div>
               </div>
             )}
           </div>

@@ -169,6 +169,9 @@ class ChatStreamEvent:
     # emits first, so a client that started a NEW thread learns its id. None on
     # every other event.
     thread_meta: Optional[dict] = None
+    # #768: a typed, server-minted action the runner may confirm. Emitted only
+    # by the thread turn after the reply text, never by the activity chat box.
+    proposed_action: Optional[dict] = None
 
 
 # How often a keepalive heartbeat is emitted while the reply is being buffered
@@ -500,6 +503,7 @@ async def _buffered_tool_loop(
     llm_messages: List[dict],
     owner_user_id,
     out: dict,
+    tools: Optional[List[dict]] = None,
 ):
     """The shared buffer-then-validate generation core (#340/#375/#648), used by
     BOTH chat surfaces: the activity chat box and the thread turn (#766). Yields
@@ -522,12 +526,14 @@ async def _buffered_tool_loop(
     # policy floor can gate claims against the sessions actually in play (rule 4
     # re-sourced from the turn's own facts rather than a stored pack).
     raw_tool_results: List[tuple] = []
+    proposed_action = None
     last_heartbeat = time.monotonic()
     try:
         for round_idx in range(_MAX_TOOL_ROUNDS):
             # The final round runs tools-off, forcing a text answer rather than another
             # fetch — the loop is guaranteed to terminate (#648, Q8).
-            tools_arg = CHAT_TOOLS if round_idx < _MAX_TOOL_ROUNDS - 1 else None
+            toolset = CHAT_TOOLS if tools is None else tools
+            tools_arg = toolset if round_idx < _MAX_TOOL_ROUNDS - 1 else None
             final_msg = None
             async for delta in client.stream_chat_turn(
                 system=system_prompt,
@@ -566,6 +572,24 @@ async def _buffered_tool_loop(
                 for blk in tool_uses:
                     name = _block_attr(blk, "name")
                     tool_input = _block_attr(blk, "input") or {}
+                    if name == "offer_proposed_action":
+                        from app.services.coach.proposed_actions import (
+                            mint_proposed_action,
+                        )
+
+                        result = mint_proposed_action(db, owner_user_id, tool_input)
+                        if proposed_action is None and result.get("ok") and isinstance(
+                            result.get("frame"), dict
+                        ):
+                            proposed_action = result["frame"]
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": _block_attr(blk, "id"),
+                                "content": json.dumps(result, default=str),
+                            }
+                        )
+                        continue
                     # Show the ephemeral affordance BEFORE the fetch runs (#648): the
                     # spinner cannot yet know the result, so it stays present-tense.
                     yield ChatStreamEvent(
@@ -615,6 +639,7 @@ async def _buffered_tool_loop(
     out["stream_fail_message"] = stream_fail_message
     out["tool_trace"] = tool_trace
     out["tool_results"] = raw_tool_results
+    out["proposed_action"] = proposed_action
 
 
 async def stream_chat_response(

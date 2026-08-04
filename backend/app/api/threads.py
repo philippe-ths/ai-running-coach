@@ -18,6 +18,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.chat import ChatMessageRead
 from app.schemas.thread import (
+    ProposedActionConfirm,
     ThreadDetail,
     ThreadListResponse,
     ThreadMessageSend,
@@ -90,6 +91,8 @@ async def post_thread_message(
                     yield ": hb\n\n"
                 elif event.thread_meta is not None:
                     yield f"data: {json.dumps({'type': 'thread', **event.thread_meta})}\n\n"
+                elif event.proposed_action is not None:
+                    yield f"data: {json.dumps({'type': 'proposed_action', **event.proposed_action})}\n\n"
                 elif event.status_label:
                     yield f"data: {json.dumps({'type': 'status', 'label': event.status_label, 'tool': event.status_tool})}\n\n"
                 elif event.trace_entry is not None:
@@ -151,3 +154,20 @@ def delete_thread(
 ):
     thread = _owned_thread_or_404(db, thread_id, user)
     thread_service.delete_thread(db, thread)
+
+
+@router.post("/actions/confirm")
+def confirm_proposed_action(
+    body: ProposedActionConfirm,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_current_user),
+):
+    from app.services.coach.proposed_actions import consume_and_execute
+
+    try:
+        result = consume_and_execute(db, user.id, body.token)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Proposed action not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return result

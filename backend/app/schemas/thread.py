@@ -93,3 +93,7 @@ class ThreadMessageSend(BaseModel):
     # Fallback provenance label for clients not yet sending a pointer; when
     # `screen` is present the label derives from it and this is ignored.
     asked_from: Optional[str] = Field(default=None, max_length=ASKED_FROM_MAX_LENGTH)
+
+
+class ProposedActionConfirm(BaseModel):
+    token: str = Field(min_length=1, max_length=64)
