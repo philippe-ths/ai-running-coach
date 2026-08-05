@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { format } from 'date-fns';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, MessageSquareQuote } from 'lucide-react';
 
 import { activityStartDate, hasMeaningfulDistance } from '@/lib/format';
 
@@ -13,6 +13,10 @@ interface Activity {
   distance_m: number;
   moving_time_s: number;
   headline?: string | null;
+  // #797: the coach report's opening line. Telegram is the only channel that
+  // announces a report, so for a runner who has not linked one this is how they
+  // find out the run was coached at all. Absent until a report exists.
+  coach_lead?: string | null;
 }
 
 export default function ActivityList({ activities }: { activities: Activity[] }) {
@@ -49,6 +53,19 @@ export default function ActivityList({ activities }: { activities: Activity[] })
                 <span aria-hidden="true">•</span>
                 <span>{Math.floor(activity.moving_time_s / 60)} min</span>
               </div>
+              {/* font-serif matches how coach prose reads in CoachSheet and
+                  CoachReportPanel, so the coach's voice looks the same wherever
+                  it appears rather than like list metadata. */}
+              {activity.coach_lead && (
+                <p className="mt-2 flex items-start gap-2 font-serif text-sm leading-snug text-gray-700 dark:text-gray-300">
+                  <MessageSquareQuote
+                    size={15}
+                    aria-hidden="true"
+                    className="mt-0.5 shrink-0 text-gray-400 dark:text-gray-500"
+                  />
+                  <span className="line-clamp-2">{activity.coach_lead}</span>
+                </p>
+              )}
             </div>
             <ChevronRight className="text-gray-400 dark:text-gray-500 shrink-0" />
           </div>

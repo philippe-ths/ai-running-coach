@@ -312,6 +312,89 @@ def get_displayable_report_row(db: Session, activity_id) -> Optional[CoachReport
     )
 
 
+def _lead_sentence(row: CoachReport, activity: Activity) -> Optional[str]:
+    """This report's opening claim, as one line.
+
+    Prefers the STORED digest (written for every non-fallback report since A2a)
+    and re-projects through the shared `build_report_digest` only for older rows,
+    mirroring `retrieval._resolve_digest` — so the line shown in a list is the same
+    text the longitudinal read treats as this report's lead, never a second
+    projection that could drift from it.
+    """
+    stored = row.digest if isinstance(row.digest, dict) else None
+    if stored:
+        lead = stored.get("lead_argument")
+        if isinstance(lead, str) and lead.strip():
+            return lead.strip()
+    report = row.report if isinstance(row.report, dict) else None
+    if not report:
+        return None
+    try:
+        return (build_report_digest(report, activity.start_date).lead_argument or "").strip() or None
+    except Exception:  # a malformed stored row must never break the activity list
+        logger.exception("Could not project a lead sentence for report %s", row.id)
+        return None
+
+
+def get_displayable_report_leads(db: Session, activities) -> dict:
+    """`{activity_id: lead sentence}` for a page of activities (#797).
+
+    Telegram is the only channel that ever ANNOUNCES a report, so a runner who
+    declines to link one had no way to discover their runs were coached at all —
+    the reports were written, stored and visible, and nothing said so. This is the
+    activity list's way of saying so, without inventing read/unread state.
+
+    Batched deliberately: one query for the whole page. The obvious
+    `get_displayable_report_row` per row would be N+1 on the home page's default
+    20 activities, on a path a runner hits on every app open.
+
+    Selection mirrors `get_displayable_report_row` — the active
+    (prompt_id, schema_version) row when one exists, else the most recent current
+    row of any version — so the list and the detail page cannot show leads from
+    two different reports. Fallback reports are excluded: `is_fallback` marks a
+    generation that FAILED, and its apology text is not coaching to advertise.
+
+    Scoped to each activity's OWN report, deliberately NOT the #482 block-primary
+    fallback: a session's report is generated once per block, so borrowing it for
+    every member would print the same sentence against a walk and the run beside
+    it. In a multi-activity block only the primary carries the line.
+    """
+    by_id = {a.id: a for a in activities}
+    if not by_id:
+        return {}
+
+    prompt_id = settings.COACH_PROMPT_ID
+    active_schema = active_schema_version(prompt_id)
+
+    def _is_active(row: CoachReport) -> bool:
+        return row.prompt_id == prompt_id and row.schema_version == active_schema
+
+    rows = (
+        db.query(CoachReport)
+        .filter(
+            CoachReport.activity_id.in_(list(by_id)),
+            # #646: current rows only, never a superseded audit copy.
+            CoachReport.superseded_at.is_(None),
+            CoachReport.is_fallback.is_(False),
+        )
+        .order_by(CoachReport.created_at.desc())
+        .all()
+    )
+
+    chosen: dict = {}
+    for row in rows:  # newest first, so the first of any class is the newest of it
+        held = chosen.get(row.activity_id)
+        if held is None or (_is_active(row) and not _is_active(held)):
+            chosen[row.activity_id] = row
+
+    leads = {}
+    for activity_id, row in chosen.items():
+        lead = _lead_sentence(row, by_id[activity_id])
+        if lead:
+            leads[activity_id] = lead
+    return leads
+
+
 def get_block_primary_report_row(db: Session, activity_id) -> Optional[CoachReport]:
     """Block-aware DISPLAY fallback (#482): the displayable report of this
     activity's block PRIMARY, when the activity itself owns none.
