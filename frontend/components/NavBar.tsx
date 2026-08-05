@@ -16,7 +16,7 @@ const LINKS = [
 
 export default function NavBar() {
   const pathname = usePathname();
-  const { toggle } = useCoachSheet();
+  const { enabled: coachEnabled, toggle } = useCoachSheet();
 
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href);
@@ -48,13 +48,15 @@ export default function NavBar() {
           </div>
           {/* #766: the desktop coach entry — the mobile launcher's md+ sibling
               (BottomNav is md:hidden, so the FAB has no home on wide screens). */}
-          <button
-            onClick={toggle}
-            className="hidden md:inline-flex items-center gap-1.5 rounded-full border border-blue-600 px-3 py-1 text-sm font-semibold text-blue-600 transition-colors hover:bg-blue-50 dark:border-blue-400 dark:text-blue-400 dark:hover:bg-blue-900/30"
-          >
-            <MessageCircle className="h-4 w-4" aria-hidden="true" />
-            Ask your coach
-          </button>
+          {coachEnabled && (
+            <button
+              onClick={toggle}
+              className="hidden md:inline-flex items-center gap-1.5 rounded-full border border-blue-600 px-3 py-1 text-sm font-semibold text-blue-600 transition-colors hover:bg-blue-50 dark:border-blue-400 dark:text-blue-400 dark:hover:bg-blue-900/30"
+            >
+              <MessageCircle className="h-4 w-4" aria-hidden="true" />
+              Ask your coach
+            </button>
+          )}
           {/* On mobile the nav links live in the bottom tab bar; Profile stays
               here as a top-right icon (the bottom bar omits it). */}
           <Link

@@ -265,6 +265,9 @@ def test_feature_flags_endpoint_reports_disabled_state(client, monkeypatch):
     assert client.get("/api/coach/feature-flags").json() == {
         "voice": True, "stance": True, "user_materials": True,
         "sleep_quality": True, "stops_analysis": True, "memory": True,
+        # #784: the thread SURFACE rides the same map, so the frontend learns
+        # from one place whether to render the launcher and sheet at all.
+        "threads": True,
     }
     # voice is derived: relationship AND voice-block must both be on.
     monkeypatch.setattr(settings, "COACH_VOICE_BLOCK_ENABLED", False)

@@ -12,6 +12,9 @@ export type CoachFeatureFlags = {
   user_materials: boolean;
   sleep_quality: boolean;
   stops_analysis: boolean;
+  // #784: not an input but a SURFACE — false takes the coach thread down
+  // (launcher, sheet, and the report's conversational options).
+  threads: boolean;
 };
 
 // Default to everything ENABLED so a fetch failure never wrongly greys a live input
@@ -22,6 +25,7 @@ export const DEFAULT_COACH_FEATURE_FLAGS: CoachFeatureFlags = {
   user_materials: true,
   sleep_quality: true,
   stops_analysis: true,
+  threads: true,
 };
 
 export function useCoachFeatureFlags(): CoachFeatureFlags {

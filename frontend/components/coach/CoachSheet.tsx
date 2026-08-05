@@ -182,7 +182,7 @@ const coachProseClasses =
 
 export default function CoachSheet() {
   const router = useRouter();
-  const { isOpen, close, screen, selections, pendingPrompt, consumePendingPrompt } =
+  const { enabled, isOpen, close, screen, selections, pendingPrompt, consumePendingPrompt } =
     useCoachSheet();
   const vvBox = useVisualViewportBox();
 
@@ -477,7 +477,7 @@ export default function CoachSheet() {
     }
   };
 
-  if (!isOpen) return null;
+  if (!enabled || !isOpen) return null;
 
   const starters = currentThreadId === null ? STARTERS[screen.key] ?? [] : [];
 
