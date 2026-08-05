@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 from app.schemas.coach import CoachReportRead
@@ -8,6 +9,8 @@ from app.services.notifications.port import (
     NotificationRenderer,
     NotifierPort,
 )
+
+logger = logging.getLogger(__name__)
 
 _active: NotifierPort | None = None
 
@@ -27,33 +30,36 @@ def _renderer_for_channel(channel: Optional[str]) -> Optional[NotificationRender
     return None
 
 
-def _recipient_for_channel(channel: str) -> str:
-    """The channel-specific recipient address (transport config, not shape)."""
-    from app.core.config import settings
-
-    return str(settings.TELEGRAM_CHAT_ID)
-
-
 def _resolve_to(channel: Optional[str], recipient: Optional[str]) -> Optional[str]:
-    """The address to deliver to, or None to SUPPRESS the notification (#542).
+    """The address to deliver to, or None to SUPPRESS the notification (#542, #795).
 
-    A per-user `recipient` (from `resolve_recipient`) always wins. With no
-    recipient and the Telegram channel: in MULTI-USER mode (`OWNER_EMAIL` set) this
-    is a non-owner unbound runner that `resolve_recipient` deliberately suppressed,
-    so we return None and never fall back to the global owner chat — defense in
-    depth, so the builder refuses to leak to the owner's chat even if a caller
-    bypassed `resolve_recipient`. In SINGLE-USER mode (`OWNER_EMAIL` unset) there is
-    no owner concept, so the original global fallback is preserved. Telegram is the
-    only channel (#595).
+    No recipient means NO notification. This layer never substitutes an address of
+    its own, so no configuration an individual process happens to hold can turn a
+    suppressed runner into a delivery.
+
+    #795: it used to. With no recipient it re-derived single-vs-multi-user from
+    `OWNER_EMAIL` alone and, reading "unset" as single-user, substituted the global
+    chat. That is the one question this layer cannot answer — it has no `db`. On the
+    deployed stack `OWNER_EMAIL` was set on `web` but not on `worker`, and `worker`
+    is the process that sends: `resolve_recipient` correctly suppressed an unbound
+    non-owner (it asked the db and saw more than one user) and this function handed
+    their run to the owner's chat anyway. Two copies of one decision, and only the
+    copy with the evidence got hardened by #600.
+
+    The single-user global fallback still exists, in `resolve_recipient`, where a
+    `db` can prove the deployment has earned it. Telegram is the only channel
+    (#595); `channel` is retained because suppression is only meaningful once a
+    channel is configured at all.
     """
     if recipient:
         return recipient
-    if channel == "telegram":
-        from app.core.config import settings
-
-        if (settings.OWNER_EMAIL or "").strip():
-            return None  # multi-user: suppress, never the global owner chat
-        return _recipient_for_channel(channel)  # single-user back-compat
+    if channel is not None:
+        logger.info(
+            "Suppressing %s notification: no recipient resolved for this runner. "
+            "An unbound runner is only delivered to the global chat when they are "
+            "the identified owner or the deployment is provably single-user (#795).",
+            channel,
+        )
     return None
 
 
@@ -127,11 +133,34 @@ def resolve_recipient(user, db=None) -> Optional[str]:
         user_email = (getattr(user, "email", "") or "").strip().lower()
         if user_email and user_email == owner_email:
             return str(settings.TELEGRAM_CHAT_ID)
-        return None  # non-owner, unbound -> suppress (no leak to the owner chat)
+        return _suppress(user)  # non-owner, unbound -> no leak to the owner chat
     # OWNER_EMAIL unset: keep the single-user global fallback ONLY when we can prove
     # the deployment has at most one user; otherwise fail closed (#600).
     if db is not None and _user_count(db) <= 1:
         return str(settings.TELEGRAM_CHAT_ID)
+    return _suppress(user)
+
+
+def _suppress(user) -> None:
+    """Suppress delivery for an unbound runner, loudly (#795).
+
+    Suppression is the SAFE outcome, but it is not a neutral one: this runner
+    receives nothing at all, indefinitely, and until now that was invisible from
+    both ends. The #795 leak ran for a week partly because the affected runner had
+    never received a single notification and so had nothing to report — silence
+    reads as "no runs yet", not "misrouted".
+
+    WARNING rather than INFO on purpose: a runner getting nothing is a broken
+    product experience, and it is fixed by them binding a chat, which they will
+    only do if someone notices. Never raises and never blocks delivery decisions.
+    """
+    logger.warning(
+        "notification_suppressed_unbound_runner: user_id=%s has no linked Telegram "
+        "chat and is not the identified owner, so this notification is not "
+        "delivered to anyone. They receive nothing until they link a chat (#795).",
+        getattr(user, "id", None),
+        extra={"user_id": str(getattr(user, "id", None))},
+    )
     return None
 
 

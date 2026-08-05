@@ -111,10 +111,23 @@ Clerk production instance, and verification) is **[custom-domain.md](custom-doma
 | `STRAVA_CLIENT_ID/SECRET`, `STRAVA_REDIRECT_URI`, `STRAVA_WEBHOOK_*` | — | ✓ (all) | ✓ (client id/secret + webhook verify token only) |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | — | ✓ (inbound callback auth + button-mark edits) | ✓ (outbound sends) |
 | `TELEGRAM_WEBHOOK_SECRET` | — | ✓ (web hosts the inbound callback) | — |
+| `TELEGRAM_BOT_USERNAME` | — | ✓ (mints the `/start` deep link) | — |
+| `OWNER_EMAIL` | — | ✓ (inbound tap auth) | ✓ (**outbound routing — #795**) |
 | `CORS_ALLOWED_ORIGINS` | — | ✓ | — |
 
 The Vercel-side names are `BACKEND_*`; the Railway-side gate names are `BASIC_AUTH_*`. They are different
 variables that must agree in value for the proxy to authenticate against the backend.
+
+**Env vars are per-service, so "the deployment is configured" is not a fact any one process can check.**
+This is not a formality — it caused a live cross-user leak (#795). `OWNER_EMAIL` was set on `web` and
+absent on `worker`; `worker` is the process that sends notifications, so another runner's coach receipts
+were delivered to the owner's Telegram chat. Three separate safeguards missed it for the same reason: the
+multi-user audit verified the var "in prod" without asking *which service*, the #600 hardening fixed only
+the copy of the decision it was pointed at, and the #609 boot warning was wired into `web` alone — the
+service that did not need it. Since #795 the recipient decision is made in exactly one place that has a
+database to prove single-user, the builder layer never substitutes an address of its own, and **both**
+processes warn at boot about their own missing vars. When adding a row above, state the value per service
+and assume nothing carries across.
 
 ### Spend controls
 

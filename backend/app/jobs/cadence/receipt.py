@@ -127,8 +127,12 @@ class ReceiptCadence(PostActivityCadence):
             lifecycle.open_exchange(db, exchange)
 
         if notification is None:
+            # Either no channel, or no recipient resolved for this runner (#795 —
+            # suppression is the SAFE outcome). `_resolve_to` logs the recipient
+            # case with its reason just before this; don't assert a cause here.
             logger.info(
-                "No receipt notification for activity %s: no channel configured",
+                "No receipt notification for activity %s: nothing to deliver "
+                "(no channel configured, or no recipient for this runner)",
                 activity.strava_activity_id,
             )
             return None

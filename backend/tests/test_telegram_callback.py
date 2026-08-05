@@ -122,6 +122,7 @@ class TestOpenerKeyboardComposition:
         notification = build_coach_notification(
             report=read, headline="Easy Run", distance_m=5000,
             app_base_url="https://app.example.com", stage="opener",
+            recipient="42",  # stated, not invented (#795); these pin the keyboard
         )
         assert [a.label for a in notification.actions] == ["Easy (6)", "Hard (8)", "No pain"]
         # Each token decodes back to the right activity + kind + value.
@@ -140,6 +141,7 @@ class TestOpenerKeyboardComposition:
         notification = build_coach_notification(
             report=read, headline="Easy Run", distance_m=5000,
             app_base_url="https://app.example.com", stage="opener",
+            recipient="42",  # stated, not invented (#795); these pin the keyboard
         )
         assert [a.label for a in notification.actions] == ["RPE 7"]
 
@@ -150,6 +152,7 @@ class TestOpenerKeyboardComposition:
         notification = build_coach_notification(
             report=read, headline="Easy Run", distance_m=5000,
             app_base_url="https://app.example.com", stage="opener",
+            recipient="42",  # stated, not invented (#795); these pin the keyboard
         )
         assert notification.actions == ()
 
@@ -161,6 +164,7 @@ class TestOpenerKeyboardComposition:
         notification = build_coach_notification(
             report=read, headline="Easy Run", distance_m=5000,
             app_base_url="https://app.example.com", stage="fuller",
+            recipient="42",  # stated, not invented (#795); these pin the keyboard
         )
         assert notification.actions == ()
 
