@@ -182,6 +182,11 @@ def _coach(report: CoachReportRead, stage: str = "fuller", distance_m: int = 820
         distance_m=distance_m,
         app_base_url=_BASE,
         stage=stage,
+        # The recipient is stated explicitly because these snapshots pin RENDERING,
+        # not routing: the builder no longer invents an address of its own (#795).
+        # "42" is the same address the old global fallback produced, so every
+        # pinned byte below is unchanged.
+        recipient="42",
     )
 
 
@@ -330,6 +335,7 @@ class TestReceipt:
             activity_id=_RID,
             distance_m=5000,
             app_base_url=_BASE,
+            recipient="42",  # stated, not invented (#795) — see `_coach`
         )
         assert n is not None
         assert n.to == "42"
@@ -349,6 +355,7 @@ class TestReceipt:
             activity_id=_RID,
             distance_m=5000,
             app_base_url=_BASE,
+            recipient="42",  # stated, not invented (#795) — see `_coach`
         )
         body = _telegram_wire(n)
         assert body["text"] == (

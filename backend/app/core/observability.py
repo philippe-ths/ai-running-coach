@@ -147,24 +147,46 @@ def warn_if_coach_prompt_inert() -> None:
     )
 
 
-def warn_notification_config() -> None:
+# Which Telegram vars each process actually needs, keyed by process (#795).
+#
+# Env vars are PER-SERVICE on Railway, so "is the deployment configured?" is not a
+# question any single process can answer — it can only answer "am I configured?".
+# #609 wired this warning into the web process only, which is why `OWNER_EMAIL`
+# missing on the WORKER went unannounced through the #795 leak: the alarm was
+# installed on the service that did not need it.
+#   web    -> mints the /start deep link (TELEGRAM_BOT_USERNAME) and authenticates
+#             inbound taps against the owner identity (OWNER_EMAIL).
+#   worker -> sends every outbound notification, so it needs OWNER_EMAIL to route
+#             the owner's own unbound fallback. It never mints a link.
+_NOTIFICATION_VARS_BY_PROCESS = {
+    "web": ("TELEGRAM_BOT_USERNAME", "OWNER_EMAIL"),
+    "worker": ("OWNER_EMAIL",),
+}
+
+
+def warn_notification_config(process: str = "web") -> None:
     """Log a loud WARNING when Telegram is the active channel in production but a
-    var that SILENTLY degrades multi-user delivery or linking is unset (#600/#609).
+    var THIS process needs, which degrades delivery SILENTLY, is unset (#600/#609/#795).
 
     NON-FATAL by design. The #549 lesson: a boot crash took prod fully down on
     Railway (removed deploys), so this is left as a warning rather than a
     ``ProductionConfigError``. Unlike the Clerk/basic-auth gates, a missing value
     here does NOT 503 every route — it fails quietly:
-      - ``TELEGRAM_BOT_USERNAME`` unset -> the ``/start`` deep link cannot be minted,
-        so the "Link Telegram" button produces nothing and no new user can bind (#609).
+      - ``TELEGRAM_BOT_USERNAME`` unset on web -> the ``/start`` deep link cannot be
+        minted, so "Link Telegram" produces nothing and no new user can bind (#609).
       - ``OWNER_EMAIL`` unset on a multi-user deploy -> the owner's own unbound
         global-chat fallback is suppressed (fail closed, #600), so even the owner
         stops receiving notifications until they bind a chat.
 
+    ``process`` selects what to check, because Railway env vars are per-service and
+    a process can only vouch for its own (#795). Both processes are expected to call
+    this: the worker is the one that SENDS, so an unwarned worker is precisely the
+    hole that let #795 run in production.
+
     Only warns when Telegram is actually the active channel (both bot token + chat
     id set) and ``APP_ENV=production``; a no-Telegram or non-production process is a
-    silent no-op. Called once per process group right after ``init_logging``. Never
-    raises, so it can never crash the boot.
+    silent no-op. Called once per process right after ``init_logging``. Never raises,
+    so it can never crash the boot.
     """
     if settings.APP_ENV != "production":
         return
@@ -172,17 +194,21 @@ def warn_notification_config() -> None:
         return  # Telegram is not the active channel; these vars are irrelevant.
     missing = [
         name
-        for name in ("TELEGRAM_BOT_USERNAME", "OWNER_EMAIL")
+        for name in _NOTIFICATION_VARS_BY_PROCESS.get(process, ())
         if not str(getattr(settings, name, "") or "").strip()
     ]
     if not missing:
         return
     logging.getLogger(__name__).warning(
         "notification_config_incomplete: Telegram is the active channel but %s "
-        "unset -- new-user linking and/or the owner's unbound fallback will fail "
-        "silently. Set these on the web service. See docs/deployment/topology.md.",
+        "unset on the %s service -- new-user linking and/or the owner's unbound "
+        "fallback will fail silently. Set these on THIS service (env vars are "
+        "per-service). See docs/deployment/topology.md.",
         ", ".join(missing),
-        extra={"missing": missing},
+        process,
+        # NB "service", not "process": LogRecord reserves `process` for the PID and
+        # raises if `extra` tries to overwrite it.
+        extra={"missing": missing, "service": process},
     )
 
 

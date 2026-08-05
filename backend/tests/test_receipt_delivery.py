@@ -76,6 +76,8 @@ def test_receipt_notification_telegram_carries_taps(telegram):
         activity_id=_aid(),
         distance_m=5000,
         app_base_url="https://app.example.com",
+        # Routing is stated, not inferred (#795): this test pins the tap keyboard.
+        recipient="42",
     )
     assert n is not None
     assert n.text == "Got your run — how did it feel?"

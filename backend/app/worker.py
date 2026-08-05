@@ -17,6 +17,7 @@ from app.core.observability import (
     init_sentry,
     log_budget_cap_status,
     warn_if_coach_prompt_inert,
+    warn_notification_config,
 )
 from app.core.queue import redis_conn
 
@@ -74,6 +75,12 @@ def main() -> None:
     # not a boot crash -- the #543 guard took prod down on Railway (#549). This
     # only logs the resulting posture.
     log_budget_cap_status()
+    # #795: the worker is the ONLY process that sends notifications, so it is the
+    # one that must vouch for its own notification config. Railway env vars are
+    # per-service; #609 wired this warning into `web` alone, so `OWNER_EMAIL`
+    # missing HERE — the config that produced the #795 cross-user leak — booted
+    # silently. Worker-scoped: TELEGRAM_BOT_USERNAME is a web-only concern.
+    warn_notification_config("worker")
     logger.info(
         "Worker booting; listening on %s (WORKER_POOL_SIZE=%d)",
         ",".join(LISTEN),

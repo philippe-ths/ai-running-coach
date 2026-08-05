@@ -319,6 +319,49 @@ class TestWarnNotificationConfig:
         self._telegram_active(monkeypatch, username="", owner="")
         observability.warn_notification_config()  # no exception
 
+    # --- per-process scoping (#795) --------------------------------------------
+
+    def test_worker_warns_when_owner_email_unset(self, monkeypatch, caplog):
+        """#795: the worker SENDS, so an OWNER_EMAIL it lacks is its own problem.
+
+        This is the exact production configuration that leaked — set on `web`,
+        absent on `worker` — and it booted without a word, because #609 wired the
+        warning into the web process only.
+        """
+        self._telegram_active(monkeypatch, username="bot", owner="")
+        with caplog.at_level(logging.WARNING, logger="app.core.observability"):
+            observability.warn_notification_config("worker")
+        assert any("OWNER_EMAIL" in r.getMessage() + str(getattr(r, "missing", ""))
+                   for r in caplog.records)
+
+    def test_worker_ignores_bot_username(self, monkeypatch, caplog):
+        # TELEGRAM_BOT_USERNAME mints the /start deep link, which only web does.
+        # Warning the worker about it would train the operator to ignore this line.
+        self._telegram_active(monkeypatch, username="", owner="o@x.dev")
+        with caplog.at_level(logging.WARNING, logger="app.core.observability"):
+            observability.warn_notification_config("worker")
+        assert not caplog.records
+
+    def test_worker_boot_checks_its_own_notification_config(self, monkeypatch):
+        """The wiring, not just the function: `python -m app.worker` must call it.
+
+        Pinned because the #795 defect was never in this function — it was in which
+        processes bothered to call it.
+        """
+        from app import worker as worker_module
+
+        called: list[str] = []
+        monkeypatch.setattr(worker_module, "warn_notification_config",
+                            lambda process="web": called.append(process))
+        for name in ("init_logging", "init_sentry", "warn_if_coach_prompt_inert",
+                     "log_budget_cap_status"):
+            monkeypatch.setattr(worker_module, name, lambda *a, **k: None)
+        monkeypatch.setattr(worker_module, "build_worker_runtime", lambda *a, **k: object())
+        monkeypatch.setattr(worker_module, "run_worker_runtime", lambda *a, **k: None)
+
+        worker_module.main()
+        assert called == ["worker"]
+
 
 @pytest.fixture(autouse=True)
 def _restore_logging_after_each_test():

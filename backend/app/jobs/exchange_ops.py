@@ -106,8 +106,13 @@ def notify_stage(
         recipient=resolve_recipient(activity.user, db=db),
     )
     if notification is None:
+        # Two reasons land here: no channel configured, or no recipient resolved
+        # for this runner (#795 — suppression is the SAFE outcome, not an error).
+        # `_resolve_to` logs the recipient case with its own reason immediately
+        # before this line, so don't assert a cause we haven't checked.
         logger.info(
-            "Skipping %s notification for activity %s: no channel configured",
+            "Skipping %s notification for activity %s: nothing to deliver "
+            "(no channel configured, or no recipient for this runner)",
             stage, activity.strava_activity_id,
         )
         return None
