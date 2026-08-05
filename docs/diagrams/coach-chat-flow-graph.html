@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Running Coach — Coach Chat Flow Graph</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#181b22; --ink:#e6e9ef; --muted:#9aa3b2; --line:#2c313c;
+    --source:#3b82f6; --code:#10b981; --store:#a78bfa; --llm:#f59e0b;
+    --gate:#ef4444; --runner:#ec4899; --memory:#a78bfa;
+    --up:#22d3ee; --down:#f59e0b;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    overflow:hidden; }
+  code { color:#c9d2e3; background:#11141a; padding:1px 5px; border-radius:4px; font-size:11.5px; }
+
+  header.top { position:fixed; top:0; left:0; right:0; z-index:20; padding:12px 18px 11px;
+    background:linear-gradient(#0f1115ee,#0f1115cc); border-bottom:1px solid var(--line);
+    display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header.top h1 { font-size:17px; margin:0; letter-spacing:-.3px; white-space:nowrap; }
+  header.top .tip { font-size:12px; color:var(--muted); max-width:600px; }
+  header.top .tip b { color:var(--ink); }
+  .legend { display:flex; flex-wrap:wrap; gap:12px; margin-left:auto; align-items:center; }
+  .ctrl { background:#11141a; color:var(--muted); border:1px solid var(--line);
+    border-radius:8px; padding:5px 11px; font-size:12px; cursor:pointer; font-family:inherit; }
+  .ctrl:hover { color:var(--ink); }
+  .ctrl.on { color:var(--ink); border-color:var(--up); }
+  .sw { width:12px; height:12px; border-radius:4px; flex:none; }
+  .dash { width:18px; height:0; border-top:3px solid; flex:none; border-radius:2px; }
+
+  #stage { position:fixed; inset:0; top:0; cursor:grab; }
+  #stage.grabbing { cursor:grabbing; }
+  #cam.glide { transition:transform .3s cubic-bezier(.4,0,.2,1); }
+  svg { width:100%; height:100%; display:block; }
+
+  .colhdr { font:700 11px/1 ui-sans-serif,system-ui; letter-spacing:1px; text-transform:uppercase; fill:#6b7280; }
+  .colhdr.sub { font-weight:500; letter-spacing:.2px; text-transform:none; fill:#525a68; }
+
+  .laneband { fill:transparent; }
+  .laneband.alt { fill:rgba(255,255,255,.018); }
+  .lanesep  { stroke:var(--line); stroke-width:1; stroke-opacity:.65; }
+  .phasesep { stroke:var(--line); stroke-width:1; stroke-dasharray:3 5; stroke-opacity:.45; }
+  .lanelbl  { fill:#8b93a1; font:700 10px/1 ui-sans-serif,system-ui; letter-spacing:.5px; text-transform:uppercase; }
+
+  .edge { fill:none; stroke:#8aa; stroke-opacity:.13; stroke-width:1.3; transition:stroke-opacity .15s, stroke .15s; }
+  .edge.eup   { stroke:var(--up);   stroke-opacity:.85; stroke-width:1.8; }
+  .edge.edown { stroke:var(--down); stroke-opacity:.8;  stroke-width:1.8; }
+  body.sel .edge:not(.eup):not(.edown) { stroke-opacity:.025; }
+
+  .node { cursor:pointer; }
+  .node rect { fill:color-mix(in srgb, var(--kind,#8892a0) 14%, #1a1e26);
+    stroke:color-mix(in srgb, var(--kind,#8892a0) 62%, #2c313c); stroke-width:1.5; rx:8;
+    transition:opacity .15s, stroke .15s, stroke-width .15s; }
+  .node text { fill:#dfe4ee; font:600 11.5px/1 -apple-system,system-ui; pointer-events:none; }
+  .node .accent { stroke-width:4; }
+  body.sel .node { opacity:.16; }
+  body.sel .node.up, body.sel .node.down, body.sel .node.focus { opacity:1; }
+  .node.up rect    { stroke:var(--up);   stroke-width:2; }
+  .node.down rect  { stroke:var(--down); stroke-width:2; }
+  .node.focus rect { stroke:#fff; stroke-width:2.5; }
+  .node.off rect { fill:#15171c; stroke-dasharray:4 3; }
+  .node.off text { fill:#6b7280; }
+  .node.off .accent { opacity:.45; }
+  body:not(.sel) .node.off { opacity:.6; }
+  .startcap { fill:#5eead4; }
+  .slotbar { }
+
+  .drawer { position:fixed; top:0; right:0; height:100%; width:min(560px,95vw); z-index:50;
+    background:var(--panel); border-left:1px solid var(--line); box-shadow:-20px 0 60px rgba(0,0,0,.5);
+    transform:translateX(100%); transition:transform .2s cubic-bezier(.4,0,.2,1); display:flex; flex-direction:column; }
+  .drawer.open { transform:translateX(0); }
+  .drawer header { padding:20px 22px 14px; border-bottom:1px solid var(--line); position:relative; }
+  .drawer h2 { margin:0 36px 0 0; font-size:18px; }
+  .drawer .path { font-size:10.5px; color:#6b7280; font-family:ui-monospace,Menlo,monospace; margin-top:4px; }
+  .tag { display:inline-block; font-size:9px; letter-spacing:.5px; text-transform:uppercase; font-weight:700;
+    padding:1px 6px; border-radius:4px; }
+  .tag.source{background:rgba(59,130,246,.18);color:#93c5fd;} .tag.code{background:rgba(16,185,129,.18);color:#6ee7b7;}
+  .tag.store{background:rgba(167,139,250,.18);color:#c4b5fd;} .tag.llm{background:rgba(245,158,11,.2);color:#fcd34d;}
+  .tag.gate{background:rgba(239,68,68,.2);color:#fca5a5;} .tag.runner{background:rgba(236,72,153,.2);color:#f9a8d4;}
+  .tag.memory{background:rgba(167,139,250,.18);color:#c4b5fd;}
+  .offpill { font-size:9px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; color:#fca5a5;
+    background:rgba(239,68,68,.13); border:1px solid rgba(239,68,68,.34); border-radius:4px; padding:1px 6px;
+    vertical-align:3px; }
+  .drawer .body { padding:16px 22px 60px; overflow-y:auto; }
+  .drawer .desc { margin:0 0 10px; font-size:12.5px; color:#c3cbd9; }
+  .drawer .desc b { color:var(--ink); }
+  .drawer h4 { font:700 9.5px/1 ui-sans-serif,system-ui; letter-spacing:1px; text-transform:uppercase;
+    color:#6b7280; margin:16px 0 7px; }
+  .close { position:absolute; top:16px; right:16px; width:30px; height:30px; border-radius:8px; cursor:pointer;
+    background:#11141a; border:1px solid var(--line); color:var(--muted); font-size:15px; }
+  .close:hover { color:var(--ink); }
+
+  .relchips { padding:12px 22px 0; }
+  .relchips .grp { margin-bottom:8px; font-size:11px; color:var(--muted); }
+  .relchips .lbl { font-size:9px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; margin-right:6px; }
+  .relchips .lbl.up { color:var(--up); } .relchips .lbl.down { color:var(--down); }
+  .chip { display:inline-block; background:#11141a; border:1px solid var(--line); border-radius:5px;
+    padding:1px 7px; margin:2px 4px 2px 0; font-size:10.5px; color:#c9d2e3; cursor:pointer; }
+  .chip.up { border-color:rgba(34,211,238,.45); } .chip.down { border-color:rgba(245,158,11,.45); }
+  .chip:hover { background:#1c2029; }
+  .chip.off { color:#6b7280; border-style:dashed; }
+  .offsub { margin-top:4px; padding-top:4px; border-top:1px dashed var(--line); }
+  .offlbl { font-size:8.5px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:#fca5a5; margin-right:6px; }
+  .grp.start, .grp.end { font-size:11px; color:var(--muted); }
+  .lbl.start { color:#5eead4; } .lbl.end { color:#fcd34d; }
+
+  /* data render (shared classes used by coach-chat-nodes.js body()) */
+  .data { background:#0c0f14; border:1px solid var(--line); border-radius:8px; padding:9px 10px; margin:0 0 10px; overflow:auto; max-height:300px; }
+  .data.tall { max-height:520px; }
+  .data pre { margin:0; font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#aeb8c9; white-space:pre; }
+  .data pre.wrap { white-space:pre-wrap; word-break:break-word; }
+  /* structured key -> value renderer (same shape as ai-flow-graph.html) */
+  .kv { font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .kv .rw { display:flex; gap:7px; padding:2px 0; align-items:baseline; flex-wrap:wrap; border-bottom:1px solid rgba(44,49,60,.45); }
+  .kv .rw:last-child { border-bottom:0; }
+  .kv .rw.col { flex-direction:column; gap:4px; flex-wrap:nowrap; align-items:stretch; }
+  .kv .rw > .kline { flex:0 0 auto; min-width:130px; color:#7dd3fc; word-break:break-word; }
+  .kv .rw.col > .kline { flex:1 1 auto; min-width:0; }
+  .kv .eq { flex:0 0 auto; color:#525a68; }
+  .kv .rw.col > .eq { display:none; }
+  .kv .k { color:#7dd3fc; }
+  .kv .idx { color:#5b6472; font-weight:700; }
+  .kv .meta { color:#5b6472; font-size:10px; }
+  /* facts(): a pre-stringified list, so it needs the row shape without the panel chrome */
+  .kv.facts { margin:0 0 11px; }
+  .kv.facts .rw > .kline { min-width:200px; }
+  /* a JSON blob found inside a prompt slot's prose — set off from the text around it */
+  .kv.blob { border-left:2px solid var(--code); padding-left:10px; margin:7px 0; }
+  .data > pre + .kv.blob { margin-top:5px; }
+  .kv .vline { flex:1 1 0; min-width:0; color:#e6e9ef; word-break:break-word; }
+  .kv .sep { color:#525a68; }
+  .kv .v.vnum{ color:#f0abfc; } .kv .v.vstr{ color:#fcd34d; } .kv .v.vbool{ color:#86efac; } .kv .v.vnull{ color:#6ee7b7; }
+  .kv .nest { border-left:1px solid var(--line); margin:3px 0 4px 4px; padding-left:12px; }
+  .kv .strlist .si { display:block; color:#cdd5e1; font-family:-apple-system,system-ui; font-size:11.5px;
+    line-height:1.45; padding:3px 0 3px 12px; border-left:2px solid var(--line); margin-bottom:4px; }
+  /* a long free-text leaf (a coach reply, a memory line, a prompt slot) reads as prose, not as a code string */
+  .kv .vtext { display:block; color:#cdd5e1; font-family:-apple-system,system-ui; font-size:11.5px;
+    line-height:1.5; white-space:pre-wrap; word-break:break-word; padding:3px 0 3px 12px;
+    border-left:2px solid var(--line); margin-top:3px; }
+  .kv .spark { margin-top:3px; }
+  .kv .spark svg { width:100%; height:46px; background:#0c0f14; border:1px solid var(--line); border-radius:6px; display:block; }
+  .kv .sparkline { fill:none; stroke:#7dd3fc; stroke-width:1.4; vector-effect:non-scaling-stroke; }
+  .kv .sparkarea { fill:rgba(125,211,252,.12); stroke:none; }
+  .kv .sparkmeta { display:flex; flex-wrap:wrap; gap:12px; font-size:10px; color:#6b7280; margin-top:4px; }
+  .note { border-left:3px solid var(--llm); background:rgba(245,158,11,.07); border-radius:0 8px 8px 0;
+    padding:9px 12px; margin:0 0 11px; font-size:12px; color:#d7c8a8; }
+  .note b { color:#fff; font-weight:600; }
+  .note code { background:#1a1610; color:#e2d3b4; }
+  /* a {slot} marker inside the rendered prompt template — clickable, jumps to its filler */
+  .slotchip { display:inline-block; background:rgba(16,185,129,.14); border:1px solid rgba(16,185,129,.45);
+    color:#6ee7b7; border-radius:4px; padding:0 4px; cursor:pointer; font-weight:700; }
+  .slotchip:hover { background:rgba(16,185,129,.3); color:#a7f3d0; }
+  .slotchip.dead { background:rgba(156,163,175,.1); border-color:rgba(156,163,175,.4); color:#9ca3af; cursor:default; }
+  /* conversation selector + turn strip */
+  .convbar { flex-basis:100%; display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    padding-top:9px; margin-top:8px; border-top:1px solid var(--line); }
+  .convbar label { font:700 9.5px/1 ui-sans-serif,system-ui; letter-spacing:1px;
+    text-transform:uppercase; color:#6b7280; }
+  .ctrl.sel { font-family:inherit; max-width:420px; padding:5px 9px; }
+  .convmeta { font-size:11px; color:var(--muted); }
+  .convmeta b { color:#cbd3e1; font-weight:600; }
+  .turnstrip { display:flex; gap:4px; flex-wrap:wrap; margin-left:auto; align-items:center; }
+  .tbtn { font-size:10px; padding:2px 7px; border-radius:5px; cursor:pointer; font-family:inherit;
+    background:#11141a; border:1px solid var(--line); color:var(--muted); }
+  .tbtn:hover { color:var(--ink); }
+  .tbtn.on { border-color:var(--up); color:#b9e9f4; background:rgba(34,211,238,.1); }
+  .tbtn.u { border-left:3px solid var(--source); }
+  .tbtn.a { border-left:3px solid var(--llm); }
+  .tbtn .n { font-weight:700; }
+
+  /* the turn-by-turn timeline inside the drawer */
+  .tl { margin:0 0 12px; }
+  .tlrow { border-left:3px solid var(--line); padding:7px 11px; margin-bottom:6px;
+    border-radius:0 7px 7px 0; background:#101318; font-size:12px; }
+  .tlrow.user  { border-left-color:var(--source); background:rgba(59,130,246,.06); }
+  .tlrow.coach { border-left-color:var(--llm);    background:rgba(245,158,11,.05); }
+  .tlrow.sel   { outline:1px solid var(--up); }
+  .tlrow .who { display:block; font:700 8.5px/1 ui-sans-serif,system-ui; letter-spacing:.7px;
+    text-transform:uppercase; color:#7b8496; margin-bottom:4px; }
+  .tlrow .txt { display:block; color:#cbd3e1; }
+  .tlrow .chips { display:block; margin-top:6px; }
+  .tchip { display:inline-block; font-size:10px; font-family:ui-monospace,Menlo,monospace;
+    background:#151920; border:1px solid var(--line); border-radius:4px; padding:1px 6px;
+    margin:2px 4px 0 0; color:#9fd8c4; }
+  .tchip i { color:#7b8496; font-style:normal; }
+  .tchip b { color:#fcd34d; }
+  .tchip.skill { color:#c4b5fd; border-color:rgba(167,139,250,.4); }
+  .tchip.none  { color:#5b6472; border-style:dashed; }
+  .redflag { display:inline-block; font-size:9px; font-weight:700; letter-spacing:.4px;
+    text-transform:uppercase; color:#fca5a5; background:rgba(239,68,68,.14);
+    border:1px solid rgba(239,68,68,.4); border-radius:4px; padding:1px 5px; margin-right:5px; }
+  .dim { color:#6b7280; }
+
+  /* real-capture markers: a value that came from the seeded DB, not from prose */
+  .realtag { display:inline-block; font-size:8.5px; font-weight:700; letter-spacing:.4px;
+    text-transform:uppercase; color:#5eead4; background:rgba(20,184,166,.15);
+    border:1px solid rgba(20,184,166,.4); border-radius:4px; padding:1px 5px; margin-left:6px;
+    vertical-align:1px; }
+  .empty { border:1px dashed var(--line); border-radius:8px; padding:9px 11px; margin:0 0 11px;
+    font-size:11.5px; color:#6b7280; background:#101318; }
+  /* the honest re-derivation caveat on a re-executed tool */
+  .rederive { border-left:3px solid #fdba74; background:rgba(251,146,60,.08); border-radius:0 8px 8px 0;
+    padding:9px 12px; margin:0 0 11px; font-size:11.5px; color:#e6c9a8; }
+  .rederive.same { border-left-color:#5eead4; background:rgba(20,184,166,.07); color:#a9dfd6; }
+  .rederive b { color:#fff; font-weight:600; }
+  /* a real question / what was served in its place */
+  .qa { border-left:3px solid var(--source); background:rgba(59,130,246,.07); border-radius:0 8px 8px 0;
+    padding:8px 12px; margin:0 0 8px; font-size:12.5px; color:#cfd8e6; }
+  .qa.served { border-left-color:var(--gate); background:rgba(239,68,68,.07); color:#e3c3c3; }
+  .qa .qlbl { display:block; font:700 8.5px/1 ui-sans-serif,system-ui; letter-spacing:.7px;
+    text-transform:uppercase; color:#7b8496; margin-bottom:5px; }
+  .qa.served .qlbl { color:#fca5a5; }
+  /* a skill's provenance — the observed failure it was written for */
+  .earned { border-left:3px solid var(--runner); background:rgba(236,72,153,.06); border-radius:0 8px 8px 0;
+    padding:8px 11px; margin:0 0 9px; font-size:11.5px; color:#e0bcd0; }
+  .earned .elbl { display:block; font:700 8.5px/1 ui-sans-serif,system-ui; letter-spacing:.7px;
+    text-transform:uppercase; color:#f9a8d4; margin-bottom:4px; }
+
+  .hintbar { position:fixed; left:14px; bottom:12px; z-index:15; font-size:11.5px; color:#6b7280;
+    background:#11141 acc; padding:4px 9px; border-radius:7px; pointer-events:none; }
+  .hintbar b { color:#c9d2e3; }
+
+  .keypanel { position:fixed; top:58px; left:14px; z-index:30; width:355px; max-width:92vw;
+    max-height:calc(100vh - 86px); overflow-y:auto; background:var(--panel); border:1px solid var(--line);
+    border-radius:12px; box-shadow:0 18px 50px rgba(0,0,0,.55); padding:15px 17px; display:none; }
+  .keypanel.open { display:block; }
+  .keypanel h3 { margin:0 0 5px; font-size:15px; letter-spacing:-.2px; }
+  .keypanel .ksub { margin:0 0 6px; font-size:11.5px; line-height:1.5; color:var(--muted); }
+  .keypanel .ksub b { color:#cdd5e1; }
+  .keypanel .kgrp { font:700 9px/1 ui-sans-serif,system-ui; letter-spacing:.6px; text-transform:uppercase;
+    color:#6b7280; margin:13px 0 8px; border-top:1px solid var(--line); padding-top:11px; }
+  .keypanel .krow { display:flex; gap:10px; align-items:flex-start; margin:0 0 8px; }
+  .keypanel .kmark { flex:none; width:40px; display:flex; justify-content:center; align-items:center; padding-top:1px; }
+  .keypanel .ktext { font-size:11.5px; line-height:1.46; color:#cdd5e1; }
+  .keypanel .ktext b { color:var(--ink); }
+  .keypanel .kclose { position:absolute; top:11px; right:13px; width:26px; height:26px; border-radius:7px;
+    cursor:pointer; background:#11141a; border:1px solid var(--line); color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>Coach Chat — Flow Graph</h1>
+  <div class="tip">One <b>thread turn</b>, every block traced to its source. <b>Click a node</b>:
+    <span style="color:var(--up)">cyan = where it came from</span>,
+    <span style="color:var(--down)">amber = where it goes</span>, and its real artifact opens on the right.
+    Drag to pan, scroll to zoom.</div>
+  <div class="legend">
+    <button class="ctrl" id="keyToggle">Key</button>
+    <button class="ctrl" id="fit">Fit</button>
+    <button class="ctrl" id="reset">Reset</button>
+  </div>
+  <div class="convbar">
+    <label for="convSel">Conversation</label>
+    <select id="convSel" class="ctrl sel"></select>
+    <span class="convmeta" id="convMeta"></span>
+    <span class="turnstrip" id="turnStrip"></span>
+  </div>
+</header>
+
+<aside class="keypanel" id="keyPanel">
+  <button class="kclose" id="keyClose" title="close">✕</button>
+  <h3>Key</h3>
+  <p class="ksub">How to read the graph. Each node is a stage in one conversational turn — from the surface the
+    runner opened, through the relationship baseline and the assembled system prompt, to the policy floor and
+    the rows written. Click any node to trace its lineage and open its real artifact on the right.</p>
+  <p class="ksub" id="capNote"></p>
+
+  <div class="kgrp">Node colour — what a node IS</div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--source)"></span></span><div class="ktext"><b>Client surface</b> — something the runner's browser sends or is shown (a launcher, the pointer, a stream frame).</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--runner)"></span></span><div class="ktext"><b>Runner input / decision</b> — runner-declared config, or a tap that authorises a write.</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--code)"></span></span><div class="ktext"><b>Deterministic code</b> — a builder, resolver, tool, or the assembled prompt. No model involved.</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--store)"></span></span><div class="ktext"><b>Stored table</b> — a row read or written (Thread, CoachChatMessage, UserProfile, Activity).</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--memory)"></span></span><div class="ktext"><b>Durable memory</b> — the runner memory profile and the cross-thread continuity built from it.</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--gate)"></span></span><div class="ktext"><b>Gate</b> — the kill switch, the spend cap, and the policy floor. Each can stop a turn.</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:var(--llm)"></span></span><div class="ktext"><b>LLM</b> — a model call: the turn itself, and the auxiliary Haiku title writer.</div></div>
+
+  <div class="kgrp">Node state</div>
+  <div class="krow"><span class="kmark"><span style="color:#5eead4;font-size:15px;line-height:1">▶</span></span><div class="ktext"><b>Start of chain</b> — nothing precedes it: a client surface, a stored table, or a code-resident constant.</div></div>
+  <div class="krow"><span class="kmark"><span class="sw" style="background:#15171c;border:1px dashed #6b7280"></span></span><div class="ktext"><b>Absent in this capture</b> (dashed + dimmed) — computed from the real assembled prompt: this block emitted nothing for the captured turn. It goes solid on a turn where it IS present.</div></div>
+
+  <div class="kgrp">Edges — appear when you click a node</div>
+  <div class="krow"><span class="kmark"><span class="dash" style="border-color:var(--up)"></span></span><div class="ktext"><b>Came from</b> (cyan) — the upstream lineage this node was built from.</div></div>
+  <div class="krow"><span class="kmark"><span class="dash" style="border-color:var(--down)"></span></span><div class="ktext"><b>Feeds</b> (amber) — everything downstream that consumes it.</div></div>
+
+  <div class="kgrp">Inside the drawer</div>
+  <div class="krow"><span class="kmark"><span class="slotchip" style="cursor:default">{slot}</span></span><div class="ktext">In the prompt template, a <b>slot marker</b>. Click it to jump to the node that fills it.</div></div>
+  <div class="krow"><span class="kmark"><span style="color:#f9a8d4;font-size:15px;line-height:1">◤</span></span><div class="ktext"><b>earned by</b> — on a coaching skill, the observed failure it was written for (ADR 0029 keeps this honest so a skill that never earned its keep can be retired).</div></div>
+</aside>
+
+<div id="stage"><svg id="svg"><g id="cam"></g></svg></div>
+<div class="hintbar" id="hint">Click any node to trace its lineage.</div>
+
+<aside class="drawer" id="drawer" role="dialog">
+  <button class="close" id="closeBtn">✕</button>
+  <header><span class="tag" id="dTag"></span><h2 id="dTitle"></h2><div class="path" id="dPath"></div></header>
+  <div class="relchips" id="dRel"></div>
+  <div class="body" id="dBody"></div>
+</aside>
+
+<script src="coach-chat-nodes.js"></script>
+<script>
+const SVGNS='http://www.w3.org/2000/svg';
+const cam=document.getElementById('cam'), svg=document.getElementById('svg'), stage=document.getElementById('stage');
+
+/* ----- layout: phase columns × kind swimlanes (same engine as ai-flow-graph.html) ----- */
+const CATS = ['entry','resolve','baseline','prompt','loop','gate','out'];
+const CATHDR = {
+  entry:   ['1  Way in',              'four surfaces, one request'],
+  resolve: ['2  Resolve',             'gate, thread, screen'],
+  baseline:['3  Relationship baseline','read-time builders'],
+  prompt:  ['4  System prompt',       'the 8 slots'],
+  loop:    ['5  The turn',            'model + tools'],
+  gate:    ['6  Policy floor',        'buffer, then validate'],
+  out:     ['7  Out',                 'stream, rows, jobs'],
+};
+const catOf = n => n.layer;
+const NW=158, NH=36, VGAP=11, COLPITCH=178, CATGAP=46, LEFT=190, PADTOP=104;
+
+const subRank = {};
+CATS.forEach(cat=>{
+  const ms = new Set(NODES.filter(n=>catOf(n)===cat).map(n=>n.id));
+  const preds = id => (byId[id].from||[]).filter(s=>ms.has(s));
+  const memo = {};
+  const rank = id => id in memo ? memo[id] : (memo[id] = preds(id).reduce((r,p)=>Math.max(r, rank(p)+1), 0));
+  ms.forEach(id=>subRank[id]=rank(id));
+});
+const catWidth = {}; CATS.forEach(c=> catWidth[c]=1+Math.max(0,...NODES.filter(n=>catOf(n)===c).map(n=>subRank[n.id])));
+const catStart = {}, catIndex = {}; let acc=0;
+CATS.forEach((c,i)=>{ catStart[c]=acc; catIndex[c]=i; acc+=catWidth[c]; });
+const totalCols = acc;
+const gcol = n => catStart[catOf(n)] + subRank[n.id];
+const xOfCol = (gc,cat) => LEFT + gc*COLPITCH + catIndex[cat]*CATGAP;
+
+const LANES = [
+  { key:'source', label:'Client surface',    kinds:['source'] },
+  { key:'runner', label:'Runner input',      kinds:['runner'] },
+  { key:'code',   label:'Deterministic code',kinds:['code']   },
+  { key:'store',  label:'Stored tables',     kinds:['store']  },
+  { key:'memory', label:'Durable memory',    kinds:['memory'] },
+  { key:'gate',   label:'Gates',             kinds:['gate']   },
+  { key:'model',  label:'The model',         kinds:['llm']    },
+];
+const laneKeyOf = n => (LANES.find(l=>l.kinds.includes(n.kind))||LANES[2]).key;
+const stackH = arr => arr.length*NH + (arr.length-1)*VGAP;
+
+const cells = {};
+NODES.forEach(n=>{ const k=gcol(n)+'|'+laneKeyOf(n); (cells[k]=cells[k]||[]).push(n); });
+
+const LANEPAD = 20;
+const laneCount = {}; LANES.forEach(l=>laneCount[l.key]=1);
+Object.entries(cells).forEach(([k,arr])=>{ const lane=k.split('|')[1]; laneCount[lane]=Math.max(laneCount[lane], arr.length); });
+const laneH = {}, laneTop = {}; let laneAcc = PADTOP;
+LANES.forEach(l=>{ laneH[l.key]=stackH(new Array(laneCount[l.key]))+LANEPAD*2; laneTop[l.key]=laneAcc; laneAcc+=laneH[l.key]; });
+
+const pos = {};
+Object.entries(cells).forEach(([k,arr])=>{
+  const [gcStr,lane]=k.split('|'); const gc=+gcStr; const cat=catOf(arr[0]);
+  const x = xOfCol(gc, cat);
+  const y0 = laneTop[lane] + (laneH[lane]-stackH(arr))/2;
+  arr.forEach((n,i)=>{ const y=y0+i*(NH+VGAP); pos[n.id]={ x, y, cx:x+NW/2, cy:y+NH/2, leftX:x, rightX:x+NW }; });
+});
+const worldW = LEFT + (totalCols-1)*COLPITCH + (CATS.length-1)*CATGAP + NW + 60;
+const worldH = laneAcc + 40;
+
+const shortLabel = n => n.title.split('—')[0].split('(')[0].trim();
+const KCOL = { source:'#3b82f6', code:'#10b981', store:'#a78bfa', llm:'#f59e0b', gate:'#ef4444', runner:'#ec4899', memory:'#a78bfa' };
+
+/* ----- swimlane grid ----- */
+const GUTTER = 16;
+LANES.forEach((l,i)=>{
+  const top=laneTop[l.key], h=laneH[l.key];
+  const band=document.createElementNS(SVGNS,'rect');
+  band.setAttribute('class','laneband'+(i%2?' alt':''));
+  band.setAttribute('x',0); band.setAttribute('y',top); band.setAttribute('width',worldW); band.setAttribute('height',h);
+  cam.appendChild(band);
+  const ly=top+18;
+  const dot=document.createElementNS(SVGNS,'rect');
+  dot.setAttribute('x',GUTTER); dot.setAttribute('y',ly-9); dot.setAttribute('width',9); dot.setAttribute('height',9); dot.setAttribute('rx',3);
+  dot.setAttribute('fill',KCOL[l.kinds[0]]||'#888'); cam.appendChild(dot);
+  const lt=document.createElementNS(SVGNS,'text'); lt.setAttribute('class','lanelbl');
+  lt.setAttribute('x',GUTTER+15); lt.setAttribute('y',ly); lt.textContent=l.label; cam.appendChild(lt);
+});
+LANES.slice(1).forEach(l=>{
+  const ln=document.createElementNS(SVGNS,'line'); ln.setAttribute('class','lanesep');
+  ln.setAttribute('x1',0); ln.setAttribute('y1',laneTop[l.key]); ln.setAttribute('x2',worldW); ln.setAttribute('y2',laneTop[l.key]);
+  cam.appendChild(ln);
+});
+CATS.slice(1).forEach(c=>{
+  const prev=CATS[catIndex[c]-1];
+  const xd=(xOfCol(catStart[c]-1,prev)+NW + xOfCol(catStart[c],c))/2;
+  const ln=document.createElementNS(SVGNS,'line'); ln.setAttribute('class','phasesep');
+  ln.setAttribute('x1',xd); ln.setAttribute('y1',PADTOP-32); ln.setAttribute('x2',xd); ln.setAttribute('y2',laneAcc);
+  cam.appendChild(ln);
+});
+CATS.forEach(cat=>{
+  const x = xOfCol(catStart[cat], cat);
+  const t1=document.createElementNS(SVGNS,'text'); t1.setAttribute('x',x); t1.setAttribute('y',54);
+  t1.setAttribute('class','colhdr'); t1.textContent=CATHDR[cat][0]; cam.appendChild(t1);
+  const t2=document.createElementNS(SVGNS,'text'); t2.setAttribute('x',x); t2.setAttribute('y',70);
+  t2.setAttribute('class','colhdr sub'); t2.textContent=CATHDR[cat][1]; cam.appendChild(t2);
+});
+
+/* ----- edges ----- */
+const edges=[];
+NODES.forEach(n=>(n.from||[]).forEach(s=>{
+  if(!pos[s]||!pos[n.id]) return;
+  const a=pos[s], b=pos[n.id];
+  const x1=a.rightX, y1=a.cy, x2=b.leftX, y2=b.cy;
+  const mx=(x1+x2)/2;
+  const p=document.createElementNS(SVGNS,'path');
+  p.setAttribute('class','edge');
+  p.setAttribute('d',`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
+  cam.appendChild(p);
+  edges.push({s, t:n.id, el:p});
+}));
+
+/* ----- nodes -----
+   A node's "off" (dashed + dimmed) state is COMPUTED from the real assembled capture,
+   not hand-authored: a slot that emitted nothing for the captured turn reads absent, and
+   goes solid on a turn where it IS present. Without a capture nothing is dimmed, because
+   the diagram then has no evidence either way. */
+const CAP = (CHAT.assembled||{});
+const P_ = () => { const c = conv(); return c ? (c.present||{}) : null; };
+const NODE_ACTIVE = {
+  s_anchor:  () => !!P_().anchor,       d_anchor:   () => !!P_().anchor,
+  s_voice:   () => !!P_().voice,        d_voice:    () => !!P_().voice,
+  s_cross:   () => !!P_().cross_thread, d_cross:    () => !!P_().cross_thread,
+  s_looking: () => !!P_().looking_at,   d_looking:  () => !!P_().looking_at,
+  d_memory:  () => !!P_().memory,       d_readiness:() => !!P_().readiness,
+  s_baseline:() => !!(P_().memory || P_().readiness),
+  // a tool the SELECTED conversation never called reads absent — the point of the
+  // selector is that a chat's shape is visible in the graph, not only in a drawer
+  tool_list:    () => convUsedTool('list_activities_in_range'),
+  tool_summary: () => convUsedTool('get_training_summary'),
+  tool_detail:  () => convUsedTool('get_session_detail'),
+  tool_skill:   () => convLoadedAnySkill(),
+  // the action path and the medical redirect follow the same rule as the tools:
+  // a node whose body reads "this never happened here" must not render live
+  tool_action:  () => convUsedTool('offer_proposed_action'),
+  action_card:  () => convUsedTool('offer_proposed_action'),
+  confirm:      () => convUsedTool('offer_proposed_action'),
+  redirect:     () => convRedirected(),
+};
+function convUsedTool(name){
+  const c = conv(); if(!c) return true;
+  return (c.turns||[]).some(t => (t.tools_used||[]).some(x =>
+    (typeof x === 'string' ? x : (x||{}).tool) === name));
+}
+function convLoadedAnySkill(){
+  const c = conv(); if(!c) return true;
+  return (c.turns||[]).some(t => (t.skills_used||[]).length);
+}
+function convRedirected(){
+  const c = conv(); if(!c) return true;
+  return (c.turns||[]).some(t => t.was_redirected);
+}
+function nodeOff(n){
+  if(!P_()) return !!n.off;                     // no capture: nothing is dimmed
+  const rule=NODE_ACTIVE[n.id]; return rule ? !rule() : !!n.off;
+}
+
+const isOrigin = n => !(n.from && n.from.length);
+const isTerminal = n => !(consumers[n.id] && consumers[n.id].length);
+const nodeEls={};
+NODES.forEach(n=>{
+  const p=pos[n.id]; if(!p) return;
+  const g=document.createElementNS(SVGNS,'g');
+  g.setAttribute('class','node'+(nodeOff(n)?' off':''));
+  g.dataset.id=n.id;
+  g.setAttribute('transform',`translate(${p.x},${p.y})`);
+  g.style.setProperty('--kind', KCOL[n.kind]||'#8892a0');
+  const r=document.createElementNS(SVGNS,'rect');
+  r.setAttribute('x',0); r.setAttribute('y',0); r.setAttribute('width',NW); r.setAttribute('height',NH); r.setAttribute('rx',8);
+  const acc=document.createElementNS(SVGNS,'rect');
+  acc.setAttribute('class','accent'); acc.setAttribute('x',0); acc.setAttribute('y',0);
+  acc.setAttribute('width',6); acc.setAttribute('height',NH); acc.setAttribute('rx',2);
+  acc.setAttribute('fill',KCOL[n.kind]||'#888');
+  const t=document.createElementNS(SVGNS,'text'); t.setAttribute('x',13); t.setAttribute('y',NH/2+4);
+  let lbl=shortLabel(n); if(lbl.length>21) lbl=lbl.slice(0,20)+'…'; t.textContent=lbl;
+  g.appendChild(r); g.appendChild(acc); g.appendChild(t);
+  if(isOrigin(n)){
+    const cap=document.createElementNS(SVGNS,'path'); cap.setAttribute('class','startcap');
+    cap.setAttribute('d',`M-12,${NH/2} L-4,${NH/2-6} L-4,${NH/2+6} Z`); g.appendChild(cap);
+  }
+  g.addEventListener('click', e=>{ e.stopPropagation(); select(n.id); });
+  cam.appendChild(g); nodeEls[n.id]=g;
+});
+
+/* ----- lineage ----- */
+function upstream(id){ const s=new Set(); (function climb(x){ if(!byId[x])return; (byId[x].from||[]).forEach(f=>{ if(!s.has(f)){s.add(f); climb(f);} }); })(id); return s; }
+function downstream(id){ const s=new Set(); (function fall(x){ (consumers[x]||[]).forEach(c=>{ if(!s.has(c)){s.add(c); fall(c);} }); })(id); return s; }
+
+let current=null;
+function select(id){
+  if(!byId[id]) return;
+  current=id;
+  const up=upstream(id), down=downstream(id);
+  document.body.classList.add('sel');
+  Object.entries(nodeEls).forEach(([nid,g])=>{
+    g.classList.remove('up','down','focus');
+    if(nid===id) g.classList.add('focus');
+    else if(up.has(nid)) g.classList.add('up');
+    else if(down.has(nid)) g.classList.add('down');
+  });
+  edges.forEach(({s,t,el})=>{
+    el.classList.remove('eup','edown');
+    const inUp   = (s===id||up.has(s))   && (t===id||up.has(t));
+    const inDown = (s===id||down.has(s)) && (t===id||down.has(t));
+    if(inUp) el.classList.add('eup'); else if(inDown) el.classList.add('edown');
+  });
+  openDrawer(id);
+  recenter(id);
+  document.getElementById('hint').innerHTML='<b>'+esc(shortLabel(byId[id]))+'</b> — '+up.size+' upstream · '+down.size+' downstream. Esc or Reset to clear.';
+}
+function recenter(id){
+  const p=pos[id]; if(!p) return;
+  const drawerW=Math.min(560, window.innerWidth*0.95);
+  const visW=Math.max(240, window.innerWidth-drawerW);
+  view.x=visW/2-p.cx*view.k; view.y=(window.innerHeight+PADTOP)/2-p.cy*view.k;
+  cam.classList.add('glide'); apply();
+  setTimeout(()=>cam.classList.remove('glide'),320);
+}
+function clearSel(){
+  current=null; document.body.classList.remove('sel');
+  Object.values(nodeEls).forEach(g=>g.classList.remove('up','down','focus'));
+  edges.forEach(e=>e.el.classList.remove('eup','edown'));
+  closeDrawer();
+  document.getElementById('hint').innerHTML='Click any node to trace its lineage.';
+}
+
+/* ----- drawer ----- */
+const drawer=document.getElementById('drawer');
+function chip(i, cls){ return '<span class="chip '+cls+(nodeOff(byId[i])?' off':'')+'" data-go="'+i+'">'+esc(shortLabel(byId[i]))+'</span>'; }
+function relGroup(ids, cls){
+  const on=ids.filter(i=>byId[i]&&!nodeOff(byId[i])), off=ids.filter(i=>byId[i]&&nodeOff(byId[i]));
+  let h=on.map(i=>chip(i,cls)).join('');
+  if(off.length) h+='<div class="offsub"><span class="offlbl">absent in this capture</span>'+off.map(i=>chip(i,cls)).join('')+'</div>';
+  return h;
+}
+function openDrawer(id){
+  const n=byId[id];
+  document.getElementById('dTag').textContent=n.tag; document.getElementById('dTag').className='tag '+n.kind;
+  document.getElementById('dTitle').innerHTML=esc(n.title)+(nodeOff(n)?' <span class="offpill">absent in this capture</span>':'');
+  document.getElementById('dPath').textContent=n.path||'';
+  const froms=(n.from||[]), feeds=(consumers[id]||[]);
+  document.getElementById('dRel').innerHTML=
+    (froms.length
+       ? '<div class="grp"><span class="lbl up">came from</span>'+relGroup(froms,'up')+'</div>'
+       : '<div class="grp start"><span class="lbl start">▶ start of chain</span> nothing precedes this — a client surface, a stored table, or a code-resident constant</div>')
+   +(feeds.length
+       ? '<div class="grp"><span class="lbl down">feeds</span>'+relGroup(feeds,'down')+'</div>'
+       : '<div class="grp end"><span class="lbl end">■ end of chain</span> nothing downstream consumes this</div>');
+  document.getElementById('dBody').innerHTML=n.body();
+  document.getElementById('dBody').scrollTop=0;
+  document.querySelectorAll('#dRel .chip').forEach(c=>c.addEventListener('click',()=>select(c.dataset.go)));
+  document.querySelectorAll('#dBody .slotchip[data-go]').forEach(c=>c.addEventListener('click', e=>{ e.stopPropagation(); select(c.dataset.go); }));
+  // a timeline row selects that turn, so the single-turn nodes follow it
+  document.querySelectorAll('#dBody .tlrow[data-turn]').forEach(r=>r.addEventListener('click', e=>{
+    e.stopPropagation(); setTurn(+r.dataset.turn); renderTurnStrip(); openDrawer(id);
+  }));
+  drawer.classList.add('open');
+}
+function closeDrawer(){ drawer.classList.remove('open'); }
+document.getElementById('closeBtn').addEventListener('click', clearSel);
+document.getElementById('reset').addEventListener('click', clearSel);
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') clearSel(); });
+
+/* ----- pan + zoom ----- */
+let view={x:0,y:0,k:1};
+function apply(){ cam.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); }
+function fit(){
+  const vw=svg.clientWidth, vh=svg.clientHeight;
+  const headerH=86, availH=vh-headerH-20;
+  const k=Math.min((vw-40)/worldW, availH/worldH, 1.1);
+  view.k=k; view.x=(vw-worldW*k)/2; view.y=headerH + Math.max(0,(availH-worldH*k)/2);
+  apply();
+}
+let drag=null;
+stage.addEventListener('pointerdown', e=>{
+  drag={ x:e.clientX, y:e.clientY, vx:view.x, vy:view.y, moved:false,
+         onNode:!!(e.target.closest && e.target.closest('.node')) };
+  stage.classList.add('grabbing');
+});
+window.addEventListener('pointermove', e=>{
+  if(!drag) return;
+  const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
+  if(Math.abs(dx)+Math.abs(dy)>4) drag.moved=true;
+  view.x=drag.vx+dx; view.y=drag.vy+dy; apply();
+});
+window.addEventListener('pointerup', ()=>{
+  if(drag && !drag.moved && !drag.onNode) clearSel();
+  drag=null; stage.classList.remove('grabbing');
+});
+stage.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const rect=svg.getBoundingClientRect(), mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  const f=e.deltaY<0?1.12:1/1.12; const nk=Math.max(.25,Math.min(2.4,view.k*f));
+  view.x=mx-(mx-view.x)*(nk/view.k); view.y=my-(my-view.y)*(nk/view.k); view.k=nk; apply();
+}, {passive:false});
+document.getElementById('fit').addEventListener('click', fit);
+const keyPanel=document.getElementById('keyPanel');
+document.getElementById('keyToggle').addEventListener('click', ()=> keyPanel.classList.toggle('open'));
+document.getElementById('keyClose').addEventListener('click', ()=> keyPanel.classList.remove('open'));
+// 1 SVG user unit = 1 CSS pixel, so the camera transform is the ONLY scaler. (A viewBox
+// larger than the viewport would scale the whole SVG down a second time on top of fit()'s
+// k, which shrinks the graph to a corner.)
+function syncViewBox(){ svg.setAttribute('viewBox',`0 0 ${svg.clientWidth} ${svg.clientHeight}`); }
+window.addEventListener('resize', ()=>{ syncViewBox(); fit(); });
+
+/* ----- the conversation selector -----
+   Choosing a chat re-points every node body at that chat's real capture, and
+   recomputes the dimming, so the graph shows the shape of THAT conversation. */
+function refreshDimming(){
+  NODES.forEach(n => { const g = nodeEls[n.id]; if(g) g.classList.toggle('off', nodeOff(n)); });
+}
+function renderConvMeta(){
+  const c = conv(); const m = document.getElementById('convMeta');
+  if(!c){ m.textContent = ''; return; }
+  m.innerHTML = '<b>'+c.turn_count+'</b> turns · <b>'+c.tool_calls+'</b> tool call'
+    + (c.tool_calls===1?'':'s') + ' · <b>'+c.skill_loads+'</b> skill'+(c.skill_loads===1?'':'s')
+    + ' · started from <b>'+esc(c.started_from||'—')+'</b>'
+    + ' · prompt <b>'+c.prompt_chars+'</b> chars'
+    + (c.anchored ? ' · anchored' : ' · unanchored');
+}
+function renderTurnStrip(){
+  const c = conv(); const s = document.getElementById('turnStrip');
+  if(!c){ s.innerHTML=''; return; }
+  let h = '<button class="tbtn'+(SEL_TURN===null?' on':'')+'" data-turn="all">whole chat</button>';
+  (c.turns||[]).forEach(t => {
+    h += '<button class="tbtn '+(t.role==='user'?'u':'a')+(SEL_TURN===t.i?' on':'')+'" data-turn="'+t.i+'">'
+       + (t.role==='user'?'Q':'A')+'<span class="n">'+(Math.floor(t.i/2)+1)+'</span>'
+       + ((t.tools_used||[]).length ? ' ·'+(t.tools_used||[]).length : '')
+       + ((t.skills_used||[]).length ? ' ✦' : '')
+       + '</button>';
+  });
+  s.innerHTML = h;
+  s.querySelectorAll('.tbtn').forEach(b => b.addEventListener('click', () => {
+    setTurn(b.dataset.turn === 'all' ? null : +b.dataset.turn);
+    renderTurnStrip();
+    if(current) openDrawer(current);
+  }));
+}
+(function buildConvSelector(){
+  const sel = document.getElementById('convSel');
+  const list = CONVS();
+  if(!list.length){
+    sel.innerHTML = '<option>no conversations captured</option>';
+    sel.disabled = true;
+    document.querySelector('.convbar').style.opacity = '.5';
+    return;
+  }
+  setConversation(CAP.default_conversation || list[0].id);
+  // Lead with the entry point and what the turn reached, so the list can be
+  // scanned for a path (which one starts on Load? which one loads a skill?)
+  // rather than only for a topic.
+  sel.innerHTML = list.map(c => {
+    const skills = [...new Set((c.turns||[]).flatMap(t => t.skills_used||[]))];
+    const tags = [esc(c.started_from||'—'),
+                  c.turn_count+' turns',
+                  c.tool_calls+' tools',
+                  skills.length ? esc(skills.join('+')) : 'no skill',
+                  c.thread_row.activity_id ? 'anchored' : 'unanchored'];
+    return '<option value="'+c.id+'">'+tags.join(' · ')
+      + '  —  ' + esc(c.display_title.slice(0,54)) + '</option>';
+  }).join('');
+  sel.value = conv().id;
+  sel.addEventListener('change', () => {
+    setConversation(sel.value);
+    renderConvMeta(); renderTurnStrip(); refreshDimming();
+    if(current) openDrawer(current);
+  });
+  renderConvMeta(); renderTurnStrip(); refreshDimming();
+})();
+
+/* the capture provenance, stated in the Key so the dimming is never mistaken for a claim
+   about the code rather than about one captured turn */
+(function(){
+  const m = CHAT.meta||{}, c = CHAT.assembled||{};
+  const host = document.getElementById('capNote');
+  if(!host) return;
+  host.innerHTML = c.ok
+    ? '<b>This capture:</b> a real assembled prompt (' + c.chars + ' chars) built by the real builder for a real '
+      + (c.anchored ? 'anchored' : 'unanchored') + ' thread in the seeded local DB, under <code>'
+      + esc(m.coach_prompt_id||'?') + '</code>' + (m.capture_config==='prod-pinned' ? ' (prod-pinned)' : ' (local .env)')
+      + '. Chat model <code>' + esc(m.chat_model_id||'?') + '</code>. Dimmed nodes are absent in THIS turn, not absent from the code.'
+    : '<b>Template only</b> — no assembled capture in this regeneration. Nothing is dimmed, because the diagram has no evidence either way.';
+})();
+
+syncViewBox();
+fit();
+</script>
+</body>
+</html>
