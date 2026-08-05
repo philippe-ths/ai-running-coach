@@ -138,9 +138,92 @@ def _turn_facts(db, row, thread):
     }
 
 
+def _sessions_on(db, user_id, day: str):
+    """The runner's activities whose LOCAL day is `day`, the same definition
+    get_session_detail stamps into the trace (`local_start.date()`).
+
+    `local_start` is a Python property (start_date_local, falling back to the UTC
+    start_date), not a column, and the model is explicit that it must never drive
+    ordering or windowing. So the query bounds a small UTC window and the local-day
+    match happens in Python, which is where that definition lives.
+    """
+    from datetime import date as _date, datetime, timedelta, timezone
+
+    from app.models.activity import Activity
+
+    try:
+        parsed = _date.fromisoformat(day)
+    except (TypeError, ValueError):
+        return []
+    lo = datetime.combine(parsed - timedelta(days=1), datetime.min.time(), timezone.utc)
+    hi = datetime.combine(parsed + timedelta(days=2), datetime.min.time(), timezone.utc)
+    rows = (
+        db.query(Activity)
+        .filter(
+            Activity.user_id == user_id,
+            Activity.is_deleted.is_(False),
+            Activity.start_date >= lo,
+            Activity.start_date < hi,
+        )
+        .order_by(Activity.start_date.asc())
+        .all()
+    )
+    return [a for a in rows if a.local_start.date() == parsed]
+
+
+def _fill_violations(conv, chat_mod_ref) -> None:
+    """Re-run the REAL policy floor over each stored reply, in place.
+
+    Only rule 5's outcome is inferable from a stored row (its redirect is
+    byte-identical to the canned message). Rules 2 and 4 are TOLERATED — logged
+    and let through — so they leave no trace on the row and have to be recomputed
+    to be shown at all. Sessions in play are rebuilt from this turn's own re-run
+    session-detail results plus the screen view, the same two sources
+    thread_turn.py feeds the validator. Runs after the re-runs exist, because it
+    needs their results.
+    """
+    runs = conv.get("tool_runs") or {}
+    floor = conv.get("floor") or {}
+    view_sessions = floor.get("view_sessions") or []
+    for turn in conv.get("turns") or []:
+        if turn.get("role") != "assistant":
+            turn["violations"] = []
+            continue
+        sessions = list(view_sessions)
+        for call in turn.get("tools_used") or []:
+            if not isinstance(call, dict) or call.get("tool") != "get_session_detail":
+                continue
+            res = (runs.get(f"get_session_detail|{call.get('detail')}") or {}).get("result") or {}
+            if not res.get("error"):
+                sessions += chat_mod_ref.sessions_in_play_from_tool_results(
+                    [("get_session_detail", res)]
+                )
+        turn["violations"] = [
+            v.rule
+            for v in chat_mod_ref._validate_conversational_text(
+                turn.pop("_full", "") or turn.get("content") or "",
+                zones_calibrated=bool(floor.get("zones_calibrated")),
+                sessions_in_play=sessions,
+            )
+        ]
+        turn["sessions_in_play"] = len(sessions)
+    for turn in conv.get("turns") or []:
+        turn.pop("_full", None)
+
+
 def _run_recorded_calls(db, user_id, thread, turns) -> dict:
-    """Re-execute every DISTINCT (tool, window) this conversation recorded, keyed
-    so each turn's node can show the result of its own call."""
+    """Re-execute every DISTINCT call this conversation recorded, keyed so each
+    turn's node shows the result of ITS OWN call.
+
+    The two window tools key on the window they resolved. `get_session_detail`
+    does not: its trace `detail` is the session's local DATE (query_tools
+    .summarize_tool_call), so it keys on that and resolves the date back to the
+    activity. Keying it by window instead collapsed every session-detail call in
+    a conversation into one bucket and re-ran it against the THREAD ANCHOR, which
+    showed one session's data under every call — an anchor the coach may never
+    have fetched. A date the record cannot resolve to exactly one session says
+    so rather than substituting a neighbour.
+    """
     from datetime import date
 
     runs: dict = {}
@@ -150,11 +233,17 @@ def _run_recorded_calls(db, user_id, thread, turns) -> dict:
             if not isinstance(call, dict):
                 continue
             tool = call.get("tool")
-            win = _WINDOW_BY_TRACE_LABEL.get(call.get("detail")) or "last_30_days"
-            key = f"{tool}|{win}"
+            detail = call.get("detail")
+            if tool == "get_session_detail":
+                key = f"{tool}|{detail}"
+            else:
+                key = f"{tool}|" + (
+                    _WINDOW_BY_TRACE_LABEL.get(detail) or "last_30_days"
+                )
             if key in seen:
                 continue
             seen.add(key)
+            win = key.split("|", 1)[1]
             try:
                 if tool == "list_activities_in_range":
                     res = query_tools.list_activities_in_range(
@@ -163,10 +252,23 @@ def _run_recorded_calls(db, user_id, thread, turns) -> dict:
                     res = query_tools.get_training_summary(
                         db, user_id, window=win, type_filter=None, today=date.today())
                 elif tool == "get_session_detail":
-                    tgt = thread.activity_id
-                    res = (query_tools.get_session_detail(
-                        db, user_id, activity_id=str(tgt), today=date.today())
-                        if tgt else {"error": "no activity id recoverable from the trace"})
+                    matches = _sessions_on(db, user_id, detail)
+                    if len(matches) == 1:
+                        res = query_tools.get_session_detail(
+                            db, user_id, activity_id=str(matches[0].id),
+                            today=date.today())
+                    elif not matches:
+                        res = {"error": "no session on that date in the record"}
+                    else:
+                        res = {
+                            "error": "the trace records only the date, and this "
+                                     "runner logged more than one session that day",
+                            "candidates": [
+                                {"activity_id": str(a.id), "name": a.name,
+                                 "type": a.type, "local_start": str(a.local_start)}
+                                for a in matches
+                            ],
+                        }
                 else:
                     continue
             except Exception as exc:  # noqa: BLE001
@@ -271,6 +373,7 @@ def _capture_thread(db, user, thread, chat_mod_ref) -> dict:
     """One conversation: how its context is built, and what each turn used."""
     from app.models.coach_chat_message import CoachChatMessage
     from app.models.user_profile import UserProfile
+    from app.services.coach import screen_context as screen_ctx
     from app.services.coach import threads as thread_service
     from app.services.coach.screen_context import resolve_screen_view
 
@@ -303,6 +406,13 @@ def _capture_thread(db, user, thread, chat_mod_ref) -> dict:
     )
     prompt = tt.build_thread_system_prompt(db, user, thread, screen_view)
 
+    # The floor's zone rule reads the runner's own calibration, not a constant.
+    from app.services.coach.context import zones_calibration
+
+    zones_calibrated, zones_basis = zones_calibration(profile)
+    # The screen view contributes its session to rule 4 exactly as it does live.
+    view_sessions = screen_ctx.sessions_in_play_from_view(screen_view)
+
     # --- per-turn: what the coach reached for ---
     turns = []
     for i, r in enumerate(rows[:_MAX_TURNS_PER_THREAD]):
@@ -320,6 +430,11 @@ def _capture_thread(db, user, thread, chat_mod_ref) -> dict:
             "skills_used": skills,
             # the redirect is byte-identical to the canned message when rule 5 fired
             "was_redirected": (r.content or "").strip() == chat_mod_ref.MEDICAL_REDIRECT_MESSAGE,
+            # filled by _fill_violations once the re-run tool results exist; it
+            # validates the FULL reply, not the display-truncated copy
+            "violations": None,
+            "sessions_in_play": 0,
+            "_full": r.content or "",
         })
 
     tool_calls = sum(len(t["tools_used"]) for t in turns)
@@ -340,6 +455,12 @@ def _capture_thread(db, user, thread, chat_mod_ref) -> dict:
         "anchored": thread.activity_id is not None,
         "created_at": str(thread.created_at),
         "last_message_at": str(thread.last_message_at) if thread.last_message_at else None,
+        # what the policy floor was gated against for this conversation
+        "floor": {
+            "zones_calibrated": zones_calibrated,
+            "zones_basis": zones_basis,
+            "view_sessions": view_sessions,
+        },
         "started_from": first_user.asked_from if first_user else None,
         "turn_count": len(rows),
         "tool_calls": tool_calls,
@@ -538,6 +659,8 @@ def _capture_assembled() -> dict:
                 th = next(x for x in recent if str(x.id) == conv["id"])
                 conv["tool_results"] = _run_tools(db, user.id, th, trace)
                 conv["tool_runs"] = _run_recorded_calls(db, user.id, th, conv["turns"])
+                # needs the re-run results, so it runs last
+                _fill_violations(conv, chat_mod)
 
             corpus = db.query(Thread).filter(Thread.user_id == user.id).count()
             return {

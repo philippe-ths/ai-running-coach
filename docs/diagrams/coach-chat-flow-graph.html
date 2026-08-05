@@ -112,18 +112,43 @@
   .data.tall { max-height:520px; }
   .data pre { margin:0; font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:#aeb8c9; white-space:pre; }
   .data pre.wrap { white-space:pre-wrap; word-break:break-word; }
-  .jk{color:#7dd3fc;} .js{color:#fcd34d;} .jn{color:#f0abfc;} .jb{color:#86efac;}
+  /* structured key -> value renderer (same shape as ai-flow-graph.html) */
+  .kv { font:11.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .kv .rw { display:flex; gap:7px; padding:2px 0; align-items:baseline; flex-wrap:wrap; border-bottom:1px solid rgba(44,49,60,.45); }
+  .kv .rw:last-child { border-bottom:0; }
+  .kv .rw.col { flex-direction:column; gap:4px; flex-wrap:nowrap; align-items:stretch; }
+  .kv .rw > .kline { flex:0 0 auto; min-width:130px; color:#7dd3fc; word-break:break-word; }
+  .kv .rw.col > .kline { flex:1 1 auto; min-width:0; }
+  .kv .eq { flex:0 0 auto; color:#525a68; }
+  .kv .rw.col > .eq { display:none; }
+  .kv .k { color:#7dd3fc; }
+  .kv .idx { color:#5b6472; font-weight:700; }
+  .kv .meta { color:#5b6472; font-size:10px; }
+  /* facts(): a pre-stringified list, so it needs the row shape without the panel chrome */
+  .kv.facts { margin:0 0 11px; }
+  .kv.facts .rw > .kline { min-width:200px; }
+  /* a JSON blob found inside a prompt slot's prose — set off from the text around it */
+  .kv.blob { border-left:2px solid var(--code); padding-left:10px; margin:7px 0; }
+  .data > pre + .kv.blob { margin-top:5px; }
+  .kv .vline { flex:1 1 0; min-width:0; color:#e6e9ef; word-break:break-word; }
+  .kv .sep { color:#525a68; }
+  .kv .v.vnum{ color:#f0abfc; } .kv .v.vstr{ color:#fcd34d; } .kv .v.vbool{ color:#86efac; } .kv .v.vnull{ color:#6ee7b7; }
+  .kv .nest { border-left:1px solid var(--line); margin:3px 0 4px 4px; padding-left:12px; }
+  .kv .strlist .si { display:block; color:#cdd5e1; font-family:-apple-system,system-ui; font-size:11.5px;
+    line-height:1.45; padding:3px 0 3px 12px; border-left:2px solid var(--line); margin-bottom:4px; }
+  /* a long free-text leaf (a coach reply, a memory line, a prompt slot) reads as prose, not as a code string */
+  .kv .vtext { display:block; color:#cdd5e1; font-family:-apple-system,system-ui; font-size:11.5px;
+    line-height:1.5; white-space:pre-wrap; word-break:break-word; padding:3px 0 3px 12px;
+    border-left:2px solid var(--line); margin-top:3px; }
+  .kv .spark { margin-top:3px; }
+  .kv .spark svg { width:100%; height:46px; background:#0c0f14; border:1px solid var(--line); border-radius:6px; display:block; }
+  .kv .sparkline { fill:none; stroke:#7dd3fc; stroke-width:1.4; vector-effect:non-scaling-stroke; }
+  .kv .sparkarea { fill:rgba(125,211,252,.12); stroke:none; }
+  .kv .sparkmeta { display:flex; flex-wrap:wrap; gap:12px; font-size:10px; color:#6b7280; margin-top:4px; }
   .note { border-left:3px solid var(--llm); background:rgba(245,158,11,.07); border-radius:0 8px 8px 0;
     padding:9px 12px; margin:0 0 11px; font-size:12px; color:#d7c8a8; }
   .note b { color:#fff; font-weight:600; }
   .note code { background:#1a1610; color:#e2d3b4; }
-  .writes { margin:0 0 11px; font-size:11px; }
-  .writes .wl { display:flex; gap:6px; padding:3px 0; align-items:baseline; border-bottom:1px solid #1a1d24; flex-wrap:wrap; }
-  .writes .wl:last-child { border-bottom:0; }
-  .writes .f { font-family:ui-monospace,Menlo,monospace; color:#7dd3fc; flex:0 0 auto; min-width:150px; }
-  .writes .eq { color:#525a68; flex:0 0 auto; }
-  .writes .val { color:var(--ink); font-family:ui-monospace,Menlo,monospace; flex:1 1 0; min-width:0; word-break:break-word; }
-  .writes .meta { color:#5b6472; font-size:10px; flex:0 0 auto; }
   /* a {slot} marker inside the rendered prompt template — clickable, jumps to its filler */
   .slotchip { display:inline-block; background:rgba(16,185,129,.14); border:1px solid rgba(16,185,129,.45);
     color:#6ee7b7; border-radius:4px; padding:0 4px; cursor:pointer; font-weight:700; }
@@ -413,6 +438,12 @@ const NODE_ACTIVE = {
   tool_summary: () => convUsedTool('get_training_summary'),
   tool_detail:  () => convUsedTool('get_session_detail'),
   tool_skill:   () => convLoadedAnySkill(),
+  // the action path and the medical redirect follow the same rule as the tools:
+  // a node whose body reads "this never happened here" must not render live
+  tool_action:  () => convUsedTool('offer_proposed_action'),
+  action_card:  () => convUsedTool('offer_proposed_action'),
+  confirm:      () => convUsedTool('offer_proposed_action'),
+  redirect:     () => convRedirected(),
 };
 function convUsedTool(name){
   const c = conv(); if(!c) return true;
@@ -422,6 +453,10 @@ function convUsedTool(name){
 function convLoadedAnySkill(){
   const c = conv(); if(!c) return true;
   return (c.turns||[]).some(t => (t.skills_used||[]).length);
+}
+function convRedirected(){
+  const c = conv(); if(!c) return true;
+  return (c.turns||[]).some(t => t.was_redirected);
 }
 function nodeOff(n){
   if(!P_()) return !!n.off;                     // no capture: nothing is dimmed
@@ -619,10 +654,19 @@ function renderTurnStrip(){
     return;
   }
   setConversation(CAP.default_conversation || list[0].id);
-  sel.innerHTML = list.map(c =>
-    '<option value="'+c.id+'">'+esc(c.display_title.slice(0,60))
-    + '  ('+c.turn_count+' turns · '+c.tool_calls+' tools · from '+esc(c.started_from||'—')+')'
-    + '</option>').join('');
+  // Lead with the entry point and what the turn reached, so the list can be
+  // scanned for a path (which one starts on Load? which one loads a skill?)
+  // rather than only for a topic.
+  sel.innerHTML = list.map(c => {
+    const skills = [...new Set((c.turns||[]).flatMap(t => t.skills_used||[]))];
+    const tags = [esc(c.started_from||'—'),
+                  c.turn_count+' turns',
+                  c.tool_calls+' tools',
+                  skills.length ? esc(skills.join('+')) : 'no skill',
+                  c.thread_row.activity_id ? 'anchored' : 'unanchored'];
+    return '<option value="'+c.id+'">'+tags.join(' · ')
+      + '  —  ' + esc(c.display_title.slice(0,54)) + '</option>';
+  }).join('');
   sel.value = conv().id;
   sel.addEventListener('change', () => {
     setConversation(sel.value);
