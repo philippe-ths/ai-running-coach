@@ -40,6 +40,11 @@ class ActivityRead(ActivityBase):
     # Classification headline composed at read time from DerivedMetric axes;
     # null until the activity has been analysed (#136).
     headline: Optional[str] = None
+    # The coach report's opening claim, projected at read time (#797). Null when
+    # the run has no displayable non-fallback report yet. Telegram is the only
+    # channel that announces a report, so this is how a runner who has not linked
+    # one discovers their runs were coached at all.
+    coach_lead: Optional[str] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 

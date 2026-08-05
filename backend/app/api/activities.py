@@ -17,6 +17,7 @@ from app.services.checkins import write_checkin
 from app.services.intents import write_activity_intent
 from app.services.analysis.classifier import Classification, compose_headline
 from app.services.analysis.splits import calculate_splits
+from app.services.coach import service as coach_service
 from app.services.laps import project_laps
 from app.services.readiness import build_readiness
 from app.services.strava_ingestion import get_strava_port, ingest_recent_activities
@@ -227,6 +228,8 @@ def read_activities(
         db, skip=skip, limit=limit, user_id=user.id,
         types=types, start_date=start_date, end_date=end_date,
     )
+    # #797: one batched lookup for the whole page, not one per row.
+    coach_leads = coach_service.get_displayable_report_leads(db, activities)
     responses = []
     for activity in activities:
         response = ActivityRead.model_validate(activity)
@@ -234,6 +237,7 @@ def read_activities(
             response.headline = compose_headline(
                 activity, Classification.from_metrics(activity.metrics)
             )
+        response.coach_lead = coach_leads.get(activity.id)
         responses.append(response)
     # #684: the models above are already validated once (model_validate). Returning
     # them directly would let FastAPI re-validate against `response_model`, re-running
