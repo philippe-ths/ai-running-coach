@@ -334,9 +334,23 @@ def _lookup_user_by_email(db: Session, normalized: str) -> Optional[User]:
 def _degraded_single_user(db: Session) -> Optional[User]:
     """The one local user when Clerk is unconfigured outside production.
 
-    Prefer the Strava-linked user (matches the legacy profile resolution), else
-    any user. Does not create a row -- callers that need a default own that.
+    Prefer the owner (``OWNER_EMAIL``), then the Strava-linked user (the legacy
+    profile resolution), else any user. Does not create a row -- callers that
+    need a default own that.
+
+    The owner check is what makes "the single local user" single. A local DB
+    seeded from the production snapshot can hold several Strava-linked users, and
+    the Strava fallback below is an unordered scan: it returns whichever row sits
+    first in the heap, and that changes when a token refresh rewrites a row. So
+    the ungated stack silently switched between real people's data from one
+    request to the next, and anything reading it (the local UI, the Auto-real
+    video build) rendered whoever it happened to get.
     """
+    owner = settings.OWNER_EMAIL.strip().lower()
+    if owner:
+        user = _lookup_user_by_email(db, owner)
+        if user is not None:
+            return user
     strava = db.execute(select(StravaAccount)).scalars().first()
     if strava is not None:
         return strava.user
