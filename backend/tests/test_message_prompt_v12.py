@@ -22,6 +22,7 @@ from app.services.coach.prompts import (
     build_system_prompt,
     is_training_history_prompt,
 )
+from app.services.coach.prompt_features import PromptFeature, features_for
 from app.services.coach.service import active_schema_version
 
 V11 = "coach_message_v11"
@@ -33,12 +34,12 @@ def test_v12_registered_carries_every_v11_capability_plus_training_history():
     assert V12.startswith(MESSAGE_PROMPT_PREFIX)  # -> schema 2.0 by prefix
     assert V12 in RECENT_TRAINING_PROMPT_IDS  # inherits v11's capabilities
     assert V12 in TRAINING_HISTORY_PROMPT_IDS  # ...plus the new TRAINING_HISTORY capability
-    # ADR 0026 Slice 2 PR 2 (#670): grouped_v2 REBASES training_history (carries
-    # TRAINING_HISTORY_2WK instead), so it drops OUT of the original-ladder set.
-    assert TRAINING_HISTORY_PROMPT_IDS == {
-        V12, "coach_message_v13", "coach_message_v14", "coach_message_lean_v1",
-        "coach_message_lean_grouped_v1",
-    }
+    # Stated as v12's own delta from v11, so a later version joining or declining the
+    # capability costs no edit here (#803). ADR 0026 Slice 2 PR 2 (#670) is the case in
+    # point: grouped_v2 REBASES training_history (carries TRAINING_HISTORY_2WK instead)
+    # and so is absent from the original-ladder set, which this assertion never has to say.
+    assert V11 not in TRAINING_HISTORY_PROMPT_IDS  # inert under a rollback to v11
+    assert features_for(V12) == features_for(V11) | {PromptFeature.TRAINING_HISTORY}
     assert V12 in _OPENER_PROMPTS  # has a distinct opener form (two-stage)
     # same schema family as v11 (so v12 reports regenerate, prior history retained).
     assert active_schema_version(V12) == active_schema_version(V11)
