@@ -280,7 +280,11 @@ def test_baseline_recompute_runs_after_derivedmetric_commit(db, monkeypatch):
         seen["dm_visible"] = row is not None
         return real_recompute(session, user_id)
 
-    monkeypatch.setattr(baseline_mod, "recompute_runner_baseline", spy_recompute)
+    # The orchestrator namespace is the seam (#805): the recompute used to be
+    # imported lazily inside `_post_commit_baseline`, so it was reachable only by
+    # patching its source module. It is now a module-level name here, alongside
+    # every other stage, and is patched where it is called from.
+    monkeypatch.setattr(_orchestrator, "recompute_runner_baseline", spy_recompute)
 
     analyze(db, activity.id)
 
@@ -297,7 +301,11 @@ def test_skip_baseline_defers_recompute(db, monkeypatch):
     def spy_recompute(session, user_id):
         called["n"] += 1
 
-    monkeypatch.setattr(baseline_mod, "recompute_runner_baseline", spy_recompute)
+    # The orchestrator namespace is the seam (#805): the recompute used to be
+    # imported lazily inside `_post_commit_baseline`, so it was reachable only by
+    # patching its source module. It is now a module-level name here, alongside
+    # every other stage, and is patched where it is called from.
+    monkeypatch.setattr(_orchestrator, "recompute_runner_baseline", spy_recompute)
 
     analyze(db, activity.id, skip_baseline=True)
 

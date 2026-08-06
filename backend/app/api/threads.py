@@ -7,16 +7,14 @@ a cross-user thread id resolves to 404, never to another runner's data.
 
 import json
 import logging
-from uuid import UUID
+from dataclasses import dataclass
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
 
-from app.core.clerk_auth import require_current_user
+from app.api.deps import CurrentUser, DbSession, OwnedThread, require_owned_thread
 from app.core.config import settings
-from app.db.session import get_db
-from app.models.user import User
 from app.schemas.chat import ChatMessageRead
 from app.schemas.thread import (
     ProposedActionConfirm,
@@ -54,36 +52,35 @@ router = APIRouter(
 )
 
 
-def _owned_thread_or_404(db: Session, thread_id: UUID, user: User):
-    thread = thread_service.get_owned_thread(db, thread_id, user.id)
-    if thread is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
-    return thread
+@dataclass(frozen=True)
+class ThreadTurn:
+    """A validated thread turn plus the owned rows it addresses.
+
+    The dependency carries the BODY as well as the resolved rows, and the
+    handler takes only this. Declaring `ThreadMessageSend` in both the
+    dependency and the handler would leave the OpenAPI schema intact (FastAPI
+    counts body params by name) but validate the payload TWICE, so a malformed
+    turn came back with every 422 entry duplicated.
+    """
+
+    body: ThreadMessageSend
+    thread: Optional[object] = None
+    anchor_activity: Optional[object] = None
 
 
-@router.get("", response_model=ThreadListResponse)
-def list_threads(
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
-):
-    return ThreadListResponse(threads=thread_service.list_threads(db, user.id))
+def get_thread_turn(
+    body: ThreadMessageSend, db: DbSession, user: CurrentUser
+) -> ThreadTurn:
+    """Resolve the thread turn's owned targets, both carried in the BODY.
 
-
-@router.post("/messages")
-async def post_thread_message(
-    body: ThreadMessageSend,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
-):
-    """Send a thread turn and stream the coach's reply via SSE.
-
-    `thread_id` continues an existing thread; absent, a new thread is created
-    (optionally anchored to an owned activity) and announced as the stream's
-    first object frame. Ownership is denied BEFORE the stream opens.
+    Order is load-bearing and preserved from the pre-#802 handler: a supplied
+    `thread_id` is resolved first, and the anchor is only consulted when no
+    thread was named. So a turn that continues an existing thread never
+    validates (and never 404s on) an `anchor_activity_id` it would ignore.
     """
     thread = None
     if body.thread_id is not None:
-        thread = _owned_thread_or_404(db, body.thread_id, user)
+        thread = require_owned_thread(db, body.thread_id, user)
 
     anchor_activity = None
     if thread is None and body.anchor_activity_id is not None:
@@ -92,6 +89,36 @@ async def post_thread_message(
         )
         if anchor_activity is None:
             raise HTTPException(status_code=404, detail="Activity not found")
+
+    return ThreadTurn(body=body, thread=thread, anchor_activity=anchor_activity)
+
+
+ResolvedThreadTurn = Annotated[ThreadTurn, Depends(get_thread_turn)]
+
+
+@router.get("", response_model=ThreadListResponse)
+def list_threads(
+    db: DbSession,
+    user: CurrentUser,
+):
+    return ThreadListResponse(threads=thread_service.list_threads(db, user.id))
+
+
+@router.post("/messages")
+async def post_thread_message(
+    turn: ResolvedThreadTurn,
+    db: DbSession,
+    user: CurrentUser,
+):
+    """Send a thread turn and stream the coach's reply via SSE.
+
+    `thread_id` continues an existing thread; absent, a new thread is created
+    (optionally anchored to an owned activity) and announced as the stream's
+    first object frame. Ownership is denied BEFORE the stream opens.
+    """
+    body = turn.body
+    thread = turn.thread
+    anchor_activity = turn.anchor_activity
 
     from app.services.coach.thread_turn import stream_thread_turn
 
@@ -139,11 +166,9 @@ async def post_thread_message(
 
 @router.get("/{thread_id}", response_model=ThreadDetail)
 def get_thread(
-    thread_id: UUID,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    thread: OwnedThread,
+    db: DbSession,
 ):
-    thread = _owned_thread_or_404(db, thread_id, user)
     messages = thread_service.thread_messages(db, thread)
     return ThreadDetail(
         id=thread.id,
@@ -157,12 +182,10 @@ def get_thread(
 
 @router.patch("/{thread_id}", status_code=204)
 def rename_thread(
-    thread_id: UUID,
     body: ThreadRename,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    thread: OwnedThread,
+    db: DbSession,
 ):
-    thread = _owned_thread_or_404(db, thread_id, user)
     thread.title = body.title.strip()
     db.add(thread)
     db.commit()
@@ -170,19 +193,17 @@ def rename_thread(
 
 @router.delete("/{thread_id}", status_code=204)
 def delete_thread(
-    thread_id: UUID,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    thread: OwnedThread,
+    db: DbSession,
 ):
-    thread = _owned_thread_or_404(db, thread_id, user)
     thread_service.delete_thread(db, thread)
 
 
 @router.post("/actions/confirm")
 def confirm_proposed_action(
     body: ProposedActionConfirm,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    db: DbSession,
+    user: CurrentUser,
 ):
     from app.services.coach.proposed_actions import consume_and_execute
 

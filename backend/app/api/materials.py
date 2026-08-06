@@ -15,11 +15,9 @@ defence under multi-user. The raw text is never echoed back — `UserMaterialRea
 import hashlib
 import logging
 from typing import Optional
-from uuid import UUID
 
 from fastapi import (
     APIRouter,
-    Depends,
     File,
     Form,
     HTTPException,
@@ -29,11 +27,9 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-from app.api.profile import get_current_user_profile
-from app.core.clerk_auth import require_current_user
+from app.api.deps import DbSession, MaterialsOwnerId, OwnedMaterial
 from app.core.config import settings
-from app.db.session import get_db
-from app.models import User, UserMaterial
+from app.models import UserMaterial
 from app.schemas.material import MaterialKind, UserMaterialRead
 from app.services.coach.material_distiller import enqueue_distillation
 
@@ -75,11 +71,11 @@ def _owned_query(db: Session, user_id):
 )
 async def upload_material(
     response: Response,
+    db: DbSession,
+    user_id: MaterialsOwnerId,
     file: UploadFile = File(...),
     kind: MaterialKind = Form(...),
     title: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
 ):
     """Accept one markdown coaching material, store the raw text, and kick off
     background distillation. Returns 202 with status=processing; the frontend polls
@@ -89,9 +85,6 @@ async def upload_material(
     re-uploads dedup on `content_hash`; re-uploading content that previously FAILED
     re-runs the distillation on the same row.
     """
-    profile = get_current_user_profile(db, user)
-    user_id = profile.user_id
-
     # Size cap, bounded read: read at most cap+1 bytes so an oversize file never
     # loads fully into memory before we reject it.
     raw_bytes = await file.read(settings.USER_MATERIAL_MAX_BYTES + 1)
@@ -183,53 +176,31 @@ async def upload_material(
 
 @router.get("/coach/materials", response_model=list[UserMaterialRead])
 def list_materials(
+    db: DbSession,
+    user_id: MaterialsOwnerId,
     include_archived: bool = False,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
 ):
     """List the runner's materials, most recent first. Archived materials are
     excluded unless `include_archived=true`."""
-    profile = get_current_user_profile(db, user)
-    q = _owned_query(db, profile.user_id)
+    q = _owned_query(db, user_id)
     if not include_archived:
         q = q.filter(UserMaterial.status != "archived")
     return q.order_by(UserMaterial.created_at.desc()).all()
 
 
 @router.get("/coach/materials/{material_id}", response_model=UserMaterialRead)
-def get_material(
-    material_id: UUID,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
-):
+def get_material(material: OwnedMaterial):
     """Fetch one material (the status-poll endpoint the frontend hits until active)."""
-    profile = get_current_user_profile(db, user)
-    material = (
-        _owned_query(db, profile.user_id)
-        .filter(UserMaterial.id == material_id)
-        .first()
-    )
-    if material is None:
-        raise HTTPException(status_code=404, detail="Material not found.")
     return material
 
 
 @router.post("/coach/materials/{material_id}/archive", response_model=UserMaterialRead)
 def archive_material(
-    material_id: UUID,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    material: OwnedMaterial,
+    db: DbSession,
 ):
     """Soft-hide a material (status=archived). Reversible by re-uploading the same
     content; the distilled record is retained on the row."""
-    profile = get_current_user_profile(db, user)
-    material = (
-        _owned_query(db, profile.user_id)
-        .filter(UserMaterial.id == material_id)
-        .first()
-    )
-    if material is None:
-        raise HTTPException(status_code=404, detail="Material not found.")
     material.status = "archived"
     db.add(material)
     db.commit()
@@ -239,18 +210,9 @@ def archive_material(
 
 @router.delete("/coach/materials/{material_id}", status_code=204)
 def delete_material(
-    material_id: UUID,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    material: OwnedMaterial,
+    db: DbSession,
 ):
     """Hard-delete a material (raw text and distilled record removed)."""
-    profile = get_current_user_profile(db, user)
-    material = (
-        _owned_query(db, profile.user_id)
-        .filter(UserMaterial.id == material_id)
-        .first()
-    )
-    if material is None:
-        raise HTTPException(status_code=404, detail="Material not found.")
     db.delete(material)
     db.commit()
