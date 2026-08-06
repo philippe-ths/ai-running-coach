@@ -123,7 +123,7 @@ def _client(*results):
 async def test_opener_notifies_and_schedules_when_salient(db, configured, notifier):
     activity = _seed(db)
     exchange = _exchange_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(exchange_ops, "schedule_fuller_turn") as sched:
         result = await OpenerFullerCadence().run_opener_stage(
@@ -148,7 +148,7 @@ async def test_fallback_opener_still_notified_and_schedules(db, configured, noti
     # schedules a recovery fuller.
     activity = _seed(db, flags=["illness_or_extreme_fatigue"])
     exchange = _exchange_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result([], stop_reason="refusal"))), \
          patch.object(exchange_ops, "schedule_fuller_turn") as sched:
         result = await OpenerFullerCadence().run_opener_stage(
@@ -162,7 +162,7 @@ async def test_fallback_opener_still_notified_and_schedules(db, configured, noti
 async def test_opener_does_not_schedule_when_unremarkable(db, configured, notifier):
     activity = _seed(db)
     exchange = _exchange_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))), \
          patch.object(exchange_ops, "schedule_fuller_turn") as sched:
         await OpenerFullerCadence().run_opener_stage(
@@ -177,7 +177,7 @@ async def test_red_flag_forces_schedule_despite_llm(db, configured, notifier):
     # LLM's schedule judgment.
     activity = _seed(db, flags=["illness_or_extreme_fatigue"])
     exchange = _exchange_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))), \
          patch.object(exchange_ops, "schedule_fuller_turn") as sched:
         await OpenerFullerCadence().run_opener_stage(
@@ -189,12 +189,12 @@ async def test_red_flag_forces_schedule_despite_llm(db, configured, notifier):
 async def test_opener_idempotent_skips_when_already_sent(db, configured, notifier):
     activity = _seed(db)
     exchange = _exchange_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(exchange_ops, "schedule_fuller_turn"):
         await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     # second run: opener already notified -> no-op, no second notification
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(exchange_ops, "schedule_fuller_turn") as sched2:
         result = await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
@@ -209,7 +209,7 @@ async def test_opener_idempotent_skips_when_already_sent(db, configured, notifie
 async def test_fuller_turn_notifies_and_sets_sentinel(db, configured, notifier):
     activity = _seed(db)
     exchange = _exchange_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         result = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert result is not None
@@ -223,7 +223,7 @@ async def test_fuller_turn_notifies_and_sets_sentinel(db, configured, notifier):
 async def test_fuller_turn_idempotent_racing_timer_noops(db, configured, notifier):
     # AC2/AC5: a reply fires the fuller; the racing timer then no-ops.
     activity = _seed(db)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()), _result(_fuller_blocks()))):
         first = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
         second = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
@@ -260,7 +260,7 @@ async def test_concurrent_timer_and_reply_fuller_yields_one_notify_one_report(
             )
         return await real_generate_fuller(db_, activity_id, *args, **kwargs)
 
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()), _result(_fuller_blocks()))), \
          patch.object(exchange_ops, "generate_fuller", side_effect=generate_then_race):
         first = await exchange_ops.run_fuller_turn(db=db, activity=activity, notifier=notifier)
@@ -314,7 +314,7 @@ async def test_fuller_raised_exception_releases_claim_and_stays_recoverable(
     assert len(notifier.sent) == 0          # nothing was notified
 
     # The turn is re-sendable: a retry re-claims and the real fuller lands + notifies.
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         recovered = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert recovered is not None
@@ -331,14 +331,14 @@ async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, n
     # substantive coaching can still land — the safety floor's guarantee survives.
     activity = _seed(db, flags=["illness_or_extreme_fatigue"])
     exchange = _exchange_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))), \
          patch.object(exchange_ops, "schedule_fuller_turn"):
         await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert len(notifier.sent) == 1  # opener only
 
     empty = [_tail(headline="x", next_steps=[], risks=[], questions=[])]
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(empty), _result(empty))):
         result = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert result is None              # a fallback fuller is not notified
@@ -354,7 +354,7 @@ async def test_safety_forced_fuller_fallback_stays_recoverable(db, configured, n
         assert maybe_enqueue_fuller_turn(db, activity.id) is True
 
     # And the re-fired fuller now produces and notifies the real substantive turn.
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         recovered = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
     assert recovered is not None
@@ -367,11 +367,11 @@ async def test_two_notifications_max_opener_then_fuller(db, configured, notifier
     # AC5: at most two notifications per exchange (one opener, one fuller).
     activity = _seed(db)
     exchange = _exchange_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(exchange_ops, "schedule_fuller_turn"):
         await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         await process_fuller_turn(db=db, activity=activity, notifier=notifier)
 
@@ -396,14 +396,14 @@ async def test_scheduled_fuller_is_inert_after_rollback_to_single_shot(
     # no generation, no notification, no learning-loop write-back.
     activity = _seed(db)
     exchange = _exchange_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(exchange_ops, "schedule_fuller_turn"):
         await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert len(notifier.sent) == 1  # the opener went out before the rollback
 
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")  # rollback
-    with patch("app.services.coach.service.AnthropicClient") as client_cls:
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls:
         result = await process_fuller_turn(db=db, activity=activity, notifier=notifier)
 
     assert result is None
@@ -424,14 +424,14 @@ async def test_opener_crash_before_schedule_recovers_on_rerun(db, configured, no
     # the stored row). This pins the re-entrancy the retry policy relies on.
     activity = _seed(db)
     exchange = _exchange_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))), \
          patch.object(exchange_ops, "schedule_fuller_turn", side_effect=RuntimeError("worker died")):
         with pytest.raises(RuntimeError):
             await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
     assert len(notifier.sent) == 0  # crashed before notify
 
-    with patch("app.services.coach.service.AnthropicClient") as client_cls, \
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls, \
          patch.object(exchange_ops, "schedule_fuller_turn") as sched:
         result = await OpenerFullerCadence().run_opener_stage(db=db, activity=activity, exchange=exchange, notifier=notifier)
 

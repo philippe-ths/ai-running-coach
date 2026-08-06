@@ -30,13 +30,21 @@ from app.schemas.coach import (
     CoachReportRead,
 )
 from app.schemas.coach_context import CoachContextPack, ContinuityContext
-from app.services.coach.budget import over_budget as budget_over, record as budget_record
+from app.services.coach.turn import (
+    CoachClient,
+    TurnKind,
+    build_client,
+    over_budget as budget_over,
+    relationship_for_user,
+)
 from app.services.coach.memory_store import get_memory
 from app.services.coach.memory_update import enqueue_memory_update
 from app.services.coach.context import build_context_pack
 from app.services.coach.coach_framing import coach_llm_view
 from app.services.coach.digest import build_report_digest
-from app.services.coach.llm import AnthropicClient
+# Retained deliberately: several tests and callers reference `service.AnthropicClient`
+# as the transport type. Client CONSTRUCTION now lives in `turn.build_client` (#801).
+from app.services.coach.llm import AnthropicClient  # noqa: F401
 from app.services.coach.output_contract import (
     RECORD_COACH_TAIL_TOOL,
     EmptyMessageError,
@@ -176,20 +184,13 @@ def is_receipt_cadence(prompt_id: str) -> bool:
 def _relationship_for_activity(
     db: Session, activity: Activity
 ) -> Optional[CoachingRelationship]:
-    """Load the runner's thin CoachingRelationship row, or None.
+    """This activity owner's thin CoachingRelationship row, or None.
 
-    Returns None both when the row does not exist yet (a runner who never opened
-    their profile) and when COACH_RELATIONSHIP_ENABLED is off (#522: never read the
-    relationship, so the runner's declared voice/stance has no effect). In both cases
-    the caller's resolver maps None to its moderate/default profile, so a missing row
-    and a disabled input are indistinguishable by design."""
-    if not settings.COACH_RELATIONSHIP_ENABLED:
-        return None
-    return (
-        db.query(CoachingRelationship)
-        .filter(CoachingRelationship.user_id == activity.user_id)
-        .first()
-    )
+    Delegates to the envelope's single gated read (#801): the
+    COACH_RELATIONSHIP_ENABLED check used to live here AND be missing from the
+    thread turn's own read, which is #791. Kept as a named function because it is
+    the activity-shaped call the resolvers below read best with."""
+    return relationship_for_user(db, activity.user_id)
 
 
 def _resolve_voice_for_activity(db: Session, activity: Activity):
@@ -422,6 +423,26 @@ def get_block_primary_report_row(db: Session, activity_id) -> Optional[CoachRepo
     return get_displayable_report_row(db, block.primary_activity_id)
 
 
+def _load_subject(db: Session, activity_uuid) -> Optional[Activity]:
+    """The subject activity a generation runs on, or None when there is nothing
+    to coach (no row, or no analysis yet).
+
+    undefer raw_summary (#359): the context pack reads the subject's raw_summary
+    (headline, average_temp), so it is loaded with the row rather than lazily on
+    first touch. All three generation entry points used to spell this out
+    identically; a fourth would have had to remember the undefer.
+    """
+    activity = (
+        db.query(Activity)
+        .options(undefer(Activity.raw_summary))
+        .filter(Activity.id == activity_uuid)
+        .first()
+    )
+    if not activity or not activity.metrics:
+        return None
+    return activity
+
+
 @dataclass
 class _GenerationRequest:
     """Everything one LLM generation call for an activity needs, assembled once.
@@ -537,25 +558,15 @@ async def get_or_generate_coach_report(
     # mid-regen leaves the prior report intact instead of zero rows. Prior schema-
     # versions are untouched (the in-place update keeps the same cache identity).
 
-    # Load activity. undefer raw_summary (#359): the context pack reads the
-    # subject's raw_summary (headline, average_temp), so load it with the row.
-    activity = (
-        db.query(Activity)
-        .options(undefer(Activity.raw_summary))
-        .filter(Activity.id == activity_uuid)
-        .first()
-    )
-    if not activity or not activity.metrics:
+    activity = _load_subject(db, activity_uuid)
+    if activity is None:
         return None
 
     # Assemble the generation request (pack, fingerprint, serialized pack, system
     # prompt, user message). Single-shot uses the default fuller mode + playbook.
     req = _assemble_generation_request(db, activity)
 
-    client = AnthropicClient(
-        api_key=settings.ANTHROPIC_API_KEY,
-        model=settings.COACH_MODEL_ID,
-    )
+    client = build_client(TurnKind.REPORT, activity.user_id)
 
     # Dispatch on prompt family (ADR 0009): the A3 prose-message path vs the
     # legacy structured path. Both normalise to a _GenOutcome so storage is shared.
@@ -611,13 +622,8 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     has no metrics (nothing to react to).
     """
     activity_uuid = _coerce_uuid(activity_id)
-    activity = (
-        db.query(Activity)
-        .options(undefer(Activity.raw_summary))  # #359: context reads subject raw_summary
-        .filter(Activity.id == activity_uuid)
-        .first()
-    )
-    if not activity or not activity.metrics:
+    activity = _load_subject(db, activity_uuid)
+    if activity is None:
         return None
 
     # Assemble the opener request first (mode="opener": lean prompt, salience-
@@ -641,9 +647,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
             is_fallback=existing.is_fallback,
         )
 
-    client = AnthropicClient(
-        api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
-    )
+    client = build_client(TurnKind.OPENER, activity.user_id)
     outcome = await _generate_message(
         client, req.system_prompt, req.user_message, req.pack,
         is_opener=True, user_id=activity.user_id,
@@ -712,13 +716,8 @@ async def generate_fuller(
     # complete report intact instead of zero rows. Prior schema-versions are untouched
     # (the in-place update keeps the same cache identity).
 
-    activity = (
-        db.query(Activity)
-        .options(undefer(Activity.raw_summary))  # #359: context reads subject raw_summary
-        .filter(Activity.id == activity_uuid)
-        .first()
-    )
-    if not activity or not activity.metrics:
+    activity = _load_subject(db, activity_uuid)
+    if activity is None:
         return None
 
     # Continuity: the opener prose this exchange already sent (preserved above,
@@ -732,9 +731,7 @@ async def generate_fuller(
     # Assemble the fuller request (mode="fuller": deep prompt + playbook + fuller
     # view). Continuity (the opener prose + reply) rides the pack on this turn only.
     req = _assemble_generation_request(db, activity, mode="fuller", continuity=continuity)
-    client = AnthropicClient(
-        api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
-    )
+    client = build_client(TurnKind.FULLER, activity.user_id)
     outcome = await _generate_message(
         client, req.system_prompt, req.user_message, req.pack, user_id=activity.user_id
     )
@@ -1028,7 +1025,7 @@ def _structured_fallback_dump() -> dict:
 
 
 async def _generate_structured(
-    client: AnthropicClient,
+    client: CoachClient,
     system_prompt: str,
     user_message: str,
     pack: CoachContextPack,
@@ -1115,35 +1112,31 @@ def _serialize_blocks(content_blocks: list) -> str:
 
 
 async def _call_message(
-    client: AnthropicClient,
+    client,
     system_prompt: str,
     user_message: str,
     *,
     max_tokens: int = _MESSAGE_MAX_TOKENS,
     user_id=None,
 ):
-    result = await client.generate_coach_message(
+    """One prose-message sub-call.
+
+    Spend is NOT recorded here any more: the client this turn was handed is a
+    `turn.MeteredClient`, which records every sub-call including the truncation,
+    tail-skip and policy-fix fan-out (#801). The recording point is identical,
+    it is simply no longer a thing each call site has to remember. `user_id` is
+    kept on the signature because the caller still uses it for the entry gate.
+    """
+    return await client.generate_coach_message(
         system=system_prompt,
         user=user_message,
         tools=[RECORD_COACH_TAIL_TOOL],
         max_tokens=max_tokens,
     )
-    # P2.2: count EVERY sub-call's spend (the retry/escalation fan-out is the
-    # cost lever the going-live doc flags), keyed by activity-owner user_id.
-    if user_id is not None:
-        budget_record(
-            user_id,
-            client.model,
-            result.input_tokens,
-            result.output_tokens,
-            cache_read_input_tokens=result.cache_read_input_tokens,
-            cache_creation_input_tokens=result.cache_creation_input_tokens,
-        )
-    return result
 
 
 async def _reattempt_if_truncated(
-    client: AnthropicClient,
+    client: CoachClient,
     system_prompt: str,
     user_message: str,
     result,
@@ -1227,7 +1220,7 @@ def _choose_message_attempt(first: _MsgAttempt, retry: _MsgAttempt) -> _MsgAttem
 
 
 async def _generate_message(
-    client: AnthropicClient,
+    client: CoachClient,
     system_prompt: str,
     user_message: str,
     pack: CoachContextPack,
@@ -1370,7 +1363,7 @@ async def _generate_message(
 
 
 async def _retry_message_with_fixes(
-    client: AnthropicClient,
+    client: CoachClient,
     system_prompt: str,
     original_user_message: str,
     pack: CoachContextPack,
@@ -1430,7 +1423,7 @@ async def _retry_message_with_fixes(
 
 
 async def _retry_with_fixes(
-    client: AnthropicClient,
+    client: CoachClient,
     system_prompt: str,
     original_user_message: str,
     pack: CoachContextPack,

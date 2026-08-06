@@ -140,7 +140,7 @@ async def test_pipeline_schedules_block_complete_instead_of_inline_opener(
     }])
 
     with patch.object(exchange_ops, "schedule_block_complete") as sched, \
-         patch("app.services.coach.service.AnthropicClient") as client_cls:
+         patch("app.services.coach.turn.AnthropicClient") as client_cls:
         result = await process_new_activity(
             db=db, account=account, strava_activity_id=9001,
             strava_port=strava_adapter, notifier=notifier,
@@ -164,7 +164,7 @@ async def test_block_complete_opens_exchange_and_notifies_primary(
     activity = _seed_activity(db, user)
     block = assign_activity_to_block(db, activity)
 
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_opener_blocks(schedule=True))), \
          patch.object(exchange_ops, "schedule_fuller_turn") as sched:
         result = await process_block_complete(
@@ -195,7 +195,7 @@ async def test_stale_completion_check_noops_when_superseded(db, configured, noti
     assert assign_activity_to_block(db, second).id == block.id
 
     # The first activity's check fires: superseded, a fresh check is pending.
-    with patch("app.services.coach.service.AnthropicClient") as client_cls:
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls:
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(first.id), notifier=notifier
         )
@@ -207,7 +207,7 @@ async def test_stale_completion_check_noops_when_superseded(db, configured, noti
     # The second activity's check fires: the block is complete, one opener, on
     # the primary (the run, not the walk).
     db.refresh(block)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_opener_blocks(schedule=False))), \
          patch.object(exchange_ops, "schedule_fuller_turn"):
         result = await process_block_complete(
@@ -218,7 +218,7 @@ async def test_stale_completion_check_noops_when_superseded(db, configured, noti
     assert block.primary_activity_id == second.id
 
     # A re-fire of either check is a no-op: exactly one opener per block.
-    with patch("app.services.coach.service.AnthropicClient") as client_cls2:
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls2:
         again = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(second.id), notifier=notifier
         )
@@ -238,7 +238,7 @@ async def test_block_complete_noops_under_single_shot_prompt(
     block = assign_activity_to_block(db, activity)
 
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")
-    with patch("app.services.coach.service.AnthropicClient") as client_cls:
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls:
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=notifier
         )
@@ -315,7 +315,7 @@ async def test_force_regeneration_never_resets_exchange_sentinels(db, configured
         questions=[{"question": "How did it feel?", "reason": "calibrate",
                     "options": [{"id": "rpe", "label": "Rate 1-10", "kind": "rpe"}]}],
     )]
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(fuller)):
         read = await generate_fuller(db, str(activity.id), force=True)
 

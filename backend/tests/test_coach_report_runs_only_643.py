@@ -125,7 +125,7 @@ async def test_walk_gets_receipt_but_no_auto_report(db, receipt_cadence, notifie
     assert receipt is not None
     assert len(notifier.sent) == 1  # the receipt fired for the walk
 
-    with patch("app.services.coach.service.AnthropicClient") as client_cls:
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls:
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(walk.id), notifier=notifier
         )
@@ -143,7 +143,7 @@ async def test_run_still_gets_auto_report(db, receipt_cadence, notifier):
     block = _block_of(db, run)
     await ReceiptCadence().send_receipt(db=db, activity=run, block=block, notifier=notifier)
 
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client_returning_fuller()):
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(run.id), notifier=notifier
@@ -165,7 +165,7 @@ async def test_trail_run_still_gets_auto_report(db, receipt_cadence, notifier):
     db.commit()
     block = _block_of(db, run)
     await ReceiptCadence().send_receipt(db=db, activity=run, block=block, notifier=notifier)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client_returning_fuller()):
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(run.id), notifier=notifier
@@ -184,7 +184,7 @@ async def test_virtual_run_gets_auto_report(db, receipt_cadence, notifier):
     assert block.primary_activity_id == vrun.id  # picked as the run primary
     await ReceiptCadence().send_receipt(db=db, activity=vrun, block=block, notifier=notifier)
 
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client_returning_fuller()):
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(vrun.id), notifier=notifier
@@ -215,7 +215,7 @@ async def test_mixed_block_reports_on_run_primary(db, receipt_cadence, notifier)
     await ReceiptCadence().send_receipt(db=db, activity=walk, block=block, notifier=notifier)
     # the block-complete check fires on the LAST member (the walk), but generates
     # on the run primary, so a report is produced.
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client_returning_fuller()):
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(walk.id), notifier=notifier
@@ -233,7 +233,7 @@ async def test_single_shot_walk_generates_no_report(db, notifier, monkeypatch):
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")  # single-shot
     monkeypatch.setattr(settings, "COACH_RECEIPT_CADENCE", False)
     walk = _seed(db, type="Walk", name="Lunch walk")
-    with patch("app.services.coach.service.AnthropicClient") as client_cls:
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls:
         result = await SingleShotCadence().run_single_shot(
             db=db, activity=walk, strava_activity_id=walk.strava_activity_id, notifier=notifier
         )

@@ -185,7 +185,7 @@ async def test_generate_stamps_current_voice_fingerprint(db, monkeypatch):
 
     fake = AsyncMock()
     fake.generate_coach_message = AsyncMock(return_value=_opener_result())
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_opener(db, str(activity.id))
 
     row = get_active_report_row(db, activity.id)

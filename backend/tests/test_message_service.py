@@ -143,7 +143,7 @@ class TestMessageServicePath:
                 questions=[],
             ),
         ]
-        with patch("app.services.coach.service.AnthropicClient", return_value=_message_client(blocks)):
+        with patch("app.services.coach.turn.AnthropicClient", return_value=_message_client(blocks)):
             read = await get_or_generate_coach_report(db, str(activity.id))
 
         assert read is not None
@@ -166,7 +166,7 @@ class TestMessageServicePath:
         activity = _seed_activity_with_metrics(db)
         blocks = [_text("Good easy run, nothing to flag today.")]
         client = _message_client(blocks, stop_reason="end_turn")
-        with patch("app.services.coach.service.AnthropicClient", return_value=client):
+        with patch("app.services.coach.turn.AnthropicClient", return_value=client):
             read = await get_or_generate_coach_report(db, str(activity.id))
 
         assert read.report.message.startswith("Good easy run")
@@ -183,7 +183,7 @@ class TestMessageServicePath:
     async def test_empty_message_yields_fallback(self, db, _message_prompt):
         activity = _seed_activity_with_metrics(db)
         blocks = [_text("   ")]  # whitespace only -> EmptyMessageError
-        with patch("app.services.coach.service.AnthropicClient", return_value=_message_client(blocks)):
+        with patch("app.services.coach.turn.AnthropicClient", return_value=_message_client(blocks)):
             read = await get_or_generate_coach_report(db, str(activity.id))
 
         stored = _stored(db, activity)
@@ -198,7 +198,7 @@ class TestMessageServicePath:
     async def test_refusal_yields_fallback(self, db, _message_prompt):
         activity = _seed_activity_with_metrics(db)
         blocks = [_text("I can't help with that.")]
-        with patch("app.services.coach.service.AnthropicClient",
+        with patch("app.services.coach.turn.AnthropicClient",
                    return_value=_message_client(blocks, stop_reason="refusal")):
             read = await get_or_generate_coach_report(db, str(activity.id))
 
@@ -214,7 +214,7 @@ class TestMessageServicePath:
         )
         fake = AsyncMock()
         fake.generate_coach_message = AsyncMock(side_effect=err)
-        with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+        with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
             read = await get_or_generate_coach_report(db, str(activity.id))
 
         stored = _stored(db, activity)
@@ -231,7 +231,7 @@ class TestMessageServicePath:
             _tail(headline="Concern", next_steps=[], risks=[], questions=[]),
         ]
         # Same overreaching output on every call (initial + retry), so it persists.
-        with patch("app.services.coach.service.AnthropicClient", return_value=_message_client(blocks)):
+        with patch("app.services.coach.turn.AnthropicClient", return_value=_message_client(blocks)):
             read = await get_or_generate_coach_report(db, str(activity.id))
 
         stored = _stored(db, activity)
@@ -246,7 +246,7 @@ class TestMessageServicePath:
         activity = _seed_activity_with_metrics(db)
         blocks = [_text("Good easy run, nothing to flag.")]  # no tail block -> degrades
         with caplog.at_level(logging.WARNING, logger="app.services.coach.service"):
-            with patch("app.services.coach.service.AnthropicClient", return_value=_message_client(blocks)):
+            with patch("app.services.coach.turn.AnthropicClient", return_value=_message_client(blocks)):
                 await get_or_generate_coach_report(db, str(activity.id))
         assert any("coach_tail_degraded" in r.message for r in caplog.records)
 
@@ -259,7 +259,7 @@ class TestMessageServicePath:
             _tail(headline="Solid run", next_steps=[], risks=[], questions=[]),
         ]
         with caplog.at_level(logging.WARNING, logger="app.services.coach.service"):
-            with patch("app.services.coach.service.AnthropicClient", return_value=_message_client(blocks)):
+            with patch("app.services.coach.turn.AnthropicClient", return_value=_message_client(blocks)):
                 await get_or_generate_coach_report(db, str(activity.id))
         assert not any("coach_tail_degraded" in r.message for r in caplog.records)
 
@@ -268,7 +268,7 @@ class TestMessageServicePath:
         """Fallbacks must not feed the learning loop (no digest stored)."""
         activity = _seed_activity_with_metrics(db)
         blocks = [_text("   ")]
-        with patch("app.services.coach.service.AnthropicClient", return_value=_message_client(blocks)):
+        with patch("app.services.coach.turn.AnthropicClient", return_value=_message_client(blocks)):
             await get_or_generate_coach_report(db, str(activity.id))
         stored = _stored(db, activity)
         assert stored.is_fallback is True
@@ -304,7 +304,7 @@ class TestTruncationEscalation:
         client.generate_coach_message = AsyncMock(
             side_effect=[truncated, _result(_good_blocks(), stop_reason="end_turn")]
         )
-        with patch("app.services.coach.service.AnthropicClient", return_value=client):
+        with patch("app.services.coach.turn.AnthropicClient", return_value=client):
             read = await get_or_generate_coach_report(db, str(activity.id))
 
         stored = _stored(db, activity)
@@ -330,7 +330,7 @@ class TestTruncationEscalation:
         client.generate_coach_message = AsyncMock(
             side_effect=[no_prose, _result(_good_blocks(), stop_reason="end_turn")]
         )
-        with patch("app.services.coach.service.AnthropicClient", return_value=client):
+        with patch("app.services.coach.turn.AnthropicClient", return_value=client):
             read = await get_or_generate_coach_report(db, str(activity.id))
 
         stored = _stored(db, activity)

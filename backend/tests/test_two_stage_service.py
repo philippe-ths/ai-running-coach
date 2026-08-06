@@ -112,7 +112,7 @@ def _stored(db, activity) -> CoachReport:
 
 async def test_opener_writes_light_state_no_learning_loop(db, _v2):
     activity = _seed(db)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))):
         result = await generate_opener(db, str(activity.id))
 
@@ -128,7 +128,7 @@ async def test_opener_writes_light_state_no_learning_loop(db, _v2):
 async def test_opener_schedule_or_safety_override(db, _v2):
     # The LLM judged NOT to deepen, but a red-flag flag forces a fuller turn.
     activity = _seed(db, flags=["illness_or_extreme_fatigue"])
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))):
         result = await generate_opener(db, str(activity.id))
     assert result.schedule_fuller_turn is True  # safety override wins
@@ -136,7 +136,7 @@ async def test_opener_schedule_or_safety_override(db, _v2):
 
 async def test_opener_unremarkable_does_not_schedule(db, _v2):
     activity = _seed(db)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=False)))):
         result = await generate_opener(db, str(activity.id))
     assert result.schedule_fuller_turn is False
@@ -145,7 +145,7 @@ async def test_opener_unremarkable_does_not_schedule(db, _v2):
 async def test_opener_idempotent_no_second_llm_call(db, _v2):
     activity = _seed(db)
     fake = _client(_result(_opener_blocks(schedule=True)))
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_opener(db, str(activity.id))
         await generate_opener(db, str(activity.id))  # idempotent re-entry
     # only one LLM call despite two generate_opener calls
@@ -158,12 +158,12 @@ async def test_opener_idempotent_no_second_llm_call(db, _v2):
 @pytest.mark.usefixtures("enable_durable_memory")  # asserts the M8/A2c loop fires
 async def test_fuller_updates_opener_row_in_place_preserving_opener(db, _v2):
     activity = _seed(db)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))):
         await generate_opener(db, str(activity.id))
     opener_row_id = _stored(db, activity).id
 
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         read = await generate_fuller(db, str(activity.id))
 
@@ -181,7 +181,7 @@ async def test_fuller_updates_opener_row_in_place_preserving_opener(db, _v2):
 async def test_fuller_inserts_when_no_opener(db, _v2):
     # On-demand / timer with no prior opener row: the fuller inserts a fresh row.
     activity = _seed(db)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         read = await generate_fuller(db, str(activity.id))
     assert read is not None
@@ -193,7 +193,7 @@ async def test_fuller_inserts_when_no_opener(db, _v2):
 async def test_fuller_cache_hit_skips_llm(db, _v2):
     activity = _seed(db)
     fake = _client(_result(_fuller_blocks()))
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
         await generate_fuller(db, str(activity.id))  # complete row cached
     assert fake.generate_coach_message.call_count == 1
@@ -202,7 +202,7 @@ async def test_fuller_cache_hit_skips_llm(db, _v2):
 async def test_fuller_force_regenerates(db, _v2):
     activity = _seed(db)
     fake = _client(_result(_fuller_blocks("First.")), _result(_fuller_blocks("Second take.")))
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
         await generate_fuller(db, str(activity.id), force=True)
     assert fake.generate_coach_message.call_count == 2
@@ -214,7 +214,7 @@ async def test_fuller_force_regenerates(db, _v2):
 
 async def test_get_or_generate_delegates_to_fuller_under_v2(db, _v2):
     activity = _seed(db)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         read = await get_or_generate_coach_report(db, str(activity.id))
     assert read is not None
@@ -242,7 +242,7 @@ async def test_opener_medical_overreach_stays_opener_only_and_recovers(db, _v2):
     # an OPENER-shaped fallback (opener-only), so the safety-forced fuller can still
     # regenerate — not a fuller-shaped fallback that the cadence can never replace.
     activity = _seed(db, flags=["illness_or_extreme_fatigue"])
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_overreach_opener_blocks()),
                                      _result(_overreach_opener_blocks()))):
         opener = await generate_opener(db, str(activity.id))
@@ -256,7 +256,7 @@ async def test_opener_medical_overreach_stays_opener_only_and_recovers(db, _v2):
 
     # The safety-forced fuller turn must now regenerate a real (non-fallback) turn,
     # not cache-hit the stuck fallback.
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         await generate_fuller(db, str(activity.id))
     row2 = _stored(db, activity)
@@ -268,15 +268,15 @@ async def test_fuller_force_preserves_opener_prose(db, _v2):
     # MEDIUM regression: force-regenerating a complete two-line row must preserve
     # the opener half of the thread.
     activity = _seed(db)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))):
         await generate_opener(db, str(activity.id))
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         await generate_fuller(db, str(activity.id))
     opener_prose = _stored(db, activity).report["opener_message"]
 
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks("Second take, drift held.")))):
         await generate_fuller(db, str(activity.id), force=True)
     row = _stored(db, activity)
@@ -288,7 +288,7 @@ async def test_fallback_opener_schedules_recovery_fuller(db, _v2):
     # MEDIUM/LOW regression: an opener LLM failure (fallback) on an UNREMARKABLE run
     # still schedules a fuller turn so the substantive coaching can recover.
     activity = _seed(db)  # no red flag
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result([], stop_reason="refusal"))):
         opener = await generate_opener(db, str(activity.id))
     assert opener.is_fallback is True
@@ -314,7 +314,7 @@ async def test_fuller_retries_once_on_transient_empty_prose(db, _v2):
     # into a real turn instead of a silently-dropped fallback.
     activity = _seed(db)
     fake = _client(_result(_empty_prose_blocks()), _result(_fuller_blocks()))
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         read = await generate_fuller(db, str(activity.id))
     assert read is not None
     assert fake.generate_coach_message.call_count == 2  # retried once
@@ -330,12 +330,12 @@ async def test_fuller_persistent_fallback_stays_opener_only_and_recovers(db, _v2
     # reply/force/timer paths can still produce the substantive turn. Mirrors
     # test_opener_medical_overreach_stays_opener_only_and_recovers for the fuller side.
     activity = _seed(db)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_opener_blocks(schedule=True)))):
         await generate_opener(db, str(activity.id))
     opener_row_id = _stored(db, activity).id
 
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_empty_prose_blocks()),
                                      _result(_empty_prose_blocks()))):
         read = await generate_fuller(db, str(activity.id))
@@ -351,7 +351,7 @@ async def test_fuller_persistent_fallback_stays_opener_only_and_recovers(db, _v2
 
     # The exchange is still open: a subsequent fuller turn regenerates a real report
     # (it does NOT cache-hit the stuck fallback) and preserves the opener half.
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))):
         await generate_fuller(db, str(activity.id))
     row2 = _stored(db, activity)
@@ -371,7 +371,7 @@ async def test_force_regen_worker_death_preserves_prior_report(db, _v2):
     # prior row is held until the new content commits, so an interrupted
     # regeneration leaves the prior report fully intact.
     activity = _seed(db)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks("Original report.")))):
         await generate_fuller(db, str(activity.id))
     original = _stored(db, activity)
@@ -380,7 +380,7 @@ async def test_force_regen_worker_death_preserves_prior_report(db, _v2):
 
     # The worker is killed during the regeneration LLM step: _generate_message
     # never returns (an uncaught interruption, not a handled fallback).
-    with patch("app.services.coach.service.AnthropicClient"), \
+    with patch("app.services.coach.turn.AnthropicClient"), \
          patch("app.services.coach.service._generate_message",
                side_effect=RuntimeError("worker killed mid-regen")):
         with pytest.raises(RuntimeError):
@@ -402,7 +402,7 @@ async def test_force_regen_fallback_preserves_prior_good_report(db, _v2):
     # prose -> a fallback) must KEEP the runner's prior complete, non-fallback report
     # rather than overwrite it with "analysis unavailable".
     activity = _seed(db)
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks("Good report.")))):
         await generate_fuller(db, str(activity.id))
     good = _stored(db, activity)
@@ -410,7 +410,7 @@ async def test_force_regen_fallback_preserves_prior_good_report(db, _v2):
     good_id = good.id
 
     # Force-regenerate, but BOTH fuller attempts return no prose -> a fallback.
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_empty_prose_blocks()),
                                      _result(_empty_prose_blocks()))):
         read = await generate_fuller(db, str(activity.id), force=True)
@@ -428,7 +428,7 @@ async def test_generate_fuller_noops_under_single_shot_prompt(db, _v2, monkeypat
     # persisted — so a stale scheduled fuller cannot leak a wrong-path report.
     activity = _seed(db)
     monkeypatch.setattr(_v2, "COACH_PROMPT_ID", "coach_report_v10")
-    with patch("app.services.coach.service.AnthropicClient") as client_cls:
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls:
         read = await generate_fuller(db, str(activity.id))
     assert read is None
     client_cls.assert_not_called()
@@ -470,7 +470,7 @@ async def test_truncated_retry_does_not_clobber_complete_first_attempt(db, _v2):
         # #282 re-attempt of the truncated retry — also truncates here
         _result([_text("At a sustained hard")], stop_reason="max_tokens"),
     )
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     # first attempt + policy retry + the #282 re-attempt of the truncated retry
@@ -493,7 +493,7 @@ async def test_adopted_retry_keeps_raw_response_in_sync(db, _v2):
         # the retry is complete AND fixes rule 1 (carries a question)
         _result(_fuller_blocks(fixed), stop_reason="end_turn"),
     )
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     row = _stored(db, activity)
@@ -524,7 +524,7 @@ async def test_truncated_policy_retry_is_reattempted_once_then_adopted(db, _v2):
         # #282 re-attempt of the truncated retry: complete AND fixes rule 1
         _result(_fuller_blocks(fixed), stop_reason="end_turn"),
     )
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     # first attempt + truncated policy retry + the single #282 re-attempt
@@ -549,7 +549,7 @@ async def test_complete_policy_retry_is_not_reattempted(db, _v2):
         # the policy retry completes cleanly (end_turn) and carries a question
         _result(_fuller_blocks(fixed), stop_reason="end_turn"),
     )
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     # first attempt + policy retry only — the completed retry is not re-attempted
@@ -566,7 +566,7 @@ async def test_no_policy_retry_means_no_reattempt(db, _v2):
     activity = _seed(db)
     fake = _client(_result(_fuller_blocks("Clean complete first attempt."),
                            stop_reason="end_turn"))
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     assert fake.generate_coach_message.call_count == 1

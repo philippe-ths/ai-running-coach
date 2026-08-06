@@ -79,7 +79,7 @@ class TestEndpointDisplaySafe:
         _insert_report(db, activity.id, "coach_message_v2", "2.0", message="prior report body")
 
         # AnthropicClient must never be constructed on the display path (no regen, no 504).
-        with patch("app.services.coach.service.AnthropicClient",
+        with patch("app.services.coach.turn.AnthropicClient",
                    side_effect=AssertionError("must not call the LLM on the display path")):
             res = client.get(f"/api/activities/{activity.id}/coach-report?generate=true")
         assert res.status_code == 200
@@ -162,7 +162,7 @@ class TestBlockAwareDisplayFallback:
         member = _add_block_member(db, primary)
         _insert_report(db, primary.id, "coach_message_v3", "2.0", message="the session report")
 
-        with patch("app.services.coach.service.AnthropicClient",
+        with patch("app.services.coach.turn.AnthropicClient",
                    side_effect=AssertionError("must not call the LLM on the display path")):
             res = client.get(f"/api/activities/{member.id}/coach-report?generate=true")
         assert res.status_code == 200

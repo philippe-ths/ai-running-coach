@@ -15,6 +15,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.services.coach.llm import Usage
+
 from app.models import Activity, DerivedMetric, StravaAccount, User, UserProfile
 from app.models.coach_report import CoachReport
 from app.services.coach.service import _strip_code_fences, get_or_generate_coach_report
@@ -80,8 +82,10 @@ async def test_fence_no_close_recovers_to_non_fallback(db):
         '"next_steps":[{"action":"Keep going","details":"Stay easy","why":"Build base"}]}'
     )
     fake = AsyncMock()
-    fake.generate_json = AsyncMock(return_value=fenced)
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    fake.generate_json_with_usage = AsyncMock(
+        return_value=(fenced, Usage())
+    )
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await get_or_generate_coach_report(db, str(activity.id))
     stored = db.query(CoachReport).filter(CoachReport.activity_id == activity.id).first()
     assert stored.is_fallback is False

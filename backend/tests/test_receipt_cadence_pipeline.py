@@ -142,7 +142,7 @@ async def test_receipt_never_calls_llm(db, configured, notifier):
     # The whole point: no LLM on the instant path, so it cannot fall back.
     activity = _seed(db)
     block = _block_of(db, activity)
-    with patch("app.services.coach.service.AnthropicClient") as client_cls:
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls:
         await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
     client_cls.assert_not_called()
 
@@ -157,7 +157,7 @@ async def test_block_complete_fires_full_report_not_opener(db, configured, notif
     await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
     assert len(notifier.sent) == 1
 
-    with patch("app.services.coach.service.AnthropicClient",
+    with patch("app.services.coach.turn.AnthropicClient",
                return_value=_client(_result(_fuller_blocks()))), \
          patch.object(opener_fuller.OpenerFullerCadence, "run_opener_stage") as opener:
         result = await process_block_complete(
@@ -192,7 +192,7 @@ async def test_block_complete_superseded_by_newer_member_noops(db, configured, n
     block = _block_of(db, first)
 
     # the FIRST activity's check is now stale (later is the last member) -> no-op
-    with patch("app.services.coach.service.AnthropicClient") as client_cls:
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls:
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(first.id), notifier=notifier
         )
@@ -341,7 +341,7 @@ async def test_block_complete_inert_after_rollback_to_single_shot(
     activity = _seed(db)
     block = _block_of(db, activity)
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", "coach_report_v10")  # single-shot
-    with patch("app.services.coach.service.AnthropicClient") as client_cls, \
+    with patch("app.services.coach.turn.AnthropicClient") as client_cls, \
          patch.object(opener_fuller.OpenerFullerCadence, "run_opener_stage") as opener:
         result = await process_block_complete(
             db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=notifier

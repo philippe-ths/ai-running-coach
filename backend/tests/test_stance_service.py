@@ -130,7 +130,7 @@ async def test_fuller_threads_declared_stance_into_pack(db, monkeypatch):
     db.commit()
 
     fake = _fake_client()
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     pack = _pack_from_call(fake)
@@ -155,7 +155,7 @@ async def test_opener_threads_declared_stance_into_pack(db, monkeypatch):
     db.commit()
 
     fake = _fake_client()
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_opener(db, str(activity.id))
 
     pack = _pack_from_call(fake)
@@ -170,7 +170,7 @@ async def test_undeclared_stance_uses_default_school_and_balanced_under_v5(db, m
     activity = _seed(db)  # no CoachingRelationship row
 
     fake = _fake_client()
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     pack = _pack_from_call(fake)
@@ -191,7 +191,7 @@ async def test_under_v4_a_declared_stance_is_inert(db, monkeypatch):
     db.commit()
 
     fake = _fake_client()
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         await generate_fuller(db, str(activity.id))
 
     pack = _pack_from_call(fake)

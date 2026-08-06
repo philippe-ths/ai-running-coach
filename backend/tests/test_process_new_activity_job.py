@@ -6,6 +6,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.services.coach.llm import Usage
+
 from app.core.config import settings
 from app.jobs.process_new_activity import process_new_activity
 from app.models import Activity, StravaAccount, User, UserProfile
@@ -122,9 +124,11 @@ async def test_pipeline_dedupes_second_run(
     _seed_strava(strava_adapter)
 
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value=_valid_llm_json())
+    fake_client.generate_json_with_usage = AsyncMock(
+        return_value=(_valid_llm_json(), Usage())
+    )
 
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake_client):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake_client):
         await process_new_activity(
             db=db, account=account, strava_activity_id=9001,
             strava_port=strava_adapter, notifier=notifier,
@@ -147,9 +151,11 @@ async def test_pipeline_skips_notification_when_llm_fallback(
     _seed_strava(strava_adapter)
 
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value="invalid json")
+    fake_client.generate_json_with_usage = AsyncMock(
+        return_value=("invalid json", Usage())
+    )
 
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake_client):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake_client):
         result = await process_new_activity(
             db=db, account=account, strava_activity_id=9001,
             strava_port=strava_adapter, notifier=notifier,
@@ -171,9 +177,11 @@ async def test_pipeline_sends_telegram_on_happy_path(
     _seed_strava(strava_adapter)
 
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value=_valid_llm_json())
+    fake_client.generate_json_with_usage = AsyncMock(
+        return_value=(_valid_llm_json(), Usage())
+    )
 
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake_client):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake_client):
         result = await process_new_activity(
             db=db, account=account, strava_activity_id=9001,
             strava_port=strava_adapter, notifier=notifier,
@@ -209,9 +217,11 @@ async def test_pipeline_send_failure_is_non_fatal_and_leaves_sentinel_null(
             raise OSError("Network is unreachable")
 
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value=_valid_llm_json())
+    fake_client.generate_json_with_usage = AsyncMock(
+        return_value=(_valid_llm_json(), Usage())
+    )
 
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake_client):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake_client):
         # Must not raise: a transport failure is swallowed and logged.
         result = await process_new_activity(
             db=db, account=account, strava_activity_id=9001,
@@ -245,8 +255,10 @@ async def test_pipeline_fallback_gate_uses_active_version_not_stale_row(
 
     # First run produces a fallback report (invalid JSON); notification skipped.
     bad_client = AsyncMock()
-    bad_client.generate_json = AsyncMock(return_value="invalid json")
-    with patch("app.services.coach.service.AnthropicClient", return_value=bad_client):
+    bad_client.generate_json_with_usage = AsyncMock(
+        return_value=("invalid json", Usage())
+    )
+    with patch("app.services.coach.turn.AnthropicClient", return_value=bad_client):
         first = await process_new_activity(
             db=db, account=account, strava_activity_id=9001,
             strava_port=strava_adapter, notifier=notifier,
@@ -263,8 +275,10 @@ async def test_pipeline_fallback_gate_uses_active_version_not_stale_row(
 
     # Second run generates a fresh, good active-version report.
     good_client = AsyncMock()
-    good_client.generate_json = AsyncMock(return_value=_valid_llm_json())
-    with patch("app.services.coach.service.AnthropicClient", return_value=good_client):
+    good_client.generate_json_with_usage = AsyncMock(
+        return_value=(_valid_llm_json(), Usage())
+    )
+    with patch("app.services.coach.turn.AnthropicClient", return_value=good_client):
         second = await process_new_activity(
             db=db, account=account, strava_activity_id=9001,
             strava_port=strava_adapter, notifier=notifier,
@@ -287,9 +301,11 @@ async def test_pipeline_skips_when_channel_unset(
     _seed_strava(strava_adapter)
 
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value=_valid_llm_json())
+    fake_client.generate_json_with_usage = AsyncMock(
+        return_value=(_valid_llm_json(), Usage())
+    )
 
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake_client):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake_client):
         result = await process_new_activity(
             db=db, account=account, strava_activity_id=9001,
             strava_port=strava_adapter, notifier=notifier,

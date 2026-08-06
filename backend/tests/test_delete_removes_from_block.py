@@ -204,7 +204,7 @@ def test_block_complete_opener_skips_empty_block(db):
 
         try:
             _settings.COACH_PROMPT_ID = "coach_message_v2"
-            with patch("app.services.coach.service.AnthropicClient") as client_cls:
+            with patch("app.services.coach.turn.AnthropicClient") as client_cls:
                 result = asyncio.run(
                     process_block_complete(
                         db=db,

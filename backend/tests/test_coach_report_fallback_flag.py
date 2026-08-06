@@ -8,6 +8,8 @@ import anthropic
 import httpx
 import pytest
 
+from app.services.coach.llm import Usage
+
 from app.models import (
     Activity,
     DerivedMetric,
@@ -90,10 +92,12 @@ async def test_is_fallback_true_when_llm_returns_invalid_json(db, monkeypatch):
     activity = _seed_activity_with_metrics(db)
 
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value="not valid json at all")
+    fake_client.generate_json_with_usage = AsyncMock(
+        return_value=("not valid json at all", Usage())
+    )
 
     with patch(
-        "app.services.coach.service.AnthropicClient", return_value=fake_client
+        "app.services.coach.turn.AnthropicClient", return_value=fake_client
     ):
         report = await get_or_generate_coach_report(db, str(activity.id))
 
@@ -116,10 +120,12 @@ async def test_is_fallback_false_on_happy_path(db):
         '}'
     )
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value=valid_json)
+    fake_client.generate_json_with_usage = AsyncMock(
+        return_value=(valid_json, Usage())
+    )
 
     with patch(
-        "app.services.coach.service.AnthropicClient", return_value=fake_client
+        "app.services.coach.turn.AnthropicClient", return_value=fake_client
     ):
         report = await get_or_generate_coach_report(db, str(activity.id))
 
@@ -141,10 +147,10 @@ async def test_is_fallback_true_when_llm_transport_error_propagates(db):
         request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     )
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(side_effect=timeout_err)
+    fake_client.generate_json_with_usage = AsyncMock(side_effect=timeout_err)
 
     with patch(
-        "app.services.coach.service.AnthropicClient", return_value=fake_client
+        "app.services.coach.turn.AnthropicClient", return_value=fake_client
     ):
         report = await get_or_generate_coach_report(db, str(activity.id))
 

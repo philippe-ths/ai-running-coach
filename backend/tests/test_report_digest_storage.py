@@ -9,6 +9,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.services.coach.llm import Usage
+
 from app.models import Activity, DerivedMetric, User, UserProfile
 from app.models.coach_report import CoachReport
 from app.services.coach.service import get_or_generate_coach_report
@@ -60,9 +62,11 @@ async def test_non_fallback_report_stores_digest(db):
         '"next_steps":[{"action":"Keep going","details":"Stay easy","why":"Build base"}]}'
     )
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value=valid_json)
+    fake_client.generate_json_with_usage = AsyncMock(
+        return_value=(valid_json, Usage())
+    )
 
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake_client):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake_client):
         report = await get_or_generate_coach_report(db, str(activity.id))
 
     assert report is not None
@@ -80,9 +84,11 @@ async def test_fallback_report_stores_no_digest(db):
     activity = _seed_activity_with_metrics(db)
 
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value="not valid json at all")
+    fake_client.generate_json_with_usage = AsyncMock(
+        return_value=("not valid json at all", Usage())
+    )
 
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake_client):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake_client):
         report = await get_or_generate_coach_report(db, str(activity.id))
 
     assert report is not None

@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+
+from app.services.coach.llm import Usage
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
@@ -91,8 +93,10 @@ def _insert_report(db, activity_id, prompt_id, schema_version):
 
 def _mock_llm():
     fake = AsyncMock()
-    fake.generate_json = AsyncMock(return_value=_HAPPY_JSON)
-    return patch("app.services.coach.service.AnthropicClient", return_value=fake), fake
+    fake.generate_json_with_usage = AsyncMock(
+        return_value=(_HAPPY_JSON, Usage())
+    )
+    return patch("app.services.coach.turn.AnthropicClient", return_value=fake), fake
 
 
 # --- model / schema -------------------------------------------------------
@@ -134,7 +138,7 @@ async def test_cache_hit_same_version_does_not_call_llm(db):
     with ctx:
         result = await get_or_generate_coach_report(db, str(activity.id))
     assert result is not None
-    fake.generate_json.assert_not_called()
+    fake.generate_json_with_usage.assert_not_called()
     # Returned the cached content, not a fresh generation.
     assert result.report.key_takeaways[0].text == "Cached takeaway one."
 
@@ -146,7 +150,7 @@ async def test_version_bump_regenerates_and_retains_old_version(db):
     ctx, fake = _mock_llm()
     with ctx:
         result = await get_or_generate_coach_report(db, str(activity.id))
-    fake.generate_json.assert_called_once()
+    fake.generate_json_with_usage.assert_called_once()
     # New active-version row exists alongside the retained old-version row.
     rows = db.query(CoachReport).filter(CoachReport.activity_id == activity.id).all()
     versions = {r.schema_version for r in rows}
@@ -169,7 +173,7 @@ async def test_force_regenerates_nondestructively_archiving_prior(db):
     ctx, fake = _mock_llm()
     with ctx:
         result = await get_or_generate_coach_report(db, str(activity.id), force=True)
-    fake.generate_json.assert_called_once()
+    fake.generate_json_with_usage.assert_called_once()
     # Prior (1.0) version survives the force.
     assert db.query(CoachReport).filter(CoachReport.id == old.id).first() is not None
 
@@ -223,7 +227,7 @@ async def test_force_regen_worker_death_preserves_prior_report(db):
 
     # The worker is killed during the regeneration LLM step: _generate_structured
     # never returns (an uncaught interruption, not a handled fallback).
-    with patch("app.services.coach.service.AnthropicClient"), \
+    with patch("app.services.coach.turn.AnthropicClient"), \
          patch("app.services.coach.service._generate_structured",
                side_effect=RuntimeError("worker killed mid-regen")):
         with pytest.raises(RuntimeError):
@@ -248,8 +252,10 @@ async def test_force_regen_fallback_preserves_prior_good_report(db):
 
     # generate_json returns unparseable content -> _generate_structured falls back.
     fake = AsyncMock()
-    fake.generate_json = AsyncMock(return_value="not valid json")
-    with patch("app.services.coach.service.AnthropicClient", return_value=fake):
+    fake.generate_json_with_usage = AsyncMock(
+        return_value=("not valid json", Usage())
+    )
+    with patch("app.services.coach.turn.AnthropicClient", return_value=fake):
         result = await get_or_generate_coach_report(db, str(activity.id), force=True)
 
     survived = db.query(CoachReport).filter(CoachReport.id == good_id).first()
