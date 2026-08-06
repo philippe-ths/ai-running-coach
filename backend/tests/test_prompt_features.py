@@ -140,6 +140,7 @@ EXPECTED_CAPABILITIES = {
     # ADR 0026 Slice 1 — the grouped-pack variant of lean_v1: full capability parity
     # (same pack CONTENT), differing only in the pack SHAPE it is served.
     "coach_message_lean_grouped_v1": {
+        F.GROUPED_PACK,
         F.TWO_STAGE,
         F.VOICE,
         F.CORPUS,
@@ -160,6 +161,7 @@ EXPECTED_CAPABILITIES = {
     # every other grouped_v1 capability, so it is deliberately NOT a superset of grouped_v1
     # (the overlap swamps + the training-history boundary move); it carries 11 features.
     "coach_message_lean_grouped_v2": {
+        F.GROUPED_PACK,
         F.TWO_STAGE,
         F.VOICE,
         F.CORPUS,
@@ -177,6 +179,7 @@ EXPECTED_CAPABILITIES = {
     # calibration) + INTENSITY_MIX (recent half). It keeps every other grouped_v2
     # capability, so it is an alternative shape (not a superset); it carries 12 features.
     "coach_message_lean_grouped_v3": {
+        F.GROUPED_PACK,
         F.TWO_STAGE,
         F.VOICE,
         F.CORPUS,
@@ -194,6 +197,7 @@ EXPECTED_CAPABILITIES = {
     # presentation-only leaf reframing of the outgoing LLM pack view (adds no section). It
     # keeps every grouped_v3 capability; it carries 13 features.
     "coach_message_lean_grouped_v4": {
+        F.GROUPED_PACK,
         F.TWO_STAGE,
         F.VOICE,
         F.CORPUS,
@@ -211,6 +215,7 @@ EXPECTED_CAPABILITIES = {
     # ADR 0026 Slice 5 (#682) — grouped_v5 = grouped_v4 + SALIENCE_DROPPED (a view-only
     # section removal), the flip target. It carries 14 features.
     "coach_message_lean_grouped_v5": {
+        F.GROUPED_PACK,
         F.TWO_STAGE,
         F.VOICE,
         F.CORPUS,
@@ -231,6 +236,7 @@ EXPECTED_CAPABILITIES = {
     # capability (identical feature set to grouped_v5, so its pack is byte-identical);
     # only the fuller system-prompt TEXT differs. Ships INERT (flip target: v5 -> v6).
     "coach_message_lean_grouped_v6": {
+        F.GROUPED_PACK,
         F.TWO_STAGE,
         F.VOICE,
         F.CORPUS,
@@ -251,6 +257,7 @@ EXPECTED_CAPABILITIES = {
     # bullet. NO new capability (identical feature set to grouped_v5/v6, so its pack is
     # byte-identical); only the fuller system-prompt TEXT differs. Ships INERT (v5 -> v7).
     "coach_message_lean_grouped_v7": {
+        F.GROUPED_PACK,
         F.TWO_STAGE,
         F.VOICE,
         F.CORPUS,
@@ -271,6 +278,7 @@ EXPECTED_CAPABILITIES = {
     # capability rather than isolate a prose change, so its pack is NOT byte-identical to
     # grouped_v5's -- it gains the nested `profile.body` signal. Ships INERT (v7 -> v8).
     "coach_message_lean_grouped_v8": {
+        F.GROUPED_PACK,
         F.TWO_STAGE,
         F.VOICE,
         F.CORPUS,
@@ -507,6 +515,10 @@ def test_fullest_message_prompt_is_the_max_capability_id():
         F.READINESS, F.RECENT_WEEKS, F.TRAINING_HISTORY_2WK,
         F.INTENSITY_READ, F.INTENSITY_MIX, F.METRICS_COACH_FRAMED, F.SALIENCE_DROPPED,
         F.PACK_COACH_VIEW,
+        # #800 relocated the grouped-serialization flag into the manifest; like the three
+        # view flags above it is presentation-only (the same sections, re-nested), so it
+        # is non-additive.
+        F.GROUPED_PACK,
     }
     # A third category (#742): ADDITIVE (it adds a pack section, so it is not an
     # alternative) but carried only on the GROUPED lineage, which swapped five original
@@ -518,9 +530,18 @@ def test_fullest_message_prompt_is_the_max_capability_id():
     max_additive = max(len(set(f) - ALTERNATIVE_FEATURES) for f in PROMPT_FEATURES.values())
     assert len(set(PROMPT_FEATURES[fullest]) - ALTERNATIVE_FEATURES) == max_additive
     every_feature = set().union(*PROMPT_FEATURES.values())
-    assert set(PROMPT_FEATURES[fullest]) == (
+    # Compared ADDITIVE-side only, which is what the claim actually is: `fullest` carries
+    # every additive feature any prompt carries. It may itself carry non-additive flags —
+    # since #800 relocated GROUPED_PACK into the manifest, `fullest` (a grouped id) does.
+    assert set(PROMPT_FEATURES[fullest]) - ALTERNATIVE_FEATURES == (
         every_feature - ALTERNATIVE_FEATURES - GROUPED_ONLY_ADDITIVE
     )
+    # ...and pin exactly WHICH non-additive flags it carries, so that relaxation cannot
+    # quietly widen. Before #800 `fullest` carried none and strict equality above said
+    # this implicitly; GROUPED_PACK is the one and only flag it may now carry, and a
+    # `fullest` that picked up (say) SALIENCE_DROPPED would be a real change of what the
+    # structural pack guards are built on top of.
+    assert set(PROMPT_FEATURES[fullest]) & ALTERNATIVE_FEATURES == {F.GROUPED_PACK}
     # Every grouped-only additive feature really is absent from `fullest` — otherwise the
     # exemption above is stale and silently widening what the guards skip.
     assert GROUPED_ONLY_ADDITIVE.isdisjoint(PROMPT_FEATURES[fullest])

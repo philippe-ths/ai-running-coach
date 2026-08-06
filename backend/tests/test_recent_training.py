@@ -158,7 +158,7 @@ def test_recent_session_carries_interval_source_when_lap_recorded():
 def test_serialization_drops_null_interval_source_keeps_recorded_laps():
     """#661: the null-drop trim omits a null `source` (costs no tokens) but keeps a
     real "recorded_laps" marker so the coach can read it."""
-    from app.schemas.coach_context import _drop_recent_training_dedup
+    from app.services.coach.signal_registry import drop_recent_training_dedup
 
     rt = {
         "last_7d": {
@@ -168,7 +168,7 @@ def test_serialization_drops_null_interval_source_keeps_recorded_laps():
             ]
         }
     }
-    _drop_recent_training_dedup(rt, {})
+    drop_recent_training_dedup(rt, {})
     acts = rt["last_7d"]["activities"]
     assert acts[0]["source"] == "recorded_laps"
     assert "source" not in acts[1]  # null source dropped

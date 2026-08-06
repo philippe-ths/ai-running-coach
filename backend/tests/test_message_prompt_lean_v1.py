@@ -78,6 +78,10 @@ def test_lean_v1_has_full_capability_parity_with_v14():
         _F.READINESS, _F.RECENT_WEEKS, _F.TRAINING_HISTORY_2WK,
         _F.INTENSITY_READ, _F.INTENSITY_MIX, _F.METRICS_COACH_FRAMED, _F.SALIENCE_DROPPED,
         _F.PACK_COACH_VIEW,
+        # #800 relocated the grouped-serialization flag into the manifest. Like the
+        # three view flags above it is presentation-only (the same sections, re-nested),
+        # so lean_v1 -- which serves the flat pack -- does not carry it.
+        _F.GROUPED_PACK,
         # #742: BODY is additive but grouped-lineage-only (grouped_v8), so lean_v1 -- which
         # predates it -- does not carry it. The parity claim above is with v14, which is
         # unaffected; see GROUPED_ONLY_ADDITIVE in test_prompt_features.

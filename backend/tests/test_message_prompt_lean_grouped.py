@@ -42,8 +42,17 @@ def test_grouped_registered_in_message_family_and_flagged_grouped():
 
 def test_grouped_has_full_capability_parity_with_lean_v1():
     """Same gated sections -> identical pack CONTENT. The A/B isolates the pack SHAPE
-    (+ the orientation), exactly as lean_v1 isolates the prose vs v14."""
-    assert features_for(GROUPED) == features_for(LEAN)
+    (+ the orientation), exactly as lean_v1 isolates the prose vs v14.
+
+    #800 moved the grouped-serialization flag out of a hand-maintained frozenset in
+    prompts.py and into the manifest as `GROUPED_PACK`. It is the SHAPE this A/B
+    isolates, so excluding it is what makes the parity claim say what it means: every
+    CONTENT-bearing capability is identical."""
+    from app.services.coach.prompt_features import PromptFeature as _F
+
+    assert features_for(GROUPED) - {_F.GROUPED_PACK} == features_for(LEAN)
+    assert _F.GROUPED_PACK in features_for(GROUPED)
+    assert _F.GROUPED_PACK not in features_for(LEAN)
 
 
 def test_grouped_is_lean_v1_plus_orientation_and_continuity_repath_only():

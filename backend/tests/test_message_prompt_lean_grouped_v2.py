@@ -45,7 +45,10 @@ def test_grouped_v2_swaps_the_redefined_features():
     expected = (
         features_for(LEAN)
         - {F.TRAINING_LOAD, F.VOLUME, F.RECENT_TRAINING, F.TRAINING_HISTORY}
-    ) | {F.READINESS, F.RECENT_WEEKS, F.TRAINING_HISTORY_2WK}
+        # #800: GROUPED_PACK is the serialization SHAPE flag every grouped prompt
+        # carries (relocated from a hand-maintained set in prompts.py into the
+        # manifest); it is not one of the redefined CONTENT capabilities.
+    ) | {F.READINESS, F.RECENT_WEEKS, F.TRAINING_HISTORY_2WK, F.GROUPED_PACK}
     assert features_for(GROUPED2) == expected
 
 
