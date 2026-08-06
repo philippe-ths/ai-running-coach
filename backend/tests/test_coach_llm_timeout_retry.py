@@ -477,3 +477,131 @@ async def test_stream_chat_turn_propagates_429_after_retries_exhausted():
                 system="s", messages=[{"role": "user", "content": "hi"}]
             ):
                 pass
+
+
+# ---------------------------------------------------------------------------
+# ONE retry policy across all four client methods (#801)
+#
+# The ladder was written four times, byte-identical apart from its log event,
+# and the streaming copy had drifted: it carried the 429 rung only, so a
+# connection drop or a 5xx on a chat turn degraded on the FIRST failure while
+# the identical failure on a report was retried. `RetryLadder` is now the one
+# policy; these pin the rungs the streaming path gained, and the guard that
+# keeps it from re-issuing a request whose tokens have already been sent.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_turn_retries_transient_drop_before_first_token():
+    """A connection drop at admission is a transport blip, not an answer. The
+    shared ladder retries it exactly as the report path does."""
+    client = AnthropicClient(api_key="k", model="m")
+    final = _make_ok_message_result()
+    client.client.messages.stream = _make_chat_streaming_ctx(
+        [anthropic.APIConnectionError(request=httpx.Request("POST", "https://x")),
+         (["Hi"], final)]
+    )
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        deltas = [
+            d async for d in client.stream_chat_turn(
+                system="s", messages=[{"role": "user", "content": "hi"}]
+            )
+        ]
+
+    assert "".join(d.text for d in deltas if d.text) == "Hi"
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_turn_retries_5xx_before_first_token():
+    client = AnthropicClient(api_key="k", model="m")
+    final = _make_ok_message_result()
+    client.client.messages.stream = _make_chat_streaming_ctx(
+        [_make_status_error(503), (["Hi"], final)]
+    )
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        deltas = [
+            d async for d in client.stream_chat_turn(
+                system="s", messages=[{"role": "user", "content": "hi"}]
+            )
+        ]
+
+    assert "".join(d.text for d in deltas if d.text) == "Hi"
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_turn_does_not_retry_4xx():
+    """A 4xx is a caller bug and will not get better; it propagates at once."""
+    client = AnthropicClient(api_key="k", model="m")
+    client.client.messages.stream = _make_chat_streaming_ctx([_make_status_error(400)])
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        with pytest.raises(anthropic.APIStatusError):
+            async for _ in client.stream_chat_turn(
+                system="s", messages=[{"role": "user", "content": "hi"}]
+            ):
+                pass
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_turn_never_reissues_once_a_token_has_streamed():
+    """The load-bearing streaming guard: a failure AFTER the first token must
+    propagate, because the caller has already buffered output and a re-run would
+    duplicate the reply. This holds for every rung, not just the 429."""
+    client = AnthropicClient(api_key="k", model="m")
+    calls = {"n": 0}
+
+    @asynccontextmanager
+    async def _ctx(*args, **kwargs):
+        calls["n"] += 1
+
+        async def _text_stream():
+            yield "partial"
+            raise anthropic.APIConnectionError(request=httpx.Request("POST", "https://x"))
+
+        stream = MagicMock()
+        stream.text_stream = _text_stream()
+        stream.get_final_message = AsyncMock(return_value=_make_ok_message_result())
+        yield stream
+
+    client.client.messages.stream = _ctx
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        with pytest.raises(anthropic.APIConnectionError):
+            async for _ in client.stream_chat_turn(
+                system="s", messages=[{"role": "user", "content": "hi"}]
+            ):
+                pass
+
+    assert calls["n"] == 1  # never re-issued
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_turn_reports_cache_token_buckets():
+    """#786: the chat prefix is cached, so the cache buckets must ride the
+    result. Without them the per-user budget counter under-reports every
+    conversational turn by the whole cached prefix."""
+    client = AnthropicClient(api_key="k", model="m")
+    final = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="hi")],
+        stop_reason="end_turn",
+        usage=SimpleNamespace(
+            input_tokens=11,
+            output_tokens=22,
+            cache_read_input_tokens=3333,
+            cache_creation_input_tokens=44,
+        ),
+    )
+    client.client.messages.stream = _make_chat_streaming_ctx([(["hi"], final)])
+
+    deltas = [
+        d async for d in client.stream_chat_turn(
+            system="s", messages=[{"role": "user", "content": "hi"}]
+        )
+    ]
+    result = [d for d in deltas if d.final is not None][-1].final
+    assert result.input_tokens == 11
+    assert result.output_tokens == 22
+    assert result.cache_read_input_tokens == 3333
+    assert result.cache_creation_input_tokens == 44
