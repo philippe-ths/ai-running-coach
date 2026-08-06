@@ -1,37 +1,41 @@
 from datetime import date
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 
-from app.core.clerk_auth import require_current_user
-from app.db.session import get_db
-from app.models import StravaAccount, StravaImport, User
+from app.api.deps import DbSession, LinkedStravaAccount
+from app.models import StravaImport
 from app.schemas import StravaImportCreate, StravaImportRead
 
 router = APIRouter()
 
 
-def _resolve_account(db: Session, user: User) -> StravaAccount:
-    # P2.1: the authenticated user's own Strava account, never the first found.
-    account = (
-        db.query(StravaAccount)
-        .filter(StravaAccount.user_id == user.id)
-        .first()
-    )
-    if not account:
+def validated_import_request(payload: StravaImportCreate) -> StravaImportCreate:
+    """Reject a future `since_date` (400).
+
+    A dependency rather than a body check, and declared BEFORE the account
+    dependency, because the order is observable: a caller with no linked Strava
+    account who posts a future date has always been told about the date (400),
+    not about the account (404). Dependencies resolve in declaration order, so
+    the precedence is preserved by where this sits in the signature.
+    """
+    if payload.since_date > date.today():
         raise HTTPException(
-            status_code=404,
-            detail="No linked Strava account found. Connect Strava first.",
+            status_code=400, detail="since_date cannot be in the future."
         )
-    return account
+    return payload
+
+
+ValidatedImportRequest = Annotated[
+    StravaImportCreate, Depends(validated_import_request)
+]
 
 
 @router.post("/strava/import", response_model=StravaImportRead)
 def start_import(
-    payload: StravaImportCreate,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    payload: ValidatedImportRequest,
+    account: LinkedStravaAccount,
+    db: DbSession,
 ):
     """Start a resumable historical Strava import from `since_date` to today.
 
@@ -40,11 +44,6 @@ def start_import(
     job. Idempotent: if an import is already running for this account, that one
     is returned instead of starting a second walk.
     """
-    if payload.since_date > date.today():
-        raise HTTPException(status_code=400, detail="since_date cannot be in the future.")
-
-    account = _resolve_account(db, user)
-
     from app.jobs.strava_import import enqueue_import
 
     import_obj = enqueue_import(db, account, payload.since_date)
@@ -53,14 +52,13 @@ def start_import(
 
 @router.get("/strava/import/status", response_model=Optional[StravaImportRead])
 def import_status(
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    account: LinkedStravaAccount,
+    db: DbSession,
 ):
     """Return the most recent historical import for the account, or null if none.
 
     The frontend polls this to show import progress and the final summary.
     """
-    account = _resolve_account(db, user)
     latest = (
         db.query(StravaImport)
         .filter(StravaImport.user_id == account.user_id)
