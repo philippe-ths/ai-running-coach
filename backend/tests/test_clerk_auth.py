@@ -563,6 +563,68 @@ class TestLocalNoAuth:
         monkeypatch.setattr(settings, "CLERK_JWKS_URL", "")
         assert settings.clerk_enabled is False
 
+    def test_degrade_resolves_the_owner_when_several_strava_users_exist(
+        self, db, monkeypatch
+    ):
+        # The real local shape: a DB seeded from the production snapshot holds
+        # more than one Strava-linked user. The Strava fallback is an unordered
+        # scan, so before the owner check it returned whichever row sat first in
+        # the heap -- and a token refresh reorders that, silently switching the
+        # ungated stack between real people's data mid-session.
+        monkeypatch.setattr(settings, "OWNER_EMAIL", "owner@gmail.com")
+        other = User(email="someone-else@gmail.com")
+        owner = User(email="owner@gmail.com")
+        db.add_all([other, owner])  # non-owner first, so insertion order != owner
+        db.flush()
+        db.add_all(
+            [
+                StravaAccount(
+                    user_id=other.id,
+                    strava_athlete_id=101,
+                    access_token="t",
+                    refresh_token="r",
+                    expires_at=0,
+                    scope="read",
+                ),
+                StravaAccount(
+                    user_id=owner.id,
+                    strava_athlete_id=102,
+                    access_token="t",
+                    refresh_token="r",
+                    expires_at=0,
+                    scope="read",
+                ),
+            ]
+        )
+        db.commit()
+        owner_id = owner.id
+
+        assert clerk_auth._degraded_single_user(db).id == owner_id
+
+    def test_degrade_falls_back_to_strava_user_without_owner_email(
+        self, db, monkeypatch
+    ):
+        # No owner configured: the legacy Strava-linked resolution is unchanged,
+        # so a DB with one linked user keeps working exactly as before.
+        monkeypatch.setattr(settings, "OWNER_EMAIL", "")
+        linked = User(email="linked@gmail.com")
+        db.add(linked)
+        db.flush()
+        db.add(
+            StravaAccount(
+                user_id=linked.id,
+                strava_athlete_id=103,
+                access_token="t",
+                refresh_token="r",
+                expires_at=0,
+                scope="read",
+            )
+        )
+        db.commit()
+        linked_id = linked.id
+
+        assert clerk_auth._degraded_single_user(db).id == linked_id
+
 
 # --- real ASGI transport (httpx), not just TestClient ----------------------
 
