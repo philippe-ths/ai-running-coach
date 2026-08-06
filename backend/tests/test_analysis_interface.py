@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from app.models import Activity, CheckIn, User, UserProfile
+from app.models import Activity, CheckIn, DerivedMetric, User, UserProfile
 from app.models.activity_stream import ActivityStream
 from app.services.analysis import analyze
 
@@ -155,32 +155,39 @@ def _seed_fixture(db):
     return target
 
 
+# Identity and bookkeeping columns: not analytical, and not deterministic across
+# runs (a re-run restamps the timestamps, the PK is generated).
+_NON_ANALYTICAL = {"id", "activity_id", "created_at", "updated_at"}
+
+
+def analytical_columns() -> list[str]:
+    """The analytical columns, DERIVED FROM THE MODEL (#805).
+
+    This list used to be written out by hand and had drifted to 21 of 23: the two
+    it omitted (`discount_signals`, `stream_view`) are written by late stages that
+    depend on earlier state, so reordering those stages would have degraded the
+    output with every test in the repo still green. Deriving it means a column
+    added to `DerivedMetric` joins the snapshot automatically and cannot be
+    silently omitted again.
+    """
+    return sorted(
+        c.key
+        for c in DerivedMetric.__mapper__.column_attrs
+        if c.key not in _NON_ANALYTICAL
+    )
+
+
 def _serialize_dm(dm) -> dict:
-    """Capture the analytical fields of a DerivedMetric. Excludes non-deterministic
-    columns (primary key, FK, timestamps)."""
-    return {
-        "effort": dm.effort,
-        "duration_class": dm.duration_class,
-        "structure": dm.structure,
-        "is_hilly": dm.is_hilly,
-        "is_race": dm.is_race,
-        "effort_score": dm.effort_score,
-        "pace_variability": dm.pace_variability,
-        "hr_drift": dm.hr_drift,
-        "time_in_zones": dm.time_in_zones,
-        "stops_analysis": dm.stops_analysis,
-        "efficiency_analysis": dm.efficiency_analysis,
-        "flags": dm.flags,
-        "confidence": dm.confidence,
-        "confidence_reasons": dm.confidence_reasons,
-        "interval_structure": dm.interval_structure,
-        "workout_match": dm.workout_match,
-        "interval_kpis": dm.interval_kpis,
-        "risk_level": dm.risk_level,
-        "risk_score": dm.risk_score,
-        "risk_reasons": dm.risk_reasons,
-        "training_context": dm.training_context,
-    }
+    """Capture every analytical field of a DerivedMetric."""
+    return {name: getattr(dm, name) for name in analytical_columns()}
+
+
+def test_snapshot_covers_every_analytical_column():
+    """The guard on the guard: if a new column appears on the model and the
+    stored snapshot does not carry it, this fails before the equality assertion
+    can pass on a partial capture."""
+    stored = json.loads(SNAPSHOT_FILE.read_text())
+    assert sorted(stored) == analytical_columns()
 
 
 def test_process_activity_matches_snapshot(db):
@@ -188,6 +195,8 @@ def test_process_activity_matches_snapshot(db):
 
     dm = analyze(db, target.id)
     assert dm is not None, "analyze returned None"
+    # stream_view is a deferred column; force-load it so the snapshot is complete.
+    db.refresh(dm, ["stream_view"])
 
     actual = _serialize_dm(dm)
     actual_json = json.dumps(actual, sort_keys=True, indent=2, default=str)
