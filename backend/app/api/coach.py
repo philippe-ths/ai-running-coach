@@ -1,18 +1,21 @@
 import json
 import logging
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.profile import get_current_user_profile
+from app.api.deps import (
+    CoachRelationship,
+    DbSession,
+    OwnedActivity,
+    OwnedActivityWithMetrics,
+)
 from app.core.clerk_auth import require_current_user
 from app.core.config import settings
 from app.db.session import get_db
-from app.models import Activity, CoachingRelationship, User
+from app.models import CoachingRelationship, User
 from app.models.coach_report import CoachReport
-from app.services import activity_queries
 from app.schemas.chat import ChatHistoryResponse, ChatMessageSend
 from app.schemas.coach import CoachReportRead
 from app.schemas.voice import VoiceConfigRead, VoiceDials, build_catalog
@@ -106,29 +109,6 @@ def delete_telegram_link(
     return {"linked": False}
 
 
-def _require_owned_activity(db: Session, activity_id: UUID, user: User) -> Activity:
-    """404 unless the activity belongs to the authenticated user (P2.1)."""
-    activity = activity_queries.get_owned_activity(db, activity_id, user.id)
-    if activity is None:
-        raise HTTPException(status_code=404, detail="Activity not found")
-    return activity
-
-
-def _get_or_create_relationship(db: Session, user: User) -> CoachingRelationship:
-    """Resolve the runner's coaching_relationship row, creating it if needed.
-
-    P2.1: scoped to the authenticated user. get_current_user_profile ensures the
-    thin relationship row exists (auto-created like the default profile), so a
-    runner who never edited their profile still has a row to read/write.
-    """
-    profile = get_current_user_profile(db, user)
-    return (
-        db.query(CoachingRelationship)
-        .filter(CoachingRelationship.user_id == profile.user_id)
-        .first()
-    )
-
-
 def _read_voice(relationship: CoachingRelationship) -> VoiceConfigRead:
     current = VoiceDials(
         preset=relationship.voice_preset,
@@ -142,19 +122,16 @@ def _read_voice(relationship: CoachingRelationship) -> VoiceConfigRead:
 
 
 @router.get("/coach/voice", response_model=VoiceConfigRead)
-def get_voice(
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
-):
+def get_voice(relationship: CoachRelationship):
     """The runner's declared coach voice plus the catalog the UI renders from."""
-    return _read_voice(_get_or_create_relationship(db, user))
+    return _read_voice(relationship)
 
 
 @router.put("/coach/voice", response_model=VoiceConfigRead)
 def update_voice(
     voice_in: VoiceDials,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    relationship: CoachRelationship,
+    db: DbSession,
 ):
     """Set the runner's declared coach voice (preset + four dials + free-text).
 
@@ -163,7 +140,6 @@ def update_voice(
     free-text is stored verbatim and framed as untrusted tone-data at prompt time,
     never as instructions.
     """
-    relationship = _get_or_create_relationship(db, user)
     relationship.voice_preset = voice_in.preset
     relationship.voice_warmth = voice_in.warmth
     relationship.voice_humor = voice_in.humor
@@ -198,19 +174,16 @@ def _read_stance(relationship: CoachingRelationship) -> StanceConfigRead:
 
 
 @router.get("/coach/stance", response_model=StanceConfigRead)
-def get_stance(
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
-):
+def get_stance(relationship: CoachRelationship):
     """The runner's declared coaching stance plus the catalog the UI renders from."""
-    return _read_stance(_get_or_create_relationship(db, user))
+    return _read_stance(relationship)
 
 
 @router.put("/coach/stance", response_model=StanceConfigRead)
 def update_stance(
     stance_in: StanceSelection,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    relationship: CoachRelationship,
+    db: DbSession,
 ):
     """Set the runner's declared coaching stance (school + two emphasis dials).
 
@@ -218,7 +191,6 @@ def update_stance(
     background job ever changes it. Stance reweights emphasis/method-framing only
     (ADR 0014/0015); it never overrides the run's measured data or the safety floor.
     """
-    relationship = _get_or_create_relationship(db, user)
     relationship.stance_school = stance_in.school
     relationship.stance_data_sentiment = stance_in.data_sentiment
     relationship.stance_process_outcome = stance_in.process_outcome
@@ -233,14 +205,12 @@ def update_stance(
     response_model=CoachReportRead,
 )
 async def get_coach_report(
-    activity_id: UUID,
+    activity: OwnedActivity,
+    db: DbSession,
     generate: bool = Query(True, description="If false, only return cached report (404 if none)"),
     force: bool = Query(False, description="If true, regenerate the active-version report (prior versions retained)"),
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
 ):
-    # P2.1: the report rides an activity; deny if it is not the user's.
-    _require_owned_activity(db, activity_id, user)
+    activity_id = activity.id
     # Display-safe (#261): unless an explicit regenerate (force) was asked for,
     # prefer ANY cached report over a synchronous regeneration. A COACH_PROMPT_ID
     # flip (e.g. activating voice coach_message_v3) leaves prior-version reports
@@ -280,11 +250,7 @@ async def get_coach_report(
     "/activities/{activity_id}/coach-report/regenerate",
     status_code=202,
 )
-def regenerate_coach_report(
-    activity_id: UUID,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
-):
+def regenerate_coach_report(activity: OwnedActivityWithMetrics):
     """Kick off an asynchronous coach-report regeneration (#260).
 
     The two-stage generation is a 30-120s LLM call — far past the gateway timeout —
@@ -293,16 +259,7 @@ def regenerate_coach_report(
     the GET endpoint for the fresh report. Returns 404 when the activity has no
     metrics to regenerate from.
     """
-    # P2.1: scope by owner; a cross-tenant activity is indistinguishable from one
-    # without metrics (both 404), leaking nothing.
-    activity = db.query(Activity).filter(
-        Activity.id == activity_id, Activity.user_id == user.id
-    ).first()
-    if not activity or not activity.metrics:
-        raise HTTPException(
-            status_code=404,
-            detail="Activity not found or metrics not yet computed.",
-        )
+    activity_id = activity.id
     # Imported here to keep the queue/job dependency off the module import path of
     # the read endpoints (and out of test collection that does not touch Redis).
     from app.core.config import settings
@@ -374,24 +331,20 @@ def regenerate_coach_report(
     response_model=ChatHistoryResponse,
 )
 def get_chat(
-    activity_id: UUID,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    activity: OwnedActivity,
+    db: DbSession,
 ):
     """Return conversation history for an activity."""
-    _require_owned_activity(db, activity_id, user)
-    messages = get_chat_history(db, str(activity_id))
+    messages = get_chat_history(db, str(activity.id))
     return ChatHistoryResponse(messages=messages)
 
 
 @router.delete("/activities/{activity_id}/coach-chat", status_code=204)
 def delete_chat(
-    activity_id: UUID,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_current_user),
+    activity: OwnedActivity,
+    db: DbSession,
 ):
     """Clear conversation history for an activity (through its thread, #765)."""
-    activity = _require_owned_activity(db, activity_id, user)
     from app.services.coach.threads import delete_threads_for_activity
 
     delete_threads_for_activity(db, activity)
