@@ -507,8 +507,12 @@ def test_post_commit_baseline_internal_error_is_visible_but_safe(db, monkeypatch
     def _boom(_db, _user_id):
         raise ValueError("malformed stored bucketed_trends")
 
+    # Patched on the ORCHESTRATOR namespace (#805): the recompute used to be
+    # imported lazily inside `_post_commit_baseline`, so patching its source
+    # module intercepted it. It is now a module-level name on the orchestrator —
+    # the one seam every composition test uses — so that is where it is patched.
     monkeypatch.setattr(
-        "app.services.analysis.baseline.recompute_runner_baseline", _boom
+        "app.services.analysis._orchestrator.recompute_runner_baseline", _boom
     )
 
     user = _seed_user(db)

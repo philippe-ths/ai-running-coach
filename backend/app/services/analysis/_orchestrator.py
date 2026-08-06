@@ -1,5 +1,7 @@
 import logging
+import sys
 import uuid
+from dataclasses import fields as dataclass_fields
 from typing import Optional
 from sqlalchemy.orm import Session, undefer
 from sqlalchemy import select
@@ -13,7 +15,34 @@ from app.services.analysis.risk import compute_risk_score
 from app.services.analysis.workout_matching import match_planned_to_detected, build_interval_kpis
 from app.services.analysis.composition import DerivedMetricFields, IntervalSession
 
+# Eagerly imported (#805). These four stage functions used to be imported LAZILY
+# inside the function body, which put them outside this module's namespace — the
+# one seam every composition test patches — so no test could intercept them.
+# None of the four imports anything that reaches back here, so the lazy form was
+# never breaking a cycle; it was only hiding a stage.
+from app.services.analysis._training_context import build_training_context
+from app.services.analysis.discount_signals import compute_discount_signals
+from app.services.analysis.stream_view import build_stream_view
+from app.services.analysis.baseline import recompute_runner_baseline
+from app.services.analysis.stages import (
+    ANALYSIS_STAGES,
+    StageContext,
+    assert_stage_contract,
+    run_stages,
+)
+
 logger = logging.getLogger(__name__)
+
+# The column-valued reads the flags stage DECLARED, derived from the registry so
+# the projection and the declaration cannot skew. `generate_flags` used to be
+# handed all 23 accumulator fields — eight of them still at their defaults.
+_FLAGS_METRIC_READS = tuple(
+    name
+    for stage in ANALYSIS_STAGES
+    if stage.name == "flags"
+    for name in stage.reads
+    if name in {f.name for f in dataclass_fields(DerivedMetricFields)}
+)
 
 def _extract_planned_workout(check_in) -> dict | None:
     """
@@ -25,6 +54,21 @@ def _extract_planned_workout(check_in) -> dict | None:
     """
     # Planned workout capture is not yet implemented in the UI.
     # When it is, this function will parse the structured input.
+    #
+    # DORMANT CONSEQUENCE (#805). Because this always returns None,
+    # `match_planned_to_detected` never reaches its plan-scoring block, so
+    # `workout_match["match_score"]` is only ever None (stream-derived) or 1.0
+    # (recorded laps, a perfect de-facto plan). That makes ONE branch of
+    # `compute_confidence` unreachable through `analyze()`: the
+    # `match_score < 0.7` test that appends `interval_structure_mismatch`, a
+    # CRITICAL reason that can force a run's confidence to "low". Its unit test
+    # passes against a hand-built dict on a path no composition can reach.
+    #
+    # Recorded as dormant rather than made reachable: making it fire would mean
+    # inventing planned-workout capture, which is a product feature, not a
+    # refactor. `tests/test_analysis_stages.py` pins the dormancy, so the day
+    # this placeholder returns a real plan the pin fails and the branch is
+    # revisited deliberately.
     return None
 
 async def analyze_with_streams(db: Session, activity_id: str) -> Optional[DerivedMetric]:
@@ -132,6 +176,233 @@ def compute_confidence(
     return level, reasons
 
 
+# --------------------------------------------------------------------------
+# Stage adapters (#805).
+#
+# One adapter per declared stage in `stages.ANALYSIS_STAGES`. Each is thin by
+# design: it reads exactly what its declaration names, calls the pure stage, and
+# writes exactly what its declaration names. The stage FUNCTIONS are untouched —
+# this is composition, not stage logic.
+#
+# Every pure stage is called through this module's namespace (a plain global
+# lookup), so `monkeypatch.setattr(_orchestrator, "<stage fn>", spy)` intercepts
+# it. That is the seam the composition tests already use, and it now reaches the
+# four stages that were previously imported lazily inside `analyze`.
+# --------------------------------------------------------------------------
+
+def _stage_base_metrics(ctx: StageContext) -> None:
+    """Seed the accumulator from the pure metrics stage.
+
+    The base stage returns its own dict (its external contract). Assigning the
+    declared keys — rather than constructing the accumulator from **metrics —
+    keeps the write set honest, so the strict check below preserves the loud
+    failure the old `cls(**metrics)` gave on an unexpected key.
+    """
+    metrics = compute_derived_metrics_data(
+        ctx.get("activity"),
+        ctx.get("streams_dict"),
+        max_hr=ctx.get("max_hr"),
+        rpe=ctx.get("check_in").rpe if ctx.get("check_in") else None,
+        zone_boundaries=ctx.get("zone_boundaries"),
+    )
+    declared = {
+        name for stage in ANALYSIS_STAGES if stage.name == "base_metrics" for name in stage.writes
+    }
+    if set(metrics) != declared:
+        raise TypeError(
+            f"compute_derived_metrics_data returned {sorted(metrics)!r}, but the "
+            f"base_metrics stage declares {sorted(declared)!r}."
+        )
+    for name, value in metrics.items():
+        ctx.set(name, value)
+
+
+def _stage_interval_probe(ctx: StageContext) -> None:
+    """Probe interval structure. INVARIANT 1's producer: the classifier consumes
+    this, so the declaration (not the placement) is what orders the two.
+
+    Prefer the runner's recorded laps (their own lap-button marks) as the
+    authoritative segmentation; fall back to the stream heuristic only when no
+    usable laps are present (#170). The stream re-segmentation can smear short
+    reps, drop a recorded warmup, and fabricate rep variability that the recorded
+    laps do not contain.
+    """
+    lap_structure = detect_intervals_from_laps(
+        ctx.get("activity").raw_summary, ctx.get("streams_dict"), max_hr=ctx.get("max_hr")
+    )
+    stream_structure = (
+        detect_intervals(ctx.get("streams_dict"), "Intervals", max_hr=ctx.get("max_hr"))
+        if ctx.get("streams_dict")
+        else None
+    )
+    ctx.set("probed_structure", lap_structure or stream_structure)
+
+
+def _stage_classification(ctx: StageContext) -> None:
+    """Classify into orthogonal axes (ADR 0007). A probed structure is the
+    "repeated work/rest" half of the structure predicate; the other half (genuine
+    pace variability) is applied inside the classifier."""
+    classification = classify_activity(
+        ctx.get("activity"),
+        ctx.get("history"),
+        time_in_zones=ctx.get("time_in_zones"),
+        pace_variability=ctx.get("pace_variability"),
+        has_interval_structure=ctx.get("probed_structure") is not None,
+        max_hr=ctx.get("max_hr"),
+    )
+    ctx.set("effort", classification.effort)
+    ctx.set("duration_class", classification.duration_class)
+    ctx.set("structure", classification.structure)
+    ctx.set("is_hilly", classification.is_hilly)
+    ctx.set("is_race", classification.is_race)
+
+
+def _stage_interval_gate(ctx: StageContext) -> None:
+    """Resolve the single "is this an interval session" gate (#701).
+
+    INVARIANT 2's producer. Every interval-only stage below declares a read of
+    `interval_session`, so none can run before this and none can re-derive the
+    concept independently.
+    """
+    interval_session = IntervalSession.gate(
+        ctx.get("structure"), ctx.get("probed_structure")
+    )
+    ctx.set("interval_session", interval_session)
+    ctx.set("interval_structure", interval_session.structure)
+
+
+def _stage_workout_match(ctx: StageContext) -> None:
+    """Compare planned vs detected.
+
+    DORMANT BRANCH (#805): `_extract_planned_workout` is a documented placeholder
+    that always returns None until planned-workout capture exists, so this stage
+    only ever runs its no-plan path. The consequence lands downstream in
+    `compute_confidence` — see the note there.
+    """
+    planned_workout = _extract_planned_workout(ctx.get("check_in"))
+    ctx.set(
+        "workout_match",
+        match_planned_to_detected(ctx.get("interval_session").structure, planned_workout),
+    )
+
+
+def _stage_interval_kpis(ctx: StageContext) -> None:
+    """Interval-specific KPIs, gated on the structure axis via the session gate."""
+    interval_session = ctx.get("interval_session")
+    if not interval_session.is_session:
+        ctx.set("interval_kpis", None)
+        return
+    profile = ctx.get("profile")
+    zones_calibrated = bool(
+        profile and (profile.hr_zones or (profile.max_hr and profile.max_hr > 100))
+    )
+    ctx.set(
+        "interval_kpis",
+        build_interval_kpis(
+            interval_session.structure,
+            max_hr=ctx.get("max_hr"),
+            zones_calibrated=zones_calibrated,
+            time_in_zones=ctx.get("time_in_zones"),
+        ),
+    )
+
+
+def _stage_history_metrics(ctx: StageContext) -> None:
+    """Load prior DerivedMetric rows for load-spike detection."""
+    history = ctx.get("history")
+    ctx.set(
+        "history_metrics",
+        (
+            ctx.get("db").query(DerivedMetric)
+            .filter(DerivedMetric.activity_id.in_([h.id for h in history]))
+            .all()
+            if history
+            else []
+        ),
+    )
+
+
+def _stage_flags(ctx: StageContext) -> None:
+    """All flag logic is consolidated in flags.py; it consumes the accumulator as
+    a dict. It now receives a projection of the five fields the stage DECLARES,
+    not the whole 23-field accumulator with eight later stages' defaults in it."""
+    ctx.set(
+        "flags",
+        generate_flags(
+            ctx.get("activity"),
+            ctx.project(_FLAGS_METRIC_READS),
+            ctx.get("history"),
+            ctx.get("check_in"),
+            history_metrics=ctx.get("history_metrics"),
+        ),
+    )
+
+
+def _stage_training_context(ctx: StageContext) -> None:
+    """Compute the training context for risk scoring; persisted so the coach
+    pipeline can read it instead of recomputing (ADR 0001)."""
+    ctx.set("training_context", build_training_context(ctx.get("db"), ctx.get("activity")))
+
+
+def _stage_risk(ctx: StageContext) -> None:
+    """Deterministic risk score from flags + check-in + training context."""
+    check_in = ctx.get("check_in")
+    check_in_data = {
+        "sleep_quality": check_in.sleep_quality if check_in else None,
+        "rpe": check_in.rpe if check_in else None,
+    }
+    risk_result = compute_risk_score(
+        ctx.get("flags"), check_in_data, ctx.get("training_context")
+    )
+    ctx.set("risk_level", risk_result["risk_level"])
+    ctx.set("risk_score", risk_result["risk_score"])
+    ctx.set("risk_reasons", risk_result["risk_reasons"])
+
+
+def _stage_confidence(ctx: StageContext) -> None:
+    """Confidence, consuming the single gate's own verdict (#701/#739) so the
+    interval-only reasons stay confined to an interval session (#169)."""
+    confidence, confidence_reasons = compute_confidence(
+        ctx.get("activity"),
+        ctx.get("streams_dict"),
+        ctx.get("check_in"),
+        interval_session=ctx.get("interval_session"),
+        workout_match=ctx.get("workout_match"),
+    )
+    ctx.set("confidence", confidence)
+    ctx.set("confidence_reasons", confidence_reasons)
+
+
+def _stage_discount_signals(ctx: StageContext) -> None:
+    """Discount signals (N4) — deterministic confounder annotation. Flags when HR
+    drift is likely inflated by heat/terrain/stimulant rather than genuine
+    fatigue."""
+    activity = ctx.get("activity")
+    profile = ctx.get("profile")
+    ctx.set(
+        "discount_signals",
+        compute_discount_signals(
+            average_temp=activity.raw_summary.get("average_temp") if activity.raw_summary else None,
+            is_hilly=ctx.get("is_hilly"),
+            hr_drift=ctx.get("hr_drift"),
+            stimulant_use=profile.stimulant_use if profile else None,
+        ),
+    )
+
+
+def _stage_stream_view(ctx: StageContext) -> None:
+    """Consolidated stream view (A2a) — a small, downsampled, aligned
+    HR/pace/grade/cadence snapshot re-derived every analysis (so it self-heals on
+    re-sync/backfill). Degrades to None without streams."""
+    ctx.set("stream_view", build_stream_view(ctx.get("streams_dict")))
+
+
+# Complete the import-time check now the adapters exist: every declared stage
+# must resolve to a callable on THIS module. A renamed adapter is a startup
+# failure, not a runtime AttributeError halfway through an analysis.
+assert_stage_contract(ANALYSIS_STAGES, namespace=sys.modules[__name__])
+
+
 def _post_commit_baseline(db: Session, user_id) -> None:
     """Post-commit phase: recompute the runner baseline trend substrate (M2).
 
@@ -146,7 +417,6 @@ def _post_commit_baseline(db: Session, user_id) -> None:
     swallowed and never breaks analyze().
     """
     try:
-        from app.services.analysis.baseline import recompute_runner_baseline
         recompute_runner_baseline(db, user_id)
     except Exception as exc:  # noqa: BLE001 baseline is best-effort, must not break analyze
         # Keep the guard (a failure here never breaks analyze), but make a genuine
@@ -168,24 +438,27 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
 
     How a DerivedMetric is assembled (the composition contract):
 
-      A. Load phase (steps 1-4): activity, recent history, streams, check-in,
-         profile-derived max_hr / HR zones. Pure DB reads.
-      B. Pre-commit metrics phase (steps 5-9.6): build the typed
-         `DerivedMetricFields` accumulator (`state`, #701) from the pure
-         analysis stages, then upsert + commit `state.to_columns()`. This phase
-         carries the two real intra-phase ordering invariants, both flagged
-         INVARIANT inline below:
-           1. The interval-structure PROBE precedes classification, and the
-              probed structure feeds the classifier's structure axis.
-           2. The single interval-session gate (`IntervalSession.gate`, the ONE
-              owner of "is this an interval session") GATES interval
-              matching/KPIs and the interval confidence checks.
-      C. Post-commit phase (step 11): the runner-baseline recompute, which by
-         INVARIANT must follow the commit (see `_post_commit_baseline`).
+      A. Load phase: activity, recent history, streams, check-in, profile-derived
+         max_hr / HR zones. Pure DB reads, and the only thing this function still
+         does by hand.
+      B. Stage phase: `stages.ANALYSIS_STAGES` — the declared sequence — is run
+         against a `StageContext`, then `state.to_columns()` is upserted and
+         committed. Each stage names what it READS and what it WRITES, so the
+         two intra-phase ordering invariants that used to be prose are now
+         checkable declarations enforced AT IMPORT (#805):
+           1. probe-before-classify: `interval_probe` writes `probed_structure`
+              and `classification` reads it.
+           2. the structure axis gates the interval-only stages: `interval_gate`
+              reads `structure` and writes `interval_session`, which workout
+              matching, KPIs and the confidence stage all read.
+      C. Post-commit phase: the runner-baseline recompute, which by INVARIANT
+         must follow the commit (see `_post_commit_baseline`). This one stays
+         prose because it is an ordering constraint against the COMMIT, not
+         against another stage's output, so the read/write graph cannot express
+         it.
 
-    A new stage should be placed in the phase whose inputs it depends on, and
-    should state any new ordering dependency here rather than relying on
-    placement.
+    A new stage is added to the registry in `stages.py` with its reads and
+    writes declared. Placement no longer carries the contract.
     """
     activity_uuid = _coerce_uuid(activity_id)
 
@@ -225,152 +498,35 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     # binning so it matches Strava (#297). Absent, binning falls back to %max.
     zone_boundaries = profile.hr_zones if profile and profile.hr_zones else None
 
-    # 5. Compute metrics. Pass the check-in RPE so the training-load primitive
-    # (#186) can fall back to session-RPE on a strap-less run.
+    # 5. Run the declared stage sequence (#805). The order is `ANALYSIS_STAGES`,
+    # not this function body; each stage reads what it declared and writes what
+    # it declared, and `run_stages` resolves the adapters off THIS module so a
+    # test can intercept any of them.
     #
-    # The pure metrics stage still returns its own dict (its external contract);
-    # the orchestrator seeds the typed accumulator (`state`, #701) from it and
-    # writes every subsequent stage's output as a typed attribute rather than a
-    # string key. `state.to_columns()` reproduces the exact upsert dict.
-    state = DerivedMetricFields.from_base_metrics(
-        compute_derived_metrics_data(
-            activity,
-            streams_dict,
-            max_hr=max_hr,
-            rpe=check_in.rpe if check_in else None,
-            zone_boundaries=zone_boundaries,
-        )
-    )
-
-    # 6. Classify into orthogonal axes (ADR 0007). Probe interval structure so
-    # the structure axis is data-driven; a probed structure is the "repeated
-    # work/rest" half of the predicate (the other half, genuine pace
-    # variability, is applied in the classifier).
-    #
-    # ORDERING INVARIANT 1 (probe-before-classify): the interval-structure probe
-    # must run BEFORE classify_activity, because the classifier consumes
-    # `has_interval_structure` to resolve its structure axis. Reordering these
-    # two would feed the classifier a stale/missing structure signal.
-    #
-    # Prefer the runner's recorded laps (their own lap-button marks) as the
-    # authoritative segmentation; fall back to the stream heuristic only when no
-    # usable laps are present (#170). The stream re-segmentation can smear short
-    # reps, drop a recorded warmup, and fabricate rep variability that the
-    # recorded laps do not contain.
-    lap_structure = detect_intervals_from_laps(activity.raw_summary, streams_dict, max_hr=max_hr)
-    stream_structure = detect_intervals(streams_dict, "Intervals", max_hr=max_hr) if streams_dict else None
-    probed_structure = lap_structure or stream_structure
-    classification = classify_activity(
-        activity, history,
-        time_in_zones=state.time_in_zones,
-        pace_variability=state.pace_variability,
-        has_interval_structure=probed_structure is not None,
+    # The accumulator starts blank: `base_metrics` is the stage that seeds it, so
+    # it is subject to the same declaration as every other stage rather than
+    # being a privileged constructor call. `state.to_columns()` still reproduces
+    # the exact upsert dict (#701).
+    state = DerivedMetricFields(effort_score=0.0)
+    ctx = StageContext(
+        db=db,
+        activity=activity,
+        history=history,
+        streams_dict=streams_dict,
+        check_in=check_in,
+        profile=profile,
         max_hr=max_hr,
+        zone_boundaries=zone_boundaries,
+        state=state,
     )
-    state.effort = classification.effort
-    state.duration_class = classification.duration_class
-    state.structure = classification.structure
-    state.is_hilly = classification.is_hilly
-    state.is_race = classification.is_race
+    run_stages(sys.modules[__name__], ctx)
 
-    # 6.5 Interval segmentation — resolve the single "is this an interval
-    # session" gate (#701). IntervalSession.gate keeps the probed structure only
-    # when the classifier's structure axis resolved to intervals; it is the ONE
-    # owner of that concept.
+    # 6. Upsert DerivedMetric.
     #
-    # ORDERING INVARIANT 2 (structure-axis gates interval KPIs): the gate is the
-    # single source every downstream interval-only stage keys off — 6.6 workout
-    # matching, 6.7 KPIs, and the interval confidence checks in
-    # compute_confidence all read `interval_session.structure`. It must be
-    # resolved here, AFTER classification and BEFORE those stages read it.
-    interval_session = IntervalSession.gate(classification.structure, probed_structure)
-    state.interval_structure = interval_session.structure
-
-    # 6.6 Workout matching — compare planned vs detected
-    planned_workout = _extract_planned_workout(check_in)
-    workout_match = match_planned_to_detected(interval_session.structure, planned_workout)
-    state.workout_match = workout_match
-
-    # 6.7 Interval-specific KPIs, gated on the structure axis via the
-    # interval_session gate (INVARIANT 2).
-    if interval_session.is_session:
-        zones_calibrated = bool(
-            profile and (profile.hr_zones or (profile.max_hr and profile.max_hr > 100))
-        )
-        state.interval_kpis = build_interval_kpis(
-            interval_session.structure,
-            max_hr=max_hr,
-            zones_calibrated=zones_calibrated,
-            time_in_zones=state.time_in_zones,
-        )
-    else:
-        state.interval_kpis = None
-
-    # 7. Load history metrics for load spike detection
-    history_metrics = (
-        db.query(DerivedMetric)
-        .filter(DerivedMetric.activity_id.in_([h.id for h in history]))
-        .all()
-        if history else []
-    )
-
-    # 8. Flags (all flag logic consolidated in flags.py). flags.py reads the
-    # accumulator as a dict; state.to_columns() presents the current typed
-    # values in that shape (later-stage fields are still at their defaults and
-    # unread here).
-    all_flags = generate_flags(
-        activity, state.to_columns(), history, check_in,
-        history_metrics=history_metrics,
-    )
-    state.flags = all_flags
-
-    # 8.5 Risk score (deterministic, based on flags + check-in + training context)
-    check_in_data = {
-        "sleep_quality": check_in.sleep_quality if check_in else None,
-        "rpe": check_in.rpe if check_in else None,
-    }
-    # Compute training context for risk scoring; persist so the coach pipeline
-    # can read it instead of recomputing.
-    from app.services.analysis._training_context import build_training_context
-    training_ctx = build_training_context(db, activity)
-    state.training_context = training_ctx
-    risk_result = compute_risk_score(all_flags, check_in_data, training_ctx)
-    state.risk_level = risk_result["risk_level"]
-    state.risk_score = risk_result["risk_score"]
-    state.risk_reasons = risk_result["risk_reasons"]
-
-    # 9. Confidence (with interval sanity checks). Consumes the single owner's
-    # verdict itself (#701/#739), so the interval-only reasons stay confined to
-    # an interval session (#169) and the type flows the whole way through.
-    confidence, confidence_reasons = compute_confidence(
-        activity, streams_dict, check_in,
-        interval_session=interval_session,
-        workout_match=workout_match,
-    )
-    state.confidence = confidence
-    state.confidence_reasons = confidence_reasons
-
-    # 9.5 Discount signals (N4) — deterministic confounder annotation. Flags
-    # when HR drift is likely inflated by heat/terrain/stimulant rather than
-    # genuine fatigue. Reuses the profile loaded for max_hr above.
-    from app.services.analysis.discount_signals import compute_discount_signals
-    state.discount_signals = compute_discount_signals(
-        average_temp=activity.raw_summary.get("average_temp") if activity.raw_summary else None,
-        is_hilly=state.is_hilly,
-        hr_drift=state.hr_drift,
-        stimulant_use=profile.stimulant_use if profile else None,
-    )
-
-    # 9.6 Consolidated stream view (A2a processed-artifacts layer) — a small,
-    # downsampled, aligned HR/pace/grade/cadence snapshot derived from the same
-    # streams_dict. Stored on the DerivedMetric so retrieval is cheap; re-derived
-    # every analysis (self-heals on re-sync/backfill), a convenience view that
-    # never overrides the re-derived metrics. Degrades to None without streams.
-    from app.services.analysis.stream_view import build_stream_view
-    state.stream_view = build_stream_view(streams_dict)
-
-    # 10. Upsert DerivedMetric. state.to_columns() reproduces the exact dict the
-    # upsert consumed before the typed-intermediate refactor (#701).
+    # SURFACED, NOT CHANGED (#805): this writes all 23 columns unconditionally,
+    # so a stage that abstains overwrites the prior value with its default rather
+    # than leaving it. That is the CURRENT behaviour and changing it is a
+    # behaviour change, not a refactor — see the issue's follow-up note.
     metric_columns = state.to_columns()
     existing_dm = db.query(DerivedMetric).filter(DerivedMetric.activity_id == activity.id).first()
 
@@ -385,7 +541,7 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     db.commit()
     db.refresh(dm)
 
-    # 11. Post-commit phase. ORDERING INVARIANT 3 (commit-before-baseline): the
+    # 7. Post-commit phase. ORDERING INVARIANT 3 (commit-before-baseline): the
     # runner-baseline recompute must follow the commit above so the
     # just-analysed activity is included in its rolling window. See
     # `_post_commit_baseline`.
