@@ -35,11 +35,20 @@ substitutes a safe redirect) — deliberately stays with the callers. Forcing
 those into one code path would make this module's interface as complex as its
 implementation, which is the shallowness the epic is fighting.
 
-NOT in scope here: the auxiliary Haiku paths (the material distiller, the
-runner-memory update, the receipt-voice generator). Those are background,
-regenerable artifacts on a hardcoded cheap model, and they gate SOFTLY — a
-background pass must never hard-fail on budget — so they keep their own explicit
-record calls. The distinction is deliberate; see #607.
+NOT in scope here: the four auxiliary Haiku paths (the material distiller, the
+runner-memory update, the receipt-voice generator, and the thread-title writer in
+`jobs/thread_maintenance.py`). Those are background, regenerable artifacts on a
+hardcoded cheap model, and they gate SOFTLY or not at all — a background pass
+must never hard-fail on budget — so they keep their own explicit record calls.
+The distinction is deliberate; see #607.
+
+One site outside this module still reads `settings.COACH_MODEL_ID` directly:
+`service._persist_report`'s `CoachReportMeta.model_id` stamp. It is provenance
+written after the fact, not a selection, and it resolves to the same value for
+every report kind — but the honest fix is to stamp the model the turn ACTUALLY
+ran on (`client.model`), which means threading the client into persist. Left
+alone here and recorded rather than changed, because it is a stored-metadata
+change and this phase is behaviour-preserving.
 """
 
 from __future__ import annotations

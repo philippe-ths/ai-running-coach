@@ -544,11 +544,22 @@ async def test_stream_chat_turn_does_not_retry_4xx():
                 pass
 
 
+@pytest.mark.parametrize(
+    "raised",
+    [
+        anthropic.APIConnectionError(request=httpx.Request("POST", "https://x")),
+        _make_status_error(503),
+        _make_rate_limit_error(retry_after=1),
+    ],
+    ids=["transient", "5xx", "429"],
+)
 @pytest.mark.asyncio
-async def test_stream_chat_turn_never_reissues_once_a_token_has_streamed():
+async def test_stream_chat_turn_never_reissues_once_a_token_has_streamed(raised):
     """The load-bearing streaming guard: a failure AFTER the first token must
     propagate, because the caller has already buffered output and a re-run would
-    duplicate the reply. This holds for every rung, not just the 429."""
+    duplicate the reply. Parameterised over EVERY rung, since the guard is the
+    reason sharing the ladder with the single-shot paths is safe at all — each of
+    these would otherwise have re-issued."""
     client = AnthropicClient(api_key="k", model="m")
     calls = {"n": 0}
 
@@ -558,7 +569,7 @@ async def test_stream_chat_turn_never_reissues_once_a_token_has_streamed():
 
         async def _text_stream():
             yield "partial"
-            raise anthropic.APIConnectionError(request=httpx.Request("POST", "https://x"))
+            raise raised
 
         stream = MagicMock()
         stream.text_stream = _text_stream()
@@ -568,7 +579,7 @@ async def test_stream_chat_turn_never_reissues_once_a_token_has_streamed():
     client.client.messages.stream = _ctx
 
     with patch("asyncio.sleep", new=AsyncMock()):
-        with pytest.raises(anthropic.APIConnectionError):
+        with pytest.raises(type(raised)):
             async for _ in client.stream_chat_turn(
                 system="s", messages=[{"role": "user", "content": "hi"}]
             ):

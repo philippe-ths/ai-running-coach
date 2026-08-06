@@ -86,11 +86,19 @@ class RetryLadder:
     - 5xx: shares the transient budget; any other 4xx is a caller bug and is
       raised immediately.
 
-    Written once because it was written four times: the four client methods below
-    carried byte-identical ladders apart from their log event, and the streaming
-    one had drifted (its transient and 5xx rungs were simply missing, so a
-    connection drop on a chat turn degraded on the first failure while the same
-    drop on a report retried). `event_prefix` keeps each call site's log events.
+    Written once because it was written four times, and they had DRIFTED — the
+    issue's "byte-identical apart from the log event" is not what the code said:
+
+    - the streaming method carried the 429 rung ONLY, so a connection drop or a
+      5xx on a chat turn degraded on the first failure while the same failure on
+      a report was retried;
+    - `httpx.RemoteProtocolError` was caught by `generate_coach_message` alone.
+      Sharing the ladder means the two non-streaming create-based methods now
+      catch it too. That can only widen: the SDK wraps httpx errors from the
+      initial HTTP call into APIConnectionError, so a non-streaming call has no
+      way to raise it unwrapped in the first place.
+
+    `event_prefix` keeps each call site's log events.
 
     `retriable` is the streaming guard: once a token has left the server the
     request must NOT be re-issued, because the caller has already buffered

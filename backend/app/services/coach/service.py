@@ -42,9 +42,6 @@ from app.services.coach.memory_update import enqueue_memory_update
 from app.services.coach.context import build_context_pack
 from app.services.coach.coach_framing import coach_llm_view
 from app.services.coach.digest import build_report_digest
-# Retained deliberately: several tests and callers reference `service.AnthropicClient`
-# as the transport type. Client CONSTRUCTION now lives in `turn.build_client` (#801).
-from app.services.coach.llm import AnthropicClient  # noqa: F401
 from app.services.coach.output_contract import (
     RECORD_COACH_TAIL_TOOL,
     EmptyMessageError,
