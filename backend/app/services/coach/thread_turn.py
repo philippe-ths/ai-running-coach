@@ -24,7 +24,6 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.activity import Activity
 from app.models.coach_chat_message import CoachChatMessage
-from app.models.coaching_relationship import CoachingRelationship
 from app.models.thread import Thread
 from app.models.user import User
 from app.models.user_profile import UserProfile
@@ -44,7 +43,7 @@ from app.services.coach.screen_context import (
     resolve_screen_view,
     sessions_in_play_from_view,
 )
-from app.services.coach.llm import AnthropicClient
+from app.services.coach.turn import TurnKind, build_client, over_budget, relationship_for_user
 from app.services.coach.memory_store import get_memory
 from app.services.coach.prompts import render_voice_block
 from app.services.coach.coaching_skills import LOAD_SKILL_TOOL, render_catalogue
@@ -238,12 +237,14 @@ def _build_cross_thread_block(db: Session, thread: Thread, user_id) -> str:
 
 
 def _resolve_voice_block_for_user(db: Session, user_id) -> str:
-    relationship = (
-        db.query(CoachingRelationship)
-        .filter(CoachingRelationship.user_id == user_id)
-        .first()
-    )
-    voice = resolve_voice(relationship)
+    """The runner's declared voice, rendered for this turn.
+
+    The relationship read goes through the envelope's single gated owner (#801),
+    so COACH_RELATIONSHIP_ENABLED now applies here exactly as it does to the
+    report. It did not before (#791): this function had its own ungated query, so
+    with the switch off the report spoke in the default moderate voice while the
+    conversation still spoke in the runner's declared one."""
+    voice = resolve_voice(relationship_for_user(db, user_id))
     return render_voice_block(settings.COACH_PROMPT_ID, voice)
 
 
@@ -316,9 +317,9 @@ async def stream_thread_turn(
     also supplies the turn's provenance label.
     """
     # Spend cap first, before any row is written: the decline is an answer, not
-    # a turn (mirrors the activity chat's gate).
-    from app.services.coach.budget import over_budget
-
+    # a turn. The client built below is metered, so what this gate observes is
+    # what conversational turns actually spend (#786) — before, the gate only
+    # ever tripped on spend that OTHER paths had recorded.
     if over_budget(user.id):
         yield ChatStreamEvent(text=THREAD_BUDGET_PAUSED_MESSAGE)
         return
@@ -369,10 +370,7 @@ async def stream_thread_turn(
     history = thread_service.thread_messages(db, thread)[-_MAX_LLM_HISTORY_TURNS:]
     llm_messages = [{"role": row.role, "content": row.content} for row in history]
 
-    client = AnthropicClient(
-        api_key=settings.ANTHROPIC_API_KEY,
-        model=settings.chat_model_id,
-    )
+    client = build_client(TurnKind.THREAD, user.id)
 
     out: dict = {}
     async for event in _buffered_tool_loop(

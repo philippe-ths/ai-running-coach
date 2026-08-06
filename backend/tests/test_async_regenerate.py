@@ -80,7 +80,7 @@ class TestRegenerateEndpoint:
         # job now) — proving the gateway-timeout path is gone.
         activity = _seed_activity(db)
         with patch("app.core.queue.queue", MagicMock()), \
-             patch("app.services.coach.service.AnthropicClient",
+             patch("app.services.coach.turn.AnthropicClient",
                    side_effect=AssertionError("must not call the LLM in the request")):
             res = client.post(f"/api/activities/{activity.id}/coach-report/regenerate")
         assert res.status_code == 202

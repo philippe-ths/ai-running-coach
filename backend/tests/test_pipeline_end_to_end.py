@@ -13,6 +13,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.services.coach.llm import Usage
+
 from app.core.config import settings
 from app.models import Activity, StravaAccount, User, UserProfile
 from app.services.notifications import InMemoryNotifier, set_notifier
@@ -139,12 +141,14 @@ def test_webhook_create_triggers_one_notification_and_dedupes_on_replay(
     fake_queue.enqueue = inline_enqueue
 
     fake_client = AsyncMock()
-    fake_client.generate_json = AsyncMock(return_value=_valid_llm_json())
+    fake_client.generate_json_with_usage = AsyncMock(
+        return_value=(_valid_llm_json(), Usage())
+    )
 
     # Replace the queue.enqueue at the webhook handler import site and patch
     # the AnthropicClient inside the coach service.
     with patch("app.api.webhooks.queue", fake_queue), patch(
-        "app.services.coach.service.AnthropicClient", return_value=fake_client
+        "app.services.coach.turn.AnthropicClient", return_value=fake_client
     ):
         # First webhook: should enqueue the pipeline job
         r1 = client.post(

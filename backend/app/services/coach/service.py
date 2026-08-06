@@ -30,13 +30,18 @@ from app.schemas.coach import (
     CoachReportRead,
 )
 from app.schemas.coach_context import CoachContextPack, ContinuityContext
-from app.services.coach.budget import over_budget as budget_over, record as budget_record
+from app.services.coach.turn import (
+    CoachClient,
+    TurnKind,
+    build_client,
+    over_budget as budget_over,
+    relationship_for_user,
+)
 from app.services.coach.memory_store import get_memory
 from app.services.coach.memory_update import enqueue_memory_update
 from app.services.coach.context import build_context_pack
 from app.services.coach.coach_framing import coach_llm_view
 from app.services.coach.digest import build_report_digest
-from app.services.coach.llm import AnthropicClient
 from app.services.coach.output_contract import (
     RECORD_COACH_TAIL_TOOL,
     EmptyMessageError,
@@ -176,20 +181,13 @@ def is_receipt_cadence(prompt_id: str) -> bool:
 def _relationship_for_activity(
     db: Session, activity: Activity
 ) -> Optional[CoachingRelationship]:
-    """Load the runner's thin CoachingRelationship row, or None.
+    """This activity owner's thin CoachingRelationship row, or None.
 
-    Returns None both when the row does not exist yet (a runner who never opened
-    their profile) and when COACH_RELATIONSHIP_ENABLED is off (#522: never read the
-    relationship, so the runner's declared voice/stance has no effect). In both cases
-    the caller's resolver maps None to its moderate/default profile, so a missing row
-    and a disabled input are indistinguishable by design."""
-    if not settings.COACH_RELATIONSHIP_ENABLED:
-        return None
-    return (
-        db.query(CoachingRelationship)
-        .filter(CoachingRelationship.user_id == activity.user_id)
-        .first()
-    )
+    Delegates to the envelope's single gated read (#801): the
+    COACH_RELATIONSHIP_ENABLED check used to live here AND be missing from the
+    thread turn's own read, which is #791. Kept as a named function because it is
+    the activity-shaped call the resolvers below read best with."""
+    return relationship_for_user(db, activity.user_id)
 
 
 def _resolve_voice_for_activity(db: Session, activity: Activity):
@@ -422,6 +420,57 @@ def get_block_primary_report_row(db: Session, activity_id) -> Optional[CoachRepo
     return get_displayable_report_row(db, block.primary_activity_id)
 
 
+def cached_row_is_servable(
+    existing: Optional[CoachReport], *, kind: TurnKind, force: bool
+) -> bool:
+    """Whether a cached row answers this request without a fresh LLM call.
+
+    One predicate with the per-kind rule stated, rather than three cache checks
+    that read as if they disagree (they did, and each disagreement was load
+    bearing):
+
+    - REPORT (single-shot): any active-version row is the whole report.
+    - FULLER: an OPENER-ONLY row is half a report, so it never serves; the fuller
+      turn's job is to fill it in place.
+    - OPENER: any active-version row serves, complete or not, because the opener
+      is idempotent re-entry — a later fuller must not be re-opened. The caller
+      still recomputes the schedule decision from the stored row.
+
+    `force` is a runner-initiated "Re-run" and overrides the first two. It does
+    NOT reach the opener, which has no force path: re-opening a delivered
+    exchange is not a thing a runner can ask for.
+    """
+    if existing is None:
+        return False
+    if kind is TurnKind.OPENER:
+        return True
+    if force:
+        return False
+    if kind is TurnKind.FULLER:
+        return not is_opener_only(existing.report)
+    return True
+
+
+def _load_subject(db: Session, activity_uuid) -> Optional[Activity]:
+    """The subject activity a generation runs on, or None when there is nothing
+    to coach (no row, or no analysis yet).
+
+    undefer raw_summary (#359): the context pack reads the subject's raw_summary
+    (headline, average_temp), so it is loaded with the row rather than lazily on
+    first touch. All three generation entry points used to spell this out
+    identically; a fourth would have had to remember the undefer.
+    """
+    activity = (
+        db.query(Activity)
+        .options(undefer(Activity.raw_summary))
+        .filter(Activity.id == activity_uuid)
+        .first()
+    )
+    if not activity or not activity.metrics:
+        return None
+    return activity
+
+
 @dataclass
 class _GenerationRequest:
     """Everything one LLM generation call for an activity needs, assembled once.
@@ -529,7 +578,7 @@ async def get_or_generate_coach_report(
 
     # Check cache (active version only)
     existing = get_active_report_row(db, activity_uuid)
-    if existing and not force:
+    if cached_row_is_servable(existing, kind=TurnKind.REPORT, force=force):
         return _to_read(existing)
     # #273: a force regenerate does NOT delete the active row up front. The LLM call
     # runs first and _persist_report updates the existing row in place (generate-
@@ -537,25 +586,15 @@ async def get_or_generate_coach_report(
     # mid-regen leaves the prior report intact instead of zero rows. Prior schema-
     # versions are untouched (the in-place update keeps the same cache identity).
 
-    # Load activity. undefer raw_summary (#359): the context pack reads the
-    # subject's raw_summary (headline, average_temp), so load it with the row.
-    activity = (
-        db.query(Activity)
-        .options(undefer(Activity.raw_summary))
-        .filter(Activity.id == activity_uuid)
-        .first()
-    )
-    if not activity or not activity.metrics:
+    activity = _load_subject(db, activity_uuid)
+    if activity is None:
         return None
 
     # Assemble the generation request (pack, fingerprint, serialized pack, system
     # prompt, user message). Single-shot uses the default fuller mode + playbook.
     req = _assemble_generation_request(db, activity)
 
-    client = AnthropicClient(
-        api_key=settings.ANTHROPIC_API_KEY,
-        model=settings.COACH_MODEL_ID,
-    )
+    client = build_client(TurnKind.REPORT, activity.user_id)
 
     # Dispatch on prompt family (ADR 0009): the A3 prose-message path vs the
     # legacy structured path. Both normalise to a _GenOutcome so storage is shared.
@@ -568,20 +607,14 @@ async def get_or_generate_coach_report(
             client, req.system_prompt, req.user_message, req.pack, user_id=activity.user_id
         )
 
-    read = _persist_report(
+    return _persist_report(
         db,
         activity=activity,
-        prompt_id=req.prompt_id,
-        schema_version=req.schema_version,
-        pack=req.pack,
-        pack_dict=req.pack_dict,
-        input_hash=req.input_hash,
+        req=req,
         outcome=outcome,
         existing=existing,  # #273: in-place swap on force; None -> insert (first gen)
         fire_learning_loop=True,
-        voice=req.voice,
     )
-    return read
 
 
 @dataclass
@@ -611,13 +644,8 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     has no metrics (nothing to react to).
     """
     activity_uuid = _coerce_uuid(activity_id)
-    activity = (
-        db.query(Activity)
-        .options(undefer(Activity.raw_summary))  # #359: context reads subject raw_summary
-        .filter(Activity.id == activity_uuid)
-        .first()
-    )
-    if not activity or not activity.metrics:
+    activity = _load_subject(db, activity_uuid)
+    if activity is None:
         return None
 
     # Assemble the opener request first (mode="opener": lean prompt, salience-
@@ -627,7 +655,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     req = _assemble_generation_request(db, activity, mode="opener")
 
     existing = get_active_report_row(db, activity_uuid)
-    if existing is not None:
+    if cached_row_is_servable(existing, kind=TurnKind.OPENER, force=False):
         # Idempotent re-entry: the opener (or a later fuller) is already written.
         # Do not re-LLM; recompute the schedule decision from the stored bit + the
         # deterministic safety override, and recover with a fuller turn if the
@@ -641,9 +669,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
             is_fallback=existing.is_fallback,
         )
 
-    client = AnthropicClient(
-        api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
-    )
+    client = build_client(TurnKind.OPENER, activity.user_id)
     outcome = await _generate_message(
         client, req.system_prompt, req.user_message, req.pack,
         is_opener=True, user_id=activity.user_id,
@@ -652,15 +678,10 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     read = _persist_report(
         db,
         activity=activity,
-        prompt_id=req.prompt_id,
-        schema_version=req.schema_version,
-        pack=req.pack,
-        pack_dict=req.pack_dict,
-        input_hash=req.input_hash,
+        req=req,
         outcome=outcome,
         existing=None,
         fire_learning_loop=False,  # the opener writes nothing to durable memory
-        voice=req.voice,
     )
     # Hybrid salience: the opener LLM's judgment OR the deterministic safety
     # override (the model can never stay quiet on a red-flag run). A fallback
@@ -703,7 +724,7 @@ async def generate_fuller(
     # row still preserves the opener half of the thread (the brief's "preserving both
     # halves" survives force too) — the in-place swap below overwrites the report dict.
     opener_prose = (existing.report or {}).get("opener_message") if existing else None
-    if existing is not None and not is_opener_only(existing.report) and not force:
+    if cached_row_is_servable(existing, kind=TurnKind.FULLER, force=force):
         # A complete fuller turn is already cached for this version.
         return _to_read(existing)
     # #273: a force regenerate does NOT delete the active row up front. The fuller
@@ -712,13 +733,8 @@ async def generate_fuller(
     # complete report intact instead of zero rows. Prior schema-versions are untouched
     # (the in-place update keeps the same cache identity).
 
-    activity = (
-        db.query(Activity)
-        .options(undefer(Activity.raw_summary))  # #359: context reads subject raw_summary
-        .filter(Activity.id == activity_uuid)
-        .first()
-    )
-    if not activity or not activity.metrics:
+    activity = _load_subject(db, activity_uuid)
+    if activity is None:
         return None
 
     # Continuity: the opener prose this exchange already sent (preserved above,
@@ -732,9 +748,7 @@ async def generate_fuller(
     # Assemble the fuller request (mode="fuller": deep prompt + playbook + fuller
     # view). Continuity (the opener prose + reply) rides the pack on this turn only.
     req = _assemble_generation_request(db, activity, mode="fuller", continuity=continuity)
-    client = AnthropicClient(
-        api_key=settings.ANTHROPIC_API_KEY, model=settings.COACH_MODEL_ID
-    )
+    client = build_client(TurnKind.FULLER, activity.user_id)
     outcome = await _generate_message(
         client, req.system_prompt, req.user_message, req.pack, user_id=activity.user_id
     )
@@ -760,15 +774,10 @@ async def generate_fuller(
     return _persist_report(
         db,
         activity=activity,
-        prompt_id=req.prompt_id,
-        schema_version=req.schema_version,
-        pack=req.pack,
-        pack_dict=req.pack_dict,
-        input_hash=req.input_hash,
+        req=req,
         outcome=outcome,
         existing=existing,  # in-place update of the opener row, or None -> insert
         fire_learning_loop=True,
-        voice=req.voice,
     )
 
 
@@ -793,19 +802,20 @@ def _persist_report(
     db: Session,
     *,
     activity: Activity,
-    prompt_id: str,
-    schema_version: str,
-    pack: CoachContextPack,
-    pack_dict: dict,
-    input_hash: str,
+    req: "_GenerationRequest",
     outcome: "_GenOutcome",
     existing: Optional[CoachReport],
     fire_learning_loop: bool,
-    voice=None,
 ) -> Optional[CoachReportRead]:
     """Build the meta + digest, persist the report, and optionally fire the learning
     loop. Shared by the single-shot path, the opener, and the fuller turn so storage
     is identical.
+
+    Takes the assembled `_GenerationRequest` rather than its six fields spread
+    out (#801): all three call sites re-typed the same prompt_id / schema_version
+    / pack / pack_dict / input_hash / voice list, which is six chances to pass one
+    generation's pack with another's fingerprint. They come from one object, so
+    they travel as one.
 
     Three persistence shapes:
     - INSERT (existing is None): a first generation.
@@ -826,6 +836,12 @@ def _persist_report(
     does). On an INSERT race the row that landed first wins and the loop is skipped.
     """
     activity_uuid = activity.id
+    prompt_id = req.prompt_id
+    schema_version = req.schema_version
+    pack = req.pack
+    pack_dict = req.pack_dict
+    input_hash = req.input_hash
+    voice = req.voice
 
     # #279: never replace a prior GOOD report with a fallback. A fallback may only
     # land where there is nothing good to protect — a first generation (existing is
@@ -1028,7 +1044,7 @@ def _structured_fallback_dump() -> dict:
 
 
 async def _generate_structured(
-    client: AnthropicClient,
+    client: CoachClient,
     system_prompt: str,
     user_message: str,
     pack: CoachContextPack,
@@ -1115,35 +1131,31 @@ def _serialize_blocks(content_blocks: list) -> str:
 
 
 async def _call_message(
-    client: AnthropicClient,
+    client,
     system_prompt: str,
     user_message: str,
     *,
     max_tokens: int = _MESSAGE_MAX_TOKENS,
     user_id=None,
 ):
-    result = await client.generate_coach_message(
+    """One prose-message sub-call.
+
+    Spend is NOT recorded here any more: the client this turn was handed is a
+    `turn.MeteredClient`, which records every sub-call including the truncation,
+    tail-skip and policy-fix fan-out (#801). The recording point is identical,
+    it is simply no longer a thing each call site has to remember. `user_id` is
+    kept on the signature because the caller still uses it for the entry gate.
+    """
+    return await client.generate_coach_message(
         system=system_prompt,
         user=user_message,
         tools=[RECORD_COACH_TAIL_TOOL],
         max_tokens=max_tokens,
     )
-    # P2.2: count EVERY sub-call's spend (the retry/escalation fan-out is the
-    # cost lever the going-live doc flags), keyed by activity-owner user_id.
-    if user_id is not None:
-        budget_record(
-            user_id,
-            client.model,
-            result.input_tokens,
-            result.output_tokens,
-            cache_read_input_tokens=result.cache_read_input_tokens,
-            cache_creation_input_tokens=result.cache_creation_input_tokens,
-        )
-    return result
 
 
 async def _reattempt_if_truncated(
-    client: AnthropicClient,
+    client: CoachClient,
     system_prompt: str,
     user_message: str,
     result,
@@ -1201,6 +1213,18 @@ def _opener_fallback_outcome() -> "_GenOutcome":
     )
 
 
+def _fix_instructions(violations: List[PolicyViolation]) -> str:
+    """The corrective retry's instruction list, one line per violation.
+
+    Shared by both retry paths (#801). Only the JOIN is shared: the two
+    preambles around it differ in wording ("Your previous MESSAGE ... Rewrite the
+    message and the tail" vs "Your previous RESPONSE ... Fix these issues"), and
+    those are bytes that reach the model, so unifying them is a prompt change
+    that belongs to the prompt phase, not to this refactor.
+    """
+    return "\n".join(f"- {v.rule}: {v.fix_instruction}" for v in violations)
+
+
 @dataclass
 class _MsgAttempt:
     """One prose-message generation attempt, carrying the signals storage needs to
@@ -1227,7 +1251,7 @@ def _choose_message_attempt(first: _MsgAttempt, retry: _MsgAttempt) -> _MsgAttem
 
 
 async def _generate_message(
-    client: AnthropicClient,
+    client: CoachClient,
     system_prompt: str,
     user_message: str,
     pack: CoachContextPack,
@@ -1370,7 +1394,7 @@ async def _generate_message(
 
 
 async def _retry_message_with_fixes(
-    client: AnthropicClient,
+    client: CoachClient,
     system_prompt: str,
     original_user_message: str,
     pack: CoachContextPack,
@@ -1395,9 +1419,7 @@ async def _retry_message_with_fixes(
     max_tokens = _OPENER_MAX_TOKENS if is_opener else _MESSAGE_MAX_TOKENS
     escalated = _OPENER_MAX_TOKENS_ESCALATED if is_opener else _MESSAGE_MAX_TOKENS_ESCALATED
     merge = merge_opener if is_opener else merge_report
-    fix_instructions = "\n".join(
-        f"- {v.rule}: {v.fix_instruction}" for v in violations
-    )
+    fix_instructions = _fix_instructions(violations)
     retry_message = (
         "Your previous message had policy violations. Rewrite the message and the "
         "tail to fix these issues ONLY (keep everything else the same):\n"
@@ -1430,7 +1452,7 @@ async def _retry_message_with_fixes(
 
 
 async def _retry_with_fixes(
-    client: AnthropicClient,
+    client: CoachClient,
     system_prompt: str,
     original_user_message: str,
     pack: CoachContextPack,
@@ -1440,9 +1462,7 @@ async def _retry_with_fixes(
     Re-prompt the LLM once with fix instructions for policy violations.
     Returns (content, remaining_violations). Never loops more than once.
     """
-    fix_instructions = "\n".join(
-        f"- {v.rule}: {v.fix_instruction}" for v in violations
-    )
+    fix_instructions = _fix_instructions(violations)
     retry_message = (
         f"Your previous response had policy violations. Fix these issues ONLY "
         f"(keep everything else the same):\n{fix_instructions}\n\n"

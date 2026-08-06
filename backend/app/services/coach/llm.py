@@ -74,6 +74,97 @@ def _rate_limit_backoff_seconds(exc: Any, retry_index: int) -> float:
     return min(backoff, _RATE_LIMIT_BACKOFF_CAP_SECONDS)
 
 
+class RetryLadder:
+    """THE transport retry policy for every Anthropic call this app makes (#801).
+
+    One ladder, three rungs, in the order a caller meets them:
+
+    - transient transport (timeout / connection drop / mid-stream protocol
+      error): `_MAX_TRANSIENT_RETRIES` attempts at a flat backoff.
+    - 429 rate limit: `_MAX_RATE_LIMIT_RETRIES` attempts honoring Retry-After
+      (#603) — capacity frees up, so a 429 is retriable where a 4xx is not.
+    - 5xx: shares the transient budget; any other 4xx is a caller bug and is
+      raised immediately.
+
+    Written once because it was written four times, and they had DRIFTED — the
+    issue's "byte-identical apart from the log event" is not what the code said:
+
+    - the streaming method carried the 429 rung ONLY, so a connection drop or a
+      5xx on a chat turn degraded on the first failure while the same failure on
+      a report was retried;
+    - `httpx.RemoteProtocolError` was caught by `generate_coach_message` alone.
+      Sharing the ladder means the two non-streaming create-based methods now
+      catch it too. That can only widen: the SDK wraps httpx errors from the
+      initial HTTP call into APIConnectionError, so a non-streaming call has no
+      way to raise it unwrapped in the first place.
+
+    `event_prefix` keeps each call site's log events.
+
+    `retriable` is the streaming guard: once a token has left the server the
+    request must NOT be re-issued, because the caller has already buffered
+    output and a re-run would duplicate it. A single-shot caller passes True.
+    """
+
+    def __init__(self, event_prefix: str) -> None:
+        self._prefix = event_prefix
+        self._transient_retries = 0
+        self._rate_limit_retries = 0
+
+    async def should_retry(self, exc: BaseException, *, retriable: bool = True) -> bool:
+        """True when the caller should re-issue the request (after sleeping out
+        the backoff here). False means the caller re-raises."""
+        import anthropic
+
+        if not retriable:
+            return False
+        if isinstance(
+            exc,
+            (
+                anthropic.APITimeoutError,
+                anthropic.APIConnectionError,
+                # httpx.RemoteProtocolError is raised mid-stream when the peer
+                # closes the connection before the chunked response body is
+                # complete ("incomplete chunked read"). The SDK wraps httpx errors
+                # from the *initial* HTTP call into APIConnectionError, but errors
+                # surfacing during SSE iteration escape unwrapped. Same transient
+                # transport class, same rung (#302).
+                httpx.RemoteProtocolError,
+            ),
+        ):
+            return await self._transient(exc)
+        if isinstance(exc, anthropic.RateLimitError):
+            if self._rate_limit_retries >= _MAX_RATE_LIMIT_RETRIES:
+                return False
+            delay = _rate_limit_backoff_seconds(exc, self._rate_limit_retries)
+            self._rate_limit_retries += 1
+            logger.warning(
+                f"{self._prefix}_rate_limit_retry",
+                extra={"attempt": self._rate_limit_retries, "sleep": delay},
+            )
+            await asyncio.sleep(delay)
+            return True
+        if isinstance(exc, anthropic.APIStatusError):
+            # Retry only on 5xx; other 4xx (bad request, auth, etc.) is a caller
+            # bug and won't get better on retry.
+            if exc.status_code >= 500:
+                return await self._transient(exc, event="5xx_retry")
+            return False
+        return False
+
+    async def _transient(self, exc: BaseException, event: str = "transient_failure") -> bool:
+        if self._transient_retries >= _MAX_TRANSIENT_RETRIES:
+            return False
+        self._transient_retries += 1
+        detail = (
+            {"attempt": self._transient_retries, "status": getattr(exc, "status_code", None)}
+            if event == "5xx_retry"
+            else {"attempt": self._transient_retries, "kind": type(exc).__name__}
+        )
+        logger.warning(f"{self._prefix}_{event}", extra=detail)
+        await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+        return True
+
+
 @dataclass
 class Usage:
     """Token usage for the per-user budget gate (#472). 0 when none was returned.
@@ -164,10 +255,7 @@ class AnthropicClient:
         self, *, system: str, user: str, max_tokens: int = 1024
     ) -> tuple[str, Usage]:
         """`generate_json` that also returns token usage for the budget gate (#472)."""
-        import anthropic
-
-        transient_retries = 0
-        rate_limit_retries = 0
+        ladder = RetryLadder("anthropic")
         while True:
             try:
                 response = await self.client.messages.create(
@@ -179,38 +267,8 @@ class AnthropicClient:
                     timeout=_TIMEOUT_SECONDS,
                 )
                 return response.content[0].text, _usage_from_response(response)
-            except (anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
-                if transient_retries < _MAX_TRANSIENT_RETRIES:
-                    transient_retries += 1
-                    logger.warning(
-                        "anthropic_transient_failure",
-                        extra={"attempt": transient_retries, "kind": type(exc).__name__},
-                    )
-                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
-                    continue
-                raise
-            except anthropic.RateLimitError as exc:
-                # 429: capacity, not a caller bug — retry honoring Retry-After (#603).
-                if rate_limit_retries < _MAX_RATE_LIMIT_RETRIES:
-                    delay = _rate_limit_backoff_seconds(exc, rate_limit_retries)
-                    rate_limit_retries += 1
-                    logger.warning(
-                        "anthropic_rate_limit_retry",
-                        extra={"attempt": rate_limit_retries, "sleep": delay},
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                raise
-            except anthropic.APIStatusError as exc:
-                # Retry only on 5xx; other 4xx (bad request, auth, etc.) is a
-                # caller bug and won't get better on retry.
-                if exc.status_code >= 500 and transient_retries < _MAX_TRANSIENT_RETRIES:
-                    transient_retries += 1
-                    logger.warning(
-                        "anthropic_5xx_retry",
-                        extra={"attempt": transient_retries, "status": exc.status_code},
-                    )
-                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+            except Exception as exc:  # noqa: BLE001 — the ladder decides; it re-raises
+                if await ladder.should_retry(exc):
                     continue
                 raise
 
@@ -247,11 +305,8 @@ class AnthropicClient:
         is returned (a logic error, not transient — not retried here; the caller
         treats it as a failed distillation).
         """
-        import anthropic
-
         tool_name = tool["name"]
-        transient_retries = 0
-        rate_limit_retries = 0
+        ladder = RetryLadder("anthropic_structured")
         while True:
             try:
                 response = await self.client.messages.create(
@@ -282,35 +337,12 @@ class AnthropicClient:
                         result = dict(tool_input) if isinstance(tool_input, dict) else {}
                         return result, usage
                 raise ValueError(f"no {tool_name} tool_use block in response")
-            except (anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
-                if transient_retries < _MAX_TRANSIENT_RETRIES:
-                    transient_retries += 1
-                    logger.warning(
-                        "anthropic_structured_transient_failure",
-                        extra={"attempt": transient_retries, "kind": type(exc).__name__},
-                    )
-                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
-                    continue
+            except ValueError:
+                # A missing tool_use block is a logic error, not transport: it is
+                # not retried here (the caller treats it as a failed distillation).
                 raise
-            except anthropic.RateLimitError as exc:
-                if rate_limit_retries < _MAX_RATE_LIMIT_RETRIES:
-                    delay = _rate_limit_backoff_seconds(exc, rate_limit_retries)
-                    rate_limit_retries += 1
-                    logger.warning(
-                        "anthropic_structured_rate_limit_retry",
-                        extra={"attempt": rate_limit_retries, "sleep": delay},
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                raise
-            except anthropic.APIStatusError as exc:
-                if exc.status_code >= 500 and transient_retries < _MAX_TRANSIENT_RETRIES:
-                    transient_retries += 1
-                    logger.warning(
-                        "anthropic_structured_5xx_retry",
-                        extra={"attempt": transient_retries, "status": exc.status_code},
-                    )
-                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+            except Exception as exc:  # noqa: BLE001 — the ladder decides; it re-raises
+                if await ladder.should_retry(exc):
                     continue
                 raise
 
@@ -333,10 +365,7 @@ class AnthropicClient:
         timeout. Returns the content blocks + stop_reason; the caller parses and
         interprets them.
         """
-        import anthropic
-
-        transient_retries = 0
-        rate_limit_retries = 0
+        ladder = RetryLadder("anthropic_message")
         while True:
             try:
                 async with self.client.messages.stream(
@@ -370,49 +399,8 @@ class AnthropicClient:
                     cache_read_input_tokens=cache_read,
                     cache_creation_input_tokens=cache_creation,
                 )
-            except (
-                anthropic.APITimeoutError,
-                anthropic.APIConnectionError,
-                # httpx.RemoteProtocolError is raised mid-stream when the peer
-                # closes the connection before the chunked response body is
-                # complete ("incomplete chunked read"). The SDK wraps httpx
-                # errors that occur during the *initial* HTTP call into
-                # APIConnectionError, but errors that surface during SSE
-                # stream iteration (inside stream.get_final_message()) escape
-                # unwrapped. Treat them as the same transient transport class
-                # so they follow the same retry-then-propagate path (#302).
-                httpx.RemoteProtocolError,
-            ) as exc:
-                if transient_retries < _MAX_TRANSIENT_RETRIES:
-                    transient_retries += 1
-                    logger.warning(
-                        "anthropic_message_transient_failure",
-                        extra={"attempt": transient_retries, "kind": type(exc).__name__},
-                    )
-                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
-                    continue
-                raise
-            except anthropic.RateLimitError as exc:
-                # 429 under concurrent-generation load: retry honoring
-                # Retry-After before the caller's fallback fires (#603).
-                if rate_limit_retries < _MAX_RATE_LIMIT_RETRIES:
-                    delay = _rate_limit_backoff_seconds(exc, rate_limit_retries)
-                    rate_limit_retries += 1
-                    logger.warning(
-                        "anthropic_message_rate_limit_retry",
-                        extra={"attempt": rate_limit_retries, "sleep": delay},
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                raise
-            except anthropic.APIStatusError as exc:
-                if exc.status_code >= 500 and transient_retries < _MAX_TRANSIENT_RETRIES:
-                    transient_retries += 1
-                    logger.warning(
-                        "anthropic_message_5xx_retry",
-                        extra={"attempt": transient_retries, "status": exc.status_code},
-                    )
-                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+            except Exception as exc:  # noqa: BLE001 — the ladder decides; it re-raises
+                if await ladder.should_retry(exc):
                     continue
                 raise
 
@@ -434,16 +422,14 @@ class AnthropicClient:
         When `tools` is falsy the call carries no tool surface, forcing a text answer
         (the loop's tools-off final round).
 
-        429 resilience (#625): a rate limit is admission-time capacity, raised when
-        the request is issued — BEFORE the first token — so a bounded retry honoring
-        Retry-After (the same `_MAX_RATE_LIMIT_RETRIES` budget and backoff as the
-        report path, #603) re-issues the request with no duplicate output. If any
-        token has already streamed, we do NOT re-run (that would duplicate the
-        buffered reply); the 429 then propagates to the caller's safe-degrade path,
-        exactly as any other transport error does.
+        Transport resilience: the SHARED `RetryLadder` (#801), so a chat turn now
+        survives the same transient drops and 5xx a report does — before this it
+        carried only the 429 rung, and a connection drop degraded on first failure.
+        Every rung is gated on `started`: a rate limit is admission-time capacity
+        raised BEFORE the first token, so re-issuing produces no duplicate output,
+        but once ANY token has streamed a re-run would duplicate the buffered reply,
+        so the error propagates to the caller's safe-degrade path instead (#625).
         """
-        import anthropic
-
         stream_kwargs: Dict[str, Any] = dict(
             model=self.model,
             max_tokens=max_tokens,
@@ -460,7 +446,7 @@ class AnthropicClient:
             stream_kwargs["tools"] = tools
             stream_kwargs["tool_choice"] = {"type": "auto"}
 
-        rate_limit_retries = 0
+        ladder = RetryLadder("anthropic_chat")
         while True:
             started = False
             try:
@@ -470,17 +456,8 @@ class AnthropicClient:
                         yield ChatTurnDelta(text=text)
                     final = await stream.get_final_message()
                 break
-            except anthropic.RateLimitError as exc:
-                # Only retriable before the first token; once tokens have streamed a
-                # re-run would duplicate the buffered reply, so propagate instead.
-                if not started and rate_limit_retries < _MAX_RATE_LIMIT_RETRIES:
-                    delay = _rate_limit_backoff_seconds(exc, rate_limit_retries)
-                    rate_limit_retries += 1
-                    logger.warning(
-                        "anthropic_chat_rate_limit_retry",
-                        extra={"attempt": rate_limit_retries, "sleep": delay},
-                    )
-                    await asyncio.sleep(delay)
+            except Exception as exc:  # noqa: BLE001 — the ladder decides; it re-raises
+                if await ladder.should_retry(exc, retriable=not started):
                     continue
                 raise
 
@@ -491,5 +468,12 @@ class AnthropicClient:
                 stop_reason=final.stop_reason,
                 input_tokens=getattr(usage, "input_tokens", 0) or 0,
                 output_tokens=getattr(usage, "output_tokens", 0) or 0,
+                # #786: the chat prefix is cached too (the breakpoint above), so
+                # the cache buckets must ride the result or the budget counter
+                # under-reports every conversational turn.
+                cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+                cache_creation_input_tokens=getattr(
+                    usage, "cache_creation_input_tokens", 0
+                ) or 0,
             )
         )

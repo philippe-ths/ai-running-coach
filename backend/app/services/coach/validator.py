@@ -491,6 +491,56 @@ def validate_message_policy(
     return violations
 
 
+# --- conversational entry point --------------------------------------------
+# The third assembly of the same rule bodies, and until #801 the only one living
+# outside this module (it sat in chat.py, so a reader auditing the policy floor
+# found two of the three entry points here and had to know the third existed).
+# ADR 0024 is unchanged by the move: the floor's BEHAVIOUR is identical, only the
+# module it is invoked from differs.
+#
+# What makes this entry point different from the two above is where its
+# primitives come from. A report is judged against its STORED context pack; a
+# conversational turn has no pack at all (ADR 0027 — a thread is anchored to the
+# runner and to now, not to a run), so its primitives are re-sourced from the
+# turn's OWN facts: zone calibration from the runner's profile, interval-claim
+# gating from the sessions actually fetched or shown this turn. That makes the
+# floor stronger off a pack rather than weaker, and it cannot be degraded by a
+# no-report window (#685).
+#
+# The DELIBERATE difference in what a violation DOES stays with the callers and
+# must not be unified: a report forces `is_fallback=True` (ADR 0009 — the prose
+# renders verbatim, so the runner must never see it), while a conversational
+# turn substitutes the safe non-diagnostic redirect (#340).
+
+
+def validate_conversational_policy(
+    text: str,
+    *,
+    zones_calibrated: bool,
+    sessions_in_play: List[dict],
+) -> List[PolicyViolation]:
+    """The conversational policy floor: the rules that bind to free-form prose.
+
+    Rule 5 (medical scope) is unconditional, as ever. Rule 2 (zone language) is
+    judged against the runner's own calibration, resolved from their profile,
+    which is where calibration always lived. Rule 4 (interval-execution claims)
+    is judged against each session actually in play this turn, each carrying its
+    own detection confidence.
+
+    Rules 1, 3, 7 and 8 do not apply: they gate structured output (a question
+    count, a risk-flag array, evidence field paths) that a conversational reply
+    has none of.
+    """
+    violations: List[PolicyViolation] = []
+    violations += check_medical_overreach(text)
+    violations += check_uncalibrated_zones(zones_calibrated, text)
+    for session_facts in sessions_in_play:
+        violations += check_ungated_interval_claim(session_facts, text)
+        if any(v.rule == "ungated_interval_claim" for v in violations):
+            break  # one gated claim is enough; no need to re-match per session
+    return violations
+
+
 def _extract_all_text(content: CoachReportContent) -> str:
     """Concatenate all text fields for pattern matching."""
     parts = []

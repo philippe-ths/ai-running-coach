@@ -135,7 +135,7 @@ async def test_over_budget_user_degrades_to_fallback_without_calling_llm(
     _capped_gate.record(str(activity.user_id), "claude-opus-4-8", 1_000_000, 0)
 
     client = _message_client(_valid_blocks())
-    with patch("app.services.coach.service.AnthropicClient", return_value=client):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=client):
         read = await get_or_generate_coach_report(db, str(activity.id))
 
     # Degraded to the deterministic fallback, and the LLM was never called (the
@@ -150,7 +150,7 @@ async def test_under_budget_user_unaffected(db, _single_shot_prompt, _capped_gat
     activity = _seed_activity_with_metrics(db)
     # This user has spent nothing; they are under the cap.
     client = _message_client(_valid_blocks())
-    with patch("app.services.coach.service.AnthropicClient", return_value=client):
+    with patch("app.services.coach.turn.AnthropicClient", return_value=client):
         read = await get_or_generate_coach_report(db, str(activity.id))
 
     client.generate_coach_message.assert_called()
