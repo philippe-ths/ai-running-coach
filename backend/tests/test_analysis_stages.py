@@ -210,8 +210,21 @@ def test_registry_module_runs_its_check_at_import():
 
 # --- 4. A stage receives what it declared, not the whole accumulator ---------
 
-class _RecordingDict(dict):
-    """A dict that remembers which keys were read through .get()."""
+def test_projection_raises_on_an_undeclared_key(db):
+    """The projection is not a plain dict. `flags.py` reads with `.get()`, so a
+    plain dict would hand back None for a key the projection does not carry —
+    the silent degradation this change exists to remove, reintroduced one layer
+    down and in a different file from the declaration."""
+    proj = stages_mod.DeclaredProjection({"effort": "easy"})
+    assert proj.get("effort") == "easy"
+    with pytest.raises(RuntimeError, match="read but not declared"):
+        proj.get("hr_drift")
+
+
+class _RecordingDict(stages_mod.DeclaredProjection):
+    """A projection that remembers which keys were read through .get()."""
+
+    __slots__ = ("accessed",)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

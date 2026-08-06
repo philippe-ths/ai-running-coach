@@ -69,6 +69,31 @@ SCRATCH_NAMES = frozenset(
 _COLUMN_NAMES = frozenset(f.name for f in fields(DerivedMetricFields))
 
 
+class DeclaredProjection(dict):
+    """The narrow dict handed to a stage whose pure function takes a mapping.
+
+    A plain dict would reintroduce, one layer down, exactly the silent
+    degradation this change removes: the consumer reads with ``.get()``, so a key
+    the projection does not carry comes back as ``None`` — indistinguishable from
+    a genuinely absent value, and the row is quietly wrong. Reading an undeclared
+    key raises instead, so the declaration in the registry stays load-bearing for
+    a consumer that lives in another file.
+    """
+
+    __slots__ = ()
+
+    def get(self, key, default=None):
+        if key not in self:
+            raise RuntimeError(
+                f"analysis stage projection: {key!r} was read but not declared. "
+                f"Declared keys are {sorted(self)!r}. Add it to the stage's "
+                f"`reads` so the import-time check can verify an earlier stage "
+                f"produces it — reading it here would silently resolve to a "
+                f"default that is indistinguishable from a real absent value."
+            )
+        return self[key]
+
+
 @dataclass
 class StageContext:
     """What a stage is handed: the load phase's inputs, the accumulator being
@@ -121,9 +146,9 @@ class StageContext:
             return
         setattr(self.state, name, value)
 
-    def project(self, names: Iterable[str]) -> dict[str, Any]:
+    def project(self, names: Iterable[str]) -> "DeclaredProjection":
         """The narrow dict a stage declared, in place of the whole accumulator."""
-        return {name: self.get(name) for name in names}
+        return DeclaredProjection({name: self.get(name) for name in names})
 
     def snapshot_identities(self, exclude: Iterable[str] = ()) -> dict[str, Any]:
         """Identity of every mutable name a stage could touch, minus the ones it
