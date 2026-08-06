@@ -24,7 +24,6 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.activity import Activity
 from app.models.coach_chat_message import CoachChatMessage
-from app.models.coaching_relationship import CoachingRelationship
 from app.models.thread import Thread
 from app.models.user import User
 from app.models.user_profile import UserProfile

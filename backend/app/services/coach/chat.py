@@ -21,6 +21,14 @@ relationship meant a runner who asked in the wrong one met a coach that had not
 heard the other.
 """
 
+# SURFACED, NOT REMOVED (#801): thirteen of the imports below are dead, left
+# behind when #770 retired the activity chat box and took `stream_chat_response`,
+# `CHAT_SYSTEM_TEMPLATE`, `_build_chat_system_prompt` and `_validate_chat_text`
+# with it — AnthropicClient, AsyncIterator, CoachContextPack, CoachReport,
+# CoachingRelationship, UserProfile, calculate_splits, coach_llm_view,
+# coach_units, joinedload, render_voice_block, resolve_voice, settings. The
+# module docstring below also still describes that retired second surface. Both
+# are recorded rather than deleted, because deletion needs an explicit ASK.
 import json
 import logging
 import time
@@ -46,12 +54,7 @@ from app.services.coach.query_tools import (
     execute_chat_tool,
     summarize_tool_call,
 )
-from app.services.coach.validator import (
-    PolicyViolation,
-    check_medical_overreach,
-    check_ungated_interval_claim,
-    check_uncalibrated_zones,
-)
+from app.services.coach.validator import validate_conversational_policy
 from app.services.coach.voice import resolve_voice
 from app.services.analysis.splits import calculate_splits
 
@@ -77,25 +80,11 @@ MEDICAL_REDIRECT_MESSAGE = (
 _STREAM_SLICE_CHARS = 40
 
 
-def _validate_conversational_text(
-    text: str, *, zones_calibrated: bool, sessions_in_play: List[dict]
-) -> List[PolicyViolation]:
-    """The conversational policy floor re-sourced from the TURN'S OWN FACTS
-    (#767, ADR 0028) instead of a stored report pack: medical scope (rule 5,
-    unconditional as ever), zone language against the runner's own calibration
-    (rule 2 — resolved from their profile, which is where calibration always
-    lived), and interval-execution claims against the sessions actually fetched
-    or shown this turn (rule 4 — each carrying its own detection confidence).
-    Used by the thread turn always, and by the activity chat when its stored
-    pack will not parse — the floor gets stronger, not weaker, off the pack."""
-    violations: List[PolicyViolation] = []
-    violations += check_medical_overreach(text)
-    violations += check_uncalibrated_zones(zones_calibrated, text)
-    for session_facts in sessions_in_play:
-        violations += check_ungated_interval_claim(session_facts, text)
-        if any(v.rule == "ungated_interval_claim" for v in violations):
-            break  # one gated claim is enough; no need to re-match per session
-    return violations
+# The conversational floor moved to `validator.py` in #801, so all three
+# assemblies of the shared rule bodies live in the module that owns them. This
+# name is retained as the alias the thread turn and the tests read best with;
+# the behaviour is the validator's, unchanged (ADR 0024).
+_validate_conversational_text = validate_conversational_policy
 
 
 def sessions_in_play_from_tool_results(tool_results: List[tuple]) -> List[dict]:

@@ -423,6 +423,37 @@ def get_block_primary_report_row(db: Session, activity_id) -> Optional[CoachRepo
     return get_displayable_report_row(db, block.primary_activity_id)
 
 
+def cached_row_is_servable(
+    existing: Optional[CoachReport], *, kind: TurnKind, force: bool
+) -> bool:
+    """Whether a cached row answers this request without a fresh LLM call.
+
+    One predicate with the per-kind rule stated, rather than three cache checks
+    that read as if they disagree (they did, and each disagreement was load
+    bearing):
+
+    - REPORT (single-shot): any active-version row is the whole report.
+    - FULLER: an OPENER-ONLY row is half a report, so it never serves; the fuller
+      turn's job is to fill it in place.
+    - OPENER: any active-version row serves, complete or not, because the opener
+      is idempotent re-entry — a later fuller must not be re-opened. The caller
+      still recomputes the schedule decision from the stored row.
+
+    `force` is a runner-initiated "Re-run" and overrides the first two. It does
+    NOT reach the opener, which has no force path: re-opening a delivered
+    exchange is not a thing a runner can ask for.
+    """
+    if existing is None:
+        return False
+    if kind is TurnKind.OPENER:
+        return True
+    if force:
+        return False
+    if kind is TurnKind.FULLER:
+        return not is_opener_only(existing.report)
+    return True
+
+
 def _load_subject(db: Session, activity_uuid) -> Optional[Activity]:
     """The subject activity a generation runs on, or None when there is nothing
     to coach (no row, or no analysis yet).
@@ -550,7 +581,7 @@ async def get_or_generate_coach_report(
 
     # Check cache (active version only)
     existing = get_active_report_row(db, activity_uuid)
-    if existing and not force:
+    if cached_row_is_servable(existing, kind=TurnKind.REPORT, force=force):
         return _to_read(existing)
     # #273: a force regenerate does NOT delete the active row up front. The LLM call
     # runs first and _persist_report updates the existing row in place (generate-
@@ -579,20 +610,14 @@ async def get_or_generate_coach_report(
             client, req.system_prompt, req.user_message, req.pack, user_id=activity.user_id
         )
 
-    read = _persist_report(
+    return _persist_report(
         db,
         activity=activity,
-        prompt_id=req.prompt_id,
-        schema_version=req.schema_version,
-        pack=req.pack,
-        pack_dict=req.pack_dict,
-        input_hash=req.input_hash,
+        req=req,
         outcome=outcome,
         existing=existing,  # #273: in-place swap on force; None -> insert (first gen)
         fire_learning_loop=True,
-        voice=req.voice,
     )
-    return read
 
 
 @dataclass
@@ -633,7 +658,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     req = _assemble_generation_request(db, activity, mode="opener")
 
     existing = get_active_report_row(db, activity_uuid)
-    if existing is not None:
+    if cached_row_is_servable(existing, kind=TurnKind.OPENER, force=False):
         # Idempotent re-entry: the opener (or a later fuller) is already written.
         # Do not re-LLM; recompute the schedule decision from the stored bit + the
         # deterministic safety override, and recover with a fuller turn if the
@@ -656,15 +681,10 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     read = _persist_report(
         db,
         activity=activity,
-        prompt_id=req.prompt_id,
-        schema_version=req.schema_version,
-        pack=req.pack,
-        pack_dict=req.pack_dict,
-        input_hash=req.input_hash,
+        req=req,
         outcome=outcome,
         existing=None,
         fire_learning_loop=False,  # the opener writes nothing to durable memory
-        voice=req.voice,
     )
     # Hybrid salience: the opener LLM's judgment OR the deterministic safety
     # override (the model can never stay quiet on a red-flag run). A fallback
@@ -707,7 +727,7 @@ async def generate_fuller(
     # row still preserves the opener half of the thread (the brief's "preserving both
     # halves" survives force too) — the in-place swap below overwrites the report dict.
     opener_prose = (existing.report or {}).get("opener_message") if existing else None
-    if existing is not None and not is_opener_only(existing.report) and not force:
+    if cached_row_is_servable(existing, kind=TurnKind.FULLER, force=force):
         # A complete fuller turn is already cached for this version.
         return _to_read(existing)
     # #273: a force regenerate does NOT delete the active row up front. The fuller
@@ -757,15 +777,10 @@ async def generate_fuller(
     return _persist_report(
         db,
         activity=activity,
-        prompt_id=req.prompt_id,
-        schema_version=req.schema_version,
-        pack=req.pack,
-        pack_dict=req.pack_dict,
-        input_hash=req.input_hash,
+        req=req,
         outcome=outcome,
         existing=existing,  # in-place update of the opener row, or None -> insert
         fire_learning_loop=True,
-        voice=req.voice,
     )
 
 
@@ -790,19 +805,20 @@ def _persist_report(
     db: Session,
     *,
     activity: Activity,
-    prompt_id: str,
-    schema_version: str,
-    pack: CoachContextPack,
-    pack_dict: dict,
-    input_hash: str,
+    req: "_GenerationRequest",
     outcome: "_GenOutcome",
     existing: Optional[CoachReport],
     fire_learning_loop: bool,
-    voice=None,
 ) -> Optional[CoachReportRead]:
     """Build the meta + digest, persist the report, and optionally fire the learning
     loop. Shared by the single-shot path, the opener, and the fuller turn so storage
     is identical.
+
+    Takes the assembled `_GenerationRequest` rather than its six fields spread
+    out (#801): all three call sites re-typed the same prompt_id / schema_version
+    / pack / pack_dict / input_hash / voice list, which is six chances to pass one
+    generation's pack with another's fingerprint. They come from one object, so
+    they travel as one.
 
     Three persistence shapes:
     - INSERT (existing is None): a first generation.
@@ -823,6 +839,12 @@ def _persist_report(
     does). On an INSERT race the row that landed first wins and the loop is skipped.
     """
     activity_uuid = activity.id
+    prompt_id = req.prompt_id
+    schema_version = req.schema_version
+    pack = req.pack
+    pack_dict = req.pack_dict
+    input_hash = req.input_hash
+    voice = req.voice
 
     # #279: never replace a prior GOOD report with a fallback. A fallback may only
     # land where there is nothing good to protect — a first generation (existing is
@@ -1194,6 +1216,18 @@ def _opener_fallback_outcome() -> "_GenOutcome":
     )
 
 
+def _fix_instructions(violations: List[PolicyViolation]) -> str:
+    """The corrective retry's instruction list, one line per violation.
+
+    Shared by both retry paths (#801). Only the JOIN is shared: the two
+    preambles around it differ in wording ("Your previous MESSAGE ... Rewrite the
+    message and the tail" vs "Your previous RESPONSE ... Fix these issues"), and
+    those are bytes that reach the model, so unifying them is a prompt change
+    that belongs to the prompt phase, not to this refactor.
+    """
+    return "\n".join(f"- {v.rule}: {v.fix_instruction}" for v in violations)
+
+
 @dataclass
 class _MsgAttempt:
     """One prose-message generation attempt, carrying the signals storage needs to
@@ -1388,9 +1422,7 @@ async def _retry_message_with_fixes(
     max_tokens = _OPENER_MAX_TOKENS if is_opener else _MESSAGE_MAX_TOKENS
     escalated = _OPENER_MAX_TOKENS_ESCALATED if is_opener else _MESSAGE_MAX_TOKENS_ESCALATED
     merge = merge_opener if is_opener else merge_report
-    fix_instructions = "\n".join(
-        f"- {v.rule}: {v.fix_instruction}" for v in violations
-    )
+    fix_instructions = _fix_instructions(violations)
     retry_message = (
         "Your previous message had policy violations. Rewrite the message and the "
         "tail to fix these issues ONLY (keep everything else the same):\n"
@@ -1433,9 +1465,7 @@ async def _retry_with_fixes(
     Re-prompt the LLM once with fix instructions for policy violations.
     Returns (content, remaining_violations). Never loops more than once.
     """
-    fix_instructions = "\n".join(
-        f"- {v.rule}: {v.fix_instruction}" for v in violations
-    )
+    fix_instructions = _fix_instructions(violations)
     retry_message = (
         f"Your previous response had policy violations. Fix these issues ONLY "
         f"(keep everything else the same):\n{fix_instructions}\n\n"
