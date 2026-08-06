@@ -22,6 +22,7 @@ from app.services.coach.prompts import (
     build_system_prompt,
     is_recent_training_prompt,
 )
+from app.services.coach.prompt_features import PromptFeature, features_for
 from app.services.coach.service import active_schema_version
 
 V10 = "coach_message_v10"
@@ -33,11 +34,10 @@ def test_v11_registered_carries_every_v10_capability_plus_recent_training():
     assert V11.startswith(MESSAGE_PROMPT_PREFIX)  # -> schema 2.0 by prefix
     assert V11 in STREAM_VIEW_PROMPT_IDS  # inherits v10's capabilities
     assert V11 in RECENT_TRAINING_PROMPT_IDS  # ...plus the new RECENT_TRAINING capability
-    assert RECENT_TRAINING_PROMPT_IDS == {
-        V11, "coach_message_v12", "coach_message_v13", "coach_message_v14",
-        "coach_message_lean_v1",
-        "coach_message_lean_grouped_v1",
-    }
+    # Stated as v11's own delta from v10, so a later version joining or declining the
+    # capability costs no edit here (#803).
+    assert V10 not in RECENT_TRAINING_PROMPT_IDS  # inert under a rollback to v10
+    assert features_for(V11) == features_for(V10) | {PromptFeature.RECENT_TRAINING}
     assert V11 in _OPENER_PROMPTS  # has a distinct opener form (two-stage)
     # same schema family as v10 (so v11 reports regenerate, prior history retained).
     assert active_schema_version(V11) == active_schema_version(V10)

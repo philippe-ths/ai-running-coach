@@ -22,6 +22,7 @@ from app.services.coach.prompts import (
     build_system_prompt,
     is_stream_view_prompt,
 )
+from app.services.coach.prompt_features import PromptFeature, features_for
 from app.services.coach.service import active_schema_version
 
 V9 = "coach_message_v9"
@@ -33,19 +34,11 @@ def test_v10_registered_carries_every_v9_capability_plus_stream_view():
     assert V10.startswith(MESSAGE_PROMPT_PREFIX)  # -> schema 2.0 by prefix
     assert V10 in VOLUME_PROMPT_IDS  # inherits v9's capabilities
     assert V10 in STREAM_VIEW_PROMPT_IDS  # ...plus the new STREAM_VIEW capability
-    # v11 (#444) inherits STREAM_VIEW too.
-    assert STREAM_VIEW_PROMPT_IDS == {
-        V10, "coach_message_v11", "coach_message_v12", "coach_message_v13",
-        "coach_message_v14", "coach_message_lean_v1",
-        "coach_message_lean_grouped_v1",
-        "coach_message_lean_grouped_v2",  # ADR 0026 Slice 2 keeps STREAM_VIEW
-        "coach_message_lean_grouped_v3",  # ADR 0026 Slice 3 keeps STREAM_VIEW
-        "coach_message_lean_grouped_v4",  # ADR 0026 Slice 4 keeps STREAM_VIEW
-        "coach_message_lean_grouped_v5",  # ADR 0026 Slice 5 keeps STREAM_VIEW
-        "coach_message_lean_grouped_v6",  # #712 keeps STREAM_VIEW
-        "coach_message_lean_grouped_v7",  # personalisation keeps STREAM_VIEW
-        "coach_message_lean_grouped_v8",  # #742 body keeps STREAM_VIEW
-    }
+    # Stated as v10's own delta from v9, so a later version joining or declining the
+    # capability costs no edit here (#803: the old forward-looking membership set was
+    # why #578 had to touch five prior version test files).
+    assert V9 not in STREAM_VIEW_PROMPT_IDS  # inert under a rollback to v9
+    assert features_for(V10) == features_for(V9) | {PromptFeature.STREAM_VIEW}
     assert V10 in _OPENER_PROMPTS  # has a distinct opener form (two-stage)
     # same schema family as v9 (so v10 reports regenerate, prior history retained).
     assert active_schema_version(V10) == active_schema_version(V9)
