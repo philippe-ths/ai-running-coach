@@ -95,7 +95,7 @@ from app.schemas.coach_context import (
     SalienceContext,
 )
 from app.schemas.coach_memory import RunnerMemoryProfile
-from app.services.trends import _query_activity_facts
+from app.services.activity_facts import query_facts as _query_activity_facts
 from app.services.units.cadence import normalize_cadence_spm
 
 logger = logging.getLogger(__name__)

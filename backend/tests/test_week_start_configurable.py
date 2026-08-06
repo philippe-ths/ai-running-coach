@@ -13,8 +13,8 @@ from app.models import Activity, DerivedMetric, User, UserProfile
 from app.services.coach.query_tools import resolve_window
 from app.services.coach.recent_weeks import build_recent_weeks
 from app.services.coach.volume import build_training_volume, build_volume_report
+from app.services.activity_facts import DailyFact
 from app.services.trends import build_weekly_buckets, get_volume_report
-from app.services.trends import DailyFact
 from app.services.weeks import MONDAY, SUNDAY
 
 # Wednesday 2024-01-03. Its Monday week starts 2024-01-01 (Mon); its Sunday week
