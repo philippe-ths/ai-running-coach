@@ -13,9 +13,9 @@ import uuid
 from datetime import date, datetime, time, timedelta
 
 from app.models import Activity, DerivedMetric, User
+from app.services.activity_facts import DailyFact
+from app.services.activity_facts import rolling_bin_start as _rolling_bin_start
 from app.services.trends import (
-    DailyFact,
-    _rolling_bin_start,
     build_period_buckets,
     build_weekly_buckets,
     get_trends_report,

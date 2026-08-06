@@ -7,9 +7,9 @@ confounder flags (hills, stops) derived from already-projected fields.
 
 from datetime import date
 
+from app.services.activity_facts import ActivityFact
 from app.services.trends import (
     build_efficiency_trend,
-    ActivityFact,
     _EFFICIENCY_HILLY_GAIN_PER_KM,
     _EFFICIENCY_STOPPY_FRACTION,
 )

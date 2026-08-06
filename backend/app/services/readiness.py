@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.core.observability import capture_exception
 from app.models import Activity, DerivedMetric
+from app.services.activity_facts import local_day as _local_day
 
 logger = logging.getLogger(__name__)
 
@@ -179,19 +180,6 @@ def compute_readiness(
         sample_count=sample_count,
         history_span_days=history_span_days,
     )
-
-
-def _local_day(start_date, start_date_local) -> date:
-    """The runner's LOCAL calendar day for an activity, the ``Activity.local_start``
-    convention (#507): ``start_date_local`` when present, else the UTC ``start_date``.
-
-    Identical to the day-bucketing the volume / recent-training signals use (via
-    ``ActivityFact.local_date``), so readiness and volume agree on the day boundary
-    — a late-evening local run that has rolled to the next UTC day, and a same-local-
-    day double session, land on ONE day across both signals.
-    """
-    chosen = start_date_local if start_date_local is not None else start_date
-    return chosen.date() if isinstance(chosen, datetime) else chosen
 
 
 def build_readiness(db: Session, user_id, as_of) -> Optional[ReadinessModel]:

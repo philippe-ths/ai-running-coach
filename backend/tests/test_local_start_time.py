@@ -15,7 +15,7 @@ from app.models import Activity, DerivedMetric
 from app.models.user import User
 from app.services.coach.context import build_context_pack
 from app.services.strava_ingestion.ingestion import upsert_activity
-from app.services.trends import ActivityFact
+from app.services.activity_facts import ActivityFact
 
 
 def _user(db):

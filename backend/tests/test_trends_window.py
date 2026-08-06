@@ -100,7 +100,9 @@ def test_previous_window_abuts_current_with_no_gap(db):
 
 # --- #400 global rolling/calendar window resolver ----------------------------
 
-from app.services.trends import _resolve_window  # noqa: E402
+from app.services.activity_facts import (  # noqa: E402
+    resolve_window as _resolve_window,
+)
 
 _T = date(2026, 6, 20)  # a Saturday
 

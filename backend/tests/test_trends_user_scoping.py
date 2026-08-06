@@ -11,8 +11,8 @@ from datetime import date, datetime, time, timedelta
 import pytest
 
 from app.models import Activity, DerivedMetric, User
+from app.services.activity_facts import query_facts as _query_activity_facts
 from app.services.trends import (
-    _query_activity_facts,
     build_activity_facts,
     get_trends_report,
     get_weekly_stats,

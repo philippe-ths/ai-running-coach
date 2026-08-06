@@ -24,6 +24,7 @@ from app.services.coach.prompts import (
     build_system_prompt,
     is_volume_prompt,
 )
+from app.services.coach.prompt_features import PromptFeature, features_for
 from app.services.coach.service import active_schema_version
 
 V8 = "coach_message_v8"
@@ -40,13 +41,12 @@ def test_v9_registered_in_message_family_and_gate_sets():
     assert V9 in STANCE_PROMPT_IDS
     assert V9 in TRAINING_LOAD_PROMPT_IDS
     assert V9 in USER_MATERIALS_PROMPT_IDS
-    # ...plus the new VOLUME capability (v9 onward; later versions inherit it).
+    # ...plus the new VOLUME capability. Stated as v9's own delta from v8, so a later
+    # version joining or declining the capability costs no edit here (#803: the old
+    # forward-looking membership set meant every new version edited five prior tests).
     assert V9 in VOLUME_PROMPT_IDS
-    assert VOLUME_PROMPT_IDS == {
-        V9, "coach_message_v10", "coach_message_v11", "coach_message_v12",
-        "coach_message_v13", "coach_message_v14", "coach_message_lean_v1",
-        "coach_message_lean_grouped_v1",
-    }
+    assert V8 not in VOLUME_PROMPT_IDS  # inert under a rollback to v8
+    assert features_for(V9) == features_for(V8) | {PromptFeature.VOLUME}
     # same schema family as v8 (so v9 reports regenerate, prior history retained).
     assert active_schema_version(V9) == active_schema_version(V8)
 

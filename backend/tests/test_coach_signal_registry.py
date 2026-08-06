@@ -82,7 +82,12 @@ PACK_SECTION_ORACLE = {
     "longitudinal": None, "salience": None, "continuity": None,
 }
 
-GROUPED_PACK_IDS_ORACLE = frozenset(
+# The hand-maintained set as it stood before #800 relocated it into the manifest. A
+# SUBSET oracle, deliberately: the claim it exists to make is that the relocation lost
+# nothing, and pinning it as an equality would additionally claim no grouped version
+# will ever be added -- the forward-looking membership that #803 removed everywhere else,
+# because it makes every new version edit the tests of the ones before it.
+GROUPED_PACK_IDS_BEFORE_RELOCATION = frozenset(
     f"coach_message_lean_grouped_v{n}" for n in range(1, 9)
 )
 
@@ -142,12 +147,21 @@ def test_pack_section_order_preserves_the_one_cross_section_trim():
 
 
 def test_grouped_pack_prompt_ids_derive_from_the_manifest():
-    """The last hand-maintained prompt-id set now derives like its siblings."""
-    assert prompts.GROUPED_PACK_PROMPT_IDS == GROUPED_PACK_IDS_ORACLE
-    for pid in GROUPED_PACK_IDS_ORACLE:
+    """The last hand-maintained prompt-id set now derives like its siblings, and the
+    relocation kept every id that was in it."""
+    assert GROUPED_PACK_IDS_BEFORE_RELOCATION <= prompts.GROUPED_PACK_PROMPT_IDS
+    for pid in GROUPED_PACK_IDS_BEFORE_RELOCATION:
         assert PromptFeature.GROUPED_PACK in PROMPT_FEATURES[pid]
+    # The flag and the view agree in both directions, for every id the manifest knows.
     for pid, feats in PROMPT_FEATURES.items():
-        assert (PromptFeature.GROUPED_PACK in feats) == (pid in GROUPED_PACK_IDS_ORACLE)
+        assert (PromptFeature.GROUPED_PACK in feats) == (
+            pid in prompts.GROUPED_PACK_PROMPT_IDS
+        )
+    # Nothing outside the grouped lineage picked the flag up.
+    assert all(
+        pid.startswith("coach_message_lean_grouped_v")
+        for pid in prompts.GROUPED_PACK_PROMPT_IDS
+    )
 
 
 def test_read_time_seam_derives_its_gates_and_kill_switches():

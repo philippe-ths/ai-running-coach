@@ -375,3 +375,79 @@ def test_cli_inherits_eligibility_excludes_streamless(db):
     assert processed == 1
     assert _has_metric(db, streamed)
     assert not _has_metric(db, streamless)
+
+
+# ---------------------------------------------------------------------------
+# Owner scoping of the progress read (#804)
+# ---------------------------------------------------------------------------
+
+
+def _seed_second_user(db) -> User:
+    """A second runner. `_seed_user` pins strava_athlete_id=777, which is UNIQUE, so
+    a two-runner test needs its own athlete id."""
+    user = User(email=f"u2-{uuid4()}@example.com")
+    db.add(user)
+    db.commit()
+    db.add(
+        StravaAccount(
+            user_id=user.id,
+            strava_athlete_id=778,
+            access_token="t",
+            refresh_token="r",
+            expires_at=9999999999,
+            scope="read,activity:read_all",
+        )
+    )
+    db.commit()
+    return user
+
+
+def test_global_pass_reports_remaining_across_every_runner(db):
+    """A global (unscoped) batch must report the remaining count for the WHOLE
+    eligible set, not for whichever runner happened to be last in the batch.
+
+    `reanalyze_history_batch` took `user_id` as its owner-scoping parameter and then
+    reused that name as a loop variable over the batch's activities. By the time the
+    remaining-count query ran, `user_id` held the last activity's owner, so an
+    unscoped pass silently re-scoped its own progress read (#804). Log-only today,
+    but it is the operator's only view of how much work is left.
+    """
+    from app.jobs.reanalyze_history import reanalyze_history_batch
+
+    alice = _seed_user(db)
+    bob = _seed_second_user(db)
+    # Newest-first by strava id: bob's two lead, alice's two follow.
+    _seed_activity(db, alice, 9501)
+    _seed_activity(db, alice, 9502)
+    _seed_activity(db, bob, 9503)
+    _seed_activity(db, bob, 9504)
+
+    # A FULL batch of bob's two, so the cursor advances and `remaining` is computed.
+    # Alice's two are still eligible past that cursor.
+    result = reanalyze_history_batch(db, limit=2)
+
+    assert result.next_cursor == 9503
+    assert result.remaining == 2, (
+        "an unscoped pass must count both of alice's activities as remaining; "
+        "scoping to the last batch member's owner reports 0"
+    )
+
+
+def test_scoped_pass_still_reports_only_that_runners_remaining(db):
+    """The fix must not widen a SCOPED pass: when the caller asks for one runner,
+    `remaining` stays that runner's, never the global set's."""
+    from app.jobs.reanalyze_history import reanalyze_history_batch
+
+    alice = _seed_user(db)
+    bob = _seed_second_user(db)
+    _seed_activity(db, alice, 9601)
+    _seed_activity(db, alice, 9602)
+    _seed_activity(db, alice, 9603)
+    _seed_activity(db, bob, 9604)
+    _seed_activity(db, bob, 9605)
+
+    result = reanalyze_history_batch(db, limit=2, user_id=str(alice.id))
+
+    # Alice's newest two are done (9603, 9602); 9601 remains. Bob's never count.
+    assert result.next_cursor == 9602
+    assert result.remaining == 1
