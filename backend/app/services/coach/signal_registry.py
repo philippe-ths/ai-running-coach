@@ -1,10 +1,12 @@
 """The coach signal registry (#800) — ONE declaration per thing the coach receives.
 
-Before this module a single coach signal was declared nine times, in six modules,
-each declaration a separate hand-kept fact that had to agree with the other eight:
-its flat position, its coaching-question group, its prompt-version gate, its
-byte-stable drop, its kill switch, and how it is computed. The registries holding
-those facts drifted, because nothing forced them to agree.
+Before this module, one coach signal was declared across six modules, and five of
+those declarations RESTATED a fact another already held: its flat position
+(``_FLAT_ORDER``), its coaching-question group (``_SECTION_GROUP``), its
+prompt-version gate — twice, once on the ``PackSection`` descriptor and again on the
+``ReadTimeSignal`` construction — and its kill switch, hand-written a third time as
+an ``if not settings.X: return None`` inside the builder. Nothing forced them to
+agree, so they drifted.
 
 This module holds the declaration. Everything else DERIVES from it:
 
@@ -37,9 +39,11 @@ Every signal must state its gate EXPLICITLY: either a real ``COACH_*_ENABLED``
 setting, or an ``ungated_reason`` recording why it has none. A signal that states
 neither fails at import. This is the #800 criterion "a signal without a kill switch
 fails loudly rather than shipping ungated" read as *state the gate*, not *invent a
-flag*: eight of these signals genuinely have no switch today, and minting eight new
-settings to satisfy a check would be a behaviour change wearing a consistency
-costume. The reasons are in the rows, so the gaps are readable rather than silent.
+flag*: most of these signals genuinely have no switch today, and minting a settings
+field per gap to satisfy a check would be a behaviour change wearing a consistency
+costume — each new flag is a live production lever nobody asked for. The reasons are
+in the rows, so the gaps are readable rather than silent, and a test pins the ungated
+list so a new one is a decision someone takes rather than a default they inherit.
 """
 
 from __future__ import annotations
