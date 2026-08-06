@@ -41,7 +41,8 @@ explicitly, because collapsing any one of them silently changes a number:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy import select
@@ -192,6 +193,19 @@ def window_bounds(
     return lo, hi
 
 
+def _comparable(dt: datetime) -> datetime:
+    """An instant on the same footing as the naive bounds ``window_bounds`` builds.
+
+    ``Activity.start_date`` comes back timezone-AWARE from Postgres and NAIVE from
+    the in-memory SQLite the test suite uses, while the bound is always naive. SQL
+    compares them by interpreting the naive bound in the session timezone (UTC here,
+    and every instant this app stores is UTC), so the faithful in-memory equivalent
+    is to convert an aware instant to UTC and drop the offset. Doing it the other way
+    round — making the bound aware — would be a guess about the DB's timezone.
+    """
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+
+
 def facts_in_window(
     facts: List[ActivityFact], start_date: Optional[date], end_date: Optional[date]
 ) -> List[ActivityFact]:
@@ -204,11 +218,103 @@ def facts_in_window(
     does; using the local day here would silently move a near-midnight activity.
     """
     lo, hi = window_bounds(start_date, end_date)
+    if lo is None and hi is None:
+        return list(facts)
     return [
         f
         for f in facts
-        if (lo is None or f.start_date >= lo) and (hi is None or f.start_date < hi)
+        if (lo is None or _comparable(f.start_date) >= lo)
+        and (hi is None or _comparable(f.start_date) < hi)
     ]
+
+
+_SCAN_CACHE_KEY = "activity_facts.scan_cache"
+
+
+@contextmanager
+def scan_cache(db: Session):
+    """Serve every ``scan`` inside this block from as few queries as possible (#804).
+
+    One coach pack build asks the SAME projection several overlapping questions —
+    the 60-day intensity window, the 91-day recent-weeks window, the ~10-year
+    training-history window — each a strict sub-window of the widest. Inside this
+    block the widest fetch per ``(owner, session-shape)`` is kept and the narrower
+    windows are answered from it by exactly the predicate SQL would have applied.
+
+    Deliberately scoped to a block rather than living on the Session for its whole
+    life: these facts are a read-time snapshot, and a cache that outlived one
+    assembly would start serving stale rows to a later one. Nesting restores the
+    outer block's cache on exit, so a caller can never be surprised by one.
+    """
+    prior = db.info.get(_SCAN_CACHE_KEY)
+    db.info[_SCAN_CACHE_KEY] = {}
+    try:
+        yield
+    finally:
+        if prior is None:
+            db.info.pop(_SCAN_CACHE_KEY, None)
+        else:
+            db.info[_SCAN_CACHE_KEY] = prior
+
+
+def _covers(
+    have: Tuple[Optional[date], Optional[date]],
+    want: Tuple[Optional[date], Optional[date]],
+) -> bool:
+    """True when the fetched span ``have`` fully contains the requested span
+    ``want``. ``None`` is unbounded on that edge."""
+    (h_lo, h_hi), (w_lo, w_hi) = have, want
+    lo_ok = h_lo is None or (w_lo is not None and w_lo >= h_lo)
+    hi_ok = h_hi is None or (w_hi is not None and w_hi <= h_hi)
+    return lo_ok and hi_ok
+
+
+def scan(
+    db: Session,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    *,
+    user_id=None,
+    include_session_shape: bool = False,
+) -> List[ActivityFact]:
+    """``query_facts`` for the owner, memoised across an enclosing ``scan_cache``.
+
+    Outside a ``scan_cache`` block this is exactly ``query_facts``. Inside one, a
+    request contained by an earlier fetch is answered in memory; a request that is
+    not contained refetches the UNION of the two spans and replaces the entry, so
+    the cache converges on one query per shape rather than growing without bound.
+
+    Only the no-``types`` form is cached: a type filter is applied in Python by
+    ``query_facts`` after the fetch, so caching it would need the filter in the key
+    for no benefit — nothing on the coach side passes one.
+    """
+    cache = db.info.get(_SCAN_CACHE_KEY)
+    if cache is None:
+        return query_facts(
+            db, start_date, end_date,
+            user_id=user_id, include_session_shape=include_session_shape,
+        )
+
+    key = (str(user_id), include_session_shape)
+    want = (start_date, end_date)
+    entry = cache.get(key)
+    if entry is not None:
+        have, facts = entry
+        if _covers(have, want):
+            return facts_in_window(facts, start_date, end_date)
+        # Widen to cover both, so the next narrower question needs no query at all.
+        h_lo, h_hi = have
+        fetch_lo = None if (h_lo is None or start_date is None) else min(h_lo, start_date)
+        fetch_hi = None if (h_hi is None or end_date is None) else max(h_hi, end_date)
+    else:
+        fetch_lo, fetch_hi = start_date, end_date
+
+    facts = query_facts(
+        db, fetch_lo, fetch_hi,
+        user_id=user_id, include_session_shape=include_session_shape,
+    )
+    cache[key] = ((fetch_lo, fetch_hi), facts)
+    return facts_in_window(facts, start_date, end_date)
 
 
 def query_facts(

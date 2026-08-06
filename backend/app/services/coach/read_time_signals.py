@@ -168,6 +168,21 @@ def build_signals(
     }
 
 
+def will_run(signal: ReadTimeSignal, prompt_id: Optional[str]) -> bool:
+    """Whether ``gather`` would reach this signal's ``compute`` under ``prompt_id``.
+
+    The gate and the kill switch are pure functions of the prompt and the settings,
+    so the answer is knowable BEFORE any scan runs. ``context.py`` uses it to plan
+    one fetch wide enough for every signal that will actually run, instead of each
+    signal re-issuing the same projection over its own sub-window (#804).
+    """
+    if signal.gate_feature is not None and not has_feature(prompt_id, signal.gate_feature):
+        return False
+    if signal.kill_switch is not None and not getattr(settings, signal.kill_switch):
+        return False
+    return True
+
+
 def gather(
     signal: ReadTimeSignal,
     db: Session,
@@ -189,9 +204,10 @@ def gather(
          inside each builder, one more copy of a fact the declaration already holds.
       3. Abstention is delegated to ``compute`` (it owns the bounded scan + thin-history
          degrade).
+
+    Both drop rules live in ``will_run`` so the pack's fetch planner can ask the same
+    question without running anything.
     """
-    if signal.gate_feature is not None and not has_feature(prompt_id, signal.gate_feature):
-        return None
-    if signal.kill_switch is not None and not getattr(settings, signal.kill_switch):
+    if not will_run(signal, prompt_id):
         return None
     return signal.compute(db, activity, as_of)
