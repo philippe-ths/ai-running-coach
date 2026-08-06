@@ -312,8 +312,9 @@ def test_every_declared_kill_switch_is_actually_read_somewhere():
 
 
 def test_ungated_signals_are_an_explicit_recorded_list():
-    """Eight signals genuinely have no kill switch. Pinning the list makes adding a
-    ninth a decision someone takes, not a default someone inherits."""
+    """Nineteen of the thirty signals genuinely have no kill switch. Pinning the list
+    makes adding a twentieth a decision someone takes, not a default someone
+    inherits."""
     ungated = sorted(s.field for s in COACH_SIGNALS if not s.kill_switches)
     assert ungated == [
         "activity", "believed_facts", "block", "calibration", "intensity",

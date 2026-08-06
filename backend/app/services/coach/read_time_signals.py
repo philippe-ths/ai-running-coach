@@ -80,8 +80,8 @@ resolve when those older pack keys retire (the same blocker #704 names):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Any, Callable, Dict, Mapping, Optional, Protocol
+from datetime import datetime
+from typing import Any, Dict, Mapping, Optional, Protocol
 
 from sqlalchemy.orm import Session
 

@@ -536,6 +536,12 @@ def test_fullest_message_prompt_is_the_max_capability_id():
     assert set(PROMPT_FEATURES[fullest]) - ALTERNATIVE_FEATURES == (
         every_feature - ALTERNATIVE_FEATURES - GROUPED_ONLY_ADDITIVE
     )
+    # ...and pin exactly WHICH non-additive flags it carries, so that relaxation cannot
+    # quietly widen. Before #800 `fullest` carried none and strict equality above said
+    # this implicitly; GROUPED_PACK is the one and only flag it may now carry, and a
+    # `fullest` that picked up (say) SALIENCE_DROPPED would be a real change of what the
+    # structural pack guards are built on top of.
+    assert set(PROMPT_FEATURES[fullest]) & ALTERNATIVE_FEATURES == {F.GROUPED_PACK}
     # Every grouped-only additive feature really is absent from `fullest` — otherwise the
     # exemption above is stale and silently widening what the guards skip.
     assert GROUPED_ONLY_ADDITIVE.isdisjoint(PROMPT_FEATURES[fullest])
