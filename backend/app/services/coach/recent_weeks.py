@@ -45,13 +45,23 @@ from app.schemas.coach_context import (
     RecentWeeksVsTypicalMetric,
 )
 from app.services.coach.recent_training import _interval_shape
-from app.services.coach.volume import (
-    _BASELINE_WEEKS,
-    _baseline_window,
-    _direction,
-    _is_run,
-    _norm_per_day,
-    _sum,
+from app.services.activity_facts import (
+    BASELINE_WEEKS as _BASELINE_WEEKS,
+)
+from app.services.activity_facts import (
+    baseline_window as _baseline_window,
+)
+from app.services.activity_facts import (
+    direction as _direction,
+)
+from app.services.activity_facts import (
+    is_run as _is_run,
+)
+from app.services.activity_facts import (
+    norm_per_day as _norm_per_day,
+)
+from app.services.activity_facts import (
+    sum_metric as _sum,
 )
 
 # A check-in bounded to what the recent log needs (the coach reads felt effort + a pain

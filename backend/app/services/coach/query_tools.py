@@ -48,7 +48,7 @@ from app.services.coach import coach_units
 from app.services.analysis.splits import calculate_splits
 from app.services.coach.recent_training import _interval_shape
 from app.services.coach.volume import build_volume_report
-from app.services.trends import _query_activity_facts
+from app.services.activity_facts import query_facts as _query_activity_facts
 from app.services.weeks import MONDAY, resolve_week_start, week_start
 
 logger = logging.getLogger(__name__)

@@ -10,11 +10,8 @@ the coverage is added.
 
 from datetime import date, timedelta
 
-from app.services.trends import (
-    DailyFact,
-    build_period_buckets,
-    build_weekly_buckets,
-)
+from app.services.activity_facts import DailyFact
+from app.services.trends import build_period_buckets, build_weekly_buckets
 
 
 def _df(d: date, dist: int = 0, effort: float = 0.0) -> DailyFact:

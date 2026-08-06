@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Activity, DerivedMetric, UserProfile
 from app.schemas.trends import LoadActivityPoint, LoadResponse, LoadWeek
+from app.services.activity_facts import local_day
 from app.services.analysis.classifier import Classification, compose_headline
 from app.services.weeks import MONDAY, resolve_week_start
 from app.services.weeks import week_start as _shared_week_start
@@ -210,9 +211,9 @@ def get_load_report(
     for r in rows:
         if r.effort_score is None:
             continue
-        # Bucket by the runner's local calendar day (#399), falling back to UTC.
-        local = r.start_date_local or r.start_date
-        start = local.date() if isinstance(local, datetime) else local
+        # Bucket by the runner's local calendar day (#399), falling back to UTC —
+        # the shared derivation, so this report cannot drift from the coach signals.
+        start = local_day(r.start_date, r.start_date_local)
         metrics = SimpleNamespace(
             effort_score=r.effort_score,
             effort=r.effort,

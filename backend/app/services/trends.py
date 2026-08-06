@@ -5,14 +5,37 @@ All grouping uses the activity's local start_date (timezone-aware).
 If multiple activities occur on the same local date, they are summed.
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import List, Optional
 
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Activity, DerivedMetric, UserProfile
-from app.services.weeks import MONDAY, resolve_week_start, week_start
+from app.models import Activity, UserProfile
+from app.services.activity_facts import (
+    ALLOWED_RANGES,
+    BASELINE_DAYS_BY_RANGE,
+    RANGE_DAYS,
+    RANGE_WINDOW_DAYS,
+    ActivityFact,
+    Bucket,
+    DailyFact,
+    build_daily_facts,
+    bucket_daily_facts,
+    bucket_key_fn,
+    bucket_zone_seconds,
+    calendar_period,
+    collapse_to_3_zones,
+    fill_days,
+    period_start,
+    period_window,
+    query_facts,
+    resolve_since,
+    resolve_window,
+    rolling_bin_start,
+    zone_minutes,
+)
+from app.services.weeks import MONDAY, resolve_week_start
 from app.schemas.trends import (
     TrendsResponse,
     TrendsSummary,
@@ -37,403 +60,20 @@ from app.schemas.trends import (
 # Effort-axis labels that count a day as "hard" for the dashboard summary.
 _HARD_EFFORTS = {"tempo", "hard"}
 
-ALLOWED_RANGES = {"7D", "30D", "3M", "6M", "1Y", "ALL"}
-
-
-# ---------------------------------------------------------------------------
-# 1. Activity-level facts
-# ---------------------------------------------------------------------------
-
-class ActivityFact:
-    """One row per activity — the minimal projection needed for trend charts."""
-
-    __slots__ = (
-        "activity_id", "local_date", "activity_type", "user_intent",
-        "distance_m", "moving_time_s", "elapsed_time_s",
-        "elev_gain_m", "avg_hr", "avg_cadence", "average_speed_mps",
-        "effort_score", "effort", "time_in_zones",
-        # #650: session shape, projected ONLY when a caller opts in
-        # (include_session_shape); None otherwise, so the wide/10-year scans stay lean.
-        "structure", "interval_structure", "duration_class",
-        # ADR 0026 Slice 2 (#670): within-run cardiac drift for the recent_weeks per-
-        # session read, projected under the same opt-in; None on the lean scans.
-        "hr_drift",
-    )
-
-    def __init__(self, activity: Activity):
-        self.activity_id = activity.id
-        # Bucket by the runner's local calendar day (#399), falling back to UTC.
-        self.local_date: date = activity.local_start.date()
-        self.activity_type = activity.type
-        self.user_intent = activity.user_intent
-        self.distance_m = activity.distance_m or 0
-        self.moving_time_s = activity.moving_time_s or 0
-        self.elapsed_time_s = activity.elapsed_time_s or 0
-        self.elev_gain_m = activity.elev_gain_m or 0.0
-        self.avg_hr = activity.avg_hr
-        self.avg_cadence = activity.avg_cadence
-        self.average_speed_mps = activity.average_speed_mps
-        self.effort_score: Optional[float] = (
-            activity.metrics.effort_score if activity.metrics else None
-        )
-        # Effort axis (ADR 0007): recovery|easy|moderate|tempo|hard. Used to
-        # count "hard days" on the dashboard without an HR/name heuristic.
-        self.effort: Optional[str] = (
-            activity.metrics.effort if activity.metrics else None
-        )
-        self.time_in_zones: Optional[dict] = (
-            activity.metrics.time_in_zones if activity.metrics else None
-        )
-        # #650: session shape (classifier structure + interval structure) for the
-        # per-session marker; None when there is no DerivedMetric.
-        self.structure: Optional[str] = (
-            activity.metrics.structure if activity.metrics else None
-        )
-        self.interval_structure: Optional[dict] = (
-            activity.metrics.interval_structure if activity.metrics else None
-        )
-        self.duration_class: Optional[str] = (
-            activity.metrics.duration_class if activity.metrics else None
-        )
-        self.hr_drift: Optional[float] = (
-            activity.metrics.hr_drift if activity.metrics else None
-        )
-
-    @classmethod
-    def from_row(cls, row) -> "ActivityFact":
-        """Build from a column-projection Row instead of a full Activity ORM
-        object (#367). The trends queries only read the ~14 scalar fields below,
-        so projecting them (mirroring readiness.py) avoids materializing the
-        Activity/DerivedMetric JSON blobs (raw_summary, interval_structure,
-        discount_signals, ...) the trend charts never touch. The LEFT join makes
-        the three metric columns NULL for an activity without a DerivedMetric,
-        reproducing the prior `activity.metrics ... else None`.
-        """
-        self = cls.__new__(cls)
-        self.activity_id = row.id
-        # Bucket by the runner's local calendar day (#399), falling back to UTC.
-        self.local_date = (row.start_date_local or row.start_date).date()
-        self.activity_type = row.type
-        self.user_intent = row.user_intent
-        self.distance_m = row.distance_m or 0
-        self.moving_time_s = row.moving_time_s or 0
-        self.elapsed_time_s = row.elapsed_time_s or 0
-        self.elev_gain_m = row.elev_gain_m or 0.0
-        self.avg_hr = row.avg_hr
-        self.avg_cadence = row.avg_cadence
-        self.average_speed_mps = row.average_speed_mps
-        self.effort_score = row.effort_score
-        self.effort = row.effort
-        self.time_in_zones = row.time_in_zones
-        # #650: present only when the caller opted into the shape projection; absent
-        # from the lean default projection, so getattr falls back to None.
-        self.structure = getattr(row, "structure", None)
-        self.interval_structure = getattr(row, "interval_structure", None)
-        self.duration_class = getattr(row, "duration_class", None)
-        self.hr_drift = getattr(row, "hr_drift", None)
-        return self
-
-    @property
-    def effective_type(self) -> str:
-        return self.user_intent if self.user_intent else self.activity_type
-
-    @property
-    def pace_sec_per_km(self) -> Optional[float]:
-        """Pace in seconds/km. None if distance is zero."""
-        if self.distance_m <= 0:
-            return None
-        return (self.moving_time_s / self.distance_m) * 1000
-
-
-# ---------------------------------------------------------------------------
-# 2. Daily facts (summed when multiple activities in a day)
-# ---------------------------------------------------------------------------
-
-class DailyFact:
-    """One row per local date — sums distance / time across all activities."""
-
-    __slots__ = (
-        "local_date", "total_distance_m", "total_moving_time_s",
-        "total_elapsed_time_s", "total_elev_gain_m", "total_effort_score",
-        "activity_count",
-    )
-
-    def __init__(self, local_date: date):
-        self.local_date = local_date
-        self.total_distance_m = 0
-        self.total_moving_time_s = 0
-        self.total_elapsed_time_s = 0
-        self.total_elev_gain_m = 0.0
-        self.total_effort_score = 0.0
-        self.activity_count = 0
-
-    def add(self, fact: ActivityFact):
-        self.total_distance_m += fact.distance_m
-        self.total_moving_time_s += fact.moving_time_s
-        self.total_elapsed_time_s += fact.elapsed_time_s
-        self.total_elev_gain_m += fact.elev_gain_m
-        if fact.effort_score:
-            self.total_effort_score += fact.effort_score
-        self.activity_count += 1
-
-
-# ---------------------------------------------------------------------------
-# 3. Weekly bucket (used by distance/time per-week charts)
-# ---------------------------------------------------------------------------
-
-class WeekBucket:
-    """Aggregation bucket for one ISO week."""
-
-    __slots__ = (
-        "week_start", "total_distance_m", "total_moving_time_s",
-        "total_effort_score", "activity_count",
-        "easy_seconds", "moderate_seconds", "hard_seconds",
-        "in_period_days", "out_of_period_days",
-        "out_of_period_distance_m", "out_of_period_moving_time_s",
-        "out_of_period_effort_score",
-    )
-
-    def __init__(self, week_start: date):
-        self.week_start = week_start  # Monday of the ISO week
-        self.total_distance_m = 0
-        self.total_moving_time_s = 0
-        self.total_effort_score = 0.0
-        self.activity_count = 0
-        self.easy_seconds = 0
-        self.moderate_seconds = 0
-        self.hard_seconds = 0
-        # Edge-bucket coverage (#566): how many of the 7 days fall inside the
-        # selected period. Defaults to a full week; the builder overrides for
-        # buckets that straddle the window boundary.
-        self.in_period_days = 7
-        self.out_of_period_days = 0
-        # Distance/time/load from the bucket's days OUTSIDE the selected window
-        # (the older days an edge week spans). total_* stays the in-period sum;
-        # the chart stacks this faded segment on top so the bar shows the whole
-        # week.
-        self.out_of_period_distance_m = 0
-        self.out_of_period_moving_time_s = 0
-        self.out_of_period_effort_score = 0.0
-
-    def add(self, daily: DailyFact):
-        self.total_distance_m += daily.total_distance_m
-        self.total_moving_time_s += daily.total_moving_time_s
-        self.total_effort_score += daily.total_effort_score
-        self.activity_count += daily.activity_count
-
-
-# ---------------------------------------------------------------------------
-# 3b. Coarse-granularity bucket (#432 — 2-week / month bars)
-# ---------------------------------------------------------------------------
-
-# A fixed Monday reference for deterministic fortnight alignment (1970-01-05 is
-# a Monday). Anchoring 2-week bins to it keeps boundaries stable regardless of
-# the window start, so the same fortnights line up across ranges and the bars
-# don't shift when the runner changes the selected range.
-_EPOCH_MONDAY = date(1970, 1, 5)
-
-
-def _period_start(d: date, period: str, week_starts_on: int = MONDAY) -> date:
-    """First local day of the coarse bucket that ``d`` falls in.
-
-    - ``biweekly``: 14-day bins aligned to the week-start grid (fortnight parity).
-    - ``monthly``: the first of the calendar month.
-
-    ``week_starts_on`` (0=Monday default, 6=Sunday) shifts the biweekly grid so
-    it aligns with the weekly bars (#676); monthly is unaffected.
-    """
-    if period == "monthly":
-        return d.replace(day=1)
-    # biweekly: snap to the bin's starting week boundary by fortnight parity. The
-    # parity epoch is the week-start grid's own epoch so weekly and biweekly agree.
-    epoch = week_start(_EPOCH_MONDAY, week_starts_on)
-    start = week_start(d, week_starts_on)
-    weeks = (start - epoch).days // 7
-    if weeks % 2 == 1:
-        start -= timedelta(days=7)
-    return start
-
-
-def _next_period_start(start: date, period: str) -> date:
-    """The start of the bucket immediately after ``start`` (for continuous fill)."""
-    if period == "monthly":
-        if start.month == 12:
-            return date(start.year + 1, 1, 1)
-        return date(start.year, start.month + 1, 1)
-    return start + timedelta(days=14)
-
-
-# ---------------------------------------------------------------------------
-# 3c. Rolling-mode bins (#630)
-# ---------------------------------------------------------------------------
-#
-# In rolling mode the bars must roll back from the current date, not snap to
-# calendar boundaries (ISO-Monday weeks / calendar months / the epoch-anchored
-# fortnight grid above). So a day's bucket is chosen by its offset back from the
-# anchor (today): the newest bin ends today and each older bin is the preceding
-# fixed-width block. Calendar mode is unchanged and keeps the calendar-anchored
-# keys above. "month" has no fixed length, so a rolling month is a 30-day block.
-_ROLLING_BIN_DAYS = {"biweekly": 14, "monthly": 30}
-
-
-def _rolling_bin_start(d: date, anchor: date, bin_days: int) -> date:
-    """First local day of the today-anchored rolling bin of width ``bin_days``
-    that ``d`` falls in. The newest bin is ``[anchor - bin_days + 1, anchor]``;
-    older bins step back by ``bin_days``. ``d`` is assumed on or before ``anchor``."""
-    k = (anchor - d).days // bin_days
-    return anchor - timedelta(days=(k + 1) * bin_days - 1)
-
-
-def _coverage_days(
-    span_start: date,
-    span_end: date,
-    period_start: Optional[date],
-    period_end: date,
-) -> tuple[int, int]:
-    """In-period vs out-of-period day counts for a bucket spanning ``[span_start,
-    span_end]`` inclusive against the selected window ``[period_start, period_end]`` (#566).
-
-    A bucket (week / fortnight / month) rarely aligns to the period boundary, so
-    an edge bucket only partially overlaps the window. Returns
-    ``(in_period_days, out_of_period_days)``; when ``period_start`` is ``None``
-    (the ALL range, no window) the bucket is treated as fully in-period.
-    """
-    total_days = (span_end - span_start).days + 1
-    if period_start is None:
-        return total_days, 0
-    lo = max(span_start, period_start)
-    hi = min(span_end, period_end)
-    in_days = (hi - lo).days + 1 if hi >= lo else 0
-    return in_days, total_days - in_days
-
-
-def _add_out_of_period_values(buckets, pre_window_daily, key_fn) -> None:
-    """Fold pre-window (out-of-period) days into the matching displayed bucket's
-    ``out_of_period_*`` totals (#566), so the chart can stack a faded segment for
-    the part of an edge bucket that falls before the window start. Pre-window
-    days whose bucket is not displayed (older than the leading bucket) are
-    ignored. ``key_fn`` maps a date to its bucket's start key.
-    """
-    if not pre_window_daily:
-        return
-    for df in pre_window_daily:
-        bucket = buckets.get(key_fn(df.local_date))
-        if bucket is not None:
-            bucket.out_of_period_distance_m += df.total_distance_m
-            bucket.out_of_period_moving_time_s += df.total_moving_time_s
-            bucket.out_of_period_effort_score += df.total_effort_score
-
-
-class PeriodBucket:
-    """Aggregation bucket for one coarse granularity period (#432)."""
-
-    __slots__ = (
-        "period_start", "total_distance_m", "total_moving_time_s",
-        "total_effort_score", "activity_count",
-        "in_period_days", "out_of_period_days",
-        "out_of_period_distance_m", "out_of_period_moving_time_s",
-        "out_of_period_effort_score",
-    )
-
-    def __init__(self, period_start: date):
-        self.period_start = period_start
-        self.total_distance_m = 0
-        self.total_moving_time_s = 0
-        self.total_effort_score = 0.0
-        self.activity_count = 0
-        # Edge-bucket coverage (#566): in/out-of-period day counts, set by the
-        # builder from the bucket's full span against the selected window.
-        self.in_period_days = 0
-        self.out_of_period_days = 0
-        # Distance/time/load from the bucket's days OUTSIDE the selected window;
-        # see WeekBucket. total_* stays the in-period sum.
-        self.out_of_period_distance_m = 0
-        self.out_of_period_moving_time_s = 0
-        self.out_of_period_effort_score = 0.0
-
-    def add(self, daily: DailyFact):
-        self.total_distance_m += daily.total_distance_m
-        self.total_moving_time_s += daily.total_moving_time_s
-        self.total_effort_score += daily.total_effort_score
-        self.activity_count += daily.activity_count
-
-
-# ---------------------------------------------------------------------------
-# 4. Pipeline functions
-# ---------------------------------------------------------------------------
-
-_RANGE_DAYS = {
-    "7D": 7,
-    "30D": 30,
-    "3M": 90,
-    "6M": 180,
-    "1Y": 365,
-    "ALL": None,
-}
-
-
-def _resolve_since(range_key: str) -> Optional[date]:
-    """Return the earliest local date to include, or None for ALL.
-
-    The window is inclusive on both ends (``since`` .. ``today``), so a range of
-    N days subtracts N-1 to span exactly N calendar days. e.g. 7D with today =
-    Jun 9 covers Jun 3–Jun 9 inclusive, not Jun 2–Jun 9 (#179).
-    """
-    days = _RANGE_DAYS.get(range_key.upper())
-    if days is None:
-        return None
-    return date.today() - timedelta(days=days - 1)
-
-
-def _period_window(range_key: str) -> Optional[tuple[date, date]]:
-    """Return (current_start, previous_start) for a fixed range, or None for ALL.
-
-    The current window is ``[current_start, today]`` (inclusive) and the previous
-    window is ``[previous_start, current_start)``. Both span exactly
-    ``_RANGE_DAYS[range]`` calendar days with no gap or overlap at the boundary,
-    so period-over-period deltas line up with the charts (#179).
-    """
-    days = _RANGE_DAYS.get(range_key.upper())
-    if days is None:
-        return None
-    current_start = _resolve_since(range_key)
-    assert current_start is not None  # days is not None here
-    previous_start = current_start - timedelta(days=days)
-    return current_start, previous_start
-
-
-def _resolve_window(
-    range_key: str, mode: str = "rolling", today: Optional[date] = None
-) -> tuple[Optional[date], Optional[date], Optional[date]]:
-    """(since, prev_start, prev_end) for the (range, mode) — the #400 global toggle.
-
-    The current window is ``[since, today]`` inclusive; the previous comparison
-    window is ``[prev_start, prev_end)``. Returns ``(None, None, None)`` for ALL
-    (whole history, no previous).
-
-    - ``rolling``: ``since`` is ``today - (N-1)`` and the previous window is the
-      equal-length block immediately before it (unchanged behaviour).
-    - ``calendar``: ``since`` is the start of the current calendar period (week/
-      month/quarter/half/year) and the previous window is the ENTIRE previous
-      calendar period (e.g. Jun 1-20 to-date vs ALL of May), so "vs last month"
-      reads against last month's full total — it runs behind for most of the
-      period and catches up by period-end (#413).
-    """
-    today = today or date.today()
-    days = _RANGE_DAYS.get(range_key.upper())
-    if days is None:
-        return None, None, None
-    if mode == "calendar":
-        from app.services.coach.volume import _calendar_period
-
-        p_start, _, _, _ = _calendar_period(range_key.upper(), today)
-        prev_p_start, _, _, _ = _calendar_period(
-            range_key.upper(), p_start - timedelta(days=1)
-        )
-        # Previous = the whole prior calendar period: [prev_p_start, p_start).
-        return p_start, prev_p_start, p_start
-    since = today - timedelta(days=days - 1)
-    return since, since - timedelta(days=days), since
+# #804: the fact stream, its windows, its buckets, its zones and its norms all live
+# in `app.services.activity_facts` now. This module keeps the Trends REPORT: which
+# questions to ask of that stream for a given range and framing, and how to shape the
+# answers into the chart payloads. The names below are re-exported deliberately —
+# they are the vocabulary the Trends tests and the coach signals already speak, and
+# re-pointing them at the shared module is what makes one definition serve both.
+WeekBucket = Bucket
+PeriodBucket = Bucket
+_RANGE_DAYS = RANGE_DAYS
+_collapse_to_3_zones = collapse_to_3_zones
+_resolve_since = resolve_since
+_period_window = period_window
+_resolve_window = resolve_window
+_zone_minutes = zone_minutes
 
 
 def get_available_types(db: Session, *, user_id=None) -> List[str]:
@@ -455,78 +95,24 @@ def get_available_types(db: Session, *, user_id=None) -> List[str]:
 
 
 def _query_activity_facts(
-    db: Session,
-    start_date: Optional[date],
-    end_date: Optional[date],
-    types: Optional[List[str]] = None,
+    db,
+    start_date,
+    end_date,
+    types=None,
     *,
     user_id=None,
     include_session_shape: bool = False,
-) -> List[ActivityFact]:
-    """
-    Internal helper to query activities by exact date range (start inclusive, end exclusive).
+):
+    """Deprecated alias for the shared projection (#804).
 
-    ``user_id`` scopes the query to a single owner.  Pass it at every call site
-    so that when multi-user lands (Phase 2) there is no accidental cross-user leak.
-    Currently optional so callers that do not yet have a user_id available can
-    continue working; the intent is to make it required once the API auth layer
-    provides a resolved user at every endpoint (ADR 0005 / Phase 2).
+    Kept so the Trends tests that name it keep working; `activity_facts.query_facts`
+    is the one definition, and the coach signals import THAT rather than reaching
+    into this module for a private name.
     """
-    # Project only the columns ActivityFact reads instead of materializing full
-    # Activity ORM objects + a selectinload of DerivedMetric (#367). The LEFT
-    # outer join keeps activities without a DerivedMetric (their metric columns
-    # come back NULL); DerivedMetric.activity_id is unique, so the join never
-    # duplicates a row. This avoids loading the Activity/DerivedMetric JSON
-    # blobs the trend charts never touch — the worst over-fetch on the ALL range.
-    stmt = (
-        select(
-            Activity.id,
-            Activity.start_date,
-            Activity.start_date_local,
-            Activity.type,
-            Activity.user_intent,
-            Activity.distance_m,
-            Activity.moving_time_s,
-            Activity.elapsed_time_s,
-            Activity.elev_gain_m,
-            Activity.avg_hr,
-            Activity.avg_cadence,
-            Activity.average_speed_mps,
-            DerivedMetric.effort_score,
-            DerivedMetric.effort,
-            DerivedMetric.time_in_zones,
-            # #650: the session-shape columns ride the projection ONLY on opt-in, so the
-            # lean scans (trends, the 10-year training-history) never load them.
-            *(
-                (
-                    DerivedMetric.structure,
-                    DerivedMetric.interval_structure,
-                    DerivedMetric.duration_class,
-                    DerivedMetric.hr_drift,
-                )
-                if include_session_shape
-                else ()
-            ),
-        )
-        .outerjoin(DerivedMetric, DerivedMetric.activity_id == Activity.id)
-        .where(Activity.is_deleted == False)  # noqa: E712
-        .order_by(Activity.start_date.asc())
+    return query_facts(
+        db, start_date, end_date, types,
+        user_id=user_id, include_session_shape=include_session_shape,
     )
-    if user_id is not None:
-        stmt = stmt.where(Activity.user_id == user_id)
-    if start_date:
-        stmt = stmt.where(Activity.start_date >= datetime.combine(start_date, datetime.min.time()))
-    if end_date:
-        stmt = stmt.where(Activity.start_date < datetime.combine(end_date, datetime.min.time()))
-
-    rows = db.execute(stmt).all()
-    facts = [ActivityFact.from_row(r) for r in rows]
-
-    if types:
-        type_set = {t.lower() for t in types}
-        facts = [f for f in facts if f.activity_type.lower() in type_set]
-
-    return facts
 
 
 def build_activity_facts(
@@ -543,21 +129,21 @@ def build_activity_facts(
     Pass ``user_id`` to restrict results to a single owner. Pass ``since`` to override
     the window start (the #400 calendar mode); otherwise it derives from range_key.
     """
-    resolved_since = since if since is not None else _resolve_since(range_key)
-    return _query_activity_facts(db, resolved_since, None, types, user_id=user_id)
+    resolved_since = since if since is not None else resolve_since(range_key)
+    return query_facts(db, resolved_since, None, types, user_id=user_id)
 
 
-def build_daily_facts(activity_facts: List[ActivityFact]) -> List[DailyFact]:
+def _window_frame(
+    range_key: str, since: Optional[date], until: Optional[date]
+) -> tuple[Optional[date], date]:
+    """The ``(since, end)`` frame a chart builder buckets over.
+
+    ``since`` defaults to the range's rolling start; ``until`` (the #413 calendar
+    frame, e.g. the full Mon-Sun week) defaults to today. Stated once so every
+    builder below frames identically.
     """
-    Collapse activity facts into one row per local date.
-    """
-    buckets: dict[date, DailyFact] = {}
-    for af in activity_facts:
-        if af.local_date not in buckets:
-            buckets[af.local_date] = DailyFact(af.local_date)
-        buckets[af.local_date].add(af)
-
-    return sorted(buckets.values(), key=lambda d: d.local_date)
+    resolved_since = since if since is not None else resolve_since(range_key)
+    return resolved_since, (until if until is not None else date.today())
 
 
 def build_continuous_daily_facts(
@@ -572,29 +158,17 @@ def build_continuous_daily_facts(
     Pass ``since`` to override the window start (the #400 calendar mode).
     Pass ``until`` to override the window end (#413): calendar mode passes the
     calendar period's last day so the chart frames the whole period (e.g. the
-    full Mon–Sun week for 7D), with days after today rendered as empty bars.
+    full Mon-Sun week for 7D), with days after today rendered as empty bars.
     Defaults to today (rolling).
     """
-    today = date.today()
-    end = until if until is not None else today
-    if since is None:
-        since = _resolve_since(range_key)
-
+    since, end = _window_frame(range_key, since, until)
     if since is not None:
         start = since
     elif daily_facts:
         start = daily_facts[0].local_date
     else:
         start = end
-
-    existing = {df.local_date: df for df in daily_facts}
-    result: List[DailyFact] = []
-    cursor = start
-    while cursor <= end:
-        result.append(existing.get(cursor, DailyFact(cursor)))
-        cursor += timedelta(days=1)
-
-    return result
+    return fill_days(daily_facts, start, end)
 
 
 def build_weekly_buckets(
@@ -605,72 +179,20 @@ def build_weekly_buckets(
     pre_window_daily: Optional[List[DailyFact]] = None,
     rolling_anchor: Optional[date] = None,
     week_starts_on: int = MONDAY,
-) -> List[WeekBucket]:
+) -> List[Bucket]:
+    """Roll daily facts into 7-day buckets, continuous across the window.
+
+    A thin framing wrapper over the shared bucketer (#804): resolve the window, then
+    ask for ``weekly`` granularity. ``rolling_anchor`` (today) buckets by 7-day blocks
+    rolling back from that anchor instead of the runner's calendar weeks (#630);
+    ``pre_window_daily`` carries a leading edge bucket's out-of-window value (#566).
     """
-    Roll daily facts into 7-day buckets.
-    Fills every week in the range so charts have continuous x-axes.
-
-    Pass ``since`` to override the window start (the #400 calendar mode).
-    Pass ``until`` to override the window end (#413): calendar mode passes the
-    calendar period's last day so the chart spans the whole period. Defaults to
-    today (rolling).
-    Pass ``pre_window_daily`` (days just before ``since``) so a leading edge
-    week carries the value of its out-of-window days for the stacked partial
-    bar (#566); ``total_*`` stays the in-period sum.
-    Pass ``rolling_anchor`` (today) to bucket by 7-day blocks rolling back from
-    that anchor instead of ISO-Monday weeks (#630): the bars then roll back from
-    the current date. A leading block that only partly overlaps the window fades
-    its out-of-window days via ``pre_window_daily``, the same as a calendar edge
-    week — the bar shows the whole block, in-window solid and excluded part faded.
-    """
-    def _key(d: date) -> date:
-        if rolling_anchor is not None:
-            return _rolling_bin_start(d, rolling_anchor, 7)
-        return week_start(d, week_starts_on)
-
-    # Build buckets from actual data first
-    buckets: dict[date, WeekBucket] = {}
-    for df in daily_facts:
-        k = _key(df.local_date)
-        if k not in buckets:
-            buckets[k] = WeekBucket(k)
-        buckets[k].add(df)
-
-    # Determine the full span of weeks to show
-    end = until if until is not None else date.today()
-    end_key = _key(end)  # last week to show
-
-    if since is None:
-        since = _resolve_since(range_key)
-    if since is not None:
-        start_key = _key(since)
-    elif daily_facts:
-        start_key = _key(daily_facts[0].local_date)
-    else:
-        start_key = end_key
-
-    # Walk from start_key to end_key, inserting empty buckets (7-day step either way)
-    cursor = start_key
-    while cursor <= end_key:
-        if cursor not in buckets:
-            buckets[cursor] = WeekBucket(cursor)
-        cursor += timedelta(weeks=1)
-
-    # Edge-bucket coverage (#566): mark how much of each week falls inside the
-    # selected window [since, end] so the chart can fade the partial leading week.
-    # Rolling and calendar are handled the same here (#630): a leading rolling
-    # block that only partly overlaps the window shows its out-of-window days as a
-    # faded segment, exactly like a calendar edge week — the bar shows the whole
-    # 7-day block, in-window solid and the excluded part faded.
-    for w in buckets.values():
-        w.in_period_days, w.out_of_period_days = _coverage_days(
-            w.week_start, w.week_start + timedelta(days=6), since, end
-        )
-    # Carry the out-of-window value of a leading edge week's earlier days, keyed
-    # the same way the buckets are (rolling block start or ISO Monday).
-    _add_out_of_period_values(buckets, pre_window_daily, _key)
-
-    return sorted(buckets.values(), key=lambda w: w.week_start)
+    since, end = _window_frame(range_key, since, until)
+    return bucket_daily_facts(
+        daily_facts, "weekly", since=since, end=end,
+        rolling_anchor=rolling_anchor, week_starts_on=week_starts_on,
+        pre_window_daily=pre_window_daily,
+    )
 
 
 def build_period_buckets(
@@ -682,75 +204,19 @@ def build_period_buckets(
     pre_window_daily: Optional[List[DailyFact]] = None,
     rolling_anchor: Optional[date] = None,
     week_starts_on: int = MONDAY,
-) -> List[PeriodBucket]:
+) -> List[Bucket]:
     """Roll daily facts into coarse buckets (#432) for ``biweekly`` or ``monthly``.
 
-    Mirrors ``build_weekly_buckets``: aggregates from real data, then fills every
-    empty bucket across the window so charts have continuous x-axes. ``since`` /
-    ``until`` override the window start/end (the #400/#413 calendar framing);
-    they default to the range start and today.
-    Pass ``rolling_anchor`` (today) to bucket by fixed-width blocks rolling back
-    from that anchor instead of the calendar grid (#630): 14-day blocks for
-    ``biweekly``, 30-day blocks for ``monthly``. A leading block that only partly
-    overlaps the window fades its out-of-window days via ``pre_window_daily``, the
-    same as a calendar edge bucket.
+    The same framing wrapper as ``build_weekly_buckets`` over the same shared
+    bucketer — the two differ only in the granularity they ask for.
     """
-    bin_days = _ROLLING_BIN_DAYS[period]  # rolling-mode block width
+    since, end = _window_frame(range_key, since, until)
+    return bucket_daily_facts(
+        daily_facts, period, since=since, end=end,
+        rolling_anchor=rolling_anchor, week_starts_on=week_starts_on,
+        pre_window_daily=pre_window_daily,
+    )
 
-    def _key(d: date) -> date:
-        if rolling_anchor is not None:
-            return _rolling_bin_start(d, rolling_anchor, bin_days)
-        return _period_start(d, period, week_starts_on)
-
-    def _advance(cur: date) -> date:
-        if rolling_anchor is not None:
-            return cur + timedelta(days=bin_days)
-        return _next_period_start(cur, period)
-
-    def _span_end(start: date) -> date:
-        if rolling_anchor is not None:
-            return start + timedelta(days=bin_days - 1)
-        return _next_period_start(start, period) - timedelta(days=1)
-
-    buckets: dict[date, PeriodBucket] = {}
-    for df in daily_facts:
-        ps = _key(df.local_date)
-        if ps not in buckets:
-            buckets[ps] = PeriodBucket(ps)
-        buckets[ps].add(df)
-
-    end = until if until is not None else date.today()
-    end_start = _key(end)
-
-    if since is None:
-        since = _resolve_since(range_key)
-    if since is not None:
-        start = _key(since)
-    elif daily_facts:
-        start = _key(daily_facts[0].local_date)
-    else:
-        start = end_start
-
-    cursor = start
-    while cursor <= end_start:
-        if cursor not in buckets:
-            buckets[cursor] = PeriodBucket(cursor)
-        cursor = _advance(cursor)
-
-    # Edge-bucket coverage (#566): the bucket's full span is [period_start,
-    # span_end] (the calendar month / fortnight in calendar mode, a fixed
-    # 14-/30-day block in rolling mode); mark how much falls inside [since, end]
-    # so a leading edge bucket fades its out-of-window part in either mode (#630).
-    for b in buckets.values():
-        span_end = _span_end(b.period_start)
-        b.in_period_days, b.out_of_period_days = _coverage_days(
-            b.period_start, span_end, since, end
-        )
-    # Carry the out-of-window value of a leading edge bucket's earlier days, keyed
-    # the same way the buckets are (rolling block start or calendar period start).
-    _add_out_of_period_values(buckets, pre_window_daily, _key)
-
-    return sorted(buckets.values(), key=lambda b: b.period_start)
 
 
 def build_suffer_score_trend(
@@ -788,11 +254,7 @@ def build_continuous_suffer_scores(
     Pass ``until`` to override the window end (#413, calendar period frame).
     Defaults to today (rolling).
     """
-    today = date.today()
-    end = until if until is not None else today
-    if since is None:
-        since = _resolve_since(range_key)
-
+    since, end = _window_frame(range_key, since, until)
     if since is not None:
         start = since
     elif activity_facts:
@@ -883,131 +345,71 @@ def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
     return sorted(points, key=lambda p: p["date"])
 
 
-def _collapse_to_3_zones(time_in_zones: dict) -> tuple[int, int, int]:
-    """Collapse 5-zone dict into 3-zone seconds: (easy, moderate, hard).
-
-    Easy    = Z1 + Z2  (< 70% max HR)
-    Moderate = Z3      (70-80% max HR)
-    Hard    = Z4 + Z5  (> 80% max HR)
-    """
-    z1 = time_in_zones.get("Z1", 0) or 0
-    z2 = time_in_zones.get("Z2", 0) or 0
-    z3 = time_in_zones.get("Z3", 0) or 0
-    z4 = time_in_zones.get("Z4", 0) or 0
-    z5 = time_in_zones.get("Z5", 0) or 0
-    return (z1 + z2, z3, z4 + z5)
-
-
 def build_zone_load_weekly(
     activity_facts: List[ActivityFact],
-    weekly_buckets: List["WeekBucket"],
+    weekly_buckets: List[Bucket],
     rolling_anchor: Optional[date] = None,
     week_starts_on: int = MONDAY,
 ) -> List[dict]:
-    """
-    Aggregate per-activity time_in_zones into weekly 3-zone buckets.
+    """Per-week 3-zone minutes, one point per weekly bucket (continuous).
 
-    Returns one dict per week: {week_start, easy_min, moderate_min, hard_min}.
-    Weeks with no zone data get zeros. ``rolling_anchor`` must match the value
-    passed to ``build_weekly_buckets`` so the zone keys line up with the bars
-    (#630): today-anchored 7-day bins when set, ISO-Monday weeks otherwise.
+    ``rolling_anchor`` must match the value passed to ``build_weekly_buckets`` so the
+    zone keys line up with the bars (#630): today-anchored 7-day bins when set, the
+    runner's calendar weeks otherwise.
     """
-    # Sum zone seconds per bucket key (must match the weekly_buckets keys)
-    zone_by_week: dict[date, tuple[int, int, int]] = {}
-    for af in activity_facts:
-        if not af.time_in_zones:
-            continue
-        if rolling_anchor is not None:
-            key = _rolling_bin_start(af.local_date, rolling_anchor, 7)
-        else:
-            key = week_start(af.local_date, week_starts_on)
-        easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
-        prev = zone_by_week.get(key, (0, 0, 0))
-        zone_by_week[key] = (
-            prev[0] + easy_s,
-            prev[1] + mod_s,
-            prev[2] + hard_s,
-        )
-
-    # Emit one point per weekly bucket (continuous)
-    result: List[dict] = []
-    for wb in weekly_buckets:
-        easy_s, mod_s, hard_s = zone_by_week.get(wb.week_start, (0, 0, 0))
-        result.append({
-            "week_start": wb.week_start.isoformat(),
-            "easy_min": round(easy_s / 60, 1),
-            "moderate_min": round(mod_s / 60, 1),
-            "hard_min": round(hard_s / 60, 1),
-        })
-    return result
+    return _zone_points(
+        activity_facts, weekly_buckets, "week_start",
+        bucket_key_fn("weekly", rolling_anchor, week_starts_on),
+    )
 
 
 def build_zone_load_daily(
     activity_facts: List[ActivityFact],
-    continuous_daily: List["DailyFact"],
+    continuous_daily: List[DailyFact],
 ) -> List[dict]:
-    """
-    Per-day 3-zone minutes, continuous (every day in the range gets a row).
-    """
-    # Sum zone seconds per local date
-    zone_by_date: dict[date, tuple[int, int, int]] = {}
-    for af in activity_facts:
-        if not af.time_in_zones:
-            continue
-        easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
-        prev = zone_by_date.get(af.local_date, (0, 0, 0))
-        zone_by_date[af.local_date] = (
-            prev[0] + easy_s,
-            prev[1] + mod_s,
-            prev[2] + hard_s,
-        )
-
-    result: List[dict] = []
-    for df in continuous_daily:
-        easy_s, mod_s, hard_s = zone_by_date.get(df.local_date, (0, 0, 0))
-        result.append({
-            "date": df.local_date.isoformat(),
-            "easy_min": round(easy_s / 60, 1),
-            "moderate_min": round(mod_s / 60, 1),
-            "hard_min": round(hard_s / 60, 1),
-        })
-    return result
+    """Per-day 3-zone minutes, continuous (every day in the range gets a row)."""
+    return _zone_points(activity_facts, continuous_daily, "date", lambda d: d)
 
 
 def build_zone_load_period(
     activity_facts: List[ActivityFact],
-    period_buckets: List["PeriodBucket"],
+    period_buckets: List[Bucket],
     period: str,
     rolling_anchor: Optional[date] = None,
     week_starts_on: int = MONDAY,
 ) -> List[dict]:
     """Per-coarse-bucket 3-zone minutes (#432), continuous over ``period_buckets``.
 
-    ``rolling_anchor`` must match ``build_period_buckets`` so the zone keys line
-    up with the bars (#630): today-anchored 14-/30-day bins when set, the
-    calendar grid otherwise.
+    ``rolling_anchor`` must match ``build_period_buckets`` so the zone keys line up
+    with the bars (#630).
     """
-    zone_by_period: dict[date, tuple[int, int, int]] = {}
-    for af in activity_facts:
-        if not af.time_in_zones:
-            continue
-        if rolling_anchor is not None:
-            ps = _rolling_bin_start(af.local_date, rolling_anchor, _ROLLING_BIN_DAYS[period])
-        else:
-            ps = _period_start(af.local_date, period, week_starts_on)
-        easy_s, mod_s, hard_s = _collapse_to_3_zones(af.time_in_zones)
-        prev = zone_by_period.get(ps, (0, 0, 0))
-        zone_by_period[ps] = (
-            prev[0] + easy_s,
-            prev[1] + mod_s,
-            prev[2] + hard_s,
-        )
+    return _zone_points(
+        activity_facts, period_buckets, "period_start",
+        bucket_key_fn(period, rolling_anchor, week_starts_on),
+    )
 
+
+def _zone_points(
+    activity_facts: List[ActivityFact],
+    buckets,
+    key_name: str,
+    key,
+) -> List[dict]:
+    """Shape the shared zone accumulation into chart points, one per displayed
+    bucket, zero-filled where the bucket has no zone data.
+
+    ``key_name`` is the point's own date field (``date``/``week_start``/
+    ``period_start``) and ``key`` the bucket-keying rule the value bars used. The
+    three public builders above differ only in those two, which is why the
+    accumulation itself lives once in ``activity_facts.bucket_zone_seconds``.
+    """
+    by_key = bucket_zone_seconds(activity_facts, key)
     result: List[dict] = []
-    for pb in period_buckets:
-        easy_s, mod_s, hard_s = zone_by_period.get(pb.period_start, (0, 0, 0))
+    for b in buckets:
+        bucket_key = b.local_date if key_name == "date" else b.start
+        easy_s, mod_s, hard_s = by_key.get(bucket_key, (0, 0, 0))
         result.append({
-            "period_start": pb.period_start.isoformat(),
+            key_name: bucket_key.isoformat(),
             "easy_min": round(easy_s / 60, 1),
             "moderate_min": round(mod_s / 60, 1),
             "hard_min": round(hard_s / 60, 1),
@@ -1023,19 +425,6 @@ def _avg_efficiency(facts: List[ActivityFact]) -> Optional[float]:
     if not points:
         return None
     return round(sum(p["efficiency_mps_per_bpm"] for p in points) / len(points), 4)
-
-
-def _zone_minutes(facts: List[ActivityFact]) -> tuple[float, float, float]:
-    """Minutes in each HR band (easy, moderate, hard) over the window (#385)."""
-    easy_s = mod_s = hard_s = 0
-    for af in facts:
-        if not af.time_in_zones:
-            continue
-        e, m, h = _collapse_to_3_zones(af.time_in_zones)
-        easy_s += e
-        mod_s += m
-        hard_s += h
-    return round(easy_s / 60, 1), round(mod_s / 60, 1), round(hard_s / 60, 1)
 
 
 def _summarise_window(facts: List[ActivityFact]) -> WeeklyStatsSummary:
@@ -1060,10 +449,10 @@ def get_weekly_stats(db: Session, *, user_id=None) -> WeeklyStatsResponse:
     HR/name heuristic.
     Pass ``user_id`` to restrict results to a single owner.
     """
-    current_start, prev_start = _period_window("7D")  # type: ignore[misc]
+    current_start, prev_start = period_window("7D")  # type: ignore[misc]
 
-    current = _query_activity_facts(db, current_start, None, user_id=user_id)
-    previous = _query_activity_facts(db, prev_start, current_start, user_id=user_id)
+    current = query_facts(db, current_start, None, user_id=user_id)
+    previous = query_facts(db, prev_start, current_start, user_id=user_id)
 
     return WeeklyStatsResponse(
         summary=_summarise_window(current),
@@ -1096,7 +485,7 @@ def get_trends_report(
 
     # The (range, mode) window: `since` starts the current window; the previous
     # comparison spans [prev_start, prev_end). Calendar mode shifts both.
-    since, prev_start, prev_end = _resolve_window(range_upper, mode)
+    since, prev_start, prev_end = resolve_window(range_upper, mode)
 
     # The runner's chosen week start (0=Monday default, 6=Sunday), which the
     # calendar-mode weekly/biweekly bars align to (#676). Rolling mode buckets by
@@ -1116,10 +505,8 @@ def get_trends_report(
     # spans the whole current period (e.g. Mon–Sun for 7D), so the period's last
     # day frames the chart and days after today render as empty bars.
     until: Optional[date] = None
-    if mode == "calendar" and range_upper in _RANGE_DAYS and _RANGE_DAYS[range_upper]:
-        from app.services.coach.volume import _calendar_period
-
-        _, until, _, _ = _calendar_period(range_upper, date.today(), week_starts_on)
+    if mode == "calendar" and range_upper in RANGE_DAYS and RANGE_DAYS[range_upper]:
+        _, until, _, _ = calendar_period(range_upper, date.today(), week_starts_on)
 
     # 1. Activity-level facts (filtered by types if provided)
     activity_facts = build_activity_facts(
@@ -1141,18 +528,16 @@ def get_trends_report(
     if since is not None:
         if rolling_anchor is not None:
             pre_start = min(
-                _rolling_bin_start(since, rolling_anchor, d) for d in (7, 14, 30)
+                rolling_bin_start(since, rolling_anchor, d) for d in (7, 14, 30)
             )
         else:
-            pre_start = _period_start(since, "monthly")
+            pre_start = period_start(since, "monthly")
         if pre_start < since:
-            pre_facts = _query_activity_facts(
-                db, pre_start, since, types=types, user_id=user_id
-            )
+            pre_facts = query_facts(db, pre_start, since, types=types, user_id=user_id)
             pre_window_daily = build_daily_facts(pre_facts)
 
     # Summary totals across the entire range
-    cur_easy, cur_mod, cur_hard = _zone_minutes(activity_facts)
+    cur_easy, cur_mod, cur_hard = zone_minutes(activity_facts)
     summary = TrendsSummary(
         total_distance_m=sum(d.total_distance_m for d in daily_facts),
         total_moving_time_s=sum(d.total_moving_time_s for d in daily_facts),
@@ -1167,8 +552,8 @@ def get_trends_report(
     # Previous period summary (vs the equivalent prior window for this mode)
     previous_summary = None
     if prev_start is not None and prev_end is not None:
-        prev_facts = _query_activity_facts(db, prev_start, prev_end, types=types, user_id=user_id)
-        prev_easy, prev_mod, prev_hard = _zone_minutes(prev_facts)
+        prev_facts = query_facts(db, prev_start, prev_end, types=types, user_id=user_id)
+        prev_easy, prev_mod, prev_hard = zone_minutes(prev_facts)
         previous_summary = TrendsSummary(
             total_distance_m=sum(f.distance_m for f in prev_facts),
             total_moving_time_s=sum(f.moving_time_s for f in prev_facts),
@@ -1257,7 +642,7 @@ def get_trends_report(
         week_starts_on=week_starts_on,
     )
 
-    def _period_distance(buckets: List[PeriodBucket]) -> List[PeriodDistancePoint]:
+    def _period_distance(buckets: List[Bucket]) -> List[PeriodDistancePoint]:
         return [
             PeriodDistancePoint(
                 period_start=b.period_start,
@@ -1270,7 +655,7 @@ def get_trends_report(
             for b in buckets
         ]
 
-    def _period_time(buckets: List[PeriodBucket]) -> List[PeriodTimePoint]:
+    def _period_time(buckets: List[Bucket]) -> List[PeriodTimePoint]:
         return [
             PeriodTimePoint(
                 period_start=b.period_start,
@@ -1283,7 +668,7 @@ def get_trends_report(
             for b in buckets
         ]
 
-    def _period_suffer(buckets: List[PeriodBucket]) -> List[PeriodSufferScorePoint]:
+    def _period_suffer(buckets: List[Bucket]) -> List[PeriodSufferScorePoint]:
         return [
             PeriodSufferScorePoint(
                 period_start=b.period_start,
@@ -1389,12 +774,7 @@ def get_volume_report(
     activity types (#413), so the typical line / "vs typical" caption compares
     like-for-like with the type-filtered Trends charts instead of measuring a
     filtered window against an all-activity norm."""
-    from app.services.coach.volume import (
-        _RANGE_WINDOW_DAYS,
-        _BASELINE_DAYS_BY_RANGE,
-        _calendar_period,
-        build_volume_report,
-    )
+    from app.services.coach.volume import build_volume_report
 
     resolved = as_of or date.today()
     week_starts_on = resolve_week_start(
@@ -1402,13 +782,11 @@ def get_volume_report(
         if user_id is not None
         else None
     )
-    key = range_key if range_key in _RANGE_WINDOW_DAYS else "7D"
-    n = _RANGE_WINDOW_DAYS[key]
+    key = range_key if range_key in RANGE_WINDOW_DAYS else "7D"
+    n = RANGE_WINDOW_DAYS[key]
     roll_start = resolved - timedelta(days=n - 1)
-    period_start, _, _, _ = _calendar_period(key, resolved, week_starts_on)
+    p_start, _, _, _ = calendar_period(key, resolved, week_starts_on)
     # Fetch back to the earliest window start plus the term-scaled norm baseline.
-    earliest = min(roll_start, period_start) - timedelta(days=_BASELINE_DAYS_BY_RANGE[key] + 1)
-    facts = _query_activity_facts(
-        db, earliest, resolved + timedelta(days=1), types, user_id=user_id
-    )
+    earliest = min(roll_start, p_start) - timedelta(days=BASELINE_DAYS_BY_RANGE[key] + 1)
+    facts = query_facts(db, earliest, resolved + timedelta(days=1), types, user_id=user_id)
     return build_volume_report(facts, resolved, key, week_starts_on)

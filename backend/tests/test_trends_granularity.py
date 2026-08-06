@@ -11,14 +11,11 @@ import uuid
 from datetime import date, datetime, time, timedelta
 
 from app.models import Activity, DerivedMetric, User
-from app.services.trends import (
-    DailyFact,
-    PeriodBucket,
-    _next_period_start,
-    _period_start,
-    build_period_buckets,
-    get_trends_report,
-)
+from app.services.activity_facts import Bucket as PeriodBucket
+from app.services.activity_facts import DailyFact
+from app.services.activity_facts import next_period_start as _next_period_start
+from app.services.activity_facts import period_start as _period_start
+from app.services.trends import build_period_buckets, get_trends_report
 
 
 # --- pure helpers ------------------------------------------------------------

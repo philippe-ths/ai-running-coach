@@ -44,7 +44,10 @@ from app.schemas.coach_context import (
     RecentTrainingWindow,
     RecentTypeBreakdown,
 )
-from app.services.coach.volume import _METRICS, _direction, _sum, build_volume_report
+from app.services.activity_facts import METRICS as _METRICS
+from app.services.activity_facts import direction as _direction
+from app.services.activity_facts import sum_metric as _sum
+from app.services.coach.volume import build_volume_report
 
 # Cap on the per-activity list for the recent window (bounded by design — the longer
 # windows carry only the per-type roll-up, never a per-session list).

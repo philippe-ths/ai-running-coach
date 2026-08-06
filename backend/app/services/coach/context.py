@@ -45,7 +45,12 @@ from app.services.coach.prompts import (
     is_stream_view_prompt,
     is_user_materials_prompt,
 )
-from app.services.coach.read_time_signals import SignalCompute, build_signals, gather
+from app.services.coach.read_time_signals import (
+    SignalCompute,
+    build_signals,
+    gather,
+    will_run,
+)
 from app.services.coach.stance import StanceProfile, resolve_stance
 from app.services.coach.volume import build_training_volume
 from app.services.coach.recent_training import build_recent_training
@@ -95,7 +100,9 @@ from app.schemas.coach_context import (
     SalienceContext,
 )
 from app.schemas.coach_memory import RunnerMemoryProfile
-from app.services.trends import _query_activity_facts
+from app.services.activity_facts import query_facts as _query_activity_facts
+from app.services.activity_facts import scan as _scan
+from app.services.activity_facts import scan_cache
 from app.services.units.cadence import normalize_cadence_spm
 
 logger = logging.getLogger(__name__)
@@ -248,6 +255,14 @@ def build_context_pack(
     # stream view (deep=True pulls it through the retrieval seam). Under any other
     # prompt deep=False, so the deferred column is never loaded and the pack stays
     # byte-stable (stream_view stays None and is dropped from serialization).
+    with scan_cache(db):
+        _prewarm_fact_scans(db, activity, prompt_id)
+        return _assemble_pack(db, activity, continuity, prompt_id, stance)
+
+
+def _assemble_pack(db, activity, continuity, prompt_id, stance) -> CoachContextPack:
+    """The pack assembly itself, unchanged, split out only so `build_context_pack`
+    can hold the fact-scan cache open across every signal it gathers (#804)."""
     wc = assemble_working_context(db, activity, deep=is_stream_view_prompt(prompt_id))
     b, f = wc.b_baseline, wc.focus
     # The read anchor shared across the read-time signal seam (#492). Calibration and
@@ -530,13 +545,9 @@ def _build_training_volume_context(
     DerivedMetric or the safety floor (the volume addendum). Degrades gracefully:
     thin history yields `has_baseline=False` and `no_norm` directions."""
     local_day = activity.local_start.date()
-    # _query_activity_facts filters on UTC start_date with an EXCLUSIVE end, so pass
-    # local_day+1 to keep the current local day (today's run) inside the rolling window;
-    # the builder partitions the fetched span by local_date. The start is widened to
-    # 91 days to cover the trailing 7d plus the 12-week norm baseline before it.
-    facts = _query_activity_facts(
-        db, local_day - timedelta(days=91), local_day + timedelta(days=1), user_id=activity.user_id
-    )
+    # The scan spans the trailing 7d plus the 12-week norm baseline before it; its
+    # width and the half-open UTC bound live once in `_FACT_SCANS` (#804).
+    facts = _scan_facts(db, activity, "training_volume")
     week_starts_on = resolve_week_start(_load_profile(db, activity.user_id))
     return build_training_volume(facts, local_day, week_starts_on)
 
@@ -557,11 +568,7 @@ def _build_recent_training_context(
     Degrades gracefully: thin history yields `has_baseline=False` and `no_norm`
     directions."""
     local_day = activity.local_start.date()
-    facts = _query_activity_facts(
-        db, local_day - timedelta(days=210), local_day + timedelta(days=1),
-        user_id=activity.user_id,
-        include_session_shape=True,  # #650: the per-session structure + rep-shape marker
-    )
+    facts = _scan_facts(db, activity, "recent_training")
     return build_recent_training(
         facts, local_day, include_previous_30d=settings.COACH_PREVIOUS_30D_ENABLED
     )
@@ -618,11 +625,7 @@ def _build_recent_weeks_context(
     so "typical" has one meaning across the product. A deterministic FACT the coach may
     cite; never overrides the run's re-derived DerivedMetric or the safety floor."""
     local_day = activity.local_start.date()
-    facts = _query_activity_facts(
-        db, local_day - timedelta(days=91), local_day + timedelta(days=1),
-        user_id=activity.user_id,
-        include_session_shape=True,  # per-session structure/rep-shape + hr_drift
-    )
+    facts = _scan_facts(db, activity, "recent_weeks")
     # Per-activity check-ins only for the two weeks the day-resolved log covers (rolling
     # 7d and this/last calendar week all fall within the trailing ~14 days).
     recent_ids = [
@@ -689,12 +692,7 @@ def _training_history_section(
     shared seam (`read_time_signals.gather`) before either adapter runs, which is the
     only route into this function."""
     local_day = activity.local_start.date()
-    facts = _query_activity_facts(
-        db,
-        local_day - timedelta(days=_TRAINING_HISTORY_FETCH_DAYS),
-        local_day + timedelta(days=1),
-        user_id=activity.user_id,
-    )
+    facts = _scan_facts(db, activity, "training_history")
     return build_training_history(facts, local_day, recent_weeks_bound=recent_weeks_bound)
 
 
@@ -750,7 +748,7 @@ def _build_intensity_context(
     local_day = activity.local_start.date()
     start = local_day - timedelta(days=_INTENSITY_FETCH_DAYS)
     end = local_day + timedelta(days=1)
-    facts = _query_activity_facts(db, start, end, user_id=activity.user_id)
+    facts = _scan_facts(db, activity, "intensity")
     confounded_ids = _query_confounded_activity_ids(db, start, end, activity.user_id)
     return build_intensity(facts, confounded_ids, activity.id, local_day)
 
@@ -1584,4 +1582,95 @@ _TRAINING_HISTORY_SIGNAL = _SIGNALS["training_history"]
 _TRAINING_HISTORY_2WK_SIGNAL = _SIGNALS["training_history_2wk"]
 _MEMORY_SIGNAL = _SIGNALS["memory"]
 _INTENSITY_SIGNAL = _SIGNALS["intensity"]
+
+
+# ---------------------------------------------------------------------------
+# The pack's fact scans (#804)
+# ---------------------------------------------------------------------------
+#
+# Five read-time signals each scan the runner's history over their own bounded
+# window, all through the SAME projection, all as of the subject activity's local
+# day. Four of those windows are sub-windows of the widest. Declaring the spans
+# here — one home per number, read by the builder that needs it AND by the planner
+# below — lets one fetch per session-shape answer every one of them, instead of the
+# projection being re-issued per signal over overlapping ranges.
+#
+# `days` is how far back from the local day the scan reaches; the upper bound is
+# always local_day + 1, because the projection's end is EXCLUSIVE and the current
+# local day (today's run) must stay inside the window. `shape` is the #650
+# session-shape opt-in: it keys the cache separately because the wide scans must
+# stay lean and never load the per-rep interval JSON.
+_FACT_SCANS: dict[str, tuple[int, bool]] = {
+    "training_volume": (91, False),      # trailing 7d + the 12-week norm baseline
+    "recent_training": (210, True),      # the 30d window + its ~6-month vs-typical baseline
+    "recent_weeks": (91, True),          # two weeks of structure + the ~12-week norm
+    "training_history": (_TRAINING_HISTORY_FETCH_DAYS, False),   # ~10 years, summary-only
+    "intensity": (_INTENSITY_FETCH_DAYS, False),                 # 28d window + its prior 28d
+}
+
+# Which signal's gating decides whether a scan happens at all. `training_history`
+# is fed by either of two mutually-exclusive signals, so the scan is needed when
+# EITHER will run.
+_SCAN_SIGNALS: dict[str, tuple] = {
+    "training_volume": (_TRAINING_VOLUME_SIGNAL,),
+    "recent_training": (_RECENT_TRAINING_SIGNAL,),
+    "recent_weeks": (_RECENT_WEEKS_SIGNAL,),
+    "training_history": (_TRAINING_HISTORY_SIGNAL, _TRAINING_HISTORY_2WK_SIGNAL),
+    "intensity": (_INTENSITY_SIGNAL,),
+}
+
+
+def _scan_window(activity: Activity, name: str) -> tuple:
+    days, shape = _FACT_SCANS[name]
+    day = activity.local_start.date()
+    return day - timedelta(days=days), day + timedelta(days=1), shape
+
+
+def _scan_facts(db: Session, activity: Activity, name: str):
+    """One declared fact scan, served from the pack's cache when one is open."""
+    start, end, shape = _scan_window(activity, name)
+    return _scan(
+        db, start, end, user_id=activity.user_id, include_session_shape=shape
+    )
+
+
+def _prewarm_fact_scans(db: Session, activity: Activity, prompt_id) -> None:
+    """Fetch, per session-shape, the WIDEST scan this prompt will actually ask for.
+
+    Every narrower scan is then a sub-window of it and costs no query. Deliberately
+    driven by `will_run` rather than by the widest declared span, so a prompt that
+    gates the 10-year history scan off does not pay for it: this only ever fetches a
+    span some signal was going to request anyway.
+
+    Best-effort — a prewarm failure must not break the pack. Each builder still asks
+    for its own window, so a cold cache simply means the previous behaviour.
+    """
+    widest: dict[bool, int] = {}
+
+    def want(name: str) -> None:
+        days, shape = _FACT_SCANS[name]
+        if days > widest.get(shape, 0):
+            widest[shape] = days
+
+    for name, signals in _SCAN_SIGNALS.items():
+        if any(will_run(sig, prompt_id) for sig in signals):
+            want(name)
+    # The intensity scan also fans out directly under an intensity-read prompt, where
+    # _INTENSITY_SIGNAL itself abstains (ADR 0026 Slice 3).
+    if is_intensity_read_prompt(prompt_id):
+        want("intensity")
+
+    day = activity.local_start.date()
+    for shape, days in widest.items():
+        try:
+            _scan(
+                db,
+                day - timedelta(days=days),
+                day + timedelta(days=1),
+                user_id=activity.user_id,
+                include_session_shape=shape,
+            )
+        except Exception:  # noqa: BLE001 - a prewarm is never load-bearing
+            logger.exception("coach fact-scan prewarm failed for activity %s", activity.id)
+
 

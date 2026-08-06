@@ -139,8 +139,13 @@ def reanalyze_history_batch(
     # 182-day windowed scan up to REANALYZE_BATCH_SIZE times per batch. We pass
     # skip_baseline=True here and recompute once per user below; the recompute
     # is a full idempotent pass, so the final baseline is identical.
+    # NB: the loop variables below are deliberately NOT named `user_id` — that is
+    # this function's owner-scoping parameter, and shadowing it made the
+    # `count_eligible` call at the end of the batch read the LAST activity's owner
+    # instead of the requested scope, so a global pass under-reported `remaining`
+    # (#804).
     recompute_user_ids: list = []
-    for activity_id, strava_id, user_id in items:
+    for activity_id, strava_id, owner_id in items:
         try:
             analyze(db, str(activity_id), skip_baseline=True)
         except Exception as exc:  # noqa: BLE001 - convergence over completeness
@@ -152,19 +157,19 @@ def reanalyze_history_batch(
                 exc,
             )
         else:
-            if user_id not in recompute_user_ids:
-                recompute_user_ids.append(user_id)
+            if owner_id not in recompute_user_ids:
+                recompute_user_ids.append(owner_id)
         result.processed.append(strava_id)
 
     # One baseline recompute per user that had at least one activity succeed.
     # Best-effort, mirroring analyze()'s _post_commit_baseline: a failure is
     # logged and the session rolled back so the next user starts clean, never
     # aborting the chain.
-    for user_id in recompute_user_ids:
+    for owner_id in recompute_user_ids:
         try:
-            recompute_runner_baseline(db, user_id)
+            recompute_runner_baseline(db, owner_id)
         except Exception:  # noqa: BLE001 - baseline is best-effort
-            logger.exception("runner baseline recompute failed for user %s", user_id)
+            logger.exception("runner baseline recompute failed for user %s", owner_id)
             db.rollback()
 
     # A full batch means there may be more; a short batch means we drained the
