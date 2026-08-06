@@ -67,7 +67,6 @@ def compose(clauses: Sequence[Clause]) -> str:
     return "".join(clause.text for clause in clauses)
 
 
-
 # ----------------------------------------------------------------------------
 # The fuller spine, in the order it is written. Every live version carries all
 # of these; the clauses below the spine are what a version chooses between.
