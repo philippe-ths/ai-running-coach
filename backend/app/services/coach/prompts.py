@@ -671,8 +671,12 @@ SYSTEM_PROMPT_MESSAGE_V8_OPENER = (
 # capability and the same retuned base prose; it ADDS the training-volume
 # discipline. The PER-RUNNER volume figures are NOT baked into the constant —
 # they ride the `training_volume` pack section (the deterministic-FACT model,
-# like `training_load`), populated only under is_volume_prompt by
-# _build_training_volume_context. The addendum's job is to stop the coach reading
+# like `training_load`), populated by _build_training_volume_context only under a
+# prompt carrying PromptFeature.VOLUME — the gate is the feature manifest, applied
+# once in the read-time signal seam (`read_time_signals.gather`) from the section's
+# `signal_registry` declaration, NOT the `is_volume_prompt` predicate this comment
+# used to name (#800: the predicate is a sibling view over the same manifest, and no
+# code path consults it). The addendum's job is to stop the coach reading
 # a deliberate down week as a problem, while keeping volume strictly as context
 # that never overrides the run's data or the safety floor.
 #
@@ -1340,22 +1344,15 @@ _OPENER_PROMPTS = {
 }
 
 # ADR 0026 Slice 1: the prompt ids that receive the GROUPED pack serialization
-# (pack.to_grouped_dict()) instead of the flat one. This is a PRESENTATION flag, not a
-# pack-section capability, so it is a plain set here rather than a PromptFeature (which
-# gates what sections the pack CONTAINS). Every other prompt id serves the flat pack,
-# byte-stable.
-GROUPED_PACK_PROMPT_IDS: frozenset[str] = frozenset(
-    {
-        "coach_message_lean_grouped_v1",
-        "coach_message_lean_grouped_v2",
-        "coach_message_lean_grouped_v3",
-        "coach_message_lean_grouped_v4",
-        "coach_message_lean_grouped_v5",
-        "coach_message_lean_grouped_v6",
-        "coach_message_lean_grouped_v7",
-        "coach_message_lean_grouped_v8",
-    }
-)
+# (pack.to_grouped_dict()) instead of the flat one. Every other prompt id serves the
+# flat pack, byte-stable.
+#
+# #800: DERIVED from the prompt-feature manifest like every sibling set. It was the one
+# hand-maintained list, on the reasoning that a presentation flag is "not a pack-section
+# capability" — but METRICS_COACH_FRAMED, SALIENCE_DROPPED and PACK_COACH_VIEW are all
+# presentation-only and all live in the manifest, so the exception only ever bought a
+# second place to forget a new grouped version.
+GROUPED_PACK_PROMPT_IDS: frozenset[str] = ids_with(PromptFeature.GROUPED_PACK)
 
 
 def is_grouped_pack_prompt(prompt_id: Optional[str]) -> bool:

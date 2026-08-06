@@ -241,9 +241,9 @@ def test_recorded_laps_source_carried_on_recent_weeks():
     act = next(a for d in rw.this_week.days for a in d.activities if a.type == "Run")
     assert act.source == "recorded_laps"
     # It survives the section's null-strip serialization (byte present when it applies).
-    from app.schemas.coach_context import _strip_nulls_in_place
+    from app.services.coach.signal_registry import strip_nulls_in_place
     dumped = act.model_dump()
-    _strip_nulls_in_place(dumped)
+    strip_nulls_in_place(dumped)
     assert dumped.get("source") == "recorded_laps"
 
 
@@ -252,11 +252,11 @@ def test_stream_detected_and_continuous_runs_have_no_source_marker():
     continuous run (no interval_structure) both carry source is None, so it is dropped
     from serialization — byte-stable when absent. The shared fixture's l_fri/t_wed carry
     interval_structure with NO source, and the walk is a non-run."""
-    from app.schemas.coach_context import _strip_nulls_in_place
+    from app.services.coach.signal_registry import strip_nulls_in_place
     rw = _build()
     for d in list(rw.last_week.days) + list(rw.this_week.days):
         for a in d.activities:
             assert a.source is None
             dumped = a.model_dump()
-            _strip_nulls_in_place(dumped)
+            strip_nulls_in_place(dumped)
             assert "source" not in dumped

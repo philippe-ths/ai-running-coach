@@ -54,6 +54,7 @@ class PromptFeature(Enum):
     METRICS_COACH_FRAMED = "metrics_coach_framed"  # ADR 0026 Slice 4 (#680): reframe the pack's numeric leaves to coach-native units/precision for the LLM view (km/pace/%max/MM:SS); presentation only, no new section
     SALIENCE_DROPPED = "salience_dropped"  # ADR 0026 Slice 5 (#682): drop the `salience` routing section from the FULLER LLM view (it steers only the opener's depth + scheduling, which prod's receipt cadence never runs); the canonical pack keeps it so the deterministic safety force is unchanged; view-only, no new section
     BODY = "body"                      # #742: the runner's stated build in `profile.body` + the BODY clause
+    GROUPED_PACK = "grouped_pack"      # ADR 0026 Slice 1: serve the pack GROUPED (pack.to_grouped_dict()) rather than flat. Presentation-only, exactly like METRICS_COACH_FRAMED / SALIENCE_DROPPED / PACK_COACH_VIEW — it changes the SHAPE the pack is serialized in, never which sections it CONTAINS. #800 moved it here from a hand-maintained frozenset in prompts.py, the last prompt-id set that did not derive from this manifest.
     PACK_COACH_VIEW = "pack_coach_view"  # ADR 0026 Slice 5 (#682): the COMPLETED coach LLM view — readiness verdict-only, recent_weeks per-session bpm, the four interval blocks collapsed to one `interval_read`, plan-less `workout_match` dropped, `hr_drift` deduped, training-history sentinel/dupes cleaned, empty `our_thread` dropped; a one-way view over the canonical grouped pack (like METRICS_COACH_FRAMED), no section added to the store
 
 
@@ -226,6 +227,7 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
     # same disposition-first prose. Ships INERT.
     "coach_message_lean_grouped_v1": frozenset(
         {
+            _F.GROUPED_PACK,
             _F.TWO_STAGE,
             _F.VOICE,
             _F.CORPUS,
@@ -251,6 +253,7 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
     # replacements appear. Every prior prompt keeps the originals (byte-stable). Ships INERT.
     "coach_message_lean_grouped_v2": frozenset(
         {
+            _F.GROUPED_PACK,
             _F.TWO_STAGE,
             _F.VOICE,
             _F.CORPUS,
@@ -273,6 +276,7 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
     # Every prior prompt keeps the originals (byte-stable). Ships INERT.
     "coach_message_lean_grouped_v3": frozenset(
         {
+            _F.GROUPED_PACK,
             _F.TWO_STAGE,
             _F.VOICE,
             _F.CORPUS,
@@ -297,6 +301,7 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
     # prior prompt is byte-identical. Ships INERT.
     "coach_message_lean_grouped_v4": frozenset(
         {
+            _F.GROUPED_PACK,
             _F.TWO_STAGE,
             _F.VOICE,
             _F.CORPUS,
@@ -322,6 +327,7 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
     # (COACH_PROMPT_ID -> this id, receipt cadence staying on) makes the grouped pack live.
     "coach_message_lean_grouped_v5": frozenset(
         {
+            _F.GROUPED_PACK,
             _F.TWO_STAGE,
             _F.VOICE,
             _F.CORPUS,
@@ -344,6 +350,7 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
     # only the system-prompt TEXT differs. Ships INERT (flip target: grouped_v5 -> grouped_v6).
     "coach_message_lean_grouped_v6": frozenset(
         {
+            _F.GROUPED_PACK,
             _F.TWO_STAGE,
             _F.VOICE,
             _F.CORPUS,
@@ -367,6 +374,7 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
     # Ships INERT (flip target: grouped_v5 -> grouped_v7).
     "coach_message_lean_grouped_v7": frozenset(
         {
+            _F.GROUPED_PACK,
             _F.TWO_STAGE,
             _F.VOICE,
             _F.CORPUS,
@@ -392,6 +400,7 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
     # Ships INERT (flip target: grouped_v7 -> grouped_v8).
     "coach_message_lean_grouped_v8": frozenset(
         {
+            _F.GROUPED_PACK,
             _F.TWO_STAGE,
             _F.VOICE,
             _F.CORPUS,
@@ -485,6 +494,10 @@ ALTERNATIVE_FEATURES: frozenset[PromptFeature] = frozenset(
         # ADR 0026 Slice 5 (#682): a view-only reshape (reframe + collapse), no stored
         # section, so it likewise must not count toward the additive ranking.
         PromptFeature.PACK_COACH_VIEW,
+        # ADR 0026 Slice 1 (#800 relocated it here): a serialization SHAPE flag — the same
+        # sections, re-nested — so it adds nothing to the pack and must not count toward
+        # the additive ranking either.
+        PromptFeature.GROUPED_PACK,
     }
 )
 

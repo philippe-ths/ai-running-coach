@@ -35,7 +35,6 @@ from app.services.coach.memory_store import get_memory
 from app.services.coach.perceived_effort import build_perceived_effort
 from app.services.coach.salience import compute_safety_override
 from app.services.coach.corpus import DEFAULT_SCHOOL_ID
-from app.services.coach.prompt_features import PromptFeature
 from app.services.coach.prompts import (
     _describe_dial,
     is_corpus_prompt,
@@ -46,7 +45,7 @@ from app.services.coach.prompts import (
     is_stream_view_prompt,
     is_user_materials_prompt,
 )
-from app.services.coach.read_time_signals import ReadTimeSignal, gather
+from app.services.coach.read_time_signals import SignalCompute, build_signals, gather
 from app.services.coach.stance import StanceProfile, resolve_stance
 from app.services.coach.volume import build_training_volume
 from app.services.coach.recent_training import build_recent_training
@@ -683,9 +682,12 @@ def _training_history_section(
     db: Session, activity: Activity, *, recent_weeks_bound: bool
 ) -> Optional[TrainingHistoryContext]:
     """Shared body for the two training-history signals: the wide summary-only history
-    fetch + off-switch, dispatching to the original or the rebased/enriched ladder."""
-    if not settings.COACH_TRAINING_HISTORY_ENABLED:
-        return None
+    fetch, dispatching to the original or the rebased/enriched ladder.
+
+    #800: `COACH_TRAINING_HISTORY_ENABLED` is no longer re-checked here. It is declared
+    on the `training_history` signal as a drop-effect kill switch and applied by the
+    shared seam (`read_time_signals.gather`) before either adapter runs, which is the
+    only route into this function."""
     local_day = activity.local_start.date()
     facts = _query_activity_facts(
         db,
@@ -766,12 +768,15 @@ def _build_memory_context(
     to this run's re-derived `DerivedMetric` and never lowers the safety floor (the
     memory addendum); it carries no behavioral verdict.
 
-    Degrades to None (section dropped, byte-stable) when the `COACH_MEMORY_ENABLED`
-    operator switch is off, no profile row exists yet (cold start), or the profile
-    has no lines in any section. A stored row that fails to parse drops too, never
-    breaking the pack."""
-    if not settings.COACH_MEMORY_ENABLED:
-        return None
+    Degrades to None (section dropped, byte-stable) when no profile row exists yet
+    (cold start) or the profile has no lines in any section. A stored row that fails to
+    parse drops too, never breaking the pack.
+
+    #800: the `COACH_MEMORY_ENABLED` operator switch is no longer re-checked here. It
+    is declared on the `memory` signal as a drop-effect kill switch and applied by the
+    shared seam (`read_time_signals.gather`) before this compute runs, which is the
+    only route into this function. (Its OTHER half — disabling the runner-memory update
+    WRITER — stays in service.py, which is a different concern from the pack.)"""
     row = get_memory(db, activity.user_id)
     if row is None or not row.profile:
         return None
@@ -1541,38 +1546,42 @@ def _novelty_axis_history(db: Session, activity: Activity) -> list[AxisSnapshot]
 # of scanning history, at the SAME (db, activity, as_of) shape and gate: `_MEMORY_SIGNAL`
 # already is one, and #203 slots adherence/calibration in the same way, with no
 # call-site change. See read_time_signals.py for why the seam stays (#699 part b).
-_CALIBRATION_SIGNAL = ReadTimeSignal("calibration", _build_calibration_context)
-_ADHERENCE_SIGNAL = ReadTimeSignal("adherence", _build_adherence_context)
-_TRAINING_LOAD_SIGNAL = ReadTimeSignal(
-    "training_load", _build_training_load_context, PromptFeature.TRAINING_LOAD
-)
-_TRAINING_VOLUME_SIGNAL = ReadTimeSignal(
-    "training_volume", _build_training_volume_context, PromptFeature.VOLUME
-)
-_RECENT_TRAINING_SIGNAL = ReadTimeSignal(
-    "recent_training", _build_recent_training_context, PromptFeature.RECENT_TRAINING
-)
-# ADR 0026 Slice 2 (#670): the redefined right_now content, gated to the new grouped
-# prompt — readiness (renamed training_load) and recent_weeks (merged volume+recent).
-_READINESS_SIGNAL = ReadTimeSignal(
-    "readiness", _build_readiness_context, PromptFeature.READINESS
-)
-_RECENT_WEEKS_SIGNAL = ReadTimeSignal(
-    "recent_weeks", _build_recent_weeks_context, PromptFeature.RECENT_WEEKS
-)
-_TRAINING_HISTORY_SIGNAL = ReadTimeSignal(
-    "training_history", _build_training_history_context, PromptFeature.TRAINING_HISTORY
-)
-# ADR 0026 Slice 2 (#670): the rebased/enriched training-history ladder for grouped_v2.
-# Mutually exclusive with _TRAINING_HISTORY_SIGNAL by prompt feature; the assembler `or`s
-# the two into the ONE `training_history` pack key.
-_TRAINING_HISTORY_2WK_SIGNAL = ReadTimeSignal(
-    "training_history_2wk",
-    _build_training_history_2wk_context,
-    PromptFeature.TRAINING_HISTORY_2WK,
-)
-_MEMORY_SIGNAL = ReadTimeSignal("memory", _build_memory_context, PromptFeature.MEMORY)
-_INTENSITY_SIGNAL = ReadTimeSignal(
-    "intensity", _build_intensity_context, PromptFeature.INTENSITY
-)
+#
+# #800: this module now registers ONLY the compute adapters. Each signal's prompt
+# gate and its drop-effect kill switch come from `signal_registry.COACH_SIGNALS`, so
+# they are stated once rather than restated here (and, for the kill switches, a
+# third time inside the builder). `build_signals` fails AT IMPORT if a declared
+# adapter has no compute or a compute has no declaration.
+_COMPUTES: dict[str, SignalCompute] = {
+    "calibration": _build_calibration_context,
+    "adherence": _build_adherence_context,
+    "training_load": _build_training_load_context,
+    "training_volume": _build_training_volume_context,
+    "recent_training": _build_recent_training_context,
+    # ADR 0026 Slice 2 (#670): the redefined right_now content — readiness (the renamed
+    # training_load) and recent_weeks (the merged volume + recent_training read).
+    "readiness": _build_readiness_context,
+    "recent_weeks": _build_recent_weeks_context,
+    "training_history": _build_training_history_context,
+    # ADR 0026 Slice 2 (#670): the rebased/enriched ladder for grouped_v2. Mutually
+    # exclusive with `training_history` by prompt feature; the assembler `or`s the two
+    # into the ONE `training_history` pack key.
+    "training_history_2wk": _build_training_history_2wk_context,
+    "memory": _build_memory_context,
+    "intensity": _build_intensity_context,
+}
+
+_SIGNALS = build_signals(_COMPUTES)
+
+_CALIBRATION_SIGNAL = _SIGNALS["calibration"]
+_ADHERENCE_SIGNAL = _SIGNALS["adherence"]
+_TRAINING_LOAD_SIGNAL = _SIGNALS["training_load"]
+_TRAINING_VOLUME_SIGNAL = _SIGNALS["training_volume"]
+_RECENT_TRAINING_SIGNAL = _SIGNALS["recent_training"]
+_READINESS_SIGNAL = _SIGNALS["readiness"]
+_RECENT_WEEKS_SIGNAL = _SIGNALS["recent_weeks"]
+_TRAINING_HISTORY_SIGNAL = _SIGNALS["training_history"]
+_TRAINING_HISTORY_2WK_SIGNAL = _SIGNALS["training_history_2wk"]
+_MEMORY_SIGNAL = _SIGNALS["memory"]
+_INTENSITY_SIGNAL = _SIGNALS["intensity"]
 

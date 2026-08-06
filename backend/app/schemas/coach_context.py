@@ -12,6 +12,7 @@ not consumed by code paths within the coach module.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -20,6 +21,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.material import DistilledMaterial
 from app.services.coach.prompt_features import PromptFeature
+from app.services.coach.signal_registry import (
+    COACH_SIGNALS,
+    FLAT_ORDER as _REGISTRY_FLAT_ORDER,
+    GROUP_NAMES as _REGISTRY_GROUP_NAMES,
+    SECTION_GROUP as _REGISTRY_SECTION_GROUP,
+)
 
 
 class ActivityContext(BaseModel):
@@ -1302,40 +1309,13 @@ class HowToCoach(BaseModel):
 # attribute it now lives under; a name absent here is a top-level meta field
 # (salience, safety_rules, the retired stubs). This one table drives un-grouping
 # (`_flat_data`), nesting (`_nest_flat`), and the legacy-flat loader (`load`).
-_SECTION_GROUP: Dict[str, str] = {
-    "activity": "this_run",
-    "metrics": "this_run",
-    "check_in": "this_run",
-    "perceived_effort": "this_run",
-    "calibration": "this_run",
-    "stream_view": "this_run",
-    "block": "this_run",
-    "intensity": "this_run",
-    "intensity_read": "this_run",
-    "referral": "this_run",
-    "training_load": "right_now",
-    "training_volume": "right_now",
-    "recent_training": "right_now",
-    "readiness": "right_now",
-    "recent_weeks": "right_now",
-    "intensity_mix": "right_now",
-    "profile": "the_runner",
-    "memory": "the_runner",
-    "training_history": "the_runner",
-    "adherence": "our_thread",
-    "continuity": "our_thread",
-    "longitudinal": "our_thread",
-    "corpus": "how_to_coach",
-    "stance": "how_to_coach",
-}
+#
+# #800: DERIVED from the coach signal registry, which declares each signal's group
+# once. It used to be a hand-kept table that had to agree with `_FLAT_ORDER` and
+# `PACK_SECTIONS` (both also derived below) by discipline alone.
+_SECTION_GROUP: Dict[str, str] = dict(_REGISTRY_SECTION_GROUP)
 
-_GROUP_NAMES: tuple[str, ...] = (
-    "this_run",
-    "right_now",
-    "the_runner",
-    "our_thread",
-    "how_to_coach",
-)
+_GROUP_NAMES: tuple[str, ...] = _REGISTRY_GROUP_NAMES
 
 # Sentinel so `from_sections` can tell an OMITTED salience/continuity (→ present empty
 # object, the old default_factory behaviour) from an explicit None (→ the #522
@@ -1344,38 +1324,11 @@ _UNSET: Any = object()
 
 # Flat section order preserved from the pre-ADR-0026 field declaration, so the flat
 # serialized dict's key order is unchanged (tidy diffs; the hash uses sort_keys).
-_FLAT_ORDER: tuple[str, ...] = (
-    "activity",
-    "metrics",
-    "check_in",
-    "profile",
-    "recent_training_summary",
-    "longitudinal",
-    "perceived_effort",
-    "adherence",
-    "calibration",
-    "believed_facts",
-    "preference_profile",
-    "narrative",
-    "salience",
-    "continuity",
-    "block",
-    "corpus",
-    "stance",
-    "training_load",
-    "training_volume",
-    "stream_view",
-    "recent_training",
-    "readiness",
-    "recent_weeks",
-    "training_history",
-    "memory",
-    "intensity",
-    "intensity_read",
-    "referral",
-    "intensity_mix",
-    "safety_rules",
-)
+#
+# #800: DERIVED from the coach signal registry's declaration order, which IS this
+# order. Appending a signal there appends a key here; inserting one anywhere else
+# reorders the serialized pack, which is why the registry says to append.
+_FLAT_ORDER: tuple[str, ...] = _REGISTRY_FLAT_ORDER
 
 
 def _nest_flat(flat: Dict[str, Any]) -> Dict[str, Any]:
@@ -1814,236 +1767,39 @@ class PackSection:
     nested_drop: Optional[Callable[[Any, Dict[str, Any]], None]] = None
 
 
-def _drop_corpus_user_materials(corpus: Dict[str, Any], _data: Dict[str, Any]) -> None:
-    """P4 (#286): ``user_materials`` rides INSIDE the corpus section, but only under
-    a user-materials-aware prompt. When None (every non-v7 corpus prompt) drop the
-    nested key entirely, so the corpus section is byte-identical to its P1.2/P1.3
-    shape under v4/v5/v6 (the activation boundary), exactly as the top-level
-    Optional-and-drop idiom does for the section itself."""
-    if corpus.get("user_materials") is None:
-        corpus.pop("user_materials", None)
-
-
-def _drop_profile_body(profile: Dict[str, Any], _data: Dict[str, Any]) -> None:
-    """#742: `body` rides INSIDE the always-present profile section, but only under a
-    body-aware prompt (and only when the runner has stated a figure). When None --
-    every prior prompt, and any runner who has stated neither -- drop the nested key
-    entirely, so the profile section is byte-identical to its pre-#742 shape. Same
-    idiom as `_drop_corpus_user_materials`; `profile` is never None itself, so this
-    descriptor exists purely to carry the nested trim."""
-    if profile.get("body") is None:
-        profile.pop("body", None)
-
-
-def _drop_training_volume_rolling_current(
-    tv: Dict[str, Any], data: Dict[str, Any]
-) -> None:
-    """#400 fold (one lane per fact): drop `current_all`/`current_runs` from the
-    `rolling_7d` window only. That window spans the same trailing 7 days as
-    `recent_training.last_7d`, so its raw totals (current_all == that window's
-    total_*/activity_count, current_runs == its by_type Run entry) were a second copy
-    of the descriptive section. `rolling_7d` keeps only the vs-norm VERDICT
-    (norm + direction + pct); the actual trailing-7d numbers live in `recent_training`.
-    `calendar_week` is left untouched — it is the current Monday-to-date window, which
-    no other section carries. Re-parse stays safe: both fields are Optional and default
-    to None when absent.
-
-    GATED on `recent_training` being present: the fold only holds when the descriptive
-    lane exists to carry the numbers (recent-training-aware prompts, v11+). Under a
-    volume-aware-but-not-recent-training prompt (v9/v10) `recent_training` is absent, so
-    we KEEP rolling_7d's current values — dropping them there would lose the trailing-7d
-    numbers entirely. (recent_training is dropped LATER in the PACK_SECTIONS loop, so its
-    raw value is still readable here.)"""
-    if not data.get("recent_training"):
-        return
-    rolling = tv.get("rolling_7d")
-    if not rolling:
-        return
-    for comp in rolling.get("metrics", []):
-        comp.pop("current_all", None)
-        comp.pop("current_runs", None)
-
-
-def _drop_recent_training_dedup(rt: Dict[str, Any], _data: Dict[str, Any]) -> None:
-    """#444/#451 pack trim: drop the deduplicated/empty fields from the
-    recent-training section so they cost no tokens. Per window: the basis strings
-    live once on the window (None on previous_30d). Per comparison: current_all/
-    current_runs (already in the window totals/by_type and in training_volume), the
-    per-row basis (moved up a level), and the 7d vs_typical_direction are all None
-    and dropped. Re-parse stays safe — every dropped field is Optional and defaults
-    to None when absent."""
-    # #522: COACH_PREVIOUS_30D_ENABLED drops the whole previous_30d window (the
-    # builder sets it None); pop the null key so the section stays byte-stable.
-    if rt.get("previous_30d") is None:
-        rt.pop("previous_30d", None)
-    for wkey in ("last_7d", "last_30d", "previous_30d"):
-        win = rt.get(wkey)
-        if not win:
-            continue
-        for k in ("prev_basis", "typical_basis"):
-            if win.get(k) is None:
-                win.pop(k, None)
-        for comp in win.get("comparisons", []):
-            for k in [k for k, v in comp.items() if v is None]:
-                comp.pop(k, None)
-        # #650: drop the null session-shape fields so they cost no tokens — a continuous
-        # run has no rep shape, and a non-run (ride/walk) has no running structure at all.
-        # weekday is always populated (from the date), so it stays. Re-parse safe: both
-        # default to None when absent.
-        for act in win.get("activities", []):
-            for k in ("structure", "interval_shape", "source", "long_run"):
-                if act.get(k) is None:
-                    act.pop(k, None)
-
-
-def _strip_nulls_in_place(obj: Any) -> None:
-    """Recursively remove None-valued keys from a nested dict/list structure."""
-    if isinstance(obj, dict):
-        for k in [k for k, v in obj.items() if v is None]:
-            obj.pop(k)
-        for v in obj.values():
-            _strip_nulls_in_place(v)
-    elif isinstance(obj, list):
-        for v in obj:
-            _strip_nulls_in_place(v)
-
-
-def _drop_training_history_v2_fields(th: Dict[str, Any], _data: Dict[str, Any]) -> None:
-    """ADR 0026 Slice 2 (#670): the grouped_v2-only training-history enrichments
-    (per-bucket `by_type`/`avg_weekly_load`/`from_date`/`to_date` + the trait
-    `peak_sustained_weekly_load`/`current_vs_peak_load_pct`) ride the SAME schema as the
-    original 60d ladder. On the original ladder they are unset (None); pop exactly those
-    keys so every prior prompt's section is BYTE-IDENTICAL to its pre-Slice-2 shape. The
-    grouped_v2 ladder always populates them (a bucket's `by_type` is a non-empty list, the
-    traits' `peak_sustained_weekly_load` is a set int), so this is a no-op there — and it
-    deliberately does NOT touch the pre-existing Optional trait nulls (`current_vs_peak_pct`
-    etc.), which still serialize as null exactly as today. Re-parse stays safe: every popped
-    field defaults to None when absent."""
-    traits = th.get("traits")
-    if isinstance(traits, dict) and traits.get("peak_sustained_weekly_load") is None:
-        traits.pop("peak_sustained_weekly_load", None)
-        traits.pop("current_vs_peak_load_pct", None)
-    for bucket in th.get("timeline", []) or []:
-        if isinstance(bucket, dict) and bucket.get("by_type") is None:
-            for key in ("from_date", "to_date", "avg_weekly_load", "by_type"):
-                bucket.pop(key, None)
-
-
-def _drop_recent_weeks_nulls(rw: Dict[str, Any], _data: Dict[str, Any]) -> None:
-    """ADR 0026 Slice 2 (#670): make the recent_weeks section's sparse per-activity/day/
-    verdict fields cost nothing when absent. Every leaf that does not apply (a no-HR
-    session's `avg_hr`/`hr_drift`, a non-run's `structure`/`shape`, a run without a
-    check-in's `rpe`/`pain`/`notes`, a rest day's `day_totals`, a `no_norm` metric's
-    `typical`/`pct`) is Optional-None on the model; drop it recursively so the section
-    carries only present facts. Re-parse stays safe — every dropped field defaults to
-    None when absent."""
-    _strip_nulls_in_place(rw)
-
-
-def _drop_intensity_read_nulls(ir: Dict[str, Any], _data: Dict[str, Any]) -> None:
-    """ADR 0026 Slice 3 (#673): make the intensity_read section's sparse fields cost
-    nothing when absent. Drop the null leaves (a no-HR run's `band`, a no-zone run's
-    `within_run`, a no-check-in run's `felt_vs_measured`, a no-drift run's
-    `drift_vs_typical`, a clean run's `drift_vs_typical.confounded`) recursively, and
-    drop the `confounders` list when empty so it only appears — leading the block — when
-    a confounder actually fired. Re-parse stays safe: every dropped field defaults to
-    None/empty when absent."""
-    if ir.get("confounders") == []:
-        ir.pop("confounders", None)
-    _strip_nulls_in_place(ir)
-
-
-# One descriptor per droppable Optional section. Order matches the historical
-# branch order in to_serializable_dict so the serialized dict's key order — and
-# therefore (post sort_keys, but kept tidy for diffs) the output — is unchanged.
-PACK_SECTIONS: tuple[PackSection, ...] = (
-    # The seven prompt-version-gated sections (#493 scope). Each is built + gated in
-    # context.py (block/corpus/stance via build helpers, training_load/training_volume/
-    # recent_training via the #492 ReadTimeSignal seam, stream_view via the deep flag),
-    # and dropped here when None to stay byte-stable.
-    PackSection("block"),  # A1 (AC8): block-of-one emits nothing.
-    # #742: `profile` itself is always present (never dropped); this descriptor
-    # carries ONLY the nested `body` trim, which is why its gate feature is the
-    # documentary cross-link for the nested field rather than the section.
-    PackSection("profile", PromptFeature.BODY, nested_drop=_drop_profile_body),
-    PackSection(
-        "corpus", PromptFeature.CORPUS, nested_drop=_drop_corpus_user_materials
-    ),  # AC1
-    PackSection("stance", PromptFeature.STANCE),  # AC1
-    PackSection("training_load", PromptFeature.TRAINING_LOAD),  # AC1
-    PackSection(
-        "training_volume",
-        PromptFeature.VOLUME,
-        nested_drop=_drop_training_volume_rolling_current,
-    ),  # #400 (+ rolling_7d current-value fold)
-    PackSection("stream_view", PromptFeature.STREAM_VIEW),  # #443
-    PackSection(
-        "recent_training",
-        PromptFeature.RECENT_TRAINING,
-        nested_drop=_drop_recent_training_dedup,
-    ),  # #444
-    # ADR 0026 Slice 2 (#670): the redefined right_now content, gated to the new grouped
-    # prompt. readiness is a keyed rename (drops like training_load); recent_weeks is the
-    # merged day-resolved read (its sparse per-activity/day/verdict nulls are stripped).
-    PackSection("readiness", PromptFeature.READINESS),
-    PackSection(
-        "recent_weeks",
-        PromptFeature.RECENT_WEEKS,
-        nested_drop=_drop_recent_weeks_nulls,
-    ),
-    # #561, redefined ADR 0026 Slice 2 (#670): populated by EITHER the original
-    # TRAINING_HISTORY signal (60d ladder, every prior prompt) or the TRAINING_HISTORY_2WK
-    # signal (14d-bounded, enriched ladder, grouped_v2) — mutually exclusive, so this ONE
-    # descriptor drops the field only when both abstain. The nested_drop surgically strips
-    # the grouped_v2-only enrichment keys on the original ladder, keeping it byte-identical.
-    PackSection(
-        "training_history",
-        PromptFeature.TRAINING_HISTORY,
-        nested_drop=_drop_training_history_v2_fields,
-    ),
-    PackSection("memory", PromptFeature.MEMORY),  # ADR 0025 runner memory profile
-    PackSection("intensity", PromptFeature.INTENSITY),  # #578 intensity distribution + trend
-    # ADR 0026 Slice 3 (#673): the merged this-run intensity read + the promoted safety
-    # referral + the recent intensity mix, gated to the new grouped prompt. perceived_effort
-    # and calibration (always-present under every prior prompt) are RETIRED to None under an
-    # intensity-read prompt; their descriptors below drop them then, byte-stable elsewhere
-    # (non-None under every prior prompt, so the drop never fires there).
-    PackSection(
-        "intensity_read",
-        PromptFeature.INTENSITY_READ,
-        nested_drop=_drop_intensity_read_nulls,
-    ),
-    PackSection("referral", PromptFeature.INTENSITY_READ),
-    PackSection("intensity_mix", PromptFeature.INTENSITY_MIX),
-    PackSection("perceived_effort"),  # retired to None under an intensity-read prompt
-    PackSection("calibration"),       # retired to None under an intensity-read prompt
-    # #451: the retired legacy summary — droppable but NOT prompt-gated (no longer
-    # populated; a pre-#451 stored pack still round-trips its real object unchanged).
-    PackSection("recent_training_summary"),
-    # M4 (ADR 0025): the retired belief / preference / narrative stubs — never
-    # populated, dropped when None, kept only so a pre-M4 stored pack still parses.
-    PackSection("believed_facts"),
-    PackSection("preference_profile"),
-    PackSection("narrative"),
-    # #522 coach-input kill switches. Normally always-present sections that the
-    # COACH_*_ENABLED settings can drop (the context.py builder returns None when the
-    # flag is off). Not prompt-feature-gated — the gate is a runtime setting, applied
-    # in context.py; here they only DROP when None, like every other descriptor.
-    PackSection("longitudinal"),  # COACH_LONGITUDINAL_ENABLED
-    PackSection("salience"),      # COACH_SALIENCE_ENABLED
-    PackSection("continuity"),    # COACH_CONTINUITY_ENABLED
+# One descriptor per droppable Optional section, DERIVED from the coach signal
+# registry (#800) in its declaration order — which is the flat serialization order,
+# and therefore also the order the drop loop runs in. That order is load-bearing for
+# exactly one trim: `training_volume`'s rolling_7d fold reads `recent_training`, and
+# `training_volume` is declared first, so the value is still there to read.
+#
+# It used to be a hand-listed tuple that had to agree with `_FLAT_ORDER`,
+# `_SECTION_GROUP` and the builder's gating by discipline alone. Now the four facts
+# (position, group, gate, drop) are one row in `signal_registry.COACH_SIGNALS`.
+PACK_SECTIONS: tuple[PackSection, ...] = tuple(
+    PackSection(s.field, s.gate_feature, s.nested_drop)
+    for s in COACH_SIGNALS
+    if s.droppable
 )
 
 
 def _assert_descriptors_match_fields() -> None:
-    """Fail loudly AT IMPORT on a descriptor/field mismatch.
+    """Fail loudly AT IMPORT on a registry/schema mismatch.
 
     Every ``PackSection.field`` MUST name a FLAT section that the drop loop can pop
     from the un-grouped ``_flat_data`` dict — i.e. a section relocated into a group
     (``_SECTION_GROUP``) or a top-level meta field on ``CoachContextPack`` (ADR 0026;
     the group container fields ``this_run``/… are not flat sections). A typo or a
     renamed field turns from a silent byte-stability break into a startup
-    ``RuntimeError``, pairing with the #328 prompt-feature manifest."""
+    ``RuntimeError``, pairing with the #328 prompt-feature manifest.
+
+    #800 adds the converse check, which is the one that matters when a signal is
+    ADDED: every flat section the pack can emit must have a declaration in
+    ``signal_registry.COACH_SIGNALS``, and every declaration must be reachable —
+    readable through a flat accessor and settable through ``from_sections``. A field
+    wired onto a group model but never declared as a signal used to serialise
+    silently, gated by nothing and dropped by nothing; now it fails at import.
+    """
     flat_universe = set(_SECTION_GROUP) | (
         set(CoachContextPack.model_fields) - set(_GROUP_NAMES)
     )
@@ -2060,6 +1816,48 @@ def _assert_descriptors_match_fields() -> None:
                 f"PackSection registry: descriptor names field {section.field!r}, "
                 f"which is not a flat section (grouped section or top-level meta). "
                 f"Fix the descriptor or declare the field."
+            )
+    declared = {s.field for s in COACH_SIGNALS}
+    # Every field the pack can emit is declared as a signal. The group models'
+    # fields plus the top-level meta fields ARE the emittable universe.
+    emittable = {
+        name
+        for group in _GROUP_NAMES
+        for name in CoachContextPack.model_fields[group].annotation.model_fields
+    } | (set(CoachContextPack.model_fields) - set(_GROUP_NAMES))
+    undeclared = emittable - declared
+    if undeclared:
+        raise RuntimeError(
+            f"coach signal registry: pack field(s) {sorted(undeclared)} reach the "
+            f"coach with no CoachSignal declaration. Declare them in "
+            f"signal_registry.COACH_SIGNALS (which fixes their group, gate, kill "
+            f"switch and drop in one place)."
+        )
+    orphan = declared - emittable
+    if orphan:
+        raise RuntimeError(
+            f"coach signal registry: signal(s) {sorted(orphan)} declare a pack field "
+            f"that does not exist on CoachContextPack or its group models."
+        )
+    # Every declared signal is reachable both ways: a flat read accessor (a property
+    # or a real field) and a `from_sections` keyword.
+    from_sections_kwargs = set(
+        inspect.signature(CoachContextPack.from_sections).parameters
+    )
+    for field in sorted(declared):
+        readable = field in CoachContextPack.model_fields or hasattr(
+            CoachContextPack, field
+        )
+        if not readable:
+            raise RuntimeError(
+                f"coach signal registry: signal {field!r} is not readable off the "
+                f"pack. A grouped section needs its flat @property accessor (the "
+                f"ADR 0026 compat layer); a meta field needs to be declared."
+            )
+        if field not in from_sections_kwargs:
+            raise RuntimeError(
+                f"coach signal registry: signal {field!r} has no `from_sections` "
+                f"keyword, so the builder can never populate it."
             )
 
 
