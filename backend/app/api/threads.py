@@ -53,16 +53,24 @@ router = APIRouter(
 
 
 @dataclass(frozen=True)
-class TurnTargets:
-    """The owned rows a thread turn addresses, resolved before the body runs."""
+class ThreadTurn:
+    """A validated thread turn plus the owned rows it addresses.
 
+    The dependency carries the BODY as well as the resolved rows, and the
+    handler takes only this. Declaring `ThreadMessageSend` in both the
+    dependency and the handler would leave the OpenAPI schema intact (FastAPI
+    counts body params by name) but validate the payload TWICE, so a malformed
+    turn came back with every 422 entry duplicated.
+    """
+
+    body: ThreadMessageSend
     thread: Optional[object] = None
     anchor_activity: Optional[object] = None
 
 
-def get_turn_targets(
+def get_thread_turn(
     body: ThreadMessageSend, db: DbSession, user: CurrentUser
-) -> TurnTargets:
+) -> ThreadTurn:
     """Resolve the thread turn's owned targets, both carried in the BODY.
 
     Order is load-bearing and preserved from the pre-#802 handler: a supplied
@@ -82,10 +90,10 @@ def get_turn_targets(
         if anchor_activity is None:
             raise HTTPException(status_code=404, detail="Activity not found")
 
-    return TurnTargets(thread=thread, anchor_activity=anchor_activity)
+    return ThreadTurn(body=body, thread=thread, anchor_activity=anchor_activity)
 
 
-ThreadTurnTargets = Annotated[TurnTargets, Depends(get_turn_targets)]
+ResolvedThreadTurn = Annotated[ThreadTurn, Depends(get_thread_turn)]
 
 
 @router.get("", response_model=ThreadListResponse)
@@ -98,8 +106,7 @@ def list_threads(
 
 @router.post("/messages")
 async def post_thread_message(
-    body: ThreadMessageSend,
-    targets: ThreadTurnTargets,
+    turn: ResolvedThreadTurn,
     db: DbSession,
     user: CurrentUser,
 ):
@@ -109,8 +116,9 @@ async def post_thread_message(
     (optionally anchored to an owned activity) and announced as the stream's
     first object frame. Ownership is denied BEFORE the stream opens.
     """
-    thread = targets.thread
-    anchor_activity = targets.anchor_activity
+    body = turn.body
+    thread = turn.thread
+    anchor_activity = turn.anchor_activity
 
     from app.services.coach.thread_turn import stream_thread_turn
 

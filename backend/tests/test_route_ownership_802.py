@@ -24,6 +24,7 @@ the claim under test is a denial rule over two arbitrary tenants, and the row
 contents are irrelevant to it.
 """
 
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -64,14 +65,48 @@ OWNED_PATH_PARAMS = {
     "material_id": {deps.get_owned_material},
 }
 
-# Every route below carries an owned-resource id in its BODY rather than its
-# path, so the structural sweep cannot see it. Each is pinned behaviourally in
-# this file instead; listing them here keeps the two halves honest about what
-# the sweep does and does not cover.
+# Every ownership resolver, whatever the resource. The broad sweep below accepts
+# any of these; the narrow sweep insists on the right one for a known id name.
+OWNERSHIP_DEPENDENCIES = {
+    fn
+    for name, fn in vars(deps).items()
+    if callable(fn)
+    and getattr(fn, "__module__", "") == "app.api.deps"
+    and (name.startswith("get_owned_") or name.startswith("require_owned_"))
+}
+
+# DENY BY DEFAULT. A route that takes a path parameter is presumed to be
+# addressing an owned row until it is listed here. Keeping this list empty is
+# the goal; adding to it is a deliberate, reviewable act. Without this
+# inversion the guard would only catch a route that happens to reuse one of the
+# four id names above, and a new `/{run_id}` route could leak in silence.
+PATH_PARAMS_THAT_ARE_NOT_OWNED_RESOURCES: set[tuple[str, str]] = set()
+
+# Routes whose owned-resource id arrives in the request BODY, where no path
+# sweep can see it. Asserted against the live route table below, and each is
+# pinned behaviourally further down this file.
 BODY_CARRIED_OWNERSHIP = {
     ("POST", "/api/blocks/{block_id}/split"),
     ("POST", "/api/blocks/{block_id}/merge"),
     ("POST", "/api/coach/threads/messages"),
+}
+
+# Body fields ending in `_id` that name something other than an owned row.
+#
+# The two webhook endpoints are the only entries, and they are a different kind
+# of surface: they carry no session, so there is no authenticated runner to
+# scope to. These ids belong to the UPSTREAM protocol, and each is already the
+# input to that endpoint's own authenticity check rather than a tenant scope —
+# Strava's `owner_id`/`subscription_id` are matched against a connected account
+# and `STRAVA_WEBHOOK_SUBSCRIPTION_ID` by `_event_is_authentic`, and Telegram's
+# `update_id` is a delivery sequence number on a route gated by the
+# `X-Telegram-Bot-Api-Secret-Token` header. Resolving them through the
+# owner-scoped dependencies would be wrong, not merely unnecessary.
+BODY_ID_FIELDS_THAT_ARE_NOT_OWNED_RESOURCES: set[tuple[str, str, str]] = {
+    ("POST", "/api/webhooks/strava", "object_id"),
+    ("POST", "/api/webhooks/strava", "owner_id"),
+    ("POST", "/api/webhooks/strava", "subscription_id"),
+    ("POST", "/api/webhooks/telegram", "update_id"),
 }
 
 
@@ -84,22 +119,46 @@ def _flat_dependency_calls(dependant):
     return calls
 
 
+def _api_routes():
+    return [r for r in app.routes if isinstance(r, APIRoute)]
+
+
+_PATH_PARAM_RE = re.compile(r"\{([^}:]+)")
+
+
+def _routes_with_path_params():
+    """Every route whose PATH carries a client-supplied value.
+
+    Read off the path string rather than the resolved dependant, so a route that
+    declares its id nowhere in its own signature — the exact shape this guard
+    exists to catch — is still discovered.
+    """
+    out = []
+    for route in _api_routes():
+        params = sorted(set(_PATH_PARAM_RE.findall(route.path)))
+        if params:
+            out.append((route, params))
+    return out
+
+
 def _owned_routes():
     found = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in _api_routes():
         for param, allowed in OWNED_PATH_PARAMS.items():
             if "{" + param + "}" in route.path:
                 found.append((route, param, allowed))
     return found
 
 
+def _route_key(route):
+    return (sorted(route.methods)[0], route.path)
+
+
 # --- structural: the guarantee the refactor creates -------------------------
 
 
 def test_owned_resource_routes_are_discovered():
-    """The sweep below is only meaningful if it actually finds routes.
+    """The sweeps below are only meaningful if they actually find routes.
 
     Without this, renaming a path parameter would turn the structural guard into
     a vacuous pass instead of a failure.
@@ -114,6 +173,7 @@ def test_owned_resource_routes_are_discovered():
         f"some owned resource type has no route using its id: "
         f"{set(OWNED_PATH_PARAMS) - covered}"
     )
+    assert len(_routes_with_path_params()) >= 16
 
 
 @pytest.mark.parametrize(
@@ -124,11 +184,12 @@ def test_owned_resource_routes_are_discovered():
     ),
 )
 def test_owned_resource_id_is_resolved_in_the_route_signature(route, param, allowed):
-    """A route taking an owned-resource id must resolve it via app.api.deps.
+    """A route taking a KNOWN owned-resource id must resolve THAT resource.
 
     This is what stops the next route forgetting: the check is not something a
     handler body opts into, it is something the route declares. A new route that
-    takes `{activity_id}` and queries the table itself fails here.
+    takes `{activity_id}` and queries the table itself fails here — and a route
+    that resolves the wrong resource type fails too.
     """
     calls = set(_flat_dependency_calls(route.dependant))
     assert calls & allowed, (
@@ -136,6 +197,110 @@ def test_owned_resource_id_is_resolved_in_the_route_signature(route, param, allo
         f"owned-resource dependency. Declare one of "
         f"{sorted(f.__name__ for f in allowed)} in the signature instead of "
         f"fetching and checking the row in the handler body (#802)."
+    )
+
+
+@pytest.mark.parametrize(
+    "route,params",
+    _routes_with_path_params(),
+    ids=lambda v: (
+        f"{sorted(v.methods)[0]} {v.path}" if isinstance(v, APIRoute) else ""
+    ),
+)
+def test_any_path_parameter_route_resolves_ownership(route, params):
+    """Deny by default: ANY path parameter is presumed to address an owned row.
+
+    The narrow sweep above keys off four known id names, so a route that called
+    its parameter something else — `{run_id}`, `{report_id}` — would sail past
+    it while leaking another tenant's row. This sweep has no name list: a new
+    parameterised route must either resolve ownership through `app.api.deps` or
+    be listed, deliberately, in PATH_PARAMS_THAT_ARE_NOT_OWNED_RESOURCES.
+    """
+    if _route_key(route) in PATH_PARAMS_THAT_ARE_NOT_OWNED_RESOURCES:
+        pytest.skip("explicitly declared as not addressing an owned resource")
+    calls = set(_flat_dependency_calls(route.dependant))
+    assert calls & OWNERSHIP_DEPENDENCIES, (
+        f"{sorted(route.methods)} {route.path} takes path parameter(s) {params} "
+        "but resolves no ownership dependency from app.api.deps. Either declare "
+        "one in the signature (#802), or — if the parameter genuinely names "
+        "nothing a runner owns — add this route to "
+        "PATH_PARAMS_THAT_ARE_NOT_OWNED_RESOURCES with a reason."
+    )
+
+
+def _body_model_fields(route):
+    field = route.body_field
+    if field is None:
+        return {}
+    model = getattr(field, "type_", None)
+    return getattr(model, "model_fields", {}) or {}
+
+
+@pytest.mark.parametrize(
+    "route",
+    [r for r in _api_routes() if r.body_field is not None],
+    ids=lambda v: f"{sorted(v.methods)[0]} {v.path}",
+)
+def test_body_carried_resource_ids_are_declared(route):
+    """Deny by default for ids that arrive in the BODY.
+
+    No structural sweep can tell whether a body field named `*_id` addresses an
+    owned row, so the rule is declaration: a route whose payload carries one is
+    listed in BODY_CARRIED_OWNERSHIP (and pinned behaviourally in this file), or
+    the field is named in BODY_ID_FIELDS_THAT_ARE_NOT_OWNED_RESOURCES. Adding a
+    new `*_id` to a request schema fails here until somebody decides which.
+    """
+    key = _route_key(route)
+    for name in _body_model_fields(route):
+        if not name.endswith("_id"):
+            continue
+        if (key[0], key[1], name) in BODY_ID_FIELDS_THAT_ARE_NOT_OWNED_RESOURCES:
+            continue
+        assert key in BODY_CARRIED_OWNERSHIP, (
+            f"{key[0]} {key[1]} accepts body field '{name}', which looks like a "
+            "client-supplied resource id, but the route is not declared in "
+            "BODY_CARRIED_OWNERSHIP. Resolve it through app.api.deps and add it "
+            "there with a cross-tenant test, or declare it in "
+            "BODY_ID_FIELDS_THAT_ARE_NOT_OWNED_RESOURCES (#802)."
+        )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [r for r in _api_routes() if r.body_field is not None],
+    ids=lambda v: f"{sorted(v.methods)[0]} {v.path}",
+)
+def test_no_route_parses_its_body_twice(route):
+    """A payload must be validated once, however many dependants want it.
+
+    Moving an ownership check into a dependency tempts you to declare the body
+    in both the dependency and the handler. FastAPI counts body params by NAME,
+    so the OpenAPI schema stays clean and nothing looks wrong — but the payload
+    is parsed once per dependant and the runner gets every 422 entry repeated.
+    The fix is for the dependency to carry the validated body through; this
+    guard is what makes the mistake visible instead of silent.
+    """
+    from fastapi.dependencies.utils import get_flat_dependant
+
+    body_params = get_flat_dependant(route.dependant).body_params
+    counts = {}
+    for param in body_params:
+        counts[param.name] = counts.get(param.name, 0) + 1
+    repeated = {name: n for name, n in counts.items() if n > 1}
+    assert not repeated, (
+        f"{sorted(route.methods)} {route.path} declares {repeated} more than "
+        "once across its dependency tree, so the payload is validated that many "
+        "times and every 422 entry is duplicated. Have the dependency return the "
+        "validated body instead of declaring it in both places (#802)."
+    )
+
+
+def test_declared_body_carried_routes_still_exist():
+    """The declaration list must track the route table, not drift from it."""
+    live = {_route_key(r) for r in _api_routes()}
+    assert BODY_CARRIED_OWNERSHIP <= live, (
+        f"BODY_CARRIED_OWNERSHIP names routes that no longer exist: "
+        f"{BODY_CARRIED_OWNERSHIP - live}"
     )
 
 
@@ -175,7 +340,7 @@ def test_body_carried_ownership_routes_reuse_the_shared_resolvers():
     ), "merge's body-carried block must resolve through deps.require_owned_block"
     assert (
         deps.require_owned_thread
-        in inspect.getclosurevars(threads.get_turn_targets).globals.values()
+        in inspect.getclosurevars(threads.get_thread_turn).globals.values()
     ), "the thread turn's body-carried thread must resolve through deps.require_owned_thread"
 
 
@@ -459,6 +624,56 @@ def test_thread_turn_denies_a_foreign_anchor_when_no_thread_is_named(client, ten
     )
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Activity not found"
+
+
+def test_a_malformed_turn_reports_each_problem_once(client, tenants):
+    """The turn's payload must be validated once, not once per dependant.
+
+    The thread turn resolves its owned rows in a dependency that also needs the
+    body. Declaring `ThreadMessageSend` in BOTH the dependency and the handler
+    leaves the OpenAPI schema intact — FastAPI counts body params by name — but
+    parses and validates the payload twice, so the runner got every 422 entry
+    duplicated. The dependency carries the validated body through instead.
+    """
+    a, _ = tenants
+    _act_as(a.user)
+    resp = client.post("/api/coach/threads/messages", json={})
+    assert resp.status_code == 422
+    locs = [tuple(e["loc"]) for e in resp.json()["detail"]]
+    assert len(locs) == len(set(locs)), (
+        f"the turn body was validated more than once: {locs}"
+    )
+
+
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("POST", "/api/blocks/{block_id}/split", {}),
+        ("POST", "/api/blocks/{block_id}/merge", {}),
+        ("PUT", "/api/activities/{activity_id}/intent", {}),
+    ],
+)
+def test_ownership_is_decided_before_the_payload_is_judged(
+    client, tenants, method, path, body
+):
+    """A caller who names a row they do not own is told 404, whatever they sent.
+
+    DELIBERATE CHANGE (#802): a dependency resolves before the handler's own
+    parameters, so a request that is BOTH aimed at an unowned/unknown row AND
+    malformed now gets the 404 rather than the 422 it used to get. It is the
+    narrower answer of the two: someone with no claim to the row learns nothing
+    about the schema. Pinned so it stays an intended property rather than an
+    accident of parameter order.
+    """
+    a, b = tenants
+    _act_as(a.user)
+    target = b.block.id if "block_id" in path else b.activity.id
+    resp = _call(client, method, path.replace("{block_id}", str(target)).replace(
+        "{activity_id}", str(target)), body)
+    assert resp.status_code == 404, (
+        f"{method} {path} with a foreign id and a malformed body returned "
+        f"{resp.status_code}; ownership must be decided first"
+    )
 
 
 def test_import_reports_a_bad_date_before_a_missing_account(client, db):
