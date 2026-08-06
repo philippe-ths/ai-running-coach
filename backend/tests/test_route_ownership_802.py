@@ -27,11 +27,11 @@ contents are irrelevant to it.
 import re
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
+from typing import NamedTuple
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi.routing import APIRoute
 
 from app.api import deps
 from app.core.clerk_auth import verify_clerk_session
@@ -119,8 +119,83 @@ def _flat_dependency_calls(dependant):
     return calls
 
 
+def _flat_body_params(dependant):
+    """Every body parameter in a route's dependency tree, including nested ones."""
+    params = list(getattr(dependant, "body_params", None) or [])
+    for sub in dependant.dependencies:
+        params.extend(_flat_body_params(sub))
+    return params
+
+
+class RouteInfo(NamedTuple):
+    """One resolved route: its full URL path, and everything gating it.
+
+    `inherited` holds the dependencies attached at `include_router` time. From
+    FastAPI 0.141 those live on the included router rather than on each route's
+    own dependant, so a guard that only walked `route.dependant` would report a
+    route as unguarded when its router guards it. Carrying them keeps the sweeps
+    correct rather than merely safe-failing.
+    """
+
+    path: str
+    methods: tuple
+    route: object
+    inherited: tuple = ()
+
+    @property
+    def dependant(self):
+        return self.route.dependant
+
+    @property
+    def key(self):
+        return (self.methods[0], self.path)
+
+
+def _walk_routes(routes, prefix, out, inherited=()):
+    """Collect every route with a dependency tree, whatever the router shape.
+
+    FastAPI changed this out from under the obvious implementation. Up to ~0.13x
+    `include_router` FLATTENED the included routes into `app.routes`, so
+    `[r for r in app.routes if isinstance(r, APIRoute)]` found all of them. From
+    0.141 it inserts an opaque `_IncludedRouter` wrapper instead and the real
+    routes live behind `original_router`, with the include-time prefix on
+    `include_context`. The old expression then matches NOTHING — it does not
+    error, it silently returns an empty list, and every sweep built on it becomes
+    a vacuous pass. That is exactly how this file first went green locally
+    (FastAPI 0.128) and green-but-empty in CI (0.141).
+
+    So: handle both shapes, and let `test_route_enumeration_is_complete` prove
+    the result against the public OpenAPI document rather than trusting it.
+    """
+    for route in routes:
+        if getattr(route, "dependant", None) is not None and hasattr(route, "path"):
+            methods = tuple(sorted(getattr(route, "methods", None) or ["GET"]))
+            out.append(RouteInfo(prefix + route.path, methods, route, inherited))
+            continue
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            ctx = getattr(route, "include_context", None)
+            attached = tuple(
+                d.dependency for d in (getattr(ctx, "dependencies", None) or [])
+            )
+            _walk_routes(
+                inner.routes,
+                prefix + (getattr(ctx, "prefix", "") or ""),
+                out,
+                inherited + attached,
+            )
+        elif hasattr(route, "routes") and not hasattr(route, "path"):
+            _walk_routes(route.routes, prefix, out, inherited)
+
+
 def _api_routes():
-    return [r for r in app.routes if isinstance(r, APIRoute)]
+    out = []
+    _walk_routes(app.routes, "", out)
+    return [info for info in out if info.path.startswith("/api/")]
+
+
+def _methods(route):
+    return list(route.methods)
 
 
 _PATH_PARAM_RE = re.compile(r"\{([^}:]+)")
@@ -141,6 +216,11 @@ def _routes_with_path_params():
     return out
 
 
+def _routes_with_body():
+    """Every route that accepts a request body, however it is declared."""
+    return [r for r in _api_routes() if _flat_body_params(r.dependant)]
+
+
 def _owned_routes():
     found = []
     for route in _api_routes():
@@ -151,10 +231,38 @@ def _owned_routes():
 
 
 def _route_key(route):
-    return (sorted(route.methods)[0], route.path)
+    return (_methods(route)[0], route.path)
 
 
 # --- structural: the guarantee the refactor creates -------------------------
+
+
+def test_route_enumeration_is_complete():
+    """The sweeps must see every route the app actually serves.
+
+    This is the load-bearing test in the file. Every guard below is a sweep over
+    an enumeration of the route table, and a sweep over an EMPTY enumeration
+    passes silently — it does not error, it just stops checking anything. FastAPI
+    changed its internal router layout once already (0.141 wraps included routers
+    instead of flattening them) and turned the obvious implementation into
+    exactly that silent no-op.
+
+    So the enumeration is checked against the public OpenAPI document, which is
+    the app's own statement of what it serves. If a future version moves the
+    furniture again, this fails loudly and the guards stay honest.
+    """
+    served = {
+        path
+        for path, ops in app.openapi()["paths"].items()
+        if path.startswith("/api/")
+    }
+    enumerated = {info.path for info in _api_routes()}
+    assert served, "the app serves no /api paths at all — something is very wrong"
+    assert served <= enumerated, (
+        "the route sweeps below cannot see routes the app actually serves, so "
+        "they would pass without checking them: "
+        f"{sorted(served - enumerated)}"
+    )
 
 
 def test_owned_resource_routes_are_discovered():
@@ -174,13 +282,30 @@ def test_owned_resource_routes_are_discovered():
         f"{set(OWNED_PATH_PARAMS) - covered}"
     )
     assert len(_routes_with_path_params()) >= 16
+    # The body sweeps must find routes too, and must find the declared ones.
+    with_body = {_route_key(r) for r in _routes_with_body()}
+    assert len(with_body) >= 8, f"body-carrying routes not discoverable: {with_body}"
+    assert BODY_CARRIED_OWNERSHIP <= with_body, (
+        f"the body sweep cannot see the declared body-carried routes: "
+        f"{BODY_CARRIED_OWNERSHIP - with_body}"
+    )
+    # And the body-field reader must actually read fields, or the *_id sweep is
+    # vacuous however many routes it iterates.
+    fields = {
+        name
+        for r in _routes_with_body()
+        for name in _body_model_fields(r)
+    }
+    assert "thread_id" in fields and "activity_id" in fields, (
+        f"body model fields are not readable on this FastAPI version: {sorted(fields)}"
+    )
 
 
 @pytest.mark.parametrize(
     "route,param,allowed",
     _owned_routes(),
     ids=lambda v: (
-        f"{sorted(v.methods)[0]} {v.path}" if isinstance(v, APIRoute) else ""
+        f"{_methods(v)[0]} {v.path}" if hasattr(v, "path") else ""
     ),
 )
 def test_owned_resource_id_is_resolved_in_the_route_signature(route, param, allowed):
@@ -191,9 +316,9 @@ def test_owned_resource_id_is_resolved_in_the_route_signature(route, param, allo
     takes `{activity_id}` and queries the table itself fails here — and a route
     that resolves the wrong resource type fails too.
     """
-    calls = set(_flat_dependency_calls(route.dependant))
+    calls = set(_flat_dependency_calls(route.dependant)) | set(route.inherited)
     assert calls & allowed, (
-        f"{sorted(route.methods)} {route.path} takes '{param}' but resolves no "
+        f"{_methods(route)} {route.path} takes '{param}' but resolves no "
         f"owned-resource dependency. Declare one of "
         f"{sorted(f.__name__ for f in allowed)} in the signature instead of "
         f"fetching and checking the row in the handler body (#802)."
@@ -204,7 +329,7 @@ def test_owned_resource_id_is_resolved_in_the_route_signature(route, param, allo
     "route,params",
     _routes_with_path_params(),
     ids=lambda v: (
-        f"{sorted(v.methods)[0]} {v.path}" if isinstance(v, APIRoute) else ""
+        f"{_methods(v)[0]} {v.path}" if hasattr(v, "path") else ""
     ),
 )
 def test_any_path_parameter_route_resolves_ownership(route, params):
@@ -218,9 +343,9 @@ def test_any_path_parameter_route_resolves_ownership(route, params):
     """
     if _route_key(route) in PATH_PARAMS_THAT_ARE_NOT_OWNED_RESOURCES:
         pytest.skip("explicitly declared as not addressing an owned resource")
-    calls = set(_flat_dependency_calls(route.dependant))
+    calls = set(_flat_dependency_calls(route.dependant)) | set(route.inherited)
     assert calls & OWNERSHIP_DEPENDENCIES, (
-        f"{sorted(route.methods)} {route.path} takes path parameter(s) {params} "
+        f"{_methods(route)} {route.path} takes path parameter(s) {params} "
         "but resolves no ownership dependency from app.api.deps. Either declare "
         "one in the signature (#802), or — if the parameter genuinely names "
         "nothing a runner owns — add this route to "
@@ -229,17 +354,25 @@ def test_any_path_parameter_route_resolves_ownership(route, params):
 
 
 def _body_model_fields(route):
-    field = route.body_field
-    if field is None:
-        return {}
-    model = getattr(field, "type_", None)
-    return getattr(model, "model_fields", {}) or {}
+    """The declared field names of every model this route accepts as a body.
+
+    Reads the dependency tree rather than `route.body_field`, and takes the
+    annotation from whichever attribute the installed FastAPI exposes, so the
+    sweep does not go quietly vacuous on a version bump.
+    """
+    names = {}
+    for param in _flat_body_params(route.dependant):
+        model = getattr(param, "type_", None)
+        if model is None:
+            model = getattr(getattr(param, "field_info", None), "annotation", None)
+        names.update(getattr(model, "model_fields", None) or {})
+    return names
 
 
 @pytest.mark.parametrize(
     "route",
-    [r for r in _api_routes() if r.body_field is not None],
-    ids=lambda v: f"{sorted(v.methods)[0]} {v.path}",
+    _routes_with_body(),
+    ids=lambda v: f"{_methods(v)[0]} {v.path}",
 )
 def test_body_carried_resource_ids_are_declared(route):
     """Deny by default for ids that arrive in the BODY.
@@ -267,8 +400,8 @@ def test_body_carried_resource_ids_are_declared(route):
 
 @pytest.mark.parametrize(
     "route",
-    [r for r in _api_routes() if r.body_field is not None],
-    ids=lambda v: f"{sorted(v.methods)[0]} {v.path}",
+    _routes_with_body(),
+    ids=lambda v: f"{_methods(v)[0]} {v.path}",
 )
 def test_no_route_parses_its_body_twice(route):
     """A payload must be validated once, however many dependants want it.
@@ -280,15 +413,13 @@ def test_no_route_parses_its_body_twice(route):
     The fix is for the dependency to carry the validated body through; this
     guard is what makes the mistake visible instead of silent.
     """
-    from fastapi.dependencies.utils import get_flat_dependant
-
-    body_params = get_flat_dependant(route.dependant).body_params
+    body_params = _flat_body_params(route.dependant)
     counts = {}
     for param in body_params:
         counts[param.name] = counts.get(param.name, 0) + 1
     repeated = {name: n for name, n in counts.items() if n > 1}
     assert not repeated, (
-        f"{sorted(route.methods)} {route.path} declares {repeated} more than "
+        f"{_methods(route)} {route.path} declares {repeated} more than "
         "once across its dependency tree, so the payload is validated that many "
         "times and every 422 entry is duplicated. Have the dependency return the "
         "validated body instead of declaring it in both places (#802)."
