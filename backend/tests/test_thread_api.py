@@ -430,6 +430,69 @@ class TestThreadTurn:
         assert "Mark" in actions[0]["description"]
         assert actions[0]["token"]
 
+    def test_a_reply_gated_for_medical_overreach_ships_no_proposed_action(
+        self, client, db
+    ):
+        """#787: the turn's reasoning was judged unsafe and its prose withheld, so
+        an offer minted during that same reasoning does not survive it. The runner
+        would otherwise get the safe redirect followed by an unexplained card
+        offering to write to their record: the prose that would have explained the
+        offer is exactly what the floor removed. The report path sets the
+        precedent, forcing `is_fallback=True` for the whole artifact rather than
+        trimming part of it."""
+        user = _seed_user(db)
+        activity = _seed_activity(db, user)
+        _act_as(user)
+
+        class _FakeRedis:
+            def __init__(self):
+                self._store = {}
+
+            def set(self, key, value, ex=None):
+                self._store[key] = value
+                return True
+
+            def getdel(self, key):
+                return self._store.pop(key, None)
+
+        fake_redis = _FakeRedis()
+        rounds = [
+            [
+                {
+                    "name": "offer_proposed_action",
+                    "input": {
+                        "action_type": "intent",
+                        "activity_id": str(activity.id),
+                        "user_intent": "Tempo",
+                    },
+                }
+            ],
+            "That knee pain is patellar tendinopathy. Take 400mg of ibuprofen first.",
+        ]
+        with patch(
+            "app.services.coach.llm.AnthropicClient.stream_chat_turn",
+            new=chat_tool_loop_stub(rounds),
+        ), patch("app.services.coach.proposed_actions.redis_conn", fake_redis):
+            resp = client.post(
+                "/api/coach/threads/messages",
+                json={
+                    "message": "knee hurts, was this a tempo?",
+                    "anchor_activity_id": str(activity.id),
+                    "asked_from": "activity",
+                },
+            )
+
+        assert resp.status_code == 200
+        text, objects = _parse_sse(resp.text)
+
+        # The floor still works: unsafe prose is replaced, not merely flagged.
+        assert "patellar" not in text
+        assert "ibuprofen" not in text
+        assert MEDICAL_REDIRECT_MESSAGE in text
+
+        # And the offer minted in the same turn does not ride along behind it.
+        assert [o for o in objects if o.get("type") == "proposed_action"] == []
+
     def test_a_loaded_skill_is_recorded_on_the_turn_and_costs_no_lookup(
         self, client, db
     ):
