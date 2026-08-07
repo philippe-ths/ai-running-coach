@@ -384,6 +384,7 @@ async def stream_thread_turn(
     ):
         yield event
 
+    gated = False
     if out["stream_failed"]:
         assistant_text = out["stream_fail_message"]
     else:
@@ -413,6 +414,15 @@ async def stream_thread_turn(
                 [v.rule for v in violations],
             )
             assistant_text = MEDICAL_REDIRECT_MESSAGE
+            # The offer was minted by the same reasoning whose prose we just
+            # withheld, so it does not survive it (#787). Withholding the text
+            # and shipping the card would leave the runner an unexplained offer
+            # to write to their record, since the prose that would have explained
+            # it is exactly what was removed. The report path sets the precedent:
+            # a medical violation there forces is_fallback for the whole artifact
+            # rather than trimming part of it. The minted token is simply left to
+            # expire unspent; nothing can redeem it without this frame.
+            gated = True
         elif violations:
             logger.warning(
                 "thread reply has tolerated policy violations (thread %s): %s",
@@ -423,7 +433,7 @@ async def stream_thread_turn(
     for piece in _slice_for_stream(assistant_text):
         yield ChatStreamEvent(text=piece)
 
-    if out.get("proposed_action") is not None:
+    if out.get("proposed_action") is not None and not gated:
         yield ChatStreamEvent(proposed_action=out["proposed_action"])
 
     assistant_msg = CoachChatMessage(
