@@ -22,12 +22,24 @@ Railway CLI is not logged in; commands below read a project token from
   live work.
 - Matters: separates what the human left mid-task from what arrived without them.
 
-### Merged branches left behind
-- Check: `git branch --merged main | grep -v '^\* main'`
-- Normal: empty. GitHub auto-deletes the remote branch on merge, so a local
-  survivor is cleanup debt rather than work in progress.
-- Matters: `worktree-agent-*` branches accumulate from sub-agent isolation runs and
-  are indistinguishable at a glance from a real branch someone is still using.
+### Branches left behind after a merge
+- Check: intersect the merged PRs' head branches with the branches that still
+  exist, locally and on the remote:
+  ```sh
+  gh pr list --state merged --limit 100 --json headRefName --jq '.[].headRefName' | sort -u > /tmp/merged
+  git branch --format='%(refname:short)' | sort -u | comm -12 /tmp/merged -
+  git ls-remote --heads origin | sed 's|.*refs/heads/||' | sort -u | comm -12 /tmp/merged -
+  ```
+- Normal: both empty.
+- Matters: **do not use `git branch --merged`.** This repository squash-merges, so
+  a branch tip never becomes an ancestor of `main` and the ancestry test reports a
+  false clean for every ordinary merged branch. It appears to work only for a
+  branch built on a real merge commit, which is why the `worktree-agent-*` stack
+  from #799 showed up under it while seven genuinely stale remote branches did not.
+  Deleting the remote copy is not automatic either: it is a per-merge choice on
+  GitHub, so some merged branches are removed and others survive.
+- Note: deleting a remote branch is a human call, so report these rather than
+  clearing them.
 
 ### Registered worktrees
 - Check: `git worktree list`
