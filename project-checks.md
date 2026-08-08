@@ -41,6 +41,19 @@ Railway CLI is not logged in; commands below read a project token from
 - Note: deleting a remote branch is a human call, so report these rather than
   clearing them.
 
+### Branches left behind without a merge
+- Check: `git ls-remote --heads origin | sed 's|.*refs/heads/||'`, then date each
+  tip with `git log -1 --format='%ci %s' <sha>`.
+- Normal: exactly `main` plus these three known long-lived branches, none of which
+  came from a merged PR and so are invisible to the check above:
+  `claude/table-header-clipping-wrkz14` (2026-06-16),
+  `experiment/726-stream-representation-image-vs-json` (2026-07-21, the #726
+  experiment, also checked out locally), and `feat/118-magic-link-auth-infra`
+  (2026-06-02, superseded by Clerk under ADR 0022). Report any fourth.
+- Matters: the merged-branch check answers "was this cleaned up after merging" and
+  says nothing about a branch that was abandoned instead. Left alone, an abandoned
+  branch is indistinguishable from work in flight.
+
 ### Registered worktrees
 - Check: `git worktree list`
 - Normal: exactly one line, the main checkout. `.claude/worktrees/` empty.
@@ -57,7 +70,7 @@ Railway CLI is not logged in; commands below read a project token from
 
 ### Open issues
 - Check: `gh issue list --state open --limit 200 --json number --jq 'length'`
-- Normal: 31 as of 2026-08-07. Report the count and any issue opened since the last
+- Normal: 33 as of 2026-08-08. Report the count and any issue opened since the last
   session; do not list all of them.
 - Matters: an issue filed by the audit sweeps often already covers the work about to
   be started.
