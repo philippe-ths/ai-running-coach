@@ -125,6 +125,18 @@ class CoachReportMeta(BaseModel):
     # the point-in-time memory). Optional/defaulted so pre-#646 stored meta validates.
     regenerated_at: Optional[datetime] = None
     memory_as_of: Optional[datetime] = None
+    # #822 voice provenance. `voice_name` is the character this report speaks in, in
+    # the same words the picker uses ("The Cornerman", "The Cornerman (adjusted)",
+    # "Custom"); None means Default, which is the absence of a character rather than
+    # a character called Default. Stamped at generation, so a report always names the
+    # voice that WROTE it rather than whatever the runner has selected today.
+    voice_name: Optional[str] = None
+    # #824: what the rewrite did — "applied", or why the baseline stands
+    # ("default_voice", "switched_off", "over_budget", "transport_error",
+    # "invented_numbers:…", "policy:…"). Without it a null voiced_message cannot be
+    # told apart from a rewrite that failed, which is a hole in the audit the two-pass
+    # design exists to provide. Optional so pre-#822 stored meta validates.
+    voice_rewrite: Optional[str] = None
 
 
 class CoachReportContent(BaseModel):

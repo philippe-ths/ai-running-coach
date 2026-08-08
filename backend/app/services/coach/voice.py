@@ -489,3 +489,18 @@ def is_customised(voice: VoiceProfile) -> bool:
     """True when the runner has departed from a plain preset selection, either by
     moving a dial off its base or by writing their own words."""
     return bool(dial_deltas(voice)) or voice.freetext is not None
+
+
+def display_name(voice: VoiceProfile) -> Optional[str]:
+    """The character label a runner would recognise, or None for Default.
+
+    One definition so a report can say which voice wrote it in the same words the
+    picker uses. None means Default, which is the absence of a character rather
+    than a character called "Default" -- a report with no voice should say nothing
+    about voice at all.
+    """
+    if voice.is_default:
+        return None
+    if voice.preset is None:
+        return "Custom"
+    return f"{voice.preset.name} (adjusted)" if is_customised(voice) else voice.preset.name

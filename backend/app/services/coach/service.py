@@ -60,7 +60,7 @@ from app.services.coach.prompts import (
 )
 from app.services.coach.prompt_features import PromptFeature, has_feature
 from app.services.coach.receipt_voice import voice_fingerprint
-from app.services.coach.voice import resolve_voice
+from app.services.coach.voice import display_name as voice_display_name, resolve_voice
 from app.services.coach.voice_rewrite import revoice_report
 from app.services.coach.stance import resolve_stance
 from app.services.coach.retrieval import fetch_latest_user_reply
@@ -908,6 +908,10 @@ def _persist_report(
         tail_degraded=outcome.tail_degraded,
         regenerated_at=regenerated_at,
         memory_as_of=memory_as_of,
+        # #822: name the character this report speaks in, stamped at generation so a
+        # later voice change never relabels an existing report.
+        voice_name=voice_display_name(voice) if voice is not None else None,
+        voice_rewrite=outcome.voice_rewrite,
     )
 
     # P1.1 voice freshness: stamp the voice this report speaks in, so a later voice
@@ -1027,6 +1031,9 @@ class _GenOutcome:
     is_fallback: bool
     policy_violations: List[str] = field(default_factory=list)
     tail_degraded: bool = False
+    # #822/#824: what the voice rewrite did, or why the baseline stands. None on the
+    # structured family and on a fallback, where no rewrite is attempted at all.
+    voice_rewrite: Optional[str] = None
 
 
 # --- structured family (legacy CoachReportContent, schema 1.2) ----------------
@@ -1396,7 +1403,7 @@ async def _generate_message(
     # runner's voice is applied here, as a rewrite that can re-word and
     # re-emphasise but cannot reach the facts — which is the whole reason the two
     # passes are separate.
-    chosen = await _apply_voice(
+    chosen, voice_rewrite = await _apply_voice(
         chosen, pack, voice=voice, user_id=user_id, is_opener=is_opener
     )
 
@@ -1406,12 +1413,13 @@ async def _generate_message(
         is_fallback=False,
         policy_violations=[v.rule for v in chosen.violations],
         tail_degraded=chosen.report.tail_degraded,
+        voice_rewrite=voice_rewrite,
     )
 
 
 async def _apply_voice(
     chosen: _MsgAttempt, pack: CoachContextPack, *, voice, user_id, is_opener: bool
-) -> _MsgAttempt:
+) -> tuple[_MsgAttempt, Optional[str]]:
     """Attach the runner's voiced rendering of this stage's prose, when they have one.
 
     Both stages are covered, because both are prose the runner reads: the opener
@@ -1421,7 +1429,7 @@ async def _apply_voice(
     reads style. A rewrite that fails for any reason leaves the report as it was.
     """
     if voice is None:
-        return chosen
+        return chosen, None
 
     field = "opener_message" if is_opener else "message"
     voiced_field = "voiced_opener_message" if is_opener else "voiced_message"
@@ -1438,14 +1446,17 @@ async def _apply_voice(
         probe = chosen.report.model_copy(update={field: text})
         return [v for v in validate_message_policy(probe, pack) if v.rule not in inherited]
 
-    voiced = await revoice_report(
+    outcome = await revoice_report(
         baseline=baseline, voice=voice, user_id=user_id, validate=_introduced
     )
-    if not voiced:
-        return chosen
-    return replace(
-        chosen,
-        report=chosen.report.model_copy(update={voiced_field: voiced}),
+    if not outcome.text:
+        return chosen, outcome.reason
+    return (
+        replace(
+            chosen,
+            report=chosen.report.model_copy(update={voiced_field: outcome.text}),
+        ),
+        outcome.reason,
     )
 
 

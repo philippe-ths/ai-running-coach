@@ -213,11 +213,22 @@ export default function VoiceDialsPanel() {
               className={`text-left p-3 rounded border transition-colors ${
                 !isDefault && !customised && preset === p.key
                   ? 'border-blue-600 bg-blue-50 dark:bg-blue-950 dark:border-blue-400'
-                  : 'border-gray-200 dark:border-gray-600 hover:border-blue-400'
+                  : customised && preset === p.key
+                    // The character a Custom voice departed FROM. Dashed rather than
+                    // filled: it is not what is selected, but it is not unrelated
+                    // either, and the link should be visible in the grid rather than
+                    // only readable in Custom's description.
+                    ? 'border-dashed border-blue-500 dark:border-blue-400'
+                    : 'border-gray-200 dark:border-gray-600 hover:border-blue-400'
               }`}
             >
               <div className="font-semibold text-sm">{p.name}</div>
               <div className="text-xs text-gray-500 dark:text-gray-400">{p.flavour}</div>
+              {customised && preset === p.key && (
+                <div className="text-[0.65rem] uppercase tracking-wider text-blue-600 dark:text-blue-400 mt-1">
+                  Base
+                </div>
+              )}
             </button>
           ))}
 
@@ -264,7 +275,16 @@ export default function VoiceDialsPanel() {
               <PolarGrid />
               <PolarAngleAxis dataKey="axis" tick={{ fontSize: 12 }} />
               <PolarRadiusAxis domain={[1, 5]} tick={false} axisLine={false} />
-              <Radar dataKey="value" stroke="#2563eb" fill="#2563eb" fillOpacity={0.35} />
+              {/* No entry animation: this is a static mirror of the dials, redrawn on
+                  every nudge, so growing it from the centre each time buys nothing and
+                  leaves the shape collapsed wherever animation frames do not run. */}
+              <Radar
+                dataKey="value"
+                stroke="#2563eb"
+                fill="#2563eb"
+                fillOpacity={0.35}
+                isAnimationActive={false}
+              />
             </RadarChart>
           </ResponsiveContainer>
         </div>

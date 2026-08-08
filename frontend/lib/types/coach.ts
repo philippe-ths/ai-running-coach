@@ -46,6 +46,12 @@ export interface CoachReportMeta {
   // "Regenerated ..., memory as of ..." stamp so a report re-run with hindsight is honest.
   regenerated_at?: string | null;
   memory_as_of?: string | null;
+  // #822: the character this report speaks in ("The Cornerman", "The Cornerman
+  // (adjusted)", "Custom"), stamped at generation — so an older report names the
+  // voice that wrote it rather than whatever is selected today. Null means Default.
+  voice_name?: string | null;
+  // #824: what the rewrite did — "applied", or why the baseline stands.
+  voice_rewrite?: string | null;
 }
 
 export interface CoachReportContent {

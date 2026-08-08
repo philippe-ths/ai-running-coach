@@ -393,9 +393,18 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
             return (
               <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                  <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2 flex-wrap">
                     <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                     Coach Analysis
+                    {/* Which character wrote this. Stamped at generation, so it names
+                        the voice that produced the words on screen rather than the one
+                        selected today. Absent on Default — no character, nothing to
+                        name. */}
+                    {report.meta?.voice_name && (
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 border border-blue-100 dark:border-blue-900">
+                        {report.meta.voice_name}
+                      </span>
+                    )}
                   </h2>
                   {headerActions}
                 </div>

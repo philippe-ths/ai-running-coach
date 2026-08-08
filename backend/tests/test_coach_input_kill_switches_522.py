@@ -239,7 +239,7 @@ async def test_voice_rewrite_skipped_when_switch_disabled(monkeypatch):
     result = await revoice_report(
         baseline="You ran 5km.", voice=voice, user_id=None, validate=lambda t: []
     )
-    assert result is None and not called
+    assert result.text is None and result.reason == "switched_off" and not called
 
 
 def test_voice_switch_enforced_inside_shared_render(monkeypatch):

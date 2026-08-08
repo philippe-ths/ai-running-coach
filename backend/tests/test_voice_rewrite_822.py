@@ -21,6 +21,7 @@ from app.services.coach.voice import (
     resolve_voice,
 )
 from app.services.coach.voice_rewrite import (
+    APPLIED,
     build_rewrite_prompts,
     invented_numbers,
     render_voice_character,
@@ -145,7 +146,9 @@ def test_a_number_with_no_source_is_invention():
 @pytest.mark.asyncio
 async def test_happy_path_returns_the_voiced_text():
     voiced = "Half your normal week, and that reads as detraining. Ramp back deliberately."
-    assert await _revoice(_voice(voice_preset="roast"), voiced) == voiced
+    outcome = await _revoice(_voice(voice_preset="roast"), voiced)
+    assert outcome.text == voiced
+    assert outcome.reason == APPLIED
 
 
 @pytest.mark.asyncio
@@ -157,26 +160,32 @@ async def test_default_voice_makes_no_call_at_all():
             baseline=BASELINE, voice=resolve_voice(None), user_id=None,
             validate=lambda t: [],
         )
-    assert result is None and build.call_count == 0
+    assert result.text is None and build.call_count == 0
+    assert result.reason == "default_voice"
 
 
 @pytest.mark.asyncio
 async def test_an_invented_number_serves_the_baseline():
     """A number the runner reads is a claim about their training, so a rewrite that
     introduces one has stopped re-voicing and started asserting."""
-    assert await _revoice(
+    outcome = await _revoice(
         _voice(voice_preset="roast"),
         "You are 12 weeks from the start line, so ramp back deliberately.",
-    ) is None
+    )
+    assert outcome.text is None
+    # The reason names the offending figure, so a degrade is diagnosable later.
+    assert outcome.reason.startswith("invented_numbers:") and "12" in outcome.reason
 
 
 @pytest.mark.asyncio
 async def test_a_policy_violation_serves_the_baseline():
-    assert await _revoice(
+    outcome = await _revoice(
         _voice(voice_preset="roast"),
         "Take ibuprofen and ramp back deliberately.",
         validate=lambda t: ["medical_overreach"],
-    ) is None
+    )
+    assert outcome.text is None
+    assert outcome.reason == "policy:medical_overreach"
 
 
 @pytest.mark.asyncio
@@ -188,12 +197,13 @@ async def test_a_transport_failure_serves_the_baseline():
             baseline=BASELINE, voice=_voice(voice_preset="roast"), user_id=None,
             validate=lambda t: [],
         )
-    assert result is None
+    assert result.text is None and result.reason == "transport_error"
 
 
 @pytest.mark.asyncio
 async def test_an_empty_rewrite_serves_the_baseline():
-    assert await _revoice(_voice(voice_preset="roast"), "   ") is None
+    outcome = await _revoice(_voice(voice_preset="roast"), "   ")
+    assert outcome.text is None and outcome.reason == "empty_rewrite"
 
 
 @pytest.mark.asyncio
@@ -204,4 +214,5 @@ async def test_the_kill_switch_stops_the_call(monkeypatch):
             baseline=BASELINE, voice=_voice(voice_preset="roast"), user_id=None,
             validate=lambda t: [],
         )
-    assert result is None and build.call_count == 0
+    assert result.text is None and build.call_count == 0
+    assert result.reason == "switched_off"

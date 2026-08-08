@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 from app.services.coach.voice import (
@@ -208,20 +209,39 @@ def invented_numbers(baseline: str, voiced: str) -> list[str]:
     return [n for n in _NUMBER.findall(voiced) if n not in source]
 
 
+@dataclass(frozen=True)
+class RewriteOutcome:
+    """What the rewrite produced, and why, so a degrade leaves a trace.
+
+    `text` is None whenever the baseline stands. `reason` says which of the many
+    ways that happens actually happened -- some healthy (the runner is on Default),
+    some defects (the model invented a figure) -- and they are indistinguishable at
+    the stored report without it. It is carried onto the report's meta so the
+    question "did this runner read the baseline by choice or by failure?" is
+    answerable later, without log access.
+    """
+
+    text: Optional[str]
+    reason: str
+
+
+APPLIED = "applied"
+
+
 async def revoice_report(
     *,
     baseline: str,
     voice: VoiceProfile,
     user_id,
     validate: Callable[[str], list],
-) -> Optional[str]:
-    """Re-voice one finished report, or return None to keep the baseline as-is.
+) -> RewriteOutcome:
+    """Re-voice one finished report, or report why the baseline stands instead.
 
-    None is the answer for every failure, not an exception: the baseline is
-    already generated, already policy-checked and already correct, so a style
-    pass must never cost the runner their coaching. `validate` is the same floor
-    the baseline cleared, applied to the rewritten prose — anything it flags means
-    the rewrite introduced what the baseline did not, and the baseline stands.
+    Every failure resolves to the baseline rather than an exception: it is already
+    generated, already policy-checked and already correct, so a style pass must
+    never cost the runner their coaching. `validate` is the same floor the baseline
+    cleared, applied to the rewritten prose — anything it flags means the rewrite
+    introduced what the baseline did not, and the baseline stands.
     """
     # Imported here so this module stays importable without the turn envelope's
     # settings/DB surface, which keeps the prompt-building half unit-testable.
@@ -233,12 +253,14 @@ async def revoice_report(
     # means every runner reads the baseline, which is what Default already gives
     # them — so the switch and the runner's own choice degrade to the same place.
     if not settings.COACH_VOICE_BLOCK_ENABLED:
-        return None
-    if voice.is_default or not baseline.strip():
-        return None
+        return RewriteOutcome(None, "switched_off")
+    if voice.is_default:
+        return RewriteOutcome(None, "default_voice")
+    if not baseline.strip():
+        return RewriteOutcome(None, "no_baseline")
     if over_budget(user_id):
         logger.info("voice_rewrite skipped: over budget")
-        return None
+        return RewriteOutcome(None, "over_budget")
 
     system, user = build_rewrite_prompts(voice, baseline)
     try:
@@ -248,11 +270,11 @@ async def revoice_report(
         )
     except Exception:  # noqa: BLE001 — a style pass never breaks a report
         logger.exception("voice_rewrite failed; serving the baseline")
-        return None
+        return RewriteOutcome(None, "transport_error")
 
     voiced = (text or "").strip()
     if not voiced:
-        return None
+        return RewriteOutcome(None, "empty_rewrite")
 
     invented = invented_numbers(baseline, voiced)
     if invented:
@@ -260,14 +282,14 @@ async def revoice_report(
             "voice_rewrite introduced unsourced numbers %s; serving the baseline",
             invented,
         )
-        return None
+        return RewriteOutcome(None, f"invented_numbers:{','.join(invented[:3])}")
 
     violations = validate(voiced)
     if violations:
+        rules = [str(getattr(v, "rule", v)) for v in violations]
         logger.warning(
-            "voice_rewrite violated policy %s; serving the baseline",
-            [getattr(v, "rule", v) for v in violations],
+            "voice_rewrite violated policy %s; serving the baseline", rules
         )
-        return None
+        return RewriteOutcome(None, f"policy:{','.join(rules[:3])}")
 
-    return voiced
+    return RewriteOutcome(voiced, APPLIED)
