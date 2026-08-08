@@ -81,6 +81,20 @@ class CoachMessageReport(BaseModel):
     tail_degraded: bool = False
     opener_message: Optional[str] = None
     schedule_fuller_turn: bool = False
+    # #822 voice rewrite: `message` is always the VOICELESS baseline — the text the
+    # digest, the eval harness and the learning loop read, so those keep consuming
+    # substance rather than style. `voiced_message` is that same report said again
+    # in the runner's chosen voice, and is what the runner is shown when present.
+    # Null means the runner is on Default, or a rewrite failed and the baseline
+    # stands. Keeping both is what makes the voice auditable: any voiced report can
+    # be diffed against the text it came from.
+    #
+    # Voiced text mirrors the baseline's own two-stage split, because a two-stage
+    # exchange evolves ONE row: without a separate opener field the fuller turn
+    # would overwrite the opener's voiced prose and the opener would then render in
+    # the fuller's words.
+    voiced_message: Optional[str] = None
+    voiced_opener_message: Optional[str] = None
 
 
 class CoachReportMeta(BaseModel):
@@ -111,6 +125,18 @@ class CoachReportMeta(BaseModel):
     # the point-in-time memory). Optional/defaulted so pre-#646 stored meta validates.
     regenerated_at: Optional[datetime] = None
     memory_as_of: Optional[datetime] = None
+    # #822 voice provenance. `voice_name` is the character this report speaks in, in
+    # the same words the picker uses ("The Cornerman", "The Cornerman (adjusted)",
+    # "Custom"); None means Default, which is the absence of a character rather than
+    # a character called Default. Stamped at generation, so a report always names the
+    # voice that WROTE it rather than whatever the runner has selected today.
+    voice_name: Optional[str] = None
+    # #824: what the rewrite did — "applied", or why the baseline stands
+    # ("default_voice", "switched_off", "over_budget", "transport_error",
+    # "invented_numbers:…", "policy:…"). Without it a null voiced_message cannot be
+    # told apart from a rewrite that failed, which is a hole in the audit the two-pass
+    # design exists to provide. Optional so pre-#822 stored meta validates.
+    voice_rewrite: Optional[str] = None
 
 
 class CoachReportContent(BaseModel):

@@ -33,7 +33,7 @@ def _declared_voice():
     # A non-default voice (a preset + a dial nudge + freetext).
     rel = SimpleNamespace(
         voice_preset="roast", voice_warmth=3, voice_humor=5,
-        voice_directness=5, voice_energy=5, voice_freetext="be cheeky",
+        voice_force=5, voice_energy=5, voice_freetext="be cheeky",
     )
     return resolve_voice(rel)
 
@@ -116,7 +116,7 @@ def test_fingerprint_stable_and_voice_sensitive():
     assert RV.voice_fingerprint(v) == RV.voice_fingerprint(v)
     other = resolve_voice(SimpleNamespace(
         voice_preset="sage", voice_warmth=4, voice_humor=2,
-        voice_directness=2, voice_energy=1, voice_freetext=None,
+        voice_force=2, voice_energy=1, voice_freetext=None,
     ))
     assert RV.voice_fingerprint(v) != RV.voice_fingerprint(other)
 

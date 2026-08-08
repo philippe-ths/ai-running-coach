@@ -95,12 +95,11 @@ def test_build_system_prompt_v5_both_modes():
     assert not fuller.startswith(SYSTEM_PROMPT_MESSAGE_V5_OPENER)
 
 
-def test_v5_carries_voice_block_at_runtime():
-    """Because v5 is voice-aware (builds on v3), build_system_prompt appends the
-    per-runner voice block. With no voice declared, the default block is rendered."""
+def test_v5_report_prompt_is_voiceless():
+    """#822: the report prompt is the static constant and nothing else. v5 remains
+    voice-aware for the conversational turn; the report's voice is applied after."""
     from app.services.coach.prompts import render_voice_block
-    fuller = build_system_prompt(V5, mode="fuller", voice=None)
-    assert fuller == SYSTEM_PROMPT_MESSAGE_V5 + render_voice_block(V5, None)
+    assert build_system_prompt(V5, mode="fuller") == SYSTEM_PROMPT_MESSAGE_V5
     assert len(render_voice_block(V5, None)) > 0  # v5 IS in VOICE_PROMPT_IDS
 
 
@@ -115,5 +114,5 @@ def test_v1_through_v4_and_report_chain_byte_stable():
     assert _EMPHASIS_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V4
     assert _EMPHASIS_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V4_OPENER
     # building a non-stance prompt never appends the emphasis addendum
-    assert _EMPHASIS_ADDENDUM not in build_system_prompt("coach_message_v4", mode="fuller", voice=None)
-    assert _EMPHASIS_ADDENDUM not in build_system_prompt("coach_message_v3", mode="opener", voice=None)
+    assert _EMPHASIS_ADDENDUM not in build_system_prompt("coach_message_v4", mode="fuller")
+    assert _EMPHASIS_ADDENDUM not in build_system_prompt("coach_message_v3", mode="opener")

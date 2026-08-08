@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { CoachReport, CoachReportBody, isMessageReport, isOpenerOnly } from '@/lib/types';
+import { CoachReport, CoachReportBody, isMessageReport, isOpenerOnly, runnerFacingProse } from '@/lib/types';
 import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2, RefreshCw, Copy, Check } from 'lucide-react';
 
 // Flatten a coach report (either output shape) into plain text for copy-to-clipboard.
@@ -12,9 +12,12 @@ import { Sparkles, ChevronRight, AlertTriangle, HelpCircle, Loader2, RefreshCw, 
 function buildReportText(body: CoachReportBody): string {
   const parts: string[] = [];
   if (isMessageReport(body)) {
-    if (body.opener_message) parts.push(body.opener_message.trim());
+    // Copy what the runner sees, which is the voiced rendering when there is one.
+    const opener = runnerFacingProse(body, 'opener');
+    const fuller = runnerFacingProse(body, 'fuller');
+    if (opener) parts.push(opener);
     if (body.headline) parts.push(body.headline.trim());
-    if ((body.message ?? '').trim()) parts.push(body.message.trim());
+    if (fuller) parts.push(fuller);
   } else {
     if (body.headline) parts.push(body.headline.trim());
     if (body.thesis) parts.push(body.thesis.trim());
@@ -376,14 +379,32 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
               immediate reaction, then the fuller turn once it lands. A single-shot
               message (no opener_message) renders just the fuller turn, unchanged. */}
           {(() => {
+            // #822: the runner reads the voiced rendering when they declared a
+            // voice; presence is still judged on the BASELINE, so a stage counts as
+            // landed whether or not its rewrite succeeded.
+            const openerProse = runnerFacingProse(body, 'opener');
+            const fullerProse = runnerFacingProse(body, 'fuller');
             const hasOpener = Boolean(body.opener_message);
             const hasFuller = (body.message ?? '').trim().length > 0;
+            // Only offer the original when it genuinely differs from what is shown.
+            // On Default, or after a rewrite degraded, the two are the same text and
+            // a toggle would promise a comparison there is nothing to compare.
+            const isVoiced = Boolean(body.voiced_message) && hasFuller;
             return (
               <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                  <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2 flex-wrap">
                     <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                     Coach Analysis
+                    {/* Which character wrote this. Stamped at generation, so it names
+                        the voice that produced the words on screen rather than the one
+                        selected today. Absent on Default — no character, nothing to
+                        name. */}
+                    {report.meta?.voice_name && (
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300 border border-blue-100 dark:border-blue-900">
+                        {report.meta.voice_name}
+                      </span>
+                    )}
                   </h2>
                   {headerActions}
                 </div>
@@ -391,7 +412,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
                 {/* Opener turn (stage one) */}
                 {hasOpener && (
                   <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
-                    <Markdown remarkPlugins={[remarkGfm]}>{body.opener_message as string}</Markdown>
+                    <Markdown remarkPlugins={[remarkGfm]}>{openerProse}</Markdown>
                   </div>
                 )}
 
@@ -410,8 +431,25 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
                     {body.headline && (
                       <h3 className="text-lg font-serif font-semibold text-gray-900 dark:text-gray-100 mb-2">{body.headline}</h3>
                     )}
+
+                    {/* The unvoiced original sits ABOVE the voiced report, because
+                        that is the order things happened in: it was written first,
+                        then said again in your coach's voice. Collapsed by default —
+                        the voiced version is the one you came to read. */}
+                    {isVoiced && (
+                      <details className="mb-3 group">
+                        <summary className="cursor-pointer text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 select-none flex items-center gap-1.5">
+                          <ChevronRight className="w-3.5 h-3.5 transition-transform group-open:rotate-90" />
+                          Written first, before your coach&apos;s voice
+                        </summary>
+                        <div className="mt-2 pl-3 border-l-2 border-gray-200 dark:border-gray-600 prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-2 text-gray-600 dark:text-gray-400">
+                          <Markdown remarkPlugins={[remarkGfm]}>{body.message}</Markdown>
+                        </div>
+                      </details>
+                    )}
+
                     <div className="prose prose-sm prose-gray dark:prose-invert max-w-none prose-p:my-2 prose-ul:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5">
-                      <Markdown remarkPlugins={[remarkGfm]}>{body.message}</Markdown>
+                      <Markdown remarkPlugins={[remarkGfm]}>{fullerProse}</Markdown>
                     </div>
                   </>
                 )}

@@ -1,17 +1,22 @@
 /**
- * P1.1 Voice — the runner-declared coach voice (ADR 0012/0013).
+ * Voice — the runner-declared coach voice (ADR 0012/0013, reshaped by #822).
  *
- * The runner picks a preset, nudges four 1-5 dials, and may add a free-text
+ * The runner picks a character, nudges five 1-5 dials, and may add a free-text
  * escape-hatch. The catalog (axes + presets) comes from the backend so the picker
  * and radar render from one source of truth.
+ *
+ * Dials are keyed BY AXIS rather than one field per axis: the axis set is data on
+ * the server, and a rename there should not ripple through these types, the panel
+ * and every test. It rippled through all three when Directness became Force.
  */
 
 export interface VoiceDials {
   preset: string | null;
   warmth: number | null;
   humor: number | null;
-  directness: number | null;
+  force: number | null;
   energy: number | null;
+  length: number | null;
   freetext: string | null;
 }
 
@@ -25,19 +30,13 @@ export interface VoicePresetInfo {
   key: string;
   name: string;
   flavour: string;
-  warmth: number;
-  humor: number;
-  directness: number;
-  energy: number;
+  dials: Record<string, number>;
 }
 
 export interface VoiceCatalog {
   axes: VoiceAxisInfo[];
   presets: VoicePresetInfo[];
-  default_warmth: number;
-  default_humor: number;
-  default_directness: number;
-  default_energy: number;
+  defaults: Record<string, number>;
 }
 
 export interface VoiceConfig {
@@ -45,4 +44,4 @@ export interface VoiceConfig {
   catalog: VoiceCatalog;
 }
 
-export type DialKey = "warmth" | "humor" | "directness" | "energy";
+export type DialKey = "warmth" | "humor" | "force" | "energy" | "length";

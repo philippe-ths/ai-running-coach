@@ -88,10 +88,10 @@ def test_build_system_prompt_v6_both_modes():
     assert not fuller.startswith(SYSTEM_PROMPT_MESSAGE_V6_OPENER)
 
 
-def test_v6_carries_voice_block_at_runtime():
+def test_v6_report_prompt_is_voiceless():
+    """#822: the report prompt is the static constant and nothing else."""
     from app.services.coach.prompts import render_voice_block
-    fuller = build_system_prompt(V6, mode="fuller", voice=None)
-    assert fuller == SYSTEM_PROMPT_MESSAGE_V6 + render_voice_block(V6, None)
+    assert build_system_prompt(V6, mode="fuller") == SYSTEM_PROMPT_MESSAGE_V6
     assert len(render_voice_block(V6, None)) > 0  # v6 IS in VOICE_PROMPT_IDS
 
 
@@ -107,5 +107,5 @@ def test_v1_through_v5_and_report_chain_byte_stable():
     assert _READINESS_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V5
     assert _READINESS_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V5_OPENER
     # building a non-training-load prompt never appends the readiness addendum
-    assert _READINESS_ADDENDUM not in build_system_prompt("coach_message_v5", mode="fuller", voice=None)
-    assert _READINESS_ADDENDUM not in build_system_prompt("coach_message_v4", mode="opener", voice=None)
+    assert _READINESS_ADDENDUM not in build_system_prompt("coach_message_v5", mode="fuller")
+    assert _READINESS_ADDENDUM not in build_system_prompt("coach_message_v4", mode="opener")

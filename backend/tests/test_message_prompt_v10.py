@@ -59,10 +59,10 @@ def test_stream_view_addendum_present_in_v10_absent_in_v9():
     assert _STREAM_VIEW_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V9
     assert _STREAM_VIEW_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V9_OPENER
     # And via the builder: v10 carries it, v9 does not (inert under rollback).
-    assert _STREAM_VIEW_ADDENDUM in build_system_prompt(V10, mode="fuller", voice=None)
-    assert _STREAM_VIEW_ADDENDUM in build_system_prompt(V10, mode="opener", voice=None)
-    assert _STREAM_VIEW_ADDENDUM not in build_system_prompt(V9, mode="fuller", voice=None)
-    assert _STREAM_VIEW_ADDENDUM not in build_system_prompt(V9, mode="opener", voice=None)
+    assert _STREAM_VIEW_ADDENDUM in build_system_prompt(V10, mode="fuller")
+    assert _STREAM_VIEW_ADDENDUM in build_system_prompt(V10, mode="opener")
+    assert _STREAM_VIEW_ADDENDUM not in build_system_prompt(V9, mode="fuller")
+    assert _STREAM_VIEW_ADDENDUM not in build_system_prompt(V9, mode="opener")
 
 
 def test_stream_view_addendum_keeps_timeline_subordinate_to_metrics():

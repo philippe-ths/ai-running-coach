@@ -59,10 +59,10 @@ def test_v12_is_v11_plus_training_history_addendum():
 def test_training_history_addendum_present_in_v12_absent_in_v11():
     assert _TRAINING_HISTORY_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V11
     assert _TRAINING_HISTORY_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V11_OPENER
-    assert _TRAINING_HISTORY_ADDENDUM in build_system_prompt(V12, mode="fuller", voice=None)
-    assert _TRAINING_HISTORY_ADDENDUM in build_system_prompt(V12, mode="opener", voice=None)
-    assert _TRAINING_HISTORY_ADDENDUM not in build_system_prompt(V11, mode="fuller", voice=None)
-    assert _TRAINING_HISTORY_ADDENDUM not in build_system_prompt(V11, mode="opener", voice=None)
+    assert _TRAINING_HISTORY_ADDENDUM in build_system_prompt(V12, mode="fuller")
+    assert _TRAINING_HISTORY_ADDENDUM in build_system_prompt(V12, mode="opener")
+    assert _TRAINING_HISTORY_ADDENDUM not in build_system_prompt(V11, mode="fuller")
+    assert _TRAINING_HISTORY_ADDENDUM not in build_system_prompt(V11, mode="opener")
 
 
 def test_training_history_addendum_holds_the_core_disciplines():

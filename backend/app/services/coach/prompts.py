@@ -617,20 +617,20 @@ def build_system_prompt(
     playbook_key: str = None,
     *,
     mode: str = "fuller",
-    voice=None,
     pack=None,
 ) -> str:
-    """Build the full system prompt, optionally with an activity-type playbook and
-    a per-runner voice block.
+    """Build the full system prompt, optionally with an activity-type playbook.
 
     `playbook_key` is derived from the classification axes (ADR 0007) by
     classifier.playbook_key. `mode` selects the two-stage form: "fuller" (the
     default — the registered deep-coaching prompt, plus the playbook) or "opener"
     (the lean immediate-reaction prompt, no playbook). `mode` is ignored for any
-    prompt id without a distinct opener form. `voice` (a voice.VoiceProfile) is
-    appended only for voice-aware prompts (VOICE_PROMPT_IDS) via render_voice_block,
-    which is a no-op for every other prompt — so all legacy/structured callers and
-    coach_message_v1/v2 are byte-stable regardless of what `voice` is passed.
+    prompt id without a distinct opener form.
+
+    The report prompt carries NO voice (#822). A report is generated voiceless and
+    the runner's voice is applied afterwards, as a rewrite of the finished text, so
+    that voice shapes delivery with no route to the facts. `render_voice_block`
+    remains for the conversational turn, which still steers at prompt time.
 
     `pack` (the CoachContextPack the same call will serialise into the user message)
     gates the data-dependent optional addenda (#439): an addendum for an optional
@@ -644,10 +644,10 @@ def build_system_prompt(
     # honoured on every path with no per-call-site gate here. COACH_PLAYBOOK_ENABLED is
     # applied below. Defaults keep both on => byte-stable.
     if mode == "opener" and base_prompt_id in _OPENER_PROMPTS:
-        base = _gate_optional_addenda(_OPENER_PROMPTS[base_prompt_id], base_prompt_id, pack)
-        return base + render_voice_block(base_prompt_id, voice)
+        return _gate_optional_addenda(
+            _OPENER_PROMPTS[base_prompt_id], base_prompt_id, pack
+        )
     base = PROMPT_VERSIONS[base_prompt_id]
     if settings.COACH_PLAYBOOK_ENABLED and playbook_key and playbook_key in ACTIVITY_PLAYBOOKS:
         base = base + "\n\n" + ACTIVITY_PLAYBOOKS[playbook_key]
-    base = _gate_optional_addenda(base, base_prompt_id, pack)
-    return base + render_voice_block(base_prompt_id, voice)
+    return _gate_optional_addenda(base, base_prompt_id, pack)

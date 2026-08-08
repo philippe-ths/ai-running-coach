@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -60,7 +60,8 @@ from app.services.coach.prompts import (
 )
 from app.services.coach.prompt_features import PromptFeature, has_feature
 from app.services.coach.receipt_voice import voice_fingerprint
-from app.services.coach.voice import resolve_voice
+from app.services.coach.voice import display_name as voice_display_name, resolve_voice
+from app.services.coach.voice_rewrite import revoice_report
 from app.services.coach.stance import resolve_stance
 from app.services.coach.retrieval import fetch_latest_user_reply
 from app.services.coach.validator import (
@@ -533,12 +534,15 @@ def _assemble_generation_request(
     # prompt; build_system_prompt ignores it under mode="opener". The voice block
     # (P1.1) rides both stages via render_voice_block (a no-op for non-voice prompts).
     classification = Classification.from_metrics(activity.metrics)
+    # #822: the report is generated VOICELESS. The runner's voice is resolved here
+    # but deliberately not handed to the prompt — it rides the request so the
+    # rewrite pass can apply it to the finished text, where it can shape delivery
+    # without any route to the facts.
     voice = _resolve_voice_for_activity(db, activity)
     system_prompt = build_system_prompt(
         prompt_id,
         playbook_key(activity, classification),
         mode=mode,
-        voice=voice,
         pack=pack,
     )
     user_message = _llm_pack_message(pack_dict, prompt_id, mode=mode)
@@ -600,7 +604,8 @@ async def get_or_generate_coach_report(
     # legacy structured path. Both normalise to a _GenOutcome so storage is shared.
     if req.prompt_id.startswith(MESSAGE_PROMPT_PREFIX):
         outcome = await _generate_message(
-            client, req.system_prompt, req.user_message, req.pack, user_id=activity.user_id
+            client, req.system_prompt, req.user_message, req.pack,
+            user_id=activity.user_id, voice=req.voice,
         )
     else:
         outcome = await _generate_structured(
@@ -672,7 +677,7 @@ async def generate_opener(db: Session, activity_id: str) -> Optional[OpenerResul
     client = build_client(TurnKind.OPENER, activity.user_id)
     outcome = await _generate_message(
         client, req.system_prompt, req.user_message, req.pack,
-        is_opener=True, user_id=activity.user_id,
+        is_opener=True, user_id=activity.user_id, voice=req.voice,
     )
 
     read = _persist_report(
@@ -750,7 +755,8 @@ async def generate_fuller(
     req = _assemble_generation_request(db, activity, mode="fuller", continuity=continuity)
     client = build_client(TurnKind.FULLER, activity.user_id)
     outcome = await _generate_message(
-        client, req.system_prompt, req.user_message, req.pack, user_id=activity.user_id
+        client, req.system_prompt, req.user_message, req.pack,
+        user_id=activity.user_id, voice=req.voice,
     )
 
     # Preserve the opener prose on the evolving row — the fuller LLM does not emit
@@ -902,6 +908,10 @@ def _persist_report(
         tail_degraded=outcome.tail_degraded,
         regenerated_at=regenerated_at,
         memory_as_of=memory_as_of,
+        # #822: name the character this report speaks in, stamped at generation so a
+        # later voice change never relabels an existing report.
+        voice_name=voice_display_name(voice) if voice is not None else None,
+        voice_rewrite=outcome.voice_rewrite,
     )
 
     # P1.1 voice freshness: stamp the voice this report speaks in, so a later voice
@@ -1021,6 +1031,9 @@ class _GenOutcome:
     is_fallback: bool
     policy_violations: List[str] = field(default_factory=list)
     tail_degraded: bool = False
+    # #822/#824: what the voice rewrite did, or why the baseline stands. None on the
+    # structured family and on a fallback, where no rewrite is attempted at all.
+    voice_rewrite: Optional[str] = None
 
 
 # --- structured family (legacy CoachReportContent, schema 1.2) ----------------
@@ -1258,6 +1271,7 @@ async def _generate_message(
     *,
     is_opener: bool = False,
     user_id=None,
+    voice=None,
 ) -> _GenOutcome:
     """The prose-message path: one adaptive-thinking call producing prose + a tool
     tail, with stop_reason-aware retries, the policy gate over message+tail, and
@@ -1384,12 +1398,65 @@ async def _generate_message(
             [v.rule for v in chosen.violations],
         )
 
+    # #822: the prose above was written with no voice input at all. It is the
+    # baseline, and it stays where every downstream reader looks for it. The
+    # runner's voice is applied here, as a rewrite that can re-word and
+    # re-emphasise but cannot reach the facts — which is the whole reason the two
+    # passes are separate.
+    chosen, voice_rewrite = await _apply_voice(
+        chosen, pack, voice=voice, user_id=user_id, is_opener=is_opener
+    )
+
     return _GenOutcome(
         report_dump=chosen.report.model_dump(),
         raw_response=chosen.raw_response,
         is_fallback=False,
         policy_violations=[v.rule for v in chosen.violations],
         tail_degraded=chosen.report.tail_degraded,
+        voice_rewrite=voice_rewrite,
+    )
+
+
+async def _apply_voice(
+    chosen: _MsgAttempt, pack: CoachContextPack, *, voice, user_id, is_opener: bool
+) -> tuple[_MsgAttempt, Optional[str]]:
+    """Attach the runner's voiced rendering of this stage's prose, when they have one.
+
+    Both stages are covered, because both are prose the runner reads: the opener
+    re-voices `opener_message`, the fuller turn `message`. The baseline is never
+    replaced — the voiceless text stays where the digest, the eval harness and the
+    learning loop read it, so those go on consuming substance while the runner
+    reads style. A rewrite that fails for any reason leaves the report as it was.
+    """
+    if voice is None:
+        return chosen, None
+
+    field = "opener_message" if is_opener else "message"
+    voiced_field = "voiced_opener_message" if is_opener else "voiced_message"
+    baseline = getattr(chosen.report, field) or ""
+
+    # Judge the rewrite against the baseline's OWN surviving violations, not against
+    # zero. A baseline can ship with a soft violation the retry did not clear (the
+    # "violations persisted" path), and rejecting the rewrite for inheriting one
+    # would discard a good re-voicing for a fault it did not commit. Only a rule the
+    # baseline did not already trip is the rewrite's doing.
+    inherited = {v.rule for v in chosen.violations}
+
+    def _introduced(text: str) -> list:
+        probe = chosen.report.model_copy(update={field: text})
+        return [v for v in validate_message_policy(probe, pack) if v.rule not in inherited]
+
+    outcome = await revoice_report(
+        baseline=baseline, voice=voice, user_id=user_id, validate=_introduced
+    )
+    if not outcome.text:
+        return chosen, outcome.reason
+    return (
+        replace(
+            chosen,
+            report=chosen.report.model_copy(update={voiced_field: outcome.text}),
+        ),
+        outcome.reason,
     )
 
 

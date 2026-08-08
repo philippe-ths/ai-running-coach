@@ -40,8 +40,14 @@ class CoachingRelationship(Base):
     voice_preset: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     voice_warmth: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     voice_humor: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
-    voice_directness: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    # `voice_force` was `voice_directness` (#822): the axis measures IMPACT, not
+    # clarity -- a gentle coach can be perfectly clear, and a brutal one is more
+    # than merely blunt. Stored values carry over unchanged; only the name moved.
+    voice_force: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     voice_energy: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
+    # #822: nothing else controlled how much room the coach takes, and length
+    # changes the read more than any tonal axis.
+    voice_length: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
     voice_freetext: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # P1.3 Coaching stance (ADR 0015). All nullable: a null stance resolves to the

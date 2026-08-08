@@ -147,11 +147,14 @@ def test_grouped_keeps_the_load_bearing_safety_surface_verbatim():
 
 
 def test_grouped_builds_for_both_modes():
-    fuller = build_system_prompt(GROUPED, mode="fuller", voice=None)
-    opener = build_system_prompt(GROUPED, mode="opener", voice=None)
+    fuller = build_system_prompt(GROUPED, mode="fuller")
+    opener = build_system_prompt(GROUPED, mode="opener")
     assert PROMPT_VERSIONS[GROUPED] in fuller
     assert _OPENER_PROMPTS[GROUPED] in opener
-    assert "YOUR VOICE FOR THIS RUNNER" in fuller  # voice-aware, like lean_v1
+    # #822: the report prompt is voiceless on both stages. The runner's voice is
+    # applied to the finished report instead, so it cannot steer the generation.
+    assert "YOUR VOICE FOR THIS RUNNER" not in fuller
+    assert "YOUR VOICE FOR THIS RUNNER" not in opener
 
 
 def test_grouped_ships_inert():

@@ -63,10 +63,10 @@ def test_volume_addendum_present_in_v9_absent_in_v8():
     assert _VOLUME_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V8
     assert _VOLUME_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V8_OPENER
     # And via the builder: v9 carries it, v8 does not (inert under rollback).
-    assert _VOLUME_ADDENDUM in build_system_prompt(V9, mode="fuller", voice=None)
-    assert _VOLUME_ADDENDUM in build_system_prompt(V9, mode="opener", voice=None)
-    assert _VOLUME_ADDENDUM not in build_system_prompt(V8, mode="fuller", voice=None)
-    assert _VOLUME_ADDENDUM not in build_system_prompt(V8, mode="opener", voice=None)
+    assert _VOLUME_ADDENDUM in build_system_prompt(V9, mode="fuller")
+    assert _VOLUME_ADDENDUM in build_system_prompt(V9, mode="opener")
+    assert _VOLUME_ADDENDUM not in build_system_prompt(V8, mode="fuller")
+    assert _VOLUME_ADDENDUM not in build_system_prompt(V8, mode="opener")
 
 
 def test_volume_addendum_speaks_to_the_deliberate_down_week():

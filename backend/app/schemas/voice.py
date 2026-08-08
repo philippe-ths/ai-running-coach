@@ -7,7 +7,7 @@ truth rather than duplicating the DNA. Example messages are NOT exposed — they
 prompt-internal steering ingredient, not user-facing copy.
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -20,8 +20,9 @@ class VoiceDials(BaseModel):
     preset: Optional[str] = None
     warmth: Optional[int] = Field(default=None, ge=DIAL_MIN, le=DIAL_MAX)
     humor: Optional[int] = Field(default=None, ge=DIAL_MIN, le=DIAL_MAX)
-    directness: Optional[int] = Field(default=None, ge=DIAL_MIN, le=DIAL_MAX)
+    force: Optional[int] = Field(default=None, ge=DIAL_MIN, le=DIAL_MAX)
     energy: Optional[int] = Field(default=None, ge=DIAL_MIN, le=DIAL_MAX)
+    length: Optional[int] = Field(default=None, ge=DIAL_MIN, le=DIAL_MAX)
     freetext: Optional[str] = Field(default=None, max_length=1000)
 
     @field_validator("preset")
@@ -50,10 +51,10 @@ class VoicePresetInfo(BaseModel):
     key: str
     name: str
     flavour: str
-    warmth: int
-    humor: int
-    directness: int
-    energy: int
+    # Keyed by axis rather than one field per axis: the axis set is data, so adding
+    # or renaming one should not ripple through the API contract, the frontend
+    # types and every test. It rippled through all three the first time.
+    dials: Dict[str, int]
 
 
 class VoiceCatalog(BaseModel):
@@ -61,10 +62,7 @@ class VoiceCatalog(BaseModel):
 
     axes: List[VoiceAxisInfo]
     presets: List[VoicePresetInfo]
-    default_warmth: int
-    default_humor: int
-    default_directness: int
-    default_energy: int
+    defaults: Dict[str, int]
 
 
 class VoiceConfigRead(BaseModel):
@@ -84,14 +82,12 @@ def build_catalog() -> VoiceCatalog:
         ],
         presets=[
             VoicePresetInfo(
-                key=p.key, name=p.name, flavour=p.flavour,
-                warmth=p.dials.warmth, humor=p.dials.humor,
-                directness=p.dials.directness, energy=p.dials.energy,
+                key=p.key,
+                name=p.name,
+                flavour=p.flavour,
+                dials={a.key: getattr(p.dials, a.key) for a in DIAL_AXES},
             )
             for p in PRESETS.values()
         ],
-        default_warmth=DEFAULT_DIALS.warmth,
-        default_humor=DEFAULT_DIALS.humor,
-        default_directness=DEFAULT_DIALS.directness,
-        default_energy=DEFAULT_DIALS.energy,
+        defaults={a.key: getattr(DEFAULT_DIALS, a.key) for a in DIAL_AXES},
     )

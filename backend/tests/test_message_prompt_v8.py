@@ -178,9 +178,9 @@ def test_v8_retune_is_actually_present():
         assert floor in SYSTEM_PROMPT_MESSAGE_V8
 
 
-def test_v8_carries_voice_block_at_runtime():
-    fuller = build_system_prompt(V8, mode="fuller", voice=None)
-    assert fuller == SYSTEM_PROMPT_MESSAGE_V8 + render_voice_block(V8, None)
+def test_v8_report_prompt_is_voiceless():
+    """#822: the report prompt is the static constant and nothing else."""
+    assert build_system_prompt(V8, mode="fuller") == SYSTEM_PROMPT_MESSAGE_V8
     assert len(render_voice_block(V8, None)) > 0  # v8 IS in VOICE_PROMPT_IDS
 
 
@@ -213,5 +213,5 @@ def test_v1_through_v7_and_report_chain_byte_stable():
     ):
         assert "# HOW YOU SOUND" not in prior
     # building a prior prompt never appends the v8 retune.
-    assert "# HOW YOU SOUND" not in build_system_prompt("coach_message_v7", mode="fuller", voice=None)
-    assert "# HOW YOU SOUND" not in build_system_prompt("coach_message_v7", mode="opener", voice=None)
+    assert "# HOW YOU SOUND" not in build_system_prompt("coach_message_v7", mode="fuller")
+    assert "# HOW YOU SOUND" not in build_system_prompt("coach_message_v7", mode="opener")
