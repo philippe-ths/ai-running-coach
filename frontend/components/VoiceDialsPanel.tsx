@@ -12,27 +12,28 @@ import {
 import { fetchFromAPI } from '@/lib/api';
 import type { DialKey, VoiceCatalog, VoiceConfig } from '@/lib/types';
 
-// The four dials in canonical order. The radar renders them at 12/3/6/9 o'clock
-// (a deliberate build choice — axis order changes the shape; ADR 0013 / brief #5):
-// data order [warmth, humor, directness, energy] places warmth at top (12) and the
-// rest clockwise.
-const DIAL_KEYS: DialKey[] = ['warmth', 'humor', 'directness', 'energy'];
+// The balanced centre of a 1-5 axis. Default sits here because Default means no
+// lean in any direction; it is a display position, never a saved value.
+const MIDDLE = 3;
 
-type DialState = Record<DialKey, number>;
+// Keyed by axis, and the axis LIST comes from the catalog: the axis set is data on
+// the server, so adding or renaming one should not need an edit here. The radar
+// renders them in catalog order, starting at 12 o'clock and going clockwise.
+type DialState = Record<string, number>;
 
-function dialsFromCatalogDefault(catalog: VoiceCatalog): DialState {
-  return {
-    warmth: catalog.default_warmth,
-    humor: catalog.default_humor,
-    directness: catalog.default_directness,
-    energy: catalog.default_energy,
-  };
+function middleDials(catalog: VoiceCatalog): DialState {
+  return Object.fromEntries(catalog.axes.map((a) => [a.key, MIDDLE]));
+}
+
+function titleCase(key: string): string {
+  return key.charAt(0).toUpperCase() + key.slice(1);
 }
 
 export default function VoiceDialsPanel() {
   const [catalog, setCatalog] = useState<VoiceCatalog | null>(null);
   const [dials, setDials] = useState<DialState | null>(null);
   const [preset, setPreset] = useState<string | null>(null);
+  const [isDefault, setIsDefault] = useState(false);
   const [freetext, setFreetext] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -50,12 +51,28 @@ export default function VoiceDialsPanel() {
         setCatalog(cat);
         setPreset(cur.preset);
         setFreetext(cur.freetext ?? '');
-        setDials({
-          warmth: cur.warmth ?? cat.default_warmth,
-          humor: cur.humor ?? cat.default_humor,
-          directness: cur.directness ?? cat.default_directness,
-          energy: cur.energy ?? cat.default_energy,
-        });
+        // Default is the runner having declared NOTHING — every field null. It is a
+        // real state, not "the dials happen to sit in the middle", because it is
+        // what switches the voice pass off entirely.
+        const declaredDials = cat.axes.filter(
+          (a) => (cur as unknown as Record<string, unknown>)[a.key] != null,
+        );
+        const undeclared =
+          cur.preset === null && declaredDials.length === 0 && !cur.freetext;
+        setIsDefault(undeclared);
+        if (undeclared) {
+          setDials(middleDials(cat));
+          setLoading(false);
+          return;
+        }
+        setDials(
+          Object.fromEntries(
+            cat.axes.map((a) => [
+              a.key,
+              (cur as unknown as Record<string, number | null>)[a.key] ?? cat.defaults[a.key],
+            ]),
+          ),
+        );
         setLoading(false);
       })
       .catch((err) => {
@@ -70,30 +87,58 @@ export default function VoiceDialsPanel() {
   // dial numbers only).
   const choosePreset = (p: VoiceCatalog['presets'][number]) => {
     setPreset(p.key);
-    setDials({ warmth: p.warmth, humor: p.humor, directness: p.directness, energy: p.energy });
+    setIsDefault(false);
+    setDials({ ...p.dials });
   };
 
-  const nudge = (key: DialKey, value: number) => {
+  const nudge = (key: string, value: number) => {
+    setIsDefault(false);
     setDials((prev) => (prev ? { ...prev, [key]: value } : prev));
   };
 
-  const resetToDefault = () => {
+  const chooseDefault = () => {
     if (!catalog) return;
+    setIsDefault(true);
     setPreset(null);
     setFreetext('');
-    setDials(dialsFromCatalogDefault(catalog));
+    // Default reads as the balanced middle of every axis, because that is what it
+    // means: no lean in any direction. The values are display only — Default saves
+    // as absence, so nothing downstream reads them.
+    setDials(middleDials(catalog));
   };
+
+  // The dials the runner has moved away from their chosen character. Selecting a
+  // character and nudging it does not make the runner anonymous — they are on that
+  // character, adjusted — so the base is named and the change shown against it.
+  const deltas = useMemo(() => {
+    if (!catalog || !dials || preset === null) return [];
+    const base = catalog.presets.find((p) => p.key === preset);
+    if (!base) return [];
+    return catalog.axes.flatMap((axis) => {
+      const offset = dials[axis.key] - base.dials[axis.key];
+      if (offset === 0) return [];
+      const pole = offset > 0 ? axis.high_pole : axis.low_pole;
+      return [
+        `${titleCase(axis.key)} ${offset > 0 ? '+' : ''}${offset} (toward ${pole})`,
+      ];
+    });
+  }, [catalog, dials, preset]);
+
+  const baseName = catalog?.presets.find((p) => p.key === preset)?.name ?? null;
+
+  // Custom is a SELECTION, not an annotation on another one: the runner who nudged
+  // The Drill Sergeant is on Custom, with Drill Sergeant as its base. Exactly one
+  // tile is lit at a time, so what is selected is never ambiguous.
+  const customised =
+    !isDefault && (deltas.length > 0 || freetext.trim().length > 0 || preset === null);
 
   const radarData = useMemo(() => {
     if (!catalog || !dials) return [];
-    return DIAL_KEYS.map((key) => {
-      const axis = catalog.axes.find((a) => a.key === key);
-      return {
-        axis: key.charAt(0).toUpperCase() + key.slice(1),
-        poles: axis ? `${axis.low_pole} - ${axis.high_pole}` : key,
-        value: dials[key],
-      };
-    });
+    return catalog.axes.map((axis) => ({
+      axis: titleCase(axis.key),
+      poles: `${axis.low_pole} - ${axis.high_pole}`,
+      value: dials[axis.key],
+    }));
   }, [catalog, dials]);
 
   const save = async () => {
@@ -103,13 +148,18 @@ export default function VoiceDialsPanel() {
     try {
       await fetchFromAPI('/api/coach/voice', {
         method: 'PUT',
+        // Default persists as genuine ABSENCE, not as dials that happen to sit in
+        // the middle. Storing middle values would read as a declared voice and buy
+        // the runner a rewrite pass that changes nothing they asked for.
+        // Built from catalog.axes rather than named fields, so a renamed axis
+        // cannot silently send `undefined` and a new one cannot be silently
+        // dropped — neither of which a type-check would catch.
         body: JSON.stringify({
-          preset,
-          warmth: dials.warmth,
-          humor: dials.humor,
-          directness: dials.directness,
-          energy: dials.energy,
-          freetext: freetext.trim() ? freetext.trim() : null,
+          preset: isDefault ? null : preset,
+          freetext: isDefault || !freetext.trim() ? null : freetext.trim(),
+          ...Object.fromEntries(
+            catalog!.axes.map((a) => [a.key, isDefault ? null : dials[a.key]]),
+          ),
         }),
       });
       setStatus('Voice saved.');
@@ -139,13 +189,29 @@ export default function VoiceDialsPanel() {
       <div>
         <label className="block text-sm font-medium mb-2">Starting character</label>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          {/* Default is a first-class choice, not the absence of one: it is the
+              only option that adds nothing at all to how your report is written. */}
+          <button
+            type="button"
+            onClick={chooseDefault}
+            className={`text-left p-3 rounded border transition-colors ${
+              isDefault
+                ? 'border-blue-600 bg-blue-50 dark:bg-blue-950 dark:border-blue-400'
+                : 'border-gray-200 dark:border-gray-600 hover:border-blue-400'
+            }`}
+          >
+            <div className="font-semibold text-sm">Default</div>
+            <div className="text-xs text-gray-500 dark:text-gray-400">
+              No voice applied; your coach as written.
+            </div>
+          </button>
           {catalog.presets.map((p) => (
             <button
               key={p.key}
               type="button"
               onClick={() => choosePreset(p)}
               className={`text-left p-3 rounded border transition-colors ${
-                preset === p.key
+                !isDefault && !customised && preset === p.key
                   ? 'border-blue-600 bg-blue-50 dark:bg-blue-950 dark:border-blue-400'
                   : 'border-gray-200 dark:border-gray-600 hover:border-blue-400'
               }`}
@@ -154,11 +220,38 @@ export default function VoiceDialsPanel() {
               <div className="text-xs text-gray-500 dark:text-gray-400">{p.flavour}</div>
             </button>
           ))}
+
+          {/* Custom: lit once the runner departs from a character, naming the base
+              they departed from rather than dropping them into an anonymous state. */}
+          <div
+            aria-current={customised ? 'true' : undefined}
+            className={`text-left p-3 rounded border transition-colors ${
+              customised
+                ? 'border-blue-600 bg-blue-50 dark:bg-blue-950 dark:border-blue-400'
+                : 'border-dashed border-gray-200 dark:border-gray-600 opacity-60'
+            }`}
+          >
+            <div className="font-semibold text-sm">Custom</div>
+            <div className="text-xs text-gray-500 dark:text-gray-400">
+              {customised
+                ? baseName
+                  ? `base: ${baseName}${deltas.length > 0 ? ` · ${deltas.join(' · ')}` : ''}${
+                      freetext.trim() ? ' · your own words' : ''
+                    }`
+                  : 'Your own dials, no base character.'
+                : 'Nudge a dial or add your own words.'}
+            </div>
+          </div>
         </div>
-        {preset === null && (
+        {isDefault && (
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-            Custom dials (no preset). Pick a character above to also borrow its way of
-            phrasing things.
+            Your report is written and sent exactly as it is today — no second pass,
+            no rewriting.
+          </p>
+        )}
+        {customised && !baseName && (
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+            Pick a character above to also borrow its way of phrasing things.
           </p>
         )}
       </div>
@@ -177,16 +270,16 @@ export default function VoiceDialsPanel() {
         </div>
 
         <div className="space-y-4">
-          {DIAL_KEYS.map((key) => {
-            const axis = catalog.axes.find((a) => a.key === key);
+          {catalog.axes.map((axis) => {
+            const key = axis.key;
             return (
               <div key={key}>
                 <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-                  <span>{axis?.low_pole}</span>
+                  <span>{axis.low_pole}</span>
                   <span className="font-medium text-gray-700 dark:text-gray-200">
-                    {key.charAt(0).toUpperCase() + key.slice(1)}: {dials[key]}
+                    {titleCase(key)}: {dials[key]}
                   </span>
-                  <span>{axis?.high_pole}</span>
+                  <span>{axis.high_pole}</span>
                 </div>
                 <input
                   type="range"
@@ -236,7 +329,7 @@ export default function VoiceDialsPanel() {
         </button>
         <button
           type="button"
-          onClick={resetToDefault}
+          onClick={chooseDefault}
           className="text-sm text-gray-600 dark:text-gray-300 hover:underline"
         >
           Reset to default

@@ -110,13 +110,14 @@ def test_lean_v1_is_radically_shorter_than_v14():
 
 
 def test_lean_v1_builds_for_both_modes():
-    fuller = build_system_prompt(LEAN, mode="fuller", voice=None)
-    opener = build_system_prompt(LEAN, mode="opener", voice=None)
+    fuller = build_system_prompt(LEAN, mode="fuller")
+    opener = build_system_prompt(LEAN, mode="opener")
     assert SYSTEM_PROMPT_MESSAGE_LEAN_V1 in fuller
     assert SYSTEM_PROMPT_MESSAGE_LEAN_V1_OPENER in opener
-    # voice-aware => the per-runner voice block is appended (default persona when None).
-    assert "YOUR VOICE FOR THIS RUNNER" in fuller
-    assert "YOUR VOICE FOR THIS RUNNER" in opener
+    # #822: the report prompt is voiceless on both stages. The runner's voice is
+    # applied to the finished report instead, so it cannot steer the generation.
+    assert "YOUR VOICE FOR THIS RUNNER" not in fuller
+    assert "YOUR VOICE FOR THIS RUNNER" not in opener
 
 
 def test_lean_v1_keeps_the_load_bearing_surface():

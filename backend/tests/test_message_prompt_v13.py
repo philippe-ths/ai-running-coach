@@ -55,10 +55,10 @@ def test_v13_is_v12_plus_memory_addendum():
 def test_memory_addendum_present_in_v13_absent_in_v12():
     assert _MEMORY_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V12
     assert _MEMORY_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V12_OPENER
-    assert _MEMORY_ADDENDUM in build_system_prompt(V13, mode="fuller", voice=None)
-    assert _MEMORY_ADDENDUM in build_system_prompt(V13, mode="opener", voice=None)
-    assert _MEMORY_ADDENDUM not in build_system_prompt(V12, mode="fuller", voice=None)
-    assert _MEMORY_ADDENDUM not in build_system_prompt(V12, mode="opener", voice=None)
+    assert _MEMORY_ADDENDUM in build_system_prompt(V13, mode="fuller")
+    assert _MEMORY_ADDENDUM in build_system_prompt(V13, mode="opener")
+    assert _MEMORY_ADDENDUM not in build_system_prompt(V12, mode="fuller")
+    assert _MEMORY_ADDENDUM not in build_system_prompt(V12, mode="opener")
 
 
 def test_memory_addendum_holds_the_core_disciplines():

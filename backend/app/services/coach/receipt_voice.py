@@ -52,7 +52,7 @@ from app.services.coach.receipt import (
     fill_template,
 )
 from app.services.coach.validator import check_medical_overreach
-from app.services.coach.voice import VoiceProfile, resolve_voice
+from app.services.coach.voice import DIAL_AXES, VoiceProfile, resolve_voice
 
 logger = logging.getLogger(__name__)
 
@@ -212,8 +212,7 @@ def voice_fingerprint(voice: VoiceProfile) -> str:
         return "default"
     payload = json.dumps(
         {
-            "dials": [voice.dials.warmth, voice.dials.humor,
-                      voice.dials.directness, voice.dials.energy],
+            "dials": {a.key: getattr(voice.dials, a.key) for a in DIAL_AXES},
             "preset": voice.preset.key if voice.preset else None,
             "freetext": voice.freetext,
         },

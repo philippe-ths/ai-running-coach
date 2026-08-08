@@ -93,10 +93,10 @@ def test_build_system_prompt_v7_both_modes():
     assert not fuller.startswith(SYSTEM_PROMPT_MESSAGE_V7_OPENER)
 
 
-def test_v7_carries_voice_block_at_runtime():
+def test_v7_report_prompt_is_voiceless():
+    """#822: the report prompt is the static constant and nothing else."""
     from app.services.coach.prompts import render_voice_block
-    fuller = build_system_prompt(V7, mode="fuller", voice=None)
-    assert fuller == SYSTEM_PROMPT_MESSAGE_V7 + render_voice_block(V7, None)
+    assert build_system_prompt(V7, mode="fuller") == SYSTEM_PROMPT_MESSAGE_V7
     assert len(render_voice_block(V7, None)) > 0  # v7 IS in VOICE_PROMPT_IDS
 
 
@@ -113,5 +113,5 @@ def test_v1_through_v6_and_report_chain_byte_stable():
     assert _USER_MATERIALS_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V6
     assert _USER_MATERIALS_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V6_OPENER
     # building a non-user-materials prompt never appends the user-materials addendum
-    assert _USER_MATERIALS_ADDENDUM not in build_system_prompt("coach_message_v6", mode="fuller", voice=None)
-    assert _USER_MATERIALS_ADDENDUM not in build_system_prompt("coach_message_v5", mode="opener", voice=None)
+    assert _USER_MATERIALS_ADDENDUM not in build_system_prompt("coach_message_v6", mode="fuller")
+    assert _USER_MATERIALS_ADDENDUM not in build_system_prompt("coach_message_v5", mode="opener")

@@ -3,6 +3,7 @@ from app.services.notifications._prose import (
     TELEGRAM_BODY_LIMIT,
     is_message_report,
     opener_body,
+    runner_facing_prose,
     truncate_at_paragraph,
 )
 
@@ -42,7 +43,11 @@ def render_coach_report_telegram(
     # message itself, truncated at a paragraph boundary under the 4096 limit. The
     # structured tail (chips, next steps) lives in the app, not the notification.
     if is_message_report(content):
-        prose = opener_body(content) if stage == "opener" else content.message
+        prose = (
+            opener_body(content)
+            if stage == "opener"
+            else runner_facing_prose(content, stage="fuller")
+        )
         body = truncate_at_paragraph(prose, TELEGRAM_BODY_LIMIT)
         return title, body, activity_url
 

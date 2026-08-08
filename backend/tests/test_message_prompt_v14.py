@@ -58,10 +58,10 @@ def test_v14_is_v13_plus_intensity_addendum():
 def test_intensity_addendum_present_in_v14_absent_in_v13():
     assert _INTENSITY_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V13
     assert _INTENSITY_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V13_OPENER
-    assert _INTENSITY_ADDENDUM in build_system_prompt(V14, mode="fuller", voice=None)
-    assert _INTENSITY_ADDENDUM in build_system_prompt(V14, mode="opener", voice=None)
-    assert _INTENSITY_ADDENDUM not in build_system_prompt(V13, mode="fuller", voice=None)
-    assert _INTENSITY_ADDENDUM not in build_system_prompt(V13, mode="opener", voice=None)
+    assert _INTENSITY_ADDENDUM in build_system_prompt(V14, mode="fuller")
+    assert _INTENSITY_ADDENDUM in build_system_prompt(V14, mode="opener")
+    assert _INTENSITY_ADDENDUM not in build_system_prompt(V13, mode="fuller")
+    assert _INTENSITY_ADDENDUM not in build_system_prompt(V13, mode="opener")
 
 
 def test_intensity_addendum_holds_the_core_disciplines():

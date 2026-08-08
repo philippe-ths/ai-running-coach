@@ -15,13 +15,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone, timedelta
 
+import pytest
+
 from app.core.config import settings
 from app.models import Activity, DerivedMetric, User, UserProfile
 from app.models.checkin import CheckIn
 from app.models.coaching_relationship import CoachingRelationship
 from app.services.coach.context import build_context_pack
 from app.services.coach.corpus import DEFAULT_SCHOOL_ID
-from app.services.coach.prompts import build_system_prompt
+from app.services.coach.prompts import build_system_prompt, render_voice_block
+from app.services.coach.voice_rewrite import revoice_report
 from app.services.coach.service import (
     _resolve_stance_for_activity,
     _resolve_voice_for_activity,
@@ -199,17 +202,44 @@ def test_sleep_quality_dropped_for_coach_when_disabled(db, monkeypatch):
 
 
 def test_playbook_present_by_default_absent_when_disabled(monkeypatch):
-    with_playbook = build_system_prompt(V11, "Intervals", voice=None)
+    with_playbook = build_system_prompt(V11, "Intervals")
     assert "INTERVAL SESSION FOCUS" in with_playbook
     monkeypatch.setattr(settings, "COACH_PLAYBOOK_ENABLED", False)
-    assert "INTERVAL SESSION FOCUS" not in build_system_prompt(V11, "Intervals", voice=None)
+    assert "INTERVAL SESSION FOCUS" not in build_system_prompt(V11, "Intervals")
 
 
 def test_voice_block_present_by_default_absent_when_disabled(monkeypatch):
-    voice = resolve_voice(None)
-    assert "## YOUR VOICE FOR THIS RUNNER" in build_system_prompt(V11, voice=voice)
+    """The switch still removes the runner's voice; #822 moved WHERE it does it.
+
+    Voice reaches the report as a rewrite of the finished text rather than as a
+    prompt block, so the switch is enforced there — off means every runner reads
+    the baseline, which is exactly what Default already gives them. The block
+    itself remains for the conversational turn and is still gated.
+    """
+    voice = resolve_voice(CoachingRelationship(voice_preset="roast"))
+    assert "## YOUR VOICE FOR THIS RUNNER" in render_voice_block(V11, voice)
     monkeypatch.setattr(settings, "COACH_VOICE_BLOCK_ENABLED", False)
-    assert "## YOUR VOICE FOR THIS RUNNER" not in build_system_prompt(V11, voice=voice)
+    assert render_voice_block(V11, voice) == ""
+
+
+@pytest.mark.asyncio
+async def test_voice_rewrite_skipped_when_switch_disabled(monkeypatch):
+    """Off at the rewrite seam too, so no call is made and the baseline stands."""
+    voice = resolve_voice(CoachingRelationship(voice_preset="roast"))
+    monkeypatch.setattr(settings, "COACH_VOICE_BLOCK_ENABLED", False)
+
+    called = False
+
+    def _boom(*a, **k):  # pragma: no cover - must never run
+        nonlocal called
+        called = True
+        raise AssertionError("the rewrite must not call a model when switched off")
+
+    monkeypatch.setattr("app.services.coach.turn.build_client", _boom)
+    result = await revoice_report(
+        baseline="You ran 5km.", voice=voice, user_id=None, validate=lambda t: []
+    )
+    assert result is None and not called
 
 
 def test_voice_switch_enforced_inside_shared_render(monkeypatch):
@@ -230,7 +260,7 @@ def _relationship(db, uid):
     db.add(CoachingRelationship(
         id=uuid.uuid4(), user_id=uid,
         voice_preset="drill_sergeant", voice_warmth=1, voice_humor=1,
-        voice_directness=5, voice_energy=5,
+        voice_force=5, voice_energy=5,
         stance_school="polarized", stance_data_sentiment=5, stance_process_outcome=1,
     ))
     db.flush()

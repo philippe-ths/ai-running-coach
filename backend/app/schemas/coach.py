@@ -81,6 +81,20 @@ class CoachMessageReport(BaseModel):
     tail_degraded: bool = False
     opener_message: Optional[str] = None
     schedule_fuller_turn: bool = False
+    # #822 voice rewrite: `message` is always the VOICELESS baseline — the text the
+    # digest, the eval harness and the learning loop read, so those keep consuming
+    # substance rather than style. `voiced_message` is that same report said again
+    # in the runner's chosen voice, and is what the runner is shown when present.
+    # Null means the runner is on Default, or a rewrite failed and the baseline
+    # stands. Keeping both is what makes the voice auditable: any voiced report can
+    # be diffed against the text it came from.
+    #
+    # Voiced text mirrors the baseline's own two-stage split, because a two-stage
+    # exchange evolves ONE row: without a separate opener field the fuller turn
+    # would overwrite the opener's voiced prose and the opener would then render in
+    # the fuller's words.
+    voiced_message: Optional[str] = None
+    voiced_opener_message: Optional[str] = None
 
 
 class CoachReportMeta(BaseModel):

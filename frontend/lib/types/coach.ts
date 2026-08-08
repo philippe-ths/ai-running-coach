@@ -88,6 +88,27 @@ export interface CoachMessageReport {
   tail_degraded: boolean;
   opener_message?: string | null;
   schedule_fuller_turn?: boolean;
+  // #822: the report is generated voiceless, then said again in the runner's
+  // chosen voice. `message`/`opener_message` are always the voiceless baseline;
+  // these carry the voiced rendering when the runner declared a voice and the
+  // rewrite held. Null means Default, or a rewrite that degraded to the baseline.
+  // The runner reads the voiced text; keeping both is what makes voice auditable.
+  voiced_message?: string | null;
+  voiced_opener_message?: string | null;
+}
+
+// The prose the RUNNER reads for a stage: the voiced rendering when there is one,
+// else the baseline. One helper so no surface can drift into showing the
+// unvoiced text to a runner who chose a voice.
+export function runnerFacingProse(
+  body: CoachMessageReport,
+  stage: 'opener' | 'fuller',
+): string {
+  const text =
+    stage === 'opener'
+      ? body.voiced_opener_message ?? body.opener_message
+      : body.voiced_message ?? body.message;
+  return (text ?? '').trim();
 }
 
 // The stored report is one of two shapes, keyed by schema-version family. The

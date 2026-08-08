@@ -11,9 +11,18 @@ def test_get_voice_returns_default_and_catalog(client: TestClient, db):
     assert data["current"]["preset"] is None
     assert data["current"]["warmth"] is None
     assert data["current"]["freetext"] is None
-    # catalog carries the four axes and six presets
-    assert [a["key"] for a in data["catalog"]["axes"]] == ["warmth", "humor", "directness", "energy"]
+    # catalog carries the five axes and six presets
+    assert [a["key"] for a in data["catalog"]["axes"]] == [
+        "warmth", "humor", "force", "energy", "length",
+    ]
     assert len(data["catalog"]["presets"]) == 6
+    # Defaults and preset DNA are keyed by axis, so a future axis needs no API change.
+    assert data["catalog"]["defaults"] == {
+        "warmth": 3, "humor": 3, "force": 3, "energy": 3, "length": 3,
+    }
+    assert set(data["catalog"]["presets"][0]["dials"]) == {
+        "warmth", "humor", "force", "energy", "length",
+    }
     keys = {p["key"] for p in data["catalog"]["presets"]}
     assert {"sage", "cornerman", "analyst", "drill_sergeant", "roast", "deadpan"} == keys
     # no example messages are exposed (prompt-internal)
@@ -21,7 +30,7 @@ def test_get_voice_returns_default_and_catalog(client: TestClient, db):
 
 
 def test_put_voice_persists_preset_and_dials(client: TestClient, db):
-    payload = {"preset": "roast", "warmth": 3, "humor": 5, "directness": 5, "energy": 5,
+    payload = {"preset": "roast", "warmth": 3, "humor": 5, "force": 5, "energy": 5,
                "freetext": "talk like a pirate"}
     res = client.put("/api/coach/voice", json=payload)
     assert res.status_code == 200

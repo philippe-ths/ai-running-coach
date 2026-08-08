@@ -80,16 +80,14 @@ def test_build_system_prompt_v4_both_modes():
     assert not fuller.startswith(SYSTEM_PROMPT_MESSAGE_V4_OPENER)
 
 
-def test_v4_carries_voice_block_at_runtime():
-    """Because v4 is voice-aware, build_system_prompt appends the per-runner voice
-    block (it builds on v3's voice). With no voice declared, the default block is
-    rendered, so the prompt is strictly longer than the static v4 constant."""
+def test_v4_report_prompt_is_voiceless():
+    """#822: the report prompt is the static constant and nothing else, on both
+    stages. v4 remains voice-aware for the conversational turn, which still steers
+    at prompt time — the report does not, because its voice is applied afterwards."""
     from app.services.coach.prompts import render_voice_block
-    fuller = build_system_prompt(V4, mode="fuller", voice=None)
-    assert fuller == SYSTEM_PROMPT_MESSAGE_V4 + render_voice_block(V4, None)
+    assert build_system_prompt(V4, mode="fuller") == SYSTEM_PROMPT_MESSAGE_V4
+    assert build_system_prompt(V4, mode="opener") == SYSTEM_PROMPT_MESSAGE_V4_OPENER
     assert len(render_voice_block(V4, None)) > 0  # v4 IS in VOICE_PROMPT_IDS
-    opener = build_system_prompt(V4, mode="opener", voice=None)
-    assert opener == SYSTEM_PROMPT_MESSAGE_V4_OPENER + render_voice_block(V4, None)
 
 
 def test_v1_v2_v3_and_report_chain_byte_stable():
@@ -102,4 +100,4 @@ def test_v1_v2_v3_and_report_chain_byte_stable():
     assert _CORPUS_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V3
     assert _CORPUS_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V2_OPENER
     # building a non-corpus prompt never appends the corpus addendum
-    assert _CORPUS_ADDENDUM not in build_system_prompt("coach_message_v3", mode="fuller", voice=None)
+    assert _CORPUS_ADDENDUM not in build_system_prompt("coach_message_v3", mode="fuller")

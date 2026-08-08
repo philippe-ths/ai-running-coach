@@ -19,6 +19,7 @@ from app.models.coach_report import CoachReport
 from app.schemas.chat import ChatHistoryResponse, ChatMessageSend
 from app.schemas.coach import CoachReportRead
 from app.schemas.voice import VoiceConfigRead, VoiceDials, build_catalog
+from app.services.coach.voice import DIAL_AXES
 from app.schemas.stance import (
     StanceConfigRead,
     StanceSelection,
@@ -112,11 +113,10 @@ def delete_telegram_link(
 def _read_voice(relationship: CoachingRelationship) -> VoiceConfigRead:
     current = VoiceDials(
         preset=relationship.voice_preset,
-        warmth=relationship.voice_warmth,
-        humor=relationship.voice_humor,
-        directness=relationship.voice_directness,
-        energy=relationship.voice_energy,
         freetext=relationship.voice_freetext,
+        # Read and written by axis, so a new axis is one row in DIAL_AXES rather
+        # than an edit here, in the schema, and in every caller.
+        **{axis.key: getattr(relationship, axis.attr) for axis in DIAL_AXES},
     )
     return VoiceConfigRead(current=current, catalog=build_catalog())
 
@@ -141,11 +141,9 @@ def update_voice(
     never as instructions.
     """
     relationship.voice_preset = voice_in.preset
-    relationship.voice_warmth = voice_in.warmth
-    relationship.voice_humor = voice_in.humor
-    relationship.voice_directness = voice_in.directness
-    relationship.voice_energy = voice_in.energy
     relationship.voice_freetext = voice_in.freetext
+    for axis in DIAL_AXES:
+        setattr(relationship, axis.attr, getattr(voice_in, axis.key))
     db.add(relationship)
     db.commit()
     db.refresh(relationship)

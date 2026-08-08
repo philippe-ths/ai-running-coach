@@ -60,9 +60,22 @@ def message_paragraphs(message: str) -> list[str]:
 OPENER_REPLY_LINE = "Let me know how it felt and I'll follow up with the full breakdown."
 
 
+def runner_facing_prose(content: CoachMessageReport, *, stage: str) -> str:
+    """The prose the RUNNER reads for this stage (#822).
+
+    The voiced rendering when the runner declared a voice and the rewrite held,
+    else the voiceless baseline. Every other consumer — the digest, the eval
+    harness, the learning loop — deliberately keeps reading the baseline, because
+    they consume substance and this is the one place style is the point.
+    """
+    if stage == "opener":
+        return (content.voiced_opener_message or content.opener_message or "").strip()
+    return (content.voiced_message or content.message or "").strip()
+
+
 def opener_body(content: CoachMessageReport) -> str:
     """The A4 opener notification body: the opener prose + the reply-invite line."""
-    prose = (content.opener_message or "").strip()
+    prose = runner_facing_prose(content, stage="opener")
     return f"{prose}\n\n{OPENER_REPLY_LINE}" if prose else OPENER_REPLY_LINE
 
 

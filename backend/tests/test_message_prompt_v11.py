@@ -57,10 +57,10 @@ def test_v11_is_v10_plus_recent_training_addendum():
 def test_recent_training_addendum_present_in_v11_absent_in_v10():
     assert _RECENT_TRAINING_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V10
     assert _RECENT_TRAINING_ADDENDUM not in SYSTEM_PROMPT_MESSAGE_V10_OPENER
-    assert _RECENT_TRAINING_ADDENDUM in build_system_prompt(V11, mode="fuller", voice=None)
-    assert _RECENT_TRAINING_ADDENDUM in build_system_prompt(V11, mode="opener", voice=None)
-    assert _RECENT_TRAINING_ADDENDUM not in build_system_prompt(V10, mode="fuller", voice=None)
-    assert _RECENT_TRAINING_ADDENDUM not in build_system_prompt(V10, mode="opener", voice=None)
+    assert _RECENT_TRAINING_ADDENDUM in build_system_prompt(V11, mode="fuller")
+    assert _RECENT_TRAINING_ADDENDUM in build_system_prompt(V11, mode="opener")
+    assert _RECENT_TRAINING_ADDENDUM not in build_system_prompt(V10, mode="fuller")
+    assert _RECENT_TRAINING_ADDENDUM not in build_system_prompt(V10, mode="opener")
 
 
 def test_recent_training_addendum_holds_the_core_disciplines():

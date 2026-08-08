@@ -68,7 +68,7 @@ logger = logging.getLogger(__name__)
 
 
 class TurnKind(str, Enum):
-    """Which of the four coaching turns is being generated.
+    """Which coaching turn is being generated.
 
     The kind selects the model lane and tags the logs; it deliberately does NOT
     select a generation shape, because the shapes are the callers' own.
@@ -78,20 +78,24 @@ class TurnKind(str, Enum):
     OPENER = "opener"    # A4 stage one
     FULLER = "fuller"    # A4 stage two, and the on-demand path
     THREAD = "thread"    # a conversational turn in a Thread (ADR 0027)
+    VOICE = "voice"      # the voice rewrite over a finished report (#822)
 
 
-# The conversational lane. `COACH_CHAT_MODEL_ID` exists so a chat turn can run on
-# a cheaper/faster model than the report without touching the report; unset it
-# falls back to COACH_MODEL_ID, so day-one behaviour is byte-identical.
-_CONVERSATIONAL_KINDS = frozenset({TurnKind.THREAD})
+# Each lane that is not the report's own. `COACH_CHAT_MODEL_ID` exists so a chat
+# turn can run on a cheaper/faster model than the report; `COACH_VOICE_MODEL_ID`
+# so the rewrite can be steered independently. Both fall back to COACH_MODEL_ID
+# when unset, so day-one behaviour is byte-identical.
+_MODEL_LANES = {
+    TurnKind.THREAD: lambda: settings.chat_model_id,
+    TurnKind.VOICE: lambda: settings.voice_model_id,
+}
 
 
 def resolve_model(kind: TurnKind) -> str:
     """The model id a turn of this kind runs on. The ONE place that decision is
     made, so a new surface cannot quietly pick a different setting."""
-    if kind in _CONVERSATIONAL_KINDS:
-        return settings.chat_model_id
-    return settings.COACH_MODEL_ID
+    lane = _MODEL_LANES.get(kind)
+    return lane() if lane else settings.COACH_MODEL_ID
 
 
 class MeteredClient:
