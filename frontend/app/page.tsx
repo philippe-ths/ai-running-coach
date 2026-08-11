@@ -56,6 +56,15 @@ export default async function Dashboard() {
             <p className="text-gray-600 dark:text-gray-400 mt-1">Here is what is happening this week.</p>
         </div>
         <div className="shrink-0 flex items-center gap-2">
+            {/* #830: All Activities lost its tab to the Schedule, so the full
+                history keeps an entry point here — one tap away, just not in the
+                tab bar. */}
+            <Link
+              href="/activities"
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+            >
+              All activities
+            </Link>
             <SelfHealTrigger />
             <SyncButton />
         </div>

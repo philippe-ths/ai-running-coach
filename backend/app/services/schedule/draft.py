@@ -87,6 +87,11 @@ matters (the long run needs a free morning; the runner has a club night).
 - A range means it floats: the session must happen, the exact day does not matter.
 - The whole week means it can go anywhere.
 
+A window must stay INSIDE one week — it may not run from one week into the next. \
+"Saturday or Sunday" is a window; "Sunday or Monday" is not, because those days \
+belong to different weeks. Put the session in the week you mean it to count \
+towards.
+
 Prefer a window to a pin. A pinned week is rigid and a rigid week is the one that \
 gets abandoned after one bad Tuesday. Pin what genuinely needs pinning and let the \
 rest float.
@@ -111,7 +116,9 @@ and `target_intent`. `min_days_between` needs `intent_a`, `intent_b` and `days`.
 - Do not estimate training load, effort scores or TRIMP for a session. Say what the \
 session is — discipline, intent, how long or how far — and the app computes what it \
 costs from this runner's own history.
-- Do not put a distance or duration on a rest day.
+- Do not put a distance or duration on a rest day. A rest day is REST. If you \
+mean an easy walk or a gentle spin, that is an easy session of that discipline \
+(intent `easy`, discipline `walk` or `bike`), not a rest day with a target on it.
 - Every other session needs enough to size it: a distance, a duration, or rep \
 structure. A session with none of the three is rejected.
 - Do not plan sessions in the past.
@@ -189,9 +196,15 @@ def build_draft_context(
 
     parts: List[str] = []
     parts.append(f"TODAY: {today.isoformat()}")
+    # From TODAY, not the week start. Asking for the whole current week when it
+    # is already Wednesday makes the coach prescribe Monday and Tuesday sessions
+    # the runner cannot do — which the validator then rejects as being in the
+    # past, so the two instructions contradicted each other and cost a plan.
     parts.append(
-        f"PLAN FROM: {first_week.isoformat()} (the runner's week starts on "
-        f"{'Sunday' if starts_on == 6 else 'Monday'})"
+        f"PLAN FROM: today, {today.isoformat()}. The current week began "
+        f"{first_week.isoformat()} and is already partly gone — plan only the "
+        f"days that remain in it, then whole weeks after that. The runner's week "
+        f"starts on {'Sunday' if starts_on == 6 else 'Monday'}."
     )
     parts.append(
         f"HORIZON: {weeks} weeks. Give concrete sessions for the first "

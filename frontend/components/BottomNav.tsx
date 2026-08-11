@@ -2,12 +2,16 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Activity, Gauge, TrendingUp, LucideIcon } from 'lucide-react';
+import { Home, CalendarDays, Gauge, TrendingUp, LucideIcon } from 'lucide-react';
 import useKeyboardOpen from '@/lib/useKeyboardOpen';
 
 const TABS: { href: string; label: string; Icon: LucideIcon }[] = [
   { href: '/', label: 'Home', Icon: Home },
-  { href: '/activities', label: 'Activities', Icon: Activity },
+  // #830: the Schedule takes this slot. The tab bar should hold the four things
+  // you open the app FOR — scrolling your own history is something you go
+  // looking for; what you are doing tomorrow is something you check. The
+  // /activities route is untouched and keeps its button on the home page.
+  { href: '/schedule', label: 'Schedule', Icon: CalendarDays },
   { href: '/load', label: 'Load', Icon: Gauge },
   { href: '/trends', label: 'Trends', Icon: TrendingUp },
 ];

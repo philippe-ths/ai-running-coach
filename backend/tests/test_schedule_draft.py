@@ -686,7 +686,12 @@ async def test_the_context_carries_the_runner_and_never_asks_for_a_load_number(
     context = client.calls[0]["user"]
     system = client.calls[0]["system"]
     assert f"TODAY: {TODAY.isoformat()}" in context
-    assert f"PLAN FROM: {TODAY.isoformat()}" in context
+    # From TODAY, not the week start. Asking for the whole current week when it
+    # is already Wednesday makes the coach prescribe Monday sessions the runner
+    # cannot do, which the validator then rejects as being in the past — the two
+    # instructions contradicted each other and cost a live draft.
+    assert f"PLAN FROM: today, {TODAY.isoformat()}" in context
+    assert "plan only the days that remain in it" in context
     assert "Autumn half" in context
     assert "run x" in context  # the disciplines they actually train
     assert "Do not estimate training load" in system
@@ -804,3 +809,18 @@ async def test_failing_a_draft_is_visible_and_never_raises(db):
     assert store.get_active_plan(db, user.id) is None
     # The internal reason is LOGGED, never stored on the row the runner reads.
     assert "cannot satisfy" not in str(stored.__dict__)
+
+
+async def test_the_prompt_states_the_constraints_the_validator_enforces():
+    """Every rule the gate rejects on must be one the coach was told about.
+
+    Each of these was enforced silently before a live draft failed on it: the
+    coach wrote a Sunday-to-Monday window and a "rest / easy walk" with a
+    duration on it, and both were rejected by rules it had never been given. A
+    validator that polices an unstated rule is not a gate, it is a trap.
+    """
+    from app.services.schedule.draft import _SYSTEM_PROMPT
+
+    assert "must stay INSIDE one week" in _SYSTEM_PROMPT
+    assert "A rest day is REST" in _SYSTEM_PROMPT
+    assert "a distance, a duration, or rep structure" in _SYSTEM_PROMPT
