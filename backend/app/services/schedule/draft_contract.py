@@ -328,7 +328,18 @@ RECORD_TRAINING_PLAN_TOOL = {
                     "required": ["week_start"],
                     "properties": {
                         "week_start": {"type": "string"},
-                        "phase": {"type": "string"},
+                        "phase": {
+                            "type": "string",
+                            "description": (
+                                "The BLOCK this week belongs to — Base, Build, "
+                                "Peak, Taper, Recovery. Weeks in the same block "
+                                "share the SAME name, so the horizon can group "
+                                "them under one heading. Do not number them "
+                                "individually ('Base — Week 3'): a name unique to "
+                                "one week groups nothing and turns the horizon "
+                                "into a label per row."
+                            ),
+                        },
                         "target_running_distance_m": {"type": "number"},
                         "sessions_by_discipline": {
                             "type": "object",

@@ -59,15 +59,48 @@ export const DISCIPLINE_LABEL: Record<Discipline, string> = {
   other: "Other",
 };
 
-// One hue, stepped. Run is the darkest step because it is the priority sport.
+// One hue, stepped by priority — run is the most prominent step because it is
+// the priority sport. Five real disciplines take the ramp; `other` is the
+// residual bucket and sits OUTSIDE it in neutral grey, because a residual has
+// no rank to encode and six steps of one hue cannot hold a visible gap between
+// each pair.
+//
+// The steps are not eyeballed. Six blue steps failed the ordinal checks twice
+// over (blue-700↔blue-600 ΔL 0.058, under the 0.06 floor; blue-200's light end
+// at 1.42:1 against white, under the 2:1 floor) and two disciplines collapsed
+// onto the same dark twin. Five steps clear every check in both modes
+// (light end 2.54:1 light, 2.84:1 dark). The horizon draws these as stacked
+// segments at width, which is where a collapsed pair actually costs a reading.
+//
+// The dark twins REVERSE the anchor: on a dark surface prominence is lightness,
+// so run takes the lightest step there and the ordering survives the flip.
 export const DISCIPLINE_FILL: Record<Discipline, string> = {
-  run: "bg-blue-700 dark:bg-blue-500",
-  bike: "bg-blue-600 dark:bg-blue-400",
-  strength: "bg-blue-500 dark:bg-blue-300",
-  row: "bg-blue-400 dark:bg-blue-200",
-  walk: "bg-blue-300 dark:bg-blue-200",
-  other: "bg-blue-200 dark:bg-blue-100",
+  run: "bg-blue-950 dark:bg-blue-200",
+  bike: "bg-blue-800 dark:bg-blue-300",
+  strength: "bg-blue-600 dark:bg-blue-400",
+  row: "bg-blue-500 dark:bg-blue-500",
+  walk: "bg-blue-400 dark:bg-blue-600",
+  other: "bg-gray-500 dark:bg-gray-400",
 };
+
+/** Stable draw order for a stacked mix: the ramp, darkest first, residual last. */
+export const DISCIPLINE_ORDER: Discipline[] = [
+  "run",
+  "bike",
+  "strength",
+  "row",
+  "walk",
+  "other",
+];
+
+/** Stable draw order for an intent mix. Rest last: it is an absence. */
+export const INTENT_ORDER: SessionIntent[] = [
+  "easy",
+  "long",
+  "quality",
+  "strength",
+  "rest",
+];
 
 // The letter carried inside a pip, so discipline never needs a second colour.
 // Run has none: it is the default sport, and "R" is owed to Row.

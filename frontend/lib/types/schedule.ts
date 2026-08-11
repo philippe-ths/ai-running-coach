@@ -139,3 +139,38 @@ export interface GoalRace {
   distance_m: number;
   priority: string;
 }
+
+// --- the horizon ------------------------------------------------------------
+//
+// The block's SHAPE rather than its sessions: concrete for about three weeks,
+// sketched beyond. `planned` is derived server-side from what is actually
+// there, so it can never claim a week holds sessions it does not.
+//
+// A week the plan says nothing about still arrives, with a null load and empty
+// mixes, so the horizon stays a continuous run of weeks and a gap reads as a
+// gap rather than as a shorter block.
+
+export interface HorizonWeek {
+  week_start: string;
+  phase: string | null;
+  // True when the week holds committed sessions; false when it is shape only.
+  planned: boolean;
+  is_current: boolean;
+  running_distance_m: number | null;
+  effort_score: number | null;
+  // discipline/intent -> share of the week's load, 0..1. Shares, not absolutes,
+  // so a mix can never contradict the total it is a mix of. An all-zero week
+  // yields an empty map rather than a fake even split.
+  discipline_mix: Record<string, number>;
+  intent_mix: Record<string, number>;
+}
+
+export interface ScheduleHorizon {
+  weeks: HorizonWeek[];
+  races: GoalRace[];
+  has_plan: boolean;
+  // The largest weekly load in the window. Bar lengths are true proportions of
+  // it — null (or zero) means there is nothing to scale against and every week
+  // draws empty.
+  peak_effort_score: number | null;
+}
