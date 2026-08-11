@@ -12,7 +12,7 @@
 // onward, so a floating session's days shrink as the week passes while the
 // stored window never moves.
 
-import type { VolumeMetricVsNorm } from "./volume";
+import type { VolumeDirection, VolumeMetricVsNorm } from "./volume";
 
 export type SessionIntent = "rest" | "easy" | "long" | "quality" | "strength";
 export type Discipline =
@@ -105,6 +105,23 @@ export interface WeekHeadline {
   done_sessions: number;
 }
 
+// The runs-only vs-norm read, which is what the free-mode headline is actually
+// made of. `norm` below stays the all-activity Trends view; this one measures
+// the same quantity the big running-km number does, so the gauge under it is
+// not a second unit stacked on the first.
+//
+// `typical_weekly_distance_m` is the WHOLE week's typical, while
+// `current_distance_m` is the week so far — the server pro-rates the norm by
+// days elapsed before computing `pct_vs_norm`, so the percentage is fair on a
+// Tuesday and the caption can still quote a full typical week.
+export interface RunningVsNorm {
+  typical_weekly_distance_m: number;
+  current_distance_m: number;
+  pct_vs_norm: number;
+  direction: VolumeDirection;
+  deadband_pct: number;
+}
+
 export interface ScheduleWeek {
   week_start: string;
   week_end: string;
@@ -123,6 +140,9 @@ export interface ScheduleWeek {
   // The runner's own typical week, from the same builder Trends uses. Present
   // only for the current week, where "as of today" means anything.
   norm: VolumeMetricVsNorm[] | null;
+  // The runs-only read for the free-mode gauge. Present only for the current
+  // week, and only once there is enough history to say what typical is.
+  running_norm: RunningVsNorm | null;
 }
 
 export interface DraftStatus {
@@ -132,12 +152,24 @@ export interface DraftStatus {
   message: string;
 }
 
+// A is the race the block is built towards; B and C are races run along the
+// way. The read keeps `priority` as a plain string because the stored column is
+// one — only the WRITE is closed to the three the API accepts.
+export type RacePriority = "A" | "B" | "C";
+
 export interface GoalRace {
   id: string;
   name: string;
   race_date: string;
   distance_m: number;
   priority: string;
+}
+
+export interface GoalRaceCreate {
+  name: string;
+  race_date: string;
+  distance_m: number;
+  priority: RacePriority;
 }
 
 // --- the horizon ------------------------------------------------------------

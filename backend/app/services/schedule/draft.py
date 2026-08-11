@@ -50,6 +50,7 @@ from app.services.schedule.draft_contract import (
     normalise,
 )
 from app.services.schedule.effort import build_load_model, estimate_effort
+from app.services.schedule.norms import running_norm_weekly_m
 from app.services.schedule.plan_validator import validate_drafted_plan
 from app.services.weeks import resolve_week_start, week_start
 
@@ -77,6 +78,16 @@ a beginner's week to someone who has been training for years.
 Give CONCRETE sessions for the near weeks and SHAPE ONLY for the weeks beyond. \
 Nobody knows what week nine looks like yet, and pretending to is how a plan stops \
 being believable.
+
+If they have a goal race, the block is built BACKWARDS from its date. Work out \
+where each week sits relative to the race and let that decide the week's job: the \
+peak lands far enough out to absorb it, the taper runs into the race, and the \
+phase names say which block a week belongs to. A plan that ignores the date it is \
+aimed at is a volume curve, not a plan.
+
+If the race falls inside the horizon, do not stop dead at it. Sketch the weeks \
+after it too — easy, short, and honest that they are recovery — so the runner can \
+see there is training on the other side rather than a cliff.
 
 # PLACEMENT
 
@@ -237,8 +248,13 @@ def build_draft_context(
             parts.append(
                 f"- {race.name}: {race.race_date.isoformat()} "
                 f"({race.distance_m / 1000:.1f} km, priority {race.priority}, "
-                f"{weeks_out:.0f} weeks away)"
+                f"{weeks_out:.0f} weeks away — the week beginning "
+                f"{week_start(race.race_date, starts_on).isoformat()})"
             )
+        parts.append(
+            "- Build the block backwards from that date. Every week you plan has a "
+            "job relative to it."
+        )
     else:
         parts.append("\n## THEIR RACE\nNo race stated. Plan for general progression.")
 
@@ -262,7 +278,7 @@ def build_draft_context(
         # as running volume — for a runner who walks a lot it is more than double
         # their running — so the running-only norm sits beside it rather than
         # being left to be inferred from a label.
-        running_norm = _norm_running_metres(facts, today, starts_on)
+        running_norm = running_norm_weekly_m(facts, today)
         if running_norm:
             parts.append(
                 f"- Typical week, RUNNING ONLY: {running_norm / 1000:.1f} km. This is "
@@ -359,7 +375,7 @@ async def draft_plan(
     client = turn.build_client(turn.TurnKind.SCHEDULE, user.id)
 
     load_model = build_load_model(facts, today)
-    norm_running = _norm_running_metres(facts, today, starts_on)
+    norm_running = running_norm_weekly_m(facts, today)
 
     # Two budgets, deliberately separate. A transport blip is not the coach's
     # fault, so it must not consume the one chance to REWRITE a rejected plan —
@@ -421,31 +437,6 @@ async def draft_plan(
         return DraftOutcome(ok=True, plan_id=plan.id, summary=drafted.summary)
 
     return DraftOutcome(ok=False, failures=failures)
-
-
-def _norm_running_metres(facts, today: date, starts_on: int) -> Optional[float]:
-    """The runner's own typical weekly RUNNING distance, or None.
-
-    The volume builder's norm is all-activity by design, so it cannot answer this
-    on its own; the running share is taken from the same fact stream over the same
-    baseline rather than by inventing a second definition of typical.
-    """
-    from app.services.activity_facts import (
-        BASELINE_WEEKS,
-        baseline_window,
-        is_run,
-        norm_per_day,
-    )
-
-    baseline_end = today - timedelta(days=7)
-    window = baseline_window(facts, baseline_end, BASELINE_WEEKS * 7)
-    if window is None:
-        return None
-    start, end, days = window
-    runs = [f for f in facts if is_run(f)]
-    per_day = norm_per_day(runs, start, end, days)
-    distance = per_day.get("distance_m")
-    return distance * 7 if distance is not None else None
 
 
 def _persist(

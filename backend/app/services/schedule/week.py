@@ -31,6 +31,7 @@ from app.schemas.schedule import (
     LoggedActivityRead,
     PlannedSessionRead,
     RuleViolation,
+    RunningVsNorm,
     ScheduleWeekRead,
     WeekHeadline,
 )
@@ -51,8 +52,9 @@ from app.services.schedule.placement import (
     has_narrowed,
     session_status,
 )
+from app.services.schedule.norms import running_vs_norm
 from app.services.schedule.rules import check_rules
-from app.services.weeks import resolve_week_start, week_start
+from app.services.weeks import days_into_week, resolve_week_start, week_start
 
 # The disciplines a week is reported in, in a fixed order so the mix bar does not
 # reshuffle between reads.
@@ -245,9 +247,13 @@ def build_week(
     violations = [RuleViolation(**v) for v in raw_violations]
 
     norm = None
+    running_norm = None
     if is_current:
         volume = build_training_volume(facts, today, starts_on)
         norm = volume.calendar_week.metrics
+        elapsed = days_into_week(today, starts_on)
+        raw = running_vs_norm(facts, week_facts, today, days_elapsed=elapsed)
+        running_norm = RunningVsNorm(**raw) if raw else None
 
     return ScheduleWeekRead(
         week_start=start,
@@ -262,6 +268,7 @@ def build_week(
         rules=rules,
         violations=violations,
         norm=norm,
+        running_norm=running_norm,
     )
 
 

@@ -69,7 +69,13 @@ function SegmentedControl<T extends string | number>({
   );
 }
 
-export default function HorizonView() {
+export default function HorizonView({
+  refreshToken = 0,
+}: {
+  /** Bumped by the page when the runner's goal races change. The race marker
+   *  rides this payload, so a new race means a refetch, not a redraw. */
+  refreshToken?: number;
+}) {
   const [weeks, setWeeks] = useState<number>(12);
   const [segmentation, setSegmentation] = useState<Segmentation>("both");
   const [showTable, setShowTable] = useState(false);
@@ -77,6 +83,10 @@ export default function HorizonView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // `refreshToken` is a dependency of the CALLBACK rather than of the effect, so
+  // a race change re-identifies `load` and the one effect below refetches. It is
+  // deliberately unread inside: its only job is to say "the server has something
+  // new for you".
   const load = useCallback(async (count: number) => {
     setLoading(true);
     setError(null);
@@ -91,7 +101,8 @@ export default function HorizonView() {
     } finally {
       setLoading(false);
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken]);
 
   useEffect(() => {
     load(weeks);
@@ -158,17 +169,19 @@ export default function HorizonView() {
                 showTable={showTable}
               />
               <div className="mt-4 border-t border-gray-100 pt-3 dark:border-gray-700">
+                {/* The table is now DRAWN on demand rather than kept sr-only:
+                    the chart's rows became labelled buttons (#830, tap to
+                    expand), so a permanently hidden twin would have a screen
+                    reader read the whole horizon twice. It is a genuine
+                    disclosure now, so it carries aria-expanded. */}
                 <button
                   type="button"
+                  aria-expanded={showTable}
+                  aria-controls="horizon-numbers"
                   onClick={() => setShowTable((v) => !v)}
                   className="-ml-2 rounded-md px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-400 dark:hover:bg-blue-900/30"
                 >
                   {showTable ? "Hide the numbers" : "Show the numbers"}
-                  {/* Deliberately no aria-expanded: the table is in the
-                      accessibility tree either way (hidden it is sr-only), so
-                      claiming it is collapsed would be false. This button
-                      controls whether it is drawn on screen. */}
-                  <span className="sr-only"> on screen</span>
                 </button>
               </div>
             </>

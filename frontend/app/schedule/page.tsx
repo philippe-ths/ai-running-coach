@@ -23,6 +23,7 @@ import RulesPanel from "@/components/schedule/RulesPanel";
 import LoggedList from "@/components/schedule/LoggedList";
 import EmptyWeek from "@/components/schedule/EmptyWeek";
 import HorizonView from "@/components/schedule/HorizonView";
+import GoalRacePanel from "@/components/schedule/GoalRacePanel";
 import { addDaysIso, todayIso } from "@/components/schedule/dates";
 
 type View = "week" | "horizon";
@@ -51,6 +52,10 @@ export default function SchedulePage() {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  // Bumped when a goal race is added or removed. The week is refetched directly;
+  // the horizon owns its own fetch, so it is told through this token — the race
+  // marker is part of the horizon payload, not something the client can draw.
+  const [raceToken, setRaceToken] = useState(0);
 
   const coach = useCoachSheet();
 
@@ -78,6 +83,11 @@ export default function SchedulePage() {
   }, [weekParam, load]);
 
   const refresh = useCallback(() => load(weekParam, true), [load, weekParam]);
+
+  const onRaceChanged = useCallback(() => {
+    load(weekParam, true);
+    setRaceToken((t) => t + 1);
+  }, [load, weekParam]);
 
   // One in-flight write at a time. The guard is a REF, not the state: two taps
   // landing in the same tick both close over `pendingId === null` and both fire,
@@ -192,11 +202,19 @@ export default function SchedulePage() {
         )}
       </header>
 
+      {/* Above the tabs, deliberately: the race the plan is built towards belongs
+          to the whole schedule, not to one of its two views. */}
+      <GoalRacePanel
+        hasPlan={!!week?.has_plan}
+        onChanged={onRaceChanged}
+        onAskCoach={coach.enabled ? coach.openWith : undefined}
+      />
+
       <ViewTabs view={view} onChange={setView} />
 
       {view === "horizon" && (
         <div id="panel-horizon" role="tabpanel" aria-labelledby="tab-horizon">
-          <HorizonView />
+          <HorizonView refreshToken={raceToken} />
         </div>
       )}
 

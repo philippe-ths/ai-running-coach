@@ -259,6 +259,24 @@ class WeekHeadline(BaseModel):
     done_sessions: int = 0
 
 
+class RunningVsNorm(BaseModel):
+    """This week's RUNNING against the runner's own typical running week.
+
+    The free-mode gauge's input. It exists because the headline is running km
+    while the all-activity norm can be three times that for a runner who walks a
+    lot — two different quantities in one glance. The gauge now measures the same
+    thing the big number does.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    typical_weekly_distance_m: float
+    current_distance_m: float
+    pct_vs_norm: float
+    direction: str
+    deadband_pct: float
+
+
 class ScheduleWeekRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -284,6 +302,10 @@ class ScheduleWeekRead(BaseModel):
     # carried alongside, so "typical" means exactly what it means on Trends.
     # Present only for the current week, where "as of today" is meaningful.
     norm: Optional[List[VolumeMetricComparison]] = None
+    # The runs-only read, for the free-mode gauge. `norm` above stays as the
+    # all-activity view the Trends page shows; this is the one that matches the
+    # running-km headline it sits under.
+    running_norm: Optional[RunningVsNorm] = None
 
 
 # --- the horizon read ------------------------------------------------------
