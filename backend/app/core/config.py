@@ -304,6 +304,17 @@ class Settings(BaseSettings):
     # None and PACK_SECTIONS drops it byte-stably.
     COACH_TRAINING_HISTORY_ENABLED: bool = True
 
+    # #830: the schedule SURFACE's kill switch, the `COACH_THREADS_ENABLED`
+    # precedent. Off => every /api/schedule route refuses with 503 (a router-level
+    # dependency, so a route added later cannot forget it) and the frontend renders
+    # no Schedule tab. Off hides the plan without deleting it: stored plans,
+    # sessions and races are untouched, and nothing else in the product depends on
+    # this surface being up. Deliberately NOT `COACH_`-prefixed and NOT part of the
+    # /api/coach/feature-flags map: that map is the enabled-state of coach INPUTS,
+    # and this gates a product screen. The orthogonal switch for the schedule as a
+    # coach input is `COACH_SCHEDULE_ENABLED`, which arrives with the pack signal.
+    SCHEDULE_ENABLED: bool = True
+
     # Runner memory (ADR 0025), the rewrite-from-source replacement for the retired
     # belief + narrative loop. The conventional #522 default-True kill switch on top
     # of the prompt gate: the background memory update pass is enqueued, and the

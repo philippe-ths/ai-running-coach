@@ -44,7 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.core.clerk_auth import require_current_user
 from app.db.session import get_db
-from app.models import Activity, Block, CoachingRelationship, StravaAccount, User, UserMaterial
+from app.models import Activity, Block, CoachingRelationship, GoalRace, StravaAccount, User, UserMaterial
 from app.models.thread import Thread
 from app.services import activity_queries
 
@@ -169,6 +169,28 @@ def get_owned_thread(thread_id: UUID, db: DbSession, user: CurrentUser) -> Threa
 
 
 OwnedThread = Annotated[Thread, Depends(get_owned_thread)]
+
+
+# --- schedule --------------------------------------------------------------
+
+
+def require_owned_goal_race(db: Session, race_id: UUID, user: User) -> GoalRace:
+    """The goal race by id IF it belongs to ``user``; 404 otherwise."""
+    race = (
+        db.query(GoalRace)
+        .filter(GoalRace.id == race_id, GoalRace.user_id == user.id)
+        .first()
+    )
+    if race is None:
+        raise HTTPException(status_code=404, detail="Race not found")
+    return race
+
+
+def get_owned_goal_race(race_id: UUID, db: DbSession, user: CurrentUser) -> GoalRace:
+    return require_owned_goal_race(db, race_id, user)
+
+
+OwnedGoalRace = Annotated[GoalRace, Depends(get_owned_goal_race)]
 
 
 # --- user materials --------------------------------------------------------
