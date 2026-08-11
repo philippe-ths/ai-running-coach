@@ -335,3 +335,25 @@ class GoalRaceCreate(BaseModel):
     race_date: date
     distance_m: float = Field(gt=0, le=1_000_000)
     priority: Literal["A", "B", "C"] = "A"
+
+
+# --- drafting --------------------------------------------------------------
+
+
+class DraftStatusRead(BaseModel):
+    """Where the runner's most recent plan stands.
+
+    `status` is None when they have never had one. `drafting` is deliberately
+    invisible to the week read, so the previous plan (or free mode) keeps serving
+    while a new one is written — a runner asking for a new plan never loses the
+    one they are following mid-week.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Optional[Literal["drafting", "active", "superseded", "failed"]] = None
+    plan_id: Optional[UUID] = None
+    generated_at: Optional[datetime] = None
+    # Runner-facing. The validator's own failure text is internal and stays in the
+    # log; what the runner is owed is a plain sentence.
+    message: str

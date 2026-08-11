@@ -79,6 +79,7 @@ class TurnKind(str, Enum):
     FULLER = "fuller"    # A4 stage two, and the on-demand path
     THREAD = "thread"    # a conversational turn in a Thread (ADR 0027)
     VOICE = "voice"      # the voice rewrite over a finished report (#822)
+    SCHEDULE = "schedule"  # drafting the runner's training plan (#830)
 
 
 # Each lane that is not the report's own. `COACH_CHAT_MODEL_ID` exists so a chat

@@ -314,6 +314,13 @@ class Settings(BaseSettings):
     # and this gates a product screen. The orthogonal switch for the schedule as a
     # coach input is `COACH_SCHEDULE_ENABLED`, which arrives with the pack signal.
     SCHEDULE_ENABLED: bool = True
+    # #830: how far the coach plans. Concrete sessions for the near weeks, shape
+    # only beyond — "nobody knows what week nine looks like yet, and pretending to
+    # is how a plan stops being believable". Both are inputs to the drafting
+    # prompt and to the horizon read, so changing one changes what the coach is
+    # asked for, not just what is displayed.
+    SCHEDULE_HORIZON_WEEKS: int = 12
+    SCHEDULE_CONCRETE_WEEKS: int = 3
 
     # Runner memory (ADR 0025), the rewrite-from-source replacement for the retired
     # belief + narrative loop. The conventional #522 default-True kill switch on top

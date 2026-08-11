@@ -22,12 +22,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.deps import CurrentUser, DbSession, OwnedGoalRace
 from app.core.config import settings
 from app.schemas.schedule import (
+    DraftStatusRead,
     GoalRaceCreate,
     GoalRaceRead,
     ScheduleHorizonRead,
     ScheduleWeekRead,
 )
 from app.services.schedule import store
+from app.services.schedule.draft import enqueue_draft
 from app.services.schedule.horizon import (
     DEFAULT_HORIZON_WEEKS,
     MAX_HORIZON_WEEKS,
@@ -86,6 +88,58 @@ def read_horizon(
 ) -> ScheduleHorizonRead:
     """The shape of the block: load per week, concrete near-term, shape beyond."""
     return build_horizon(db, user, weeks=weeks)
+
+
+_DRAFT_MESSAGES = {
+    "drafting": "Your coach is writing your plan. This usually takes a minute.",
+    "active": "Your plan is ready.",
+    "superseded": "This plan has been replaced by a newer one.",
+    "failed": (
+        "Your coach could not write a plan just now. Nothing has changed — try "
+        "again, or ask in a conversation."
+    ),
+}
+
+
+def _draft_status(plan) -> DraftStatusRead:
+    if plan is None:
+        return DraftStatusRead(message="You have no plan yet.")
+    known = plan.status in _DRAFT_MESSAGES
+    # One fallback, not two. Reporting `status=None` beside a real `plan_id` and
+    # a "you have no plan yet" message would be three answers to one question the
+    # moment a fifth status is added.
+    return DraftStatusRead(
+        status=plan.status if known else None,
+        plan_id=plan.id if known else None,
+        generated_at=plan.generated_at if known else None,
+        message=_DRAFT_MESSAGES.get(plan.status, "You have no plan yet."),
+    )
+
+
+@router.post("/draft", response_model=DraftStatusRead, status_code=202)
+def start_draft(db: DbSession, user: CurrentUser) -> DraftStatusRead:
+    """Ask the coach to write a plan.
+
+    Runner-triggered by design: no background pass ever spends tokens writing
+    plans for runners who have not asked. Returns immediately — the generation is
+    a slow LLM call on the worker, and the client polls `GET /draft`.
+
+    Idempotent while one is in flight, the `POST /api/strava/import` precedent: a
+    second tap returns the draft already running rather than starting a second.
+    """
+    existing = store.draft_in_flight(db, user.id)
+    if existing is not None:
+        return _draft_status(existing)
+
+    plan = store.create_drafting_plan(db, user.id)
+    enqueue_draft(user.id, plan.id)
+    return _draft_status(plan)
+
+
+@router.get("/draft", response_model=DraftStatusRead)
+def read_draft_status(db: DbSession, user: CurrentUser) -> DraftStatusRead:
+    """Where the runner's most recent plan stands. Polled while drafting."""
+    return _draft_status(store.latest_plan(db, user.id))
 
 
 @router.get("/races", response_model=list[GoalRaceRead])
