@@ -82,11 +82,34 @@ async def process_new_activity(
     )
     await analyze_with_streams(db, str(activity.id))
 
+    # #830: tick off whatever planned session this run satisfies, before the
+    # cadence speaks. Guarded because the schedule is an addition to the
+    # pipeline, not a dependency of it — a runner's run must still be ingested,
+    # analysed and reported on if the schedule cannot answer.
+    _autocomplete_planned_session(db, activity)
+
     block = exchange_ops.ensure_block(db, activity)
 
     return await get_active_cadence(settings).on_ingest(
         db=db, activity=activity, block=block, notifier=notifier
     )
+
+
+def _autocomplete_planned_session(db: Session, activity) -> None:
+    """Credit this activity to the planned session it satisfies, if any.
+
+    One of three routes to the same write (#830) — the other two are the runner's
+    tap and telling the coach. Never fatal: a schedule fault must not cost the
+    runner their report.
+    """
+    try:
+        from app.services.schedule.completion import complete_from_activity
+
+        complete_from_activity(db, activity)
+    except Exception:  # noqa: BLE001 — the schedule is additive to the pipeline
+        logger.exception(
+            "schedule: auto-completion failed for activity %s", activity.id
+        )
 
 
 async def process_block_complete(

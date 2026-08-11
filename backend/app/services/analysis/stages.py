@@ -44,6 +44,10 @@ PRELOADED_INPUTS = frozenset(
     {
         "db",
         "activity",
+        # #830: the planned session this activity satisfies, resolved in the load
+        # phase. It is what finally feeds `_extract_planned_workout`, a
+        # placeholder that returned None from the beginning of the project.
+        "planned_session",
         "history",
         "streams_dict",
         "check_in",
@@ -114,6 +118,10 @@ class StageContext:
     max_hr: int
     zone_boundaries: Any
     state: DerivedMetricFields
+    # #830. Defaulted because it is absent for every runner without a schedule,
+    # and because "no plan" is the honest reading of its absence rather than a
+    # missing argument.
+    planned_session: Any = None
     scratch: dict[str, Any] = field(default_factory=dict)
 
     # Set by run_stages for the duration of one stage: the names that stage
@@ -236,7 +244,7 @@ ANALYSIS_STAGES: tuple[Stage, ...] = (
     Stage(
         name="workout_match",
         adapter="_stage_workout_match",
-        reads=("check_in", "interval_session"),
+        reads=("planned_session", "interval_session"),
         writes=("workout_match",),
     ),
     Stage(

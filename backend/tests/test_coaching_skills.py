@@ -70,7 +70,17 @@ class TestBoundaries:
                     named = {word.strip(",.\"'") for word in line.split()}
                     invented = named & {"log_workout", "update_profile", "set_voice"}
                     assert not invented
-        assert allowed == {"check_in", "intent", "split_block", "merge_blocks"}
+        # The set is fixed, narrow and reversible — every member undoable by the
+        # runner. `complete_session` (#830) joined it because a session the runner
+        # says they did is often the only record there will be: Strava never sees
+        # the gym. It unticks, so it keeps the reversibility rule.
+        assert allowed == {
+            "check_in",
+            "intent",
+            "split_block",
+            "merge_blocks",
+            "complete_session",
+        }
 
     @pytest.mark.parametrize("skill", SKILLS, ids=[s.name for s in SKILLS])
     def test_no_skill_text_would_itself_fail_the_medical_floor(self, skill):

@@ -56,7 +56,9 @@ INTENT_OPTIONS_BY_TYPE: dict[str, tuple[str, ...]] = {
 
 
 class ProposedActionFrame(BaseModel):
-    action_type: Literal["check_in", "intent", "split_block", "merge_blocks"]
+    action_type: Literal[
+        "check_in", "intent", "split_block", "merge_blocks", "complete_session"
+    ]
     token: str
     description: str
     confirm_label: str
@@ -69,7 +71,9 @@ class ProposedActionRequest(BaseModel):
     Narrow and reversible only. A missing or off-shape argument means no offer.
     """
 
-    action_type: Literal["check_in", "intent", "split_block", "merge_blocks"]
+    action_type: Literal[
+        "check_in", "intent", "split_block", "merge_blocks", "complete_session"
+    ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = Field(default=None, ge=1, le=10)
     pain_score: Optional[int] = Field(default=None, ge=0, le=10)
@@ -77,6 +81,8 @@ class ProposedActionRequest(BaseModel):
     block_id: Optional[UUID] = None
     split_at_activity_id: Optional[UUID] = None
     other_block_id: Optional[UUID] = None
+    # #830: the planned session the conversation settled as done.
+    planned_session_id: Optional[UUID] = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -98,12 +104,17 @@ class ProposedActionRequest(BaseModel):
         elif self.action_type == "merge_blocks":
             if self.block_id is None or self.other_block_id is None:
                 raise ValueError("merge_blocks requires block_id and other_block_id")
+        elif self.action_type == "complete_session":
+            if self.planned_session_id is None:
+                raise ValueError("complete_session requires planned_session_id")
         return self
 
 
 class StoredProposedAction(BaseModel):
     owner_user_id: UUID
-    action_type: Literal["check_in", "intent", "split_block", "merge_blocks"]
+    action_type: Literal[
+        "check_in", "intent", "split_block", "merge_blocks", "complete_session"
+    ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = None
     pain_score: Optional[int] = None
@@ -111,6 +122,7 @@ class StoredProposedAction(BaseModel):
     block_id: Optional[UUID] = None
     split_at_activity_id: Optional[UUID] = None
     other_block_id: Optional[UUID] = None
+    planned_session_id: Optional[UUID] = None
 
 
 PROPOSED_ACTION_TOOL: Dict[str, Any] = {
@@ -118,8 +130,10 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
     "description": (
         "Offer ONE narrow, reversible change to the runner's record for them to "
         "confirm: logging a check-in (RPE and/or pain), naming a session's stated "
-        "intent, splitting a block at a named member session, or merging two "
-        "adjacent blocks. Offering is not doing — this puts a card in front of the "
+        "intent, splitting a block at a named member session, merging two "
+        "adjacent blocks, or marking a PLANNED session done when the runner says "
+        "they did it (the gym and the turbo never reach Strava, so a session they "
+        "mention is often the only record there will be). Offering is not doing — this puts a card in front of the "
         "runner and nothing is written unless they tap it, so speak of it as "
         "something you can do, never as done. Use only activity_id and block_id "
         "values already in front of you or returned by your other tools; never "
@@ -130,7 +144,13 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
         "properties": {
             "action_type": {
                 "type": "string",
-                "enum": ["check_in", "intent", "split_block", "merge_blocks"],
+                "enum": [
+                    "check_in",
+                    "intent",
+                    "split_block",
+                    "merge_blocks",
+                    "complete_session",
+                ],
             },
             "activity_id": {"type": "string"},
             "rpe": {"type": "integer", "minimum": 1, "maximum": 10},
@@ -148,6 +168,13 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
             "block_id": {"type": "string"},
             "split_at_activity_id": {"type": "string"},
             "other_block_id": {"type": "string"},
+            "planned_session_id": {
+                "type": "string",
+                "description": (
+                    "The planned session the runner has just said they did. Use "
+                    "only an id already in front of you."
+                ),
+            },
         },
         "required": ["action_type"],
     },
@@ -253,12 +280,72 @@ def consume_and_execute(db: Session, owner_user_id: UUID, token: str) -> dict:
         merged = merge_blocks(db, block, other)
         return {"action_type": "merge_blocks", "block_id": str(merged.id)}
 
+    if stored.action_type == "complete_session":
+        from app.services.schedule.completion import (
+            CONVERSATION,
+            complete_planned_session,
+        )
+
+        session = _require_owned_planned_session(
+            db, owner_user_id, stored.planned_session_id
+        )
+        # The same writer the tap and the auto-match use. Three routes to done,
+        # one write — the `write_checkin` shape.
+        complete_planned_session(db, session, source=CONVERSATION)
+        return {
+            "action_type": "complete_session",
+            "planned_session_id": str(session.id),
+        }
+
     raise LookupError("Proposed action not found")
+
+
+def _require_owned_planned_session(db: Session, owner_user_id: UUID, session_id):
+    """Ownership re-resolved at execute time, like every other action here."""
+    from app.models.planned_session import PlannedSession
+
+    session = (
+        db.query(PlannedSession)
+        .filter(
+            PlannedSession.id == session_id,
+            PlannedSession.user_id == owner_user_id,
+        )
+        .first()
+    )
+    if session is None:
+        raise LookupError("Proposed action not found")
+    return session
+
+
+def _describe_complete_session(session) -> str:
+    when = (
+        session.window_start.strftime("%a %-d %b")
+        if session.window_start == session.window_end
+        else f"{session.window_start.strftime('%-d')}-{session.window_end.strftime('%-d %b')}"
+    )
+    return f"Mark \u201c{session.title}\u201d ({when}) as done"
 
 
 def _build_offer(
     db: Session, owner_user_id: UUID, request: ProposedActionRequest
 ) -> tuple[ProposedActionFrame, StoredProposedAction]:
+    if request.action_type == "complete_session":
+        session = _require_owned_planned_session(
+            db, owner_user_id, request.planned_session_id
+        )
+        frame = ProposedActionFrame(
+            action_type="complete_session",
+            token="",
+            description=_describe_complete_session(session),
+            confirm_label="Mark it done",
+        )
+        stored = StoredProposedAction(
+            owner_user_id=owner_user_id,
+            action_type="complete_session",
+            planned_session_id=session.id,
+        )
+        return frame, stored
+
     if request.action_type == "check_in":
         activity = _require_owned_activity(db, owner_user_id, request.activity_id)
         desc = _describe_check_in_offer(activity, request.rpe, request.pain_score)

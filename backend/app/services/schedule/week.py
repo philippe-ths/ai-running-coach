@@ -263,3 +263,15 @@ def build_week(
         violations=violations,
         norm=norm,
     )
+
+
+def session_read(user: User, session: Any, *, today: Optional[date] = None):
+    """One session in the API shape, for the endpoints that act on a single one.
+
+    Shares `_to_session_read` with the week builder so a session tapped done
+    renders exactly as the same session does inside the week — including its
+    derived placement, effective window and status.
+    """
+    today = today or date.today()
+    starts_on = resolve_week_start(getattr(user, "profile", None))
+    return _to_session_read(session, today, starts_on)

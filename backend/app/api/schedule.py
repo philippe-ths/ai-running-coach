@@ -19,7 +19,12 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import CurrentUser, DbSession, OwnedGoalRace
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    OwnedGoalRace,
+    OwnedPlannedSession,
+)
 from app.core.config import settings
 from app.schemas.schedule import (
     DraftStatusRead,
@@ -28,7 +33,7 @@ from app.schemas.schedule import (
     ScheduleHorizonRead,
     ScheduleWeekRead,
 )
-from app.services.schedule import store
+from app.services.schedule import completion, store
 from app.services.schedule.draft import enqueue_draft
 from app.services.schedule.horizon import (
     DEFAULT_HORIZON_WEEKS,
@@ -178,3 +183,42 @@ def create_race(
 @router.delete("/races/{race_id}", status_code=204)
 def delete_race(race: OwnedGoalRace, db: DbSession) -> None:
     store.delete_goal_race(db, race)
+
+
+@router.post("/sessions/{session_id}/complete", status_code=204)
+def complete_session(session: OwnedPlannedSession, db: DbSession) -> None:
+    """Tick a session off by hand.
+
+    One of three routes to the same write — the other two are the auto-match from
+    a synced activity and telling the coach in conversation. Strava never sees
+    the gym, so the tap is not a fallback for the matcher failing; it is how a
+    whole class of session gets recorded at all.
+
+    204 rather than the updated session, deliberately. A tick changes the week's
+    headline, its done count and its discipline mix, so handing back one session
+    would invite a client to patch state it cannot correctly patch — and it also
+    means an off-vocabulary row (the plan is LLM-written, so a stored row can
+    carry a discipline outside the closed set) cannot make a SUCCESSFUL write
+    answer with a serialization error.
+    """
+    completion.complete_planned_session(db, session, source=completion.MANUAL)
+
+
+@router.delete("/sessions/{session_id}/complete", status_code=204)
+def uncomplete_session(session: OwnedPlannedSession, db: DbSession) -> None:
+    """Untick. The runner is allowed to be wrong about their own week."""
+    completion.clear_completion(db, session)
+
+
+@router.post("/sessions/{session_id}/dismiss", status_code=204)
+def dismiss_session(session: OwnedPlannedSession, db: DbSession) -> None:
+    """Decline a SUGGESTION.
+
+    Only a suggestion. Declining something the runner agreed to is a plan change,
+    and plan changes go through the coach — otherwise the schedule quietly
+    becomes a to-do list the runner edits, which is the one thing it is not.
+    """
+    try:
+        completion.dismiss_planned_session(db, session)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))

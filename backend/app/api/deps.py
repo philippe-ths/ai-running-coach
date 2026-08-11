@@ -45,6 +45,7 @@ from sqlalchemy.orm import Session
 from app.core.clerk_auth import require_current_user
 from app.db.session import get_db
 from app.models import Activity, Block, CoachingRelationship, GoalRace, StravaAccount, User, UserMaterial
+from app.models.planned_session import PlannedSession
 from app.models.thread import Thread
 from app.services import activity_queries
 
@@ -191,6 +192,35 @@ def get_owned_goal_race(race_id: UUID, db: DbSession, user: CurrentUser) -> Goal
 
 
 OwnedGoalRace = Annotated[GoalRace, Depends(get_owned_goal_race)]
+
+
+def require_owned_planned_session(
+    db: Session, session_id: UUID, user: User
+) -> PlannedSession:
+    """The planned session by id IF it belongs to ``user``; 404 otherwise.
+
+    `PlannedSession.user_id` is denormalised off its plan precisely so this gate
+    is one predicate rather than a join a later route could forget.
+    """
+    session = (
+        db.query(PlannedSession)
+        .filter(PlannedSession.id == session_id, PlannedSession.user_id == user.id)
+        .first()
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail="Planned session not found")
+    return session
+
+
+def get_owned_planned_session(
+    session_id: UUID, db: DbSession, user: CurrentUser
+) -> PlannedSession:
+    return require_owned_planned_session(db, session_id, user)
+
+
+OwnedPlannedSession = Annotated[
+    PlannedSession, Depends(get_owned_planned_session)
+]
 
 
 # --- user materials --------------------------------------------------------
