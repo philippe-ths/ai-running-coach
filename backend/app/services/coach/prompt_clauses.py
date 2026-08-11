@@ -211,6 +211,15 @@ BODY = Clause(
 """,
 )
 
+# The runner's plan says what a session was FOR. Keyed on PromptFeature.SCHEDULE,
+# because it describes the right_now.schedule signal: a version that does not
+# receive the plan is never told it has one.
+SCHEDULE = Clause(
+    "schedule",
+    """- Their plan tells me what a session was FOR — the difference between "you ran with some fast bits" and "you hit the 800s" — and what it sets up next, so I can say where the week goes from here. A plan is intent, not a record: what actually happened is in the numbers in front of me, and where the two differ I coach the gap rather than score it. A session that did not happen is information about the week, never a charge for them to answer.
+""",
+)
+
 
 # ----------------------------------------------------------------------------
 # The intervals clause. Exactly one variant sits between MISREAD_NUMBERS and
@@ -368,6 +377,8 @@ PROSE_VARIANTS: dict[str, frozenset[ProseVariant]] = {
     "coach_message_lean_grouped_v7": frozenset({ProseVariant.PERSONALISATION}),
     # v8 = v7's prose plus the body clause, which it gets by carrying PromptFeature.BODY.
     "coach_message_lean_grouped_v8": frozenset({ProseVariant.PERSONALISATION}),
+    # v9 = v8's prose plus the schedule clause, from PromptFeature.SCHEDULE.
+    "coach_message_lean_grouped_v9": frozenset({ProseVariant.PERSONALISATION}),
 }
 
 # The live lineage, oldest first.
@@ -400,6 +411,8 @@ def fuller_clauses(prompt_id: str) -> tuple[Clause, ...]:
         disposition.append(PERSONALISATION)
     if PromptFeature.BODY in features:
         disposition.append(BODY)
+    if PromptFeature.SCHEDULE in features:
+        disposition.append(SCHEDULE)
 
     intervals = (
         INTERVALS_ANY_SESSION

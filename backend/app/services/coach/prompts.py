@@ -210,6 +210,10 @@ INTENSITY_READ_PROMPT_IDS = ids_with(PromptFeature.INTENSITY_READ)
 # intensity section).
 INTENSITY_MIX_PROMPT_IDS = ids_with(PromptFeature.INTENSITY_MIX)
 
+# #830: the prompts that read the runner's own plan for this week
+# (`right_now.schedule`) — what this session was FOR and what it sets up.
+SCHEDULE_PROMPT_IDS = ids_with(PromptFeature.SCHEDULE)
+
 # #742: prompt ids that carry the BODY clause AND the nested `profile.body` signal
 # (the runner's stated build). Gates both, so under every prior prompt the profile
 # section keeps its pre-#742 shape byte-for-byte.
@@ -340,6 +344,11 @@ def is_body_prompt(prompt_id: Optional[str]) -> bool:
     clause. False for every prior prompt, so the build stays wholly inert under a
     rollback and the profile section is byte-identical to its pre-#742 shape."""
     return has_feature(prompt_id, PromptFeature.BODY)
+
+
+def is_schedule_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt reads the runner's plan (#830)."""
+    return has_feature(prompt_id, PromptFeature.SCHEDULE)
 
 
 def is_intensity_mix_prompt(prompt_id: Optional[str]) -> bool:

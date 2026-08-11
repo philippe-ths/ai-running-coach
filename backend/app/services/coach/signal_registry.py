@@ -702,6 +702,23 @@ COACH_SIGNALS: Tuple[CoachSignal, ...] = (
         why="ADR 0026 Slice 3 (#673)",
     ),
     CoachSignal(
+        field="schedule",
+        group="right_now",
+        gate_feature=_F.SCHEDULE,
+        droppable=True,
+        adapters=(ReadTimeAdapter("schedule", _F.SCHEDULE, "COACH_SCHEDULE_ENABLED"),),
+        kill_switches=(
+            KillSwitch(
+                "COACH_SCHEDULE_ENABLED",
+                "drop",
+                "read_time_signals.gather",
+                "the coach stops seeing the runner's plan; the schedule surface "
+                "itself is unaffected (that is SCHEDULE_ENABLED)",
+            ),
+        ),
+        why="#830",
+    ),
+    CoachSignal(
         field="safety_rules",
         ungated_reason=(
             "The safety floor. Never gated, never dropped, never switchable — that is "

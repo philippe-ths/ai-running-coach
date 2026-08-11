@@ -319,6 +319,11 @@ class Settings(BaseSettings):
     # is how a plan stops being believable". Both are inputs to the drafting
     # prompt and to the horizon read, so changing one changes what the coach is
     # asked for, not just what is displayed.
+    # #830: the coach INPUT switch, orthogonal to `SCHEDULE_ENABLED` above. That
+    # one gates the runner's screen; this one gates whether the coach SEES the
+    # plan when it writes. Off => the `right_now.schedule` section drops
+    # byte-stably and the runner's schedule keeps working exactly as before.
+    COACH_SCHEDULE_ENABLED: bool = True
     SCHEDULE_HORIZON_WEEKS: int = 12
     SCHEDULE_CONCRETE_WEEKS: int = 3
 
@@ -568,6 +573,12 @@ class Settings(BaseSettings):
             # #784: not a coach INPUT but a surface — the frontend reads it to
             # decide whether to render the launcher and sheet at all.
             "threads": self.COACH_THREADS_ENABLED,
+            # #830: whether the coach SEES the runner's plan when it writes. A
+            # coach input with a very visible UI surface, so the schedule screen
+            # can say plainly that its plan is not reaching the coach rather than
+            # leaving the runner to wonder why a report never mentions it.
+            # Distinct from SCHEDULE_ENABLED, which gates the screen itself.
+            "schedule": self.COACH_SCHEDULE_ENABLED,
         }
 
     model_config = SettingsConfigDict(

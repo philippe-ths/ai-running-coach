@@ -86,6 +86,10 @@ def test_lean_v1_has_full_capability_parity_with_v14():
         # predates it -- does not carry it. The parity claim above is with v14, which is
         # unaffected; see GROUPED_ONLY_ADDITIVE in test_prompt_features.
         _F.BODY,
+        # #830: SCHEDULE is additive but grouped-lineage-only (grouped_v9), for the
+        # same reason as BODY — lean_v1 predates it. Its named guard is
+        # tests/test_schedule_pack_section.py.
+        _F.SCHEDULE,
     }
     assert features_for(LEAN) == every_additive
 

@@ -1,0 +1,309 @@
+"""#830: `right_now.schedule` — the runner's plan, as the coach receives it.
+
+The named guard this section owes. `right_now.schedule` is a grouped-lineage-only
+additive feature, so it sits outside the structural pack guards that build their
+pack under `fullest_message_prompt_id` — which is exactly why it needs a test of
+its own rather than inheriting coverage it does not have.
+
+Two claims are load-bearing here.
+
+**Byte-stability.** Under every prompt that is not schedule-aware the pack must be
+byte-identical to what it was before this signal existed. A section that leaks
+into an older prompt changes what a live prod prompt sends.
+
+**The framing.** Handed a plan and a result, a model reaches for a compliance
+verdict. This section carries no adherence label, no percentage and no per-session
+hit/miss — it states intent and lets the coach compare. That is not a stylistic
+preference: it is the nagging the runner-memory redesign (ADR 0025) removed, and
+a scorecard-shaped section would put it straight back.
+
+All row data is synthetic test setup (exercises code paths; represents no real
+runner).
+"""
+
+from datetime import date, datetime, timedelta, timezone
+from uuid import uuid4
+
+import pytest
+
+from app.core.config import settings
+from app.models import Activity, User, UserProfile
+from app.models.planned_session import PlannedSession
+from app.models.training_plan import TrainingPlan
+from app.services.schedule.coach_view import build_schedule_context
+
+MON = date(2026, 8, 10)
+TUE = MON + timedelta(days=1)
+SAT = MON + timedelta(days=5)
+SUN = MON + timedelta(days=6)
+
+SCHEDULE_PROMPT = "coach_message_lean_grouped_v9"
+PRIOR_PROMPT = "coach_message_lean_grouped_v8"
+
+
+def _seed_user(db) -> User:
+    user = User(email=f"sched-pack-{uuid4()}@example.com")
+    db.add(user)
+    db.commit()
+    db.add(
+        UserProfile(
+            user_id=user.id,
+            goal_type="half",
+            experience_level="intermediate",
+            weekly_days_available=5,
+            max_hr=190,
+        )
+    )
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _seed_activity(db, user: User, *, day: date = TUE, activity_type: str = "Run"):
+    activity = Activity(
+        user_id=user.id,
+        strava_activity_id=abs(hash(str(uuid4()))) % 10**9,
+        start_date=datetime(day.year, day.month, day.day, 9, 0, tzinfo=timezone.utc),
+        type=activity_type,
+        name="Session",
+        distance_m=9000,
+        moving_time_s=2700,
+        elapsed_time_s=2700,
+        elev_gain_m=0.0,
+        raw_summary={},
+    )
+    db.add(activity)
+    db.commit()
+    db.refresh(activity)
+    return activity
+
+
+def _seed_plan(db, user: User, *, rules=None) -> TrainingPlan:
+    plan = TrainingPlan(
+        user_id=user.id, status="active", rules=rules or [], week_shapes=[]
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+def _seed_session(db, plan, **kw) -> PlannedSession:
+    payload = {
+        "plan_id": plan.id,
+        "user_id": plan.user_id,
+        "window_start": TUE,
+        "window_end": TUE,
+        "intent": "quality",
+        "discipline": "run",
+        "commitment": "committed",
+        "title": "6x800m",
+        "target_distance_m": 9000,
+    }
+    payload.update(kw)
+    session = PlannedSession(**payload)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+# --- the section says what a session was FOR --------------------------------
+
+
+def test_the_coach_learns_what_this_run_was_meant_to_be(db):
+    """The difference between "you ran with some fast bits" and "you hit the 800s"."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db,
+        plan,
+        structure={"reps_planned": 6, "rep_distance_m": 800, "rest_s": 90},
+        detail="5k effort",
+    )
+    activity = _seed_activity(db, user)
+
+    section = build_schedule_context(db, activity)
+
+    assert section is not None
+    planned = section.planned_for_this_activity
+    assert planned is not None
+    assert planned.title == "6x800m"
+    assert planned.intent == "quality"
+    assert planned.target == "6 x 800 m off 90 s"
+
+
+def test_the_prescription_is_never_expressed_as_load(db):
+    """`effort_score` is a modelled cumulative number that reads as an intensity
+    verdict (#168), and nobody was asked to "do 90 load". The coach is given what
+    the runner was actually asked for."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db, plan, target_distance_m=None, target_duration_s=2400,
+        target_effort_score=91.0, structure=None, intent="easy", title="Easy hour",
+    )
+    activity = _seed_activity(db, user)
+
+    section = build_schedule_context(db, activity)
+
+    assert section.planned_for_this_activity.target == "40 min"
+    assert "91" not in (section.planned_for_this_activity.target or "")
+    assert "load" not in section.model_dump_json()
+
+
+def test_the_session_this_run_is_does_not_also_appear_as_still_to_come(db):
+    """Otherwise the coach tells the runner to go and do the run it is writing
+    about."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan)
+    _seed_session(db, plan, window_start=SAT, window_end=SUN, intent="long",
+                  title="Long run", target_distance_m=18000, structure=None)
+    activity = _seed_activity(db, user)
+
+    section = build_schedule_context(db, activity)
+
+    titles = [s.title for s in section.still_to_come_this_week]
+    assert titles == ["Long run"]
+    assert section.planned_for_this_activity.title == "6x800m"
+
+
+def test_what_is_still_to_come_says_when_in_the_runners_own_terms(db):
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan, window_start=SAT, window_end=SUN, intent="long",
+                  title="Long run", target_distance_m=18000, structure=None)
+    _seed_session(db, plan, window_start=MON, window_end=SUN, intent="strength",
+                  discipline="strength", title="Gym", target_duration_s=2400,
+                  structure=None)
+    activity = _seed_activity(db, user, activity_type="Walk")
+
+    section = build_schedule_context(db, activity)
+    when = {s.title: s.when for s in section.still_to_come_this_week}
+
+    assert when["Long run"] == "Sat-Sun"
+    assert when["Gym"] == "any day"
+
+
+# --- the framing: intent, never a scorecard ---------------------------------
+
+
+def test_the_section_carries_no_compliance_verdict(db):
+    """THE claim of this signal.
+
+    No adherence label, no percentage, no per-session hit/miss. A model handed a
+    plan and a result reaches for "you missed two sessions", which is precisely
+    the nagging ADR 0025 removed. The section states intent; comparing is the
+    coach's job.
+    """
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan)
+    _seed_session(db, plan, window_start=SAT, window_end=SAT, intent="long",
+                  title="Long run", target_distance_m=18000, structure=None)
+    activity = _seed_activity(db, user)
+
+    section = build_schedule_context(db, activity)
+    payload = section.model_dump()
+
+    forbidden = {"adherence", "compliance", "missed", "hit", "completed", "status"}
+    assert not (forbidden & set(payload)), payload.keys()
+    for upcoming in payload["still_to_come_this_week"]:
+        assert not (forbidden & set(upcoming)), upcoming.keys()
+    # The one count that exists, and what it is for: not telling a runner who has
+    # done everything that they still have work left.
+    assert payload["committed_this_week"] == 2
+    assert payload["done_this_week"] == 0
+
+
+def test_a_finished_session_is_counted_but_never_listed_as_outstanding(db):
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db, plan, window_start=MON, window_end=MON, intent="easy", title="Monday easy",
+        target_distance_m=8000, structure=None,
+        completed_at=datetime(2026, 8, 10, 10, 0, tzinfo=timezone.utc),
+    )
+    _seed_session(db, plan, window_start=SAT, window_end=SAT, intent="long",
+                  title="Long run", target_distance_m=18000, structure=None)
+    activity = _seed_activity(db, user, activity_type="Walk")
+
+    section = build_schedule_context(db, activity)
+
+    assert section.done_this_week == 1
+    assert [s.title for s in section.still_to_come_this_week] == ["Long run"]
+
+
+def test_the_rules_ride_along_so_advice_does_not_contradict_the_plan(db):
+    """The coach wrote "a full rest day after the long run"; it should not then
+    tell the runner to train tomorrow."""
+    user = _seed_user(db)
+    plan = _seed_plan(
+        db,
+        user,
+        rules=[
+            {
+                "kind": "rest_day_after",
+                "label": "A full rest day after the long run",
+                "intent": "long",
+                "source": "coach",
+            }
+        ],
+    )
+    _seed_session(db, plan)
+    activity = _seed_activity(db, user)
+
+    section = build_schedule_context(db, activity)
+
+    assert section.rules_in_play == ["A full rest day after the long run"]
+
+
+# --- byte-stability ----------------------------------------------------------
+
+
+def test_a_runner_with_no_plan_gets_no_section_at_all(db):
+    """None, not an empty shell: the pack stays byte-identical to what it was
+    before this signal existed for every runner without a schedule."""
+    user = _seed_user(db)
+    activity = _seed_activity(db, user)
+
+    assert build_schedule_context(db, activity) is None
+
+
+def test_the_section_reaches_only_a_schedule_aware_prompt(db, monkeypatch):
+    """A section leaking into an older prompt would change what a live prod
+    prompt sends."""
+    from app.services.coach import context as ctx
+    from app.services.coach.read_time_signals import will_run
+
+    assert will_run(ctx._SCHEDULE_SIGNAL, SCHEDULE_PROMPT) is True
+    assert will_run(ctx._SCHEDULE_SIGNAL, PRIOR_PROMPT) is False
+
+
+def test_the_kill_switch_drops_the_section(db, monkeypatch):
+    """`COACH_SCHEDULE_ENABLED` off stops the coach seeing the plan and leaves the
+    runner's schedule screen entirely alone (that is `SCHEDULE_ENABLED`)."""
+    from app.services.coach import context as ctx
+    from app.services.coach.read_time_signals import will_run
+
+    monkeypatch.setattr(settings, "COACH_SCHEDULE_ENABLED", False)
+
+    assert will_run(ctx._SCHEDULE_SIGNAL, SCHEDULE_PROMPT) is False
+    assert settings.SCHEDULE_ENABLED is True
+
+
+def test_a_schedule_fault_never_costs_the_runner_their_report(db, monkeypatch):
+    """The schedule is an addition to the report, not a dependency of it."""
+    from app.services.coach import context as ctx
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("schedule is down")
+
+    monkeypatch.setattr(
+        "app.services.schedule.coach_view.build_schedule_context", _boom
+    )
+    user = _seed_user(db)
+    activity = _seed_activity(db, user)
+
+    assert ctx._build_schedule_context(db, activity, None) is None

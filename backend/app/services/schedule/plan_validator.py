@@ -12,11 +12,14 @@ It is a COHERENCE gate, not a coaching opinion. Whether four runs or five is
 right for this runner is exactly the judgment the coach is for, and the North
 Star is explicit that population defaults are a starting point to depart from,
 not a template to apply. So there is no "10% rule" here and no cap on quality
-sessions. The only volume check is an absurdity ceiling — twice the runner's OWN
+sessions. The only volume check is an absurdity ceiling against the runner's OWN
 recent norm — which exists to catch a plan that prescribes 100 km to a 20 km
-runner, not to second-guess a coach who ramps deliberately. It is measured
-against this runner's history, never a population figure, and it abstains
-entirely when there is no history to measure against.
+runner, not to second-guess a coach who ramps deliberately. A week still only
+SKETCHED gets a looser bound than next Tuesday, because a build is not
+absurdity and a sketch will be rewritten into real sessions long before the
+runner reaches it. It is measured against this runner's history, never a
+population figure, and it abstains entirely when there is no history to measure
+against.
 
 A failure here is not a fallback. The report path can degrade to prose without a
 tail; a plan cannot degrade — a schedule with an unsatisfiable week is worse than
@@ -36,6 +39,14 @@ from app.services.weeks import MONDAY, week_start
 # Deliberately loose: a real build week can be well above typical, and a taper
 # well below. This catches a plan that has lost the plot, not one that is bold.
 MAX_WEEKLY_MULTIPLE = 2.0
+
+# The same ceiling, loosened for a week that is still only a SKETCH. A build from
+# 18 km/week to 38 km at peak over ten weeks is ordinary coaching, not a plan that
+# has lost the plot — and a sketched week will be rewritten into real sessions
+# long before the runner reaches it. Holding a week ten weeks out to the same
+# bound as next Tuesday is the ceiling second-guessing the ramp, which is exactly
+# what it is not for.
+MAX_SKETCH_MULTIPLE = 3.0
 
 # An absurdity floor on how many sessions may land on one day. Every other
 # nonsense has a floor; without this one a week could pin all fourteen permitted
@@ -140,7 +151,7 @@ def validate_drafted_plan(
             norm_weekly_running_m
             and sketch.target_running_distance_m
             and sketch.target_running_distance_m
-            > norm_weekly_running_m * MAX_WEEKLY_MULTIPLE
+            > norm_weekly_running_m * MAX_SKETCH_MULTIPLE
         ):
             check.fail(
                 f"sketched week {sketch.week_start} plans "

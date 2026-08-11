@@ -55,6 +55,7 @@ class PromptFeature(Enum):
     SALIENCE_DROPPED = "salience_dropped"  # ADR 0026 Slice 5 (#682): drop the `salience` routing section from the FULLER LLM view (it steers only the opener's depth + scheduling, which prod's receipt cadence never runs); the canonical pack keeps it so the deterministic safety force is unchanged; view-only, no new section
     BODY = "body"                      # #742: the runner's stated build in `profile.body` + the BODY clause
     GROUPED_PACK = "grouped_pack"      # ADR 0026 Slice 1: serve the pack GROUPED (pack.to_grouped_dict()) rather than flat. Presentation-only, exactly like METRICS_COACH_FRAMED / SALIENCE_DROPPED / PACK_COACH_VIEW — it changes the SHAPE the pack is serialized in, never which sections it CONTAINS. #800 moved it here from a hand-maintained frozenset in prompts.py, the last prompt-id set that did not derive from this manifest.
+    SCHEDULE = "schedule"              # #830: the runner's own plan for this week in `right_now.schedule` — what this session was FOR and what it sets up
     PACK_COACH_VIEW = "pack_coach_view"  # ADR 0026 Slice 5 (#682): the COMPLETED coach LLM view — readiness verdict-only, recent_weeks per-session bpm, the four interval blocks collapsed to one `interval_read`, plan-less `workout_match` dropped, `hr_drift` deduped, training-history sentinel/dupes cleaned, empty `our_thread` dropped; a one-way view over the canonical grouped pack (like METRICS_COACH_FRAMED), no section added to the store
 
 
@@ -417,6 +418,32 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.SALIENCE_DROPPED,
             _F.PACK_COACH_VIEW,
             _F.BODY,
+        }
+    ),
+    "coach_message_lean_grouped_v9": frozenset(
+        {
+            _F.GROUPED_PACK,
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.READINESS,
+            _F.USER_MATERIALS,
+            _F.RECENT_WEEKS,
+            _F.STREAM_VIEW,
+            _F.TRAINING_HISTORY_2WK,
+            _F.MEMORY,
+            _F.INTENSITY_READ,
+            _F.INTENSITY_MIX,
+            _F.METRICS_COACH_FRAMED,
+            _F.SALIENCE_DROPPED,
+            _F.PACK_COACH_VIEW,
+            _F.BODY,
+            # #830: the runner's own plan for this week. The first version to add
+            # a capability since grouped_v8, so its pack is NOT byte-identical to
+            # v8's — it gains `right_now.schedule`, inert until the runner has a
+            # plan.
+            _F.SCHEDULE,
         }
     ),
 }

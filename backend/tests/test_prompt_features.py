@@ -126,7 +126,8 @@ def test_fullest_message_prompt_is_the_max_capability_id():
     # consequence is real and must not be waved through: a section here is NOT covered by
     # the structural guards that build their pack under `fullest`, so each one owes a
     # named guard of its own. `profile.body` -> tests/test_body_pack_section.py.
-    GROUPED_ONLY_ADDITIVE = {F.BODY}
+    GROUPED_ONLY_ADDITIVE = {F.BODY, F.SCHEDULE}
+    # `right_now.schedule` (#830) -> tests/test_schedule_pack_section.py.
     max_additive = max(len(set(f) - ALTERNATIVE_FEATURES) for f in PROMPT_FEATURES.values())
     assert len(set(PROMPT_FEATURES[fullest]) - ALTERNATIVE_FEATURES) == max_additive
     every_feature = set().union(*PROMPT_FEATURES.values())
