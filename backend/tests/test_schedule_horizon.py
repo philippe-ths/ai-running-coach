@@ -389,6 +389,73 @@ def test_coverage_planned_always_agrees_with_the_planned_flag(db):
         assert week.planned == (week.coverage == "planned")
 
 
+def test_a_committed_session_past_the_recorded_reach_is_never_beyond_plan(db):
+    """#848: `horizon_end` is written once, at draft time, and is not a DB
+    constraint on what a `PlannedSession` can later say — a correction, a
+    disagreeing writer, or (as here) a directly-constructed row can leave a
+    committed session in a week later than the plan's own recorded reach. The
+    view draws a single "Plan ends here" divider on the assumption that once a
+    week reads `beyond_plan` every later week does too; a `planned` week
+    surfacing after that divider would be the exact violation #848 named — a
+    week with real sessions rendered as past the end of a plan that plainly
+    still covers it. `_last_covered_week` must extend to cover it, not just the
+    committed week itself but every INTERIOR week between the recorded reach
+    and it, so none of them reads `beyond_plan` either.
+
+    This state is not reachable through drafting (`draft.py` derives
+    `horizon_end` from the weeks it writes), so it is constructed directly,
+    exactly as the adversarial review that filed the issue did.
+    """
+    user = _seed_user(db)
+    # The plan claims to reach only WEEK_1, but a committed session two weeks
+    # later says otherwise.
+    plan = _seed_plan(db, user, horizon_end=WEEK_1 + timedelta(days=6))
+    _seed_session(db, plan, start=WEEK_3, target_effort_score=60.0)
+
+    horizon = build_horizon(db, user, weeks=5, today=TODAY)
+
+    assert _week(horizon, WEEK_0).coverage == "empty"
+    # WEEK_1 and WEEK_2 are interior gaps now, not `beyond_plan`: the plan's
+    # true reach (derived from what it actually holds) extends to WEEK_3.
+    assert _week(horizon, WEEK_1).coverage == "empty"
+    assert _week(horizon, WEEK_2).coverage == "empty"
+    assert _week(horizon, WEEK_3).coverage == "planned"
+    # Only the week genuinely past the plan's true reach reads beyond_plan.
+    assert _week(horizon, WEEK_4).coverage == "beyond_plan"
+
+    # The invariant the divider depends on, checked directly: no `planned` or
+    # `sketched` week ever follows a `beyond_plan` one.
+    seen_beyond_plan = False
+    for week in horizon.weeks:
+        if week.coverage == "beyond_plan":
+            seen_beyond_plan = True
+        elif seen_beyond_plan:
+            assert week.coverage not in ("planned", "sketched"), (
+                f"{week.week_start} is {week.coverage} after a beyond_plan week"
+            )
+
+
+def test_a_sketched_week_past_the_recorded_reach_is_never_beyond_plan(db):
+    """Same #848 guarantee, for a week shape rather than a committed session."""
+    user = _seed_user(db)
+    plan = _seed_plan(
+        db,
+        user,
+        horizon_end=WEEK_0 + timedelta(days=6),
+        week_shapes=[
+            {"week_start": WEEK_2.isoformat(), "phase": "build", "target_effort_score": 300}
+        ],
+    )
+    _seed_session(db, plan, start=WEEK_0, target_effort_score=60.0)
+
+    horizon = build_horizon(db, user, weeks=4, today=TODAY)
+
+    assert _week(horizon, WEEK_0).coverage == "planned"
+    assert _week(horizon, WEEK_1).coverage == "empty"
+    assert _week(horizon, WEEK_2).coverage == "sketched"
+    assert _week(horizon, WEEK_3).coverage == "beyond_plan"
+
+
 # --- mixes are shares ------------------------------------------------------
 
 
