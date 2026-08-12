@@ -24,7 +24,11 @@ class StravaImport(Base):
     __tablename__ = "strava_imports"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=generate_uuid)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    # `index=True` states what the creating migration (d9f1a2b3c4e5) already
+    # built as `ix_strava_imports_user_id` (#839): every read of this table is
+    # by user, and the model was silent about the index that serves them, which
+    # made `alembic check` permanently red and unable to guard real drift.
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
 
     # Lower bound the runner chose: import activities on or after this date.
     since_date: Mapped[date] = mapped_column(Date)
