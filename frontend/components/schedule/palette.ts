@@ -18,12 +18,25 @@ export const INTENT_LABEL: Record<SessionIntent, string> = {
 
 // Solid fills, tuned to the wireframe (#4f8a6d / #3f5c9a / #bd5138 / #a8a29e /
 // #7c6aa8). Rest never uses one of these — it is drawn hollow and dashed.
+//
+// #843: three dark twins sat above the 0.67 lightness ceiling for a dark surface
+// (emerald-500 0.696, orange-500 0.705, violet-400 0.709) and each moved down one
+// step. The LIGHT values are untouched, so the four rounds of wireframe review
+// that produced them stand. This was not only polish: `intentPip` prints the
+// discipline letter in WHITE on these fills, and all three were under the 3:1
+// floor for a graphical object against it (2.54 / 2.80 / 2.72). They now read
+// 3.77 / 3.56 / 4.23, and adjacent-pair separation improved with them
+// (worst deutan ΔE 21.1 -> 22.7).
+//
+// `rest` is the standing exception, in both modes: stone is under the chroma
+// floor and reads as grey ON PURPOSE, because rest is an absence rather than a
+// fifth category. It is drawn hollow and dashed everywhere the runner meets it.
 export const INTENT_FILL: Record<SessionIntent, string> = {
   rest: "bg-stone-400 dark:bg-stone-500",
-  easy: "bg-emerald-600 dark:bg-emerald-500",
+  easy: "bg-emerald-600 dark:bg-emerald-600",
   long: "bg-blue-700 dark:bg-blue-500",
-  quality: "bg-orange-700 dark:bg-orange-500",
-  strength: "bg-violet-500 dark:bg-violet-400",
+  quality: "bg-orange-700 dark:bg-orange-600",
+  strength: "bg-violet-500 dark:bg-violet-500",
 };
 
 export const INTENT_TEXT: Record<SessionIntent, string> = {

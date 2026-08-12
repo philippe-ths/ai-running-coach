@@ -24,6 +24,7 @@ WEEK_0 = date(2026, 8, 10)  # the Monday it falls in
 WEEK_1 = WEEK_0 + timedelta(days=7)
 WEEK_2 = WEEK_0 + timedelta(days=14)
 WEEK_3 = WEEK_0 + timedelta(days=21)
+WEEK_4 = WEEK_0 + timedelta(days=28)
 
 
 def _seed_user(db) -> User:
@@ -44,9 +45,15 @@ def _seed_user(db) -> User:
     return user
 
 
-def _seed_plan(db, user: User, *, week_shapes=None) -> TrainingPlan:
+def _seed_plan(
+    db, user: User, *, week_shapes=None, horizon_end: date = None
+) -> TrainingPlan:
     plan = TrainingPlan(
-        user_id=user.id, status="active", rules=[], week_shapes=week_shapes or []
+        user_id=user.id,
+        status="active",
+        rules=[],
+        week_shapes=week_shapes or [],
+        horizon_end=horizon_end,
     )
     db.add(plan)
     db.commit()
@@ -254,6 +261,132 @@ def test_the_horizon_is_a_continuous_run_of_weeks_from_the_current_one(db):
         WEEK_0 + timedelta(days=7 * index) for index in range(6)
     ]
     assert [w.is_current for w in horizon.weeks] == [True] + [False] * 5
+
+
+# --- coverage: planned / sketched / empty / beyond_plan (#842) -------------
+
+
+def test_coverage_is_planned_when_the_week_holds_a_committed_session(db):
+    user = _seed_user(db)
+    plan = _seed_plan(db, user, horizon_end=WEEK_3 + timedelta(days=6))
+    _seed_session(db, plan, start=WEEK_0, target_effort_score=60.0)
+
+    week = _week(build_horizon(db, user, weeks=4, today=TODAY), WEEK_0)
+
+    assert week.coverage == "planned"
+    assert week.planned is True
+
+
+def test_coverage_is_sketched_when_only_a_week_shape_is_present(db):
+    user = _seed_user(db)
+    _seed_plan(
+        db,
+        user,
+        horizon_end=WEEK_3 + timedelta(days=6),
+        week_shapes=[
+            {"week_start": WEEK_2.isoformat(), "phase": "build", "target_effort_score": 420}
+        ],
+    )
+
+    week = _week(build_horizon(db, user, weeks=4, today=TODAY), WEEK_2)
+
+    assert week.coverage == "sketched"
+    assert week.planned is False
+
+
+def test_coverage_is_empty_for_an_interior_gap_inside_the_plans_own_span(db):
+    """The #842 distinction: a gap INSIDE the plan's span reads `empty`, not
+    `beyond_plan` — the two used to be the same byte-identical `else` branch,
+    which is what let a week the coach never sketched print "Shape only, not
+    written yet" indistinguishably from one it genuinely left blank."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user, horizon_end=WEEK_3 + timedelta(days=6))
+    _seed_session(db, plan, start=WEEK_0, target_effort_score=60.0)
+    # WEEK_1 and WEEK_2 say nothing at all, but the plan's horizon_end reaches
+    # WEEK_3, so they are still inside the plan's own span.
+
+    horizon = build_horizon(db, user, weeks=4, today=TODAY)
+
+    assert _week(horizon, WEEK_1).coverage == "empty"
+    assert _week(horizon, WEEK_2).coverage == "empty"
+
+
+def test_a_plan_shorter_than_the_window_reads_its_tail_as_beyond_plan(db):
+    """#842's own regression: `build_horizon` always walks a fixed N weeks
+    regardless of how far the plan reaches, so a plan covering only the first
+    two of a four-week window used to render its trailing two weeks with the
+    exact same hollow "shape only, not written yet" tick as a genuinely
+    sketched week — a false claim, since the coach never sketched them."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user, horizon_end=WEEK_1 + timedelta(days=6))
+    _seed_session(db, plan, start=WEEK_0, target_effort_score=60.0)
+
+    horizon = build_horizon(db, user, weeks=4, today=TODAY)
+
+    assert _week(horizon, WEEK_0).coverage == "planned"
+    assert _week(horizon, WEEK_1).coverage == "empty"
+    assert _week(horizon, WEEK_2).coverage == "beyond_plan"
+    assert _week(horizon, WEEK_3).coverage == "beyond_plan"
+
+
+def test_with_no_active_plan_no_week_is_ever_beyond_plan(db):
+    """With no plan there is nothing to be beyond — `has_plan=False` already
+    tells the client that, so every week reads `empty` instead. The main edge
+    case the design calls out."""
+    user = _seed_user(db)
+
+    horizon = build_horizon(db, user, weeks=6, today=TODAY)
+
+    assert horizon.has_plan is False
+    assert all(w.coverage == "empty" for w in horizon.weeks)
+    assert not any(w.coverage == "beyond_plan" for w in horizon.weeks)
+
+
+def test_horizon_end_null_falls_back_to_the_latest_shape_or_committed_session(db):
+    user = _seed_user(db)
+    plan = _seed_plan(
+        db,
+        user,
+        week_shapes=[
+            {"week_start": WEEK_2.isoformat(), "phase": "build", "target_effort_score": 300}
+        ],
+    )
+    _seed_session(db, plan, start=WEEK_1, target_effort_score=60.0)
+
+    horizon = build_horizon(db, user, weeks=4, today=TODAY)
+
+    # The later of the shape (WEEK_2) and the committed session (WEEK_1) is
+    # WEEK_2, so only WEEK_3 falls past it.
+    assert _week(horizon, WEEK_1).coverage == "planned"
+    assert _week(horizon, WEEK_2).coverage == "sketched"
+    assert _week(horizon, WEEK_3).coverage == "beyond_plan"
+
+
+def test_horizon_end_null_fallback_ignores_a_merely_suggested_session(db):
+    """A suggestion nobody has agreed to does not extend the plan's reach — the
+    same reading `planned` already applies to whether a week counts as written
+    at all."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db, plan, start=WEEK_3, commitment="suggested", target_effort_score=60.0
+    )
+
+    horizon = build_horizon(db, user, weeks=5, today=TODAY)
+
+    assert _week(horizon, WEEK_0).coverage == "empty"
+    assert _week(horizon, WEEK_4).coverage == "empty"
+
+
+def test_coverage_planned_always_agrees_with_the_planned_flag(db):
+    user = _seed_user(db)
+    plan = _seed_plan(db, user, horizon_end=WEEK_1 + timedelta(days=6))
+    _seed_session(db, plan, start=WEEK_0, target_effort_score=60.0)
+
+    horizon = build_horizon(db, user, weeks=4, today=TODAY)
+
+    for week in horizon.weeks:
+        assert week.planned == (week.coverage == "planned")
 
 
 # --- mixes are shares ------------------------------------------------------

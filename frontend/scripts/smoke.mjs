@@ -260,16 +260,23 @@ const mockScheduleWeek = {
       logged_sessions: 1,
     },
   ],
+  // `statement` is the derived runner-facing rule text the API returns (#844);
+  // `label` is the coach's own prose, carried as a subordinate note. The first
+  // rule below deliberately keeps the MISLEADING live label that opened #844 —
+  // it promises an easy walk against a predicate that forbids one — so the mock
+  // exercises the case where the two genuinely diverge.
   rules: [
     {
       kind: "rest_day_after",
-      label: "A full rest day after the long run",
+      label: "Full rest or easy walk only the day after the long run",
+      statement: "Nothing but rest the day after a long session.",
       source: "coach",
       intent: "long",
     },
     {
       kind: "preferred_days",
       label: "Long run needs a free morning — Sat or Sun",
+      statement: "Long sessions only on Saturday and Sunday.",
       source: "runner",
       intent: "long",
       weekdays: [5, 6],
@@ -279,6 +286,7 @@ const mockScheduleWeek = {
     {
       kind: "no_intent_day_before",
       label: "No heavy legs the day before a quality run",
+      statement: "No strength session the day before a quality session.",
       detail: "Lower body sits the day before the 6 x 800m window opens.",
     },
   ],
@@ -316,16 +324,22 @@ const mockScheduleWeek = {
   },
 };
 
-// #830: the horizon. Twelve weeks carrying every shape the chart has to survive
-// — planned weeks with real mixes, sketched weeks, a phase change, an EMPTY week
-// the plan says nothing about (null load, empty mixes — the divide-by-zero
-// case), a race, and a peak that is not the first or last week.
+// #830/#842: the horizon. Twelve weeks carrying every shape the chart has to
+// survive — planned weeks with real mixes, sketched weeks, a phase change, an
+// EMPTY week the plan says nothing about but still falls inside its own span
+// (null load, empty mixes — the divide-by-zero case), a race, a peak that is
+// not the first or last week, and a tail of BEYOND_PLAN weeks past the plan's
+// own reach — the coach never sketched them, so like the empty week they carry
+// null load and no phase, but they read as a different thing entirely (past
+// the plan's end, not a gap inside it) and the chart draws the "Plan ends
+// here" boundary right before the first one.
 const mockScheduleHorizon = {
   weeks: [
     {
       week_start: "2026-03-23",
       phase: "Base",
       planned: true,
+      coverage: "planned",
       is_current: true,
       running_distance_m: 42000,
       effort_score: 210,
@@ -336,6 +350,7 @@ const mockScheduleHorizon = {
       week_start: "2026-03-30",
       phase: "Base",
       planned: true,
+      coverage: "planned",
       is_current: false,
       running_distance_m: 46000,
       effort_score: 232,
@@ -346,6 +361,7 @@ const mockScheduleHorizon = {
       week_start: "2026-04-06",
       phase: "Base",
       planned: true,
+      coverage: "planned",
       is_current: false,
       running_distance_m: 34000,
       effort_score: 168,
@@ -356,6 +372,7 @@ const mockScheduleHorizon = {
       week_start: "2026-04-13",
       phase: "Build",
       planned: false,
+      coverage: "sketched",
       is_current: false,
       running_distance_m: 52000,
       effort_score: 268,
@@ -366,18 +383,22 @@ const mockScheduleHorizon = {
       week_start: "2026-04-20",
       phase: "Build",
       planned: false,
+      coverage: "sketched",
       is_current: false,
       running_distance_m: 56000,
       effort_score: 290,
       discipline_mix: { run: 0.78, strength: 0.14, row: 0.08 },
       intent_mix: { easy: 0.42, long: 0.3, quality: 0.28 },
     },
-    // The plan says nothing about this week: it still arrives, so the run of
-    // weeks stays continuous and a gap reads as a gap.
+    // The plan says nothing about this week, but its own span still reaches
+    // past it (a later week is sketched) — a genuine interior GAP, distinct
+    // from a week past the plan's end. It still arrives so the run of weeks
+    // stays continuous and a gap reads as a gap.
     {
       week_start: "2026-04-27",
       phase: null,
       planned: false,
+      coverage: "empty",
       is_current: false,
       running_distance_m: null,
       effort_score: null,
@@ -388,6 +409,7 @@ const mockScheduleHorizon = {
       week_start: "2026-05-04",
       phase: "Build",
       planned: false,
+      coverage: "sketched",
       is_current: false,
       running_distance_m: 60000,
       effort_score: 312,
@@ -398,6 +420,7 @@ const mockScheduleHorizon = {
       week_start: "2026-05-11",
       phase: "Build",
       planned: false,
+      coverage: "sketched",
       is_current: false,
       running_distance_m: 44000,
       effort_score: 226,
@@ -408,6 +431,7 @@ const mockScheduleHorizon = {
       week_start: "2026-05-18",
       phase: "Peak",
       planned: false,
+      coverage: "sketched",
       is_current: false,
       running_distance_m: 66000,
       effort_score: 340,
@@ -418,31 +442,40 @@ const mockScheduleHorizon = {
       week_start: "2026-05-25",
       phase: "Peak",
       planned: false,
+      coverage: "sketched",
       is_current: false,
       running_distance_m: 62000,
       effort_score: 318,
       discipline_mix: { run: 0.82, strength: 0.12, bike: 0.06 },
       intent_mix: { easy: 0.4, long: 0.3, quality: 0.3 },
     },
+    // The plan's own reach ends after the Peak week above — the coach never
+    // sketched a Taper, so these two are BEYOND_PLAN rather than sketched:
+    // null load and no phase, same as the empty week, but the chart must not
+    // draw them with the same hollow "shape only" tick, and the last two weeks
+    // is exactly the "make the LAST few weeks beyond_plan" case the #842 fix
+    // exists to render honestly.
     {
       week_start: "2026-06-01",
-      phase: "Taper",
+      phase: null,
       planned: false,
+      coverage: "beyond_plan",
       is_current: false,
-      running_distance_m: 38000,
-      effort_score: 180,
-      discipline_mix: { run: 0.88, strength: 0.12 },
-      intent_mix: { easy: 0.55, quality: 0.25, rest: 0.2 },
+      running_distance_m: null,
+      effort_score: null,
+      discipline_mix: {},
+      intent_mix: {},
     },
     {
       week_start: "2026-06-08",
-      phase: "Taper",
+      phase: null,
       planned: false,
+      coverage: "beyond_plan",
       is_current: false,
-      running_distance_m: 26000,
-      effort_score: 120,
-      discipline_mix: { run: 0.92, walk: 0.08 },
-      intent_mix: { easy: 0.6, quality: 0.15, rest: 0.25 },
+      running_distance_m: null,
+      effort_score: null,
+      discipline_mix: {},
+      intent_mix: {},
     },
   ],
   // A race inside the FIRST few weeks as well as the A race at the end, so the

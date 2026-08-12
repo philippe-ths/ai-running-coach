@@ -5,13 +5,13 @@
 // never red.
 
 import { AlertTriangle } from "lucide-react";
-import type { RuleViolation, SpacingRule } from "@/lib/types/schedule";
+import type { RuleViolation, SpacingRuleRead } from "@/lib/types/schedule";
 
 export default function RulesPanel({
   rules,
   violations,
 }: {
-  rules: SpacingRule[];
+  rules: SpacingRuleRead[];
   violations: RuleViolation[];
 }) {
   if (!rules.length && !violations.length) return null;
@@ -32,10 +32,18 @@ export default function RulesPanel({
                 className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-gray-400 dark:bg-gray-500"
               />
               <span>
-                {rule.label}
+                {rule.statement}
                 {rule.source === "runner" && (
                   <span className="ml-1.5 text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">
                     yours
+                  </span>
+                )}
+                {/* The coach's own phrasing/reasoning, subordinate to the rule
+                    above — suppressed when it says nothing the statement did
+                    not already say. */}
+                {rule.label && rule.label !== rule.statement && (
+                  <span className="block text-[11px] text-gray-400 dark:text-gray-500">
+                    {rule.label}
                   </span>
                 )}
               </span>
@@ -59,8 +67,13 @@ export default function RulesPanel({
           <ul className="mt-2 space-y-1.5">
             {violations.map((v, i) => (
               <li key={`${v.kind}-${i}`} className="text-xs text-amber-800 dark:text-amber-200">
-                <span className="font-medium">{v.label}</span>
+                <span className="font-medium">{v.statement}</span>
                 <span className="text-amber-700 dark:text-amber-300"> — {v.detail}</span>
+                {v.label && v.label !== v.statement && (
+                  <span className="block text-[11px] text-amber-700/70 dark:text-amber-300/70">
+                    {v.label}
+                  </span>
+                )}
               </li>
             ))}
           </ul>

@@ -33,6 +33,7 @@ from app.schemas.schedule import (
     RuleViolation,
     RunningVsNorm,
     ScheduleWeekRead,
+    SpacingRuleRead,
     WeekHeadline,
 )
 from app.services.activity_facts import (
@@ -53,6 +54,7 @@ from app.services.schedule.placement import (
     session_status,
 )
 from app.services.schedule.norms import running_vs_norm
+from app.services.schedule.rule_text import describe_rule
 from app.services.schedule.rules import check_rules
 from app.services.weeks import days_into_week, resolve_week_start, week_start
 
@@ -235,6 +237,12 @@ def build_week(
     )
 
     rules = store.plan_rules(plan)
+    # The runner-facing STATEMENT is derived here, from kind + arguments, never
+    # from the coach's own `label` (#844) — see rule_text.py.
+    rules_read = [
+        SpacingRuleRead(**rule.model_dump(), statement=describe_rule(rule))
+        for rule in rules
+    ]
     # Only sessions still looking for a day constrain anything. A session already
     # done, dismissed or missed cannot be moved, so asking whether it fits would
     # report a failure the runner can do nothing about.
@@ -265,7 +273,7 @@ def build_week(
         sessions=sessions,
         logged=logged,
         by_discipline=_by_discipline(sessions, logged),
-        rules=rules,
+        rules=rules_read,
         violations=violations,
         norm=norm,
         running_norm=running_norm,
