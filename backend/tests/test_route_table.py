@@ -213,14 +213,18 @@ def test_the_installed_fastapi_matches_the_declared_constraint():
     )
 
 
-def test_the_naive_top_level_sweep_is_not_used_anywhere():
-    """Pin the mechanism itself so the regression is legible.
+def test_the_shared_walk_finds_at_least_what_the_naive_sweep_did():
+    """Pin the mechanism itself so the regression stays legible.
 
-    On FastAPI 0.141 the pre-#809 expression -- filter `app.routes` for entries
-    that carry a `dependant` -- returns NOTHING, because `include_router` now
-    inserts an opaque wrapper. On 0.128 it returns everything. Either way the
-    shared walk must find at least as much, and on the version CI resolves it
-    finds strictly more.
+    The pre-#809 expression -- filter `app.routes` for entries that carry a
+    `dependant` -- returns NOTHING on FastAPI 0.141, because `include_router`
+    now inserts an opaque wrapper, and everything on 0.128. The shared walk must
+    never see less than it did, on either model.
+
+    Deliberately `>=` rather than a strict `>`: which of the two holds depends
+    on the installed version, and pinning the version-specific half here would
+    duplicate what `test_the_installed_fastapi_matches_the_declared_constraint`
+    already states in one place.
     """
     naive = [
         r

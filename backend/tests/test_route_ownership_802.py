@@ -162,7 +162,7 @@ def _owned_routes():
 
 
 def _route_key(route):
-    return (_methods(route)[0], route.path)
+    return route.key  # (method, path), defined once on RouteInfo
 
 
 # --- structural: the guarantee the refactor creates -------------------------

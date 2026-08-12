@@ -129,7 +129,12 @@ def walk_routes(routes, prefix: str, out: list, inherited: tuple = ()) -> None:
 
 
 def all_routes(application=None) -> list:
-    """Every resolved route on the app, regardless of prefix."""
+    """Every route carrying a dependency tree, regardless of prefix.
+
+    Not literally every entry in the routing table: FastAPI's own `/docs`,
+    `/redoc` and `/openapi.json` are plain Starlette routes with no `dependant`
+    and are skipped, which is right for guards that reason about dependencies.
+    """
     out: list = []
     walk_routes((application or _app).routes, "", out)
     return out
@@ -155,6 +160,11 @@ def assert_enumeration_is_not_vacuous(application=None) -> list:
     This is the anti-vacuity check every route sweep depends on: an empty (or
     merely incomplete) enumeration turns a sweep into a silent no-op, which is
     what issue #809 was. Returns the enumeration so a caller can use it.
+
+    The OpenAPI document is an exact oracle only for routes it describes; a
+    route declared `include_in_schema=False` would not appear in it. There are
+    none today, and the route-count floor below is what stands behind that gap
+    if one is ever added.
     """
     enumerated = api_routes(application)
     served = served_api_paths(application)

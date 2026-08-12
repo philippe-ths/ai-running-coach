@@ -13,6 +13,7 @@ dependency's enforcement/degrade contract.
 
 import asyncio
 import datetime as dt
+import re
 from uuid import uuid4
 
 import httpx
@@ -490,8 +491,24 @@ class TestUserResolution:
 # run over an enumeration that has gone empty or short.
 
 
+# A floor on how many non-exempt routes a sweep of the REAL app must have
+# looked at. Every check below iterates a collection, and iterating an empty
+# collection is a pass -- so each sweep states how much it saw. Well under the
+# 55 the app carries today; raised only deliberately.
+_MIN_APPLICATION_ROUTES = 40
+
+
+def _application_routes(application=None) -> list:
+    """Every non-exempt /api route on `application`: the fence's subject."""
+    return [
+        info
+        for info in api_routes(application)
+        if not any(info.path.startswith(p) for p in _EXEMPT_PREFIXES)
+    ]
+
+
 def _ungated_application_routes(application=None) -> list:
-    """Every non-exempt /api route on `application` that no session gates.
+    """Those of them that no session dependency gates.
 
     `gating_calls` is the union of the route's own dependency tree and the
     dependencies attached where its router was included -- FastAPI 0.141 stopped
@@ -501,9 +518,8 @@ def _ungated_application_routes(application=None) -> list:
     """
     return [
         info.label()
-        for info in api_routes(application)
-        if not any(info.path.startswith(p) for p in _EXEMPT_PREFIXES)
-        and clerk_auth.verify_clerk_session not in info.gating_calls
+        for info in _application_routes(application)
+        if clerk_auth.verify_clerk_session not in info.gating_calls
     ]
 
 
@@ -517,8 +533,24 @@ class TestGateCoverage:
         assert_enumeration_is_not_vacuous()
 
     def test_every_application_route_requires_a_session(self):
-        """No application /api route may be left ungated (fail-closed by review)."""
-        ungated = _ungated_application_routes()
+        """No application /api route may be left ungated (fail-closed by review).
+
+        States how many routes it inspected as well as the verdict, so this test
+        cannot go green on an empty sweep even when run on its own. The sibling
+        above is the general protection; this floor makes THIS assertion, the
+        load-bearing one, non-vacuous in isolation.
+        """
+        inspected = _application_routes()
+        assert len(inspected) >= _MIN_APPLICATION_ROUTES, (
+            f"the fence inspected only {len(inspected)} application routes, "
+            f"below the floor of {_MIN_APPLICATION_ROUTES}, so it is not "
+            "actually checking the gate (#809)"
+        )
+        ungated = [
+            info.label()
+            for info in inspected
+            if clerk_auth.verify_clerk_session not in info.gating_calls
+        ]
         assert not ungated, f"ungated application routes: {ungated}"
 
     def test_the_fence_catches_a_genuinely_ungated_route(self):
@@ -605,29 +637,21 @@ class TestGateCoverage:
         Structural and behavioural coverage fail differently: the structural
         sweep goes blind when FastAPI moves its furniture (#809), this one goes
         blind only if the enumeration does, which the check above forbids.
+
+        Every path parameter is substituted IN PLACE rather than truncating the
+        path at the first one: a truncated URL can collide with a different,
+        already-gated route, answer 401 for that route's reasons, and let the
+        one under test go unexercised while the count still looks healthy.
         """
-        ids = (
-            "activity_id",
-            "block_id",
-            "thread_id",
-            "material_id",
-            "race_id",
-            "session_id",
-        )
         unexpected, checked = [], 0
-        for info in api_routes():
-            if any(info.path.startswith(p) for p in _EXEMPT_PREFIXES):
-                continue
-            url = info.path
-            for name in ids:
-                url = url.replace("{" + name + "}", str(uuid4()))
-            if "{" in url:  # some other parameter name; any value will do
-                url = url.split("{")[0].rstrip("/") + "/x"
+        for info in _application_routes():
+            url = re.sub(r"\{[^}]+\}", str(uuid4()), info.path)
+            assert "{" not in url, url
             checked += 1
             resp = client.request(info.methods[0], url, json={})
             if resp.status_code != 401:
                 unexpected.append(f"{resp.status_code} {info.label()}")
-        assert checked >= 40, (
+        assert checked >= _MIN_APPLICATION_ROUTES, (
             f"only {checked} routes were exercised, so this sweep is not "
             "actually testing the gate (#809)"
         )
