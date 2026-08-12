@@ -249,5 +249,13 @@ def build_thread_schedule(
         "still_to_come_this_week": [item.model_dump() for item in upcoming],
         "committed_this_week": committed,
         "done_this_week": done,
-        "rules_in_play": [rule.label for rule in store.plan_rules(plan)][:MAX_RULES],
+        # The DERIVED statement, never the coach's own `label` (#844/#847). The
+        # label is LLM-written prose that nothing ties to the predicate, so it can
+        # promise what the rule does not enforce — a live draft invited a walk the
+        # predicate then flagged. A coach planning around the label would plan the
+        # same violation into the next block, which is the original defect one
+        # surface further in.
+        "rules_in_play": [
+            describe_rule(rule) for rule in store.plan_rules(plan)
+        ][:MAX_RULES],
     }

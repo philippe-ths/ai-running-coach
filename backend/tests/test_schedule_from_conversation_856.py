@@ -370,6 +370,33 @@ def test_the_conversation_carries_the_week_the_runner_is_actually_training(db):
     assert all("done" not in s for s in schedule["still_to_come_this_week"])
 
 
+def test_the_conversation_reads_the_rule_that_is_enforced_not_the_coach_s_label(db):
+    """#844/#847, one surface further in. A `SpacingRule`'s `label` is LLM-written
+    prose that nothing ties to the predicate, so it can promise what the rule does
+    not enforce — a live draft invited a walk the predicate then flagged. A coach
+    handed the label would plan that same violation into the next block, so the
+    conversation reads the DERIVED statement, exactly as the report pack does."""
+    from app.services.coach import thread_turn
+    from app.services.schedule.rule_text import describe_rule
+
+    user = _user(db)
+    plan = _active_plan(db, user)
+    plan.rules = [
+        {
+            "kind": "rest_day_after",
+            "intent": "long",
+            "label": "Full rest or easy walk only the day after the long run",
+        }
+    ]
+    db.commit()
+
+    rules = thread_turn._build_baseline_sections(db, user)["schedule"]["rules_in_play"]
+    derived = describe_rule(store.plan_rules(plan)[0])
+
+    assert rules == [derived]
+    assert "easy walk" not in rules[0]
+
+
 def test_the_coach_input_switch_removes_the_schedule_from_the_conversation(db, monkeypatch):
     """`COACH_SCHEDULE_ENABLED` is the input switch: off, the coach stops seeing
     the plan while the runner's Schedule screen keeps working exactly as before."""
