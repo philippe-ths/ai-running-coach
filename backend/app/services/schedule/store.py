@@ -14,7 +14,7 @@ means it does not constrain anything, and the checker reports what it can see.
 
 import logging
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -28,6 +28,125 @@ logger = logging.getLogger(__name__)
 
 ACTIVE = "active"
 SUPERSEDED = "superseded"
+DRAFTING = "drafting"
+FAILED = "failed"
+
+
+# How long a draft may sit in `drafting` before it is treated as abandoned.
+# Generous next to a generation that takes about a minute: the cost of waiting is
+# a slow retry, the cost of being too eager is two concurrently-billed drafts.
+DRAFT_STALE_AFTER = timedelta(minutes=15)
+
+
+def latest_plan(db: Session, user_id: uuid.UUID) -> Optional[TrainingPlan]:
+    """The runner's most recent plan row whatever its status.
+
+    The status poll reads this: a draft in flight is deliberately invisible to
+    `get_active_plan`, so the week keeps serving the previous plan (or free mode)
+    while a new one is being written.
+
+    `created_at` is `server_default=func.now()` — the TRANSACTION timestamp on
+    Postgres, one-second resolution on SQLite — so it ties readily. The `id`
+    tiebreaker is arbitrary but DETERMINISTIC, which is what a poll needs: an
+    answer that does not flip between two calls that saw the same rows.
+    """
+    return (
+        db.query(TrainingPlan)
+        .filter(TrainingPlan.user_id == user_id)
+        .order_by(TrainingPlan.created_at.desc(), TrainingPlan.id.desc())
+        .first()
+    )
+
+
+def draft_in_flight(db: Session, user_id: uuid.UUID) -> Optional[TrainingPlan]:
+    """A draft currently being written, or None — stale rows excluded.
+
+    Asked as its own query rather than read off `latest_plan`, because it is the
+    idempotency guard for a billed operation and must not depend on which of two
+    same-second rows sorted first.
+
+    A row older than `DRAFT_STALE_AFTER` is not in flight. Without that, a Redis
+    hiccup or a worker that died before picking the job up would leave a row
+    nothing ever moves, and every later tap would return it — the feature would
+    be permanently stuck for that runner with no way back but a DB edit.
+    """
+    cutoff = datetime.now(timezone.utc) - DRAFT_STALE_AFTER
+    plan = (
+        db.query(TrainingPlan)
+        .filter(TrainingPlan.user_id == user_id, TrainingPlan.status == DRAFTING)
+        .order_by(TrainingPlan.created_at.desc(), TrainingPlan.id.desc())
+        .first()
+    )
+    if plan is None:
+        return None
+    created = plan.created_at
+    if created is not None and created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    if created is not None and created < cutoff:
+        fail_plan(db, plan, "abandoned: still drafting after the staleness window")
+        return None
+    return plan
+
+
+def create_drafting_plan(
+    db: Session, user_id: uuid.UUID, *, goal_race_id: Optional[uuid.UUID] = None
+) -> TrainingPlan:
+    """An empty plan row in `drafting`, created before the generation starts.
+
+    It exists up front so the runner's client has something to poll and so a
+    crashed worker leaves a visible `drafting` row rather than silence.
+    """
+    plan = TrainingPlan(
+        user_id=user_id,
+        status=DRAFTING,
+        goal_race_id=goal_race_id,
+        rules=[],
+        week_shapes=[],
+        source="coach",
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+def activate_plan(db: Session, plan: TrainingPlan) -> TrainingPlan:
+    """Make this plan the runner's active one, superseding any predecessor.
+
+    Two rows change together, so it is one transaction: the old plan stops being
+    active in the same commit that makes the new one active. At no instant does
+    the runner have two active plans or none.
+    """
+    db.query(TrainingPlan).filter(
+        TrainingPlan.user_id == plan.user_id,
+        TrainingPlan.status == ACTIVE,
+        TrainingPlan.id != plan.id,
+    ).update({TrainingPlan.status: SUPERSEDED}, synchronize_session=False)
+    plan.status = ACTIVE
+    plan.generated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+def fail_plan(db: Session, plan: TrainingPlan, reason: str) -> TrainingPlan:
+    """Mark a draft failed, visibly.
+
+    A plan cannot degrade the way a report can — half a plan is worse than none,
+    because the runner would act on it — so a rejected draft leaves a row saying
+    so rather than a partial schedule.
+
+    The reason is LOGGED rather than stored. Validator failures are internal
+    ("week 2026-08-17 cannot satisfy its own rule ..."), and the runner is owed a
+    plain "your coach could not write a plan just now", not the machinery. If a
+    runner-facing reason is ever wanted it needs its own column and its own
+    wording, which is a deliberate change rather than a leak of this text.
+    """
+    logger.warning("schedule: draft %s failed: %s", plan.id, reason)
+    plan.status = FAILED
+    db.commit()
+    db.refresh(plan)
+    return plan
 
 
 def get_active_plan(db: Session, user_id: uuid.UUID) -> Optional[TrainingPlan]:
