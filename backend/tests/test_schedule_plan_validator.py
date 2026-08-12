@@ -766,3 +766,52 @@ def test_a_session_with_nothing_to_size_it_is_still_rejected():
 
     assert check.ok is False
     assert any("nothing can size it" in f for f in check.failures)
+
+
+def test_a_sketched_week_may_ramp_further_than_a_concrete_one():
+    """A build is not absurdity.
+
+    Going from 18 km/week to 38 km at peak over ten weeks is ordinary coaching. A
+    single ceiling held a sketched week ten weeks out to the same bound as next
+    Tuesday and rejected a perfectly sensible half-marathon build, which is the
+    ceiling second-guessing the ramp rather than catching nonsense.
+    """
+    norm = 18_000.0
+    fine = _plan(
+        sketch_weeks=[
+            SketchedWeek(
+                week_start=MON + timedelta(days=70),
+                target_running_distance_m=40_000,
+            )
+        ]
+    )
+    absurd = _plan(
+        sketch_weeks=[
+            SketchedWeek(
+                week_start=MON + timedelta(days=70),
+                target_running_distance_m=90_000,
+            )
+        ]
+    )
+
+    assert validate_drafted_plan(
+        fine, today=MON, norm_weekly_running_m=norm
+    ).ok is True
+    assert validate_drafted_plan(
+        absurd, today=MON, norm_weekly_running_m=norm
+    ).ok is False
+
+
+def test_the_concrete_week_ceiling_is_unchanged():
+    """Next week is what the runner actually does, so it keeps the tighter bound."""
+    norm = 18_000.0
+    plan = _plan(
+        weeks=[
+            _week(sessions=[_session(target_distance_m=40_000, title="Enormous")])
+        ]
+    )
+
+    check = validate_drafted_plan(plan, today=MON, norm_weekly_running_m=norm)
+
+    assert check.ok is False
+    assert any("typical" in f for f in check.failures)

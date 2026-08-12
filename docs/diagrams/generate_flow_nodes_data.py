@@ -214,7 +214,12 @@ def build_data(db):
     )
     llm_view = coach_llm_view(llm_pack_dict, PROMPT_ID)
     classification = Classification.from_metrics(metrics)
-    system_prompt = build_system_prompt(PROMPT_ID, playbook_key(activity, classification), voice=voice)
+    # No `voice=`: since #822 the report is generated VOICELESS and re-voiced
+    # afterwards by `voice_rewrite`, so the system prompt no longer takes one.
+    # The generator kept passing it and had been raising a TypeError ever since —
+    # `make diagram-check` compares pack sections and DerivedMetric columns, so it
+    # cannot see a generator that will not run.
+    system_prompt = build_system_prompt(PROMPT_ID, playbook_key(activity, classification))
 
     rep = db.execute(
         select(CoachReport)

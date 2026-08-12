@@ -302,6 +302,14 @@ RECORD_TRAINING_PLAN_TOOL = {
                                     "commitment": {
                                         "type": "string",
                                         "enum": ["committed", "suggested"],
+                                        "description": (
+                                            "`committed` is the plan — it counts "
+                                            "towards the week and missing it "
+                                            "matters. `suggested` is an optional "
+                                            "extra the runner can decline with no "
+                                            "trace. Default to committed; a week "
+                                            "of suggestions is not a plan."
+                                        ),
                                     },
                                     "title": {"type": "string"},
                                     "detail": {"type": "string"},

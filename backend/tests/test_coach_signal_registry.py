@@ -49,7 +49,7 @@ FLAT_ORDER_ORACLE = (
     "preference_profile", "narrative", "salience", "continuity", "block", "corpus",
     "stance", "training_load", "training_volume", "stream_view", "recent_training",
     "readiness", "recent_weeks", "training_history", "memory", "intensity",
-    "intensity_read", "referral", "intensity_mix", "safety_rules",
+    "intensity_read", "referral", "intensity_mix", "schedule", "safety_rules",
 )
 
 SECTION_GROUP_ORACLE = {
@@ -60,6 +60,7 @@ SECTION_GROUP_ORACLE = {
     "training_load": "right_now", "training_volume": "right_now",
     "recent_training": "right_now", "readiness": "right_now",
     "recent_weeks": "right_now", "intensity_mix": "right_now",
+    "schedule": "right_now",
     "profile": "the_runner", "memory": "the_runner", "training_history": "the_runner",
     "adherence": "our_thread", "continuity": "our_thread", "longitudinal": "our_thread",
     "corpus": "how_to_coach", "stance": "how_to_coach",
@@ -77,6 +78,7 @@ PACK_SECTION_ORACLE = {
     "intensity_read": PromptFeature.INTENSITY_READ,
     "referral": PromptFeature.INTENSITY_READ,
     "intensity_mix": PromptFeature.INTENSITY_MIX,
+    "schedule": PromptFeature.SCHEDULE,
     "perceived_effort": None, "calibration": None, "recent_training_summary": None,
     "believed_facts": None, "preference_profile": None, "narrative": None,
     "longitudinal": None, "salience": None, "continuity": None,
@@ -108,6 +110,7 @@ ADAPTER_ORACLE = {
     ),
     "memory": (PromptFeature.MEMORY, "COACH_MEMORY_ENABLED"),
     "intensity": (PromptFeature.INTENSITY, None),
+    "schedule": (PromptFeature.SCHEDULE, "COACH_SCHEDULE_ENABLED"),
 }
 
 

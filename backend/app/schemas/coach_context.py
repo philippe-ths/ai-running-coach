@@ -1255,6 +1255,70 @@ class ThisRun(BaseModel):
     referral: Optional[str] = None
 
 
+# ---------------------------------------------------------------------------
+# #830: the runner's own plan, so the coach can read a session against what it
+# was FOR rather than describing it cold.
+
+
+class PlannedForContext(BaseModel):
+    """What THIS activity was meant to be, if the runner had it planned.
+
+    The difference between "you ran 9.4 km with some fast bits" and "you hit the
+    800s". Deliberately carries the PRESCRIPTION only — what was asked for — and
+    never a verdict on whether it was met: the measured `this_run` sections are
+    what actually happened, and comparing the two is the coach's job, not a
+    number the pack hands it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    intent: str
+    discipline: str
+    target: Optional[str] = None          # "8 km", "45 min", "6 x 400 m"
+    detail: Optional[str] = None
+
+
+class UpcomingSessionContext(BaseModel):
+    """One session still to come this week. Intent, never a record of events."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    when: str                              # "Sat" | "Thu-Sat" | "any day"
+    title: str
+    intent: str
+    discipline: str
+    target: Optional[str] = None
+
+
+class ScheduleContext(BaseModel):
+    """The runner's plan for THIS week (#830).
+
+    Scoped to the week on purpose. A twelve-week horizon is the runner's screen,
+    not something a report about one run needs: what a coach needs here is what
+    this session was for and what it sets up, and the rest is tokens spent on
+    weeks nobody is asking about yet.
+
+    Everything in here is INTENT. Not one field states that something happened —
+    `done_this_week` is a count of sessions the runner ticked off, and the
+    measured record of any of them lives in the `this_run` sections and the
+    activity history. That separation is the whole safety of this signal: handed
+    a plan, a model reaches for a compliance verdict, which is the nagging the
+    runner-memory redesign exists to have removed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    planned_for_this_activity: Optional[PlannedForContext] = None
+    still_to_come_this_week: List[UpcomingSessionContext] = Field(default_factory=list)
+    # The spacing rules in play, as the runner reads them. Carried so advice does
+    # not contradict the plan the coach itself wrote ("do a session tomorrow"
+    # when tomorrow is the rest day after the long run).
+    rules_in_play: List[str] = Field(default_factory=list)
+    committed_this_week: int = 0
+    done_this_week: int = 0
+
+
 class RightNow(BaseModel):
     """ADR 0026: how is the runner currently?
 
@@ -1275,6 +1339,11 @@ class RightNow(BaseModel):
     # ADR 0026 Slice 3 (#673): the recent intensity distribution + trend (the "how hard
     # lately" half of the retired intensity section), gated to the new grouped prompt.
     intensity_mix: Optional["IntensityMix"] = None
+    # #830: what the runner PLANNED for this week — the forward half of "how is
+    # the runner currently". It sits here rather than in a sixth group because a
+    # plan is part of where things stand, and a new coaching group would ripple
+    # through every grouped prompt version's orientation prose.
+    schedule: Optional["ScheduleContext"] = None
 
 
 class TheRunner(BaseModel):
@@ -1460,6 +1529,10 @@ class CoachContextPack(BaseModel):
         return self.right_now.intensity_mix
 
     @property
+    def schedule(self) -> Optional["ScheduleContext"]:
+        return self.right_now.schedule
+
+    @property
     def training_load(self) -> Optional["TrainingLoadContext"]:
         return self.right_now.training_load
 
@@ -1538,6 +1611,7 @@ class CoachContextPack(BaseModel):
         recent_training: Optional["RecentTrainingContext"] = None,
         readiness: Optional["ReadinessContext"] = None,
         recent_weeks: Optional["RecentWeeksContext"] = None,
+        schedule: Optional["ScheduleContext"] = None,
         training_history: Optional["TrainingHistoryContext"] = None,
         memory: Optional["MemoryContext"] = None,
         intensity: Optional["IntensityContext"] = None,
@@ -1570,6 +1644,7 @@ class CoachContextPack(BaseModel):
                 readiness=readiness,
                 recent_weeks=recent_weeks,
                 intensity_mix=intensity_mix,
+                schedule=schedule,
             ),
             the_runner=TheRunner(
                 profile=profile,

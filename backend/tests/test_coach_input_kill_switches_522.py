@@ -298,6 +298,11 @@ def test_feature_flags_endpoint_reports_disabled_state(client, monkeypatch):
         # #784: the thread SURFACE rides the same map, so the frontend learns
         # from one place whether to render the launcher and sheet at all.
         "threads": True,
+        # #830: whether the coach SEES the runner's plan. On the map so the
+        # schedule screen can say plainly that its plan is not reaching the
+        # coach, rather than leaving the runner to wonder why no report
+        # mentions it.
+        "schedule": True,
     }
     # voice is derived: relationship AND voice-block must both be on.
     monkeypatch.setattr(settings, "COACH_VOICE_BLOCK_ENABLED", False)

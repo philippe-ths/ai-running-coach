@@ -366,6 +366,7 @@ def _assemble_pack(db, activity, continuity, prompt_id, stance) -> CoachContextP
         # three sections above still emit, byte-stable.
         readiness=gather(_READINESS_SIGNAL, db, activity, prompt_id, as_of),
         recent_weeks=gather(_RECENT_WEEKS_SIGNAL, db, activity, prompt_id, as_of),
+        schedule=gather(_SCHEDULE_SIGNAL, db, activity, prompt_id, as_of),
         # #561 multi-year training-history picture (LOD volume ladder + durability traits).
         # ADR 0026 Slice 2 (#670): EITHER the original 60d ladder (every prior prompt) OR
         # the rebased-after-recent_weeks 14d ladder (grouped_v2), never both — the two
@@ -1550,6 +1551,24 @@ def _novelty_axis_history(db: Session, activity: Activity) -> list[AxisSnapshot]
 # they are stated once rather than restated here (and, for the kill switches, a
 # third time inside the builder). `build_signals` fails AT IMPORT if a declared
 # adapter has no compute or a compute has no declaration.
+def _build_schedule_context(db, activity, as_of):
+    """#830: the runner's plan for this week, as the coach receives it.
+
+    Lazily imported: the schedule is a separate surface, and a fault in it must
+    never stop a report being written.
+    """
+    try:
+        from app.services.schedule.coach_view import build_schedule_context
+
+        return build_schedule_context(db, activity, as_of)
+    except Exception:  # noqa: BLE001 — a report must survive a schedule fault
+        logger.exception(
+            "schedule: pack section failed for activity %s; coaching without it",
+            getattr(activity, "id", None),
+        )
+        return None
+
+
 _COMPUTES: dict[str, SignalCompute] = {
     "calibration": _build_calibration_context,
     "adherence": _build_adherence_context,
@@ -1567,6 +1586,10 @@ _COMPUTES: dict[str, SignalCompute] = {
     "training_history_2wk": _build_training_history_2wk_context,
     "memory": _build_memory_context,
     "intensity": _build_intensity_context,
+    # #830: the runner's own plan for this week. The gate and the kill switch are
+    # declared in signal_registry and applied by `gather`, so this registers only
+    # the compute.
+    "schedule": _build_schedule_context,
 }
 
 _SIGNALS = build_signals(_COMPUTES)
@@ -1582,6 +1605,7 @@ _TRAINING_HISTORY_SIGNAL = _SIGNALS["training_history"]
 _TRAINING_HISTORY_2WK_SIGNAL = _SIGNALS["training_history_2wk"]
 _MEMORY_SIGNAL = _SIGNALS["memory"]
 _INTENSITY_SIGNAL = _SIGNALS["intensity"]
+_SCHEDULE_SIGNAL = _SIGNALS["schedule"]
 
 
 # ---------------------------------------------------------------------------
