@@ -8,13 +8,24 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 # --- CUSTOM: Import our settings and model Base ---
+import importlib
+import pkgutil
+
 from app.core.config import settings
 from app.db.base import Base
-# Import models to ensure they are attached to Base.metadata
-from app.models import (  # noqa
-    User, StravaAccount, Activity, ActivityStream,
-    DerivedMetric, UserProfile, CheckIn,
-)
+import app.models as _models_package
+
+# Import every model module so `Base.metadata` carries every table (#869).
+# This used to name seven models and receive the other fourteen only because
+# importing `app.models` runs the barrel `__init__.py`. That made completeness
+# rest on a convention nobody checked: a model in a file missing from the
+# barrel would be absent from the metadata, so `--autogenerate` would not see
+# its table and the `alembic check` drift guard (#839) would report no drift
+# while blind to it. Walking the package removes the barrel from the path
+# entirely, so the guard's reach no longer depends on an import list staying
+# in sync by hand.
+for _module in pkgutil.iter_modules(_models_package.__path__):
+    importlib.import_module(f"{_models_package.__name__}.{_module.name}")
 
 config = context.config
 
