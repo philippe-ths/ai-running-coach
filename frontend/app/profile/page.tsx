@@ -121,10 +121,11 @@ export default function ProfilePage() {
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-                <label className="block text-sm font-medium mb-1">Goal Type</label>
-                <select 
-                    name="goal_type" 
-                    value={formData.goal_type} 
+                <label htmlFor="goal_type" className="block text-sm font-medium mb-1">Goal Type</label>
+                <select
+                    id="goal_type"
+                    name="goal_type"
+                    value={formData.goal_type}
                     onChange={handleChange}
                     className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 >
@@ -137,10 +138,11 @@ export default function ProfilePage() {
             </div>
 
             <div>
-                <label className="block text-sm font-medium mb-1">Experience Level</label>
-                <select 
-                    name="experience_level" 
-                    value={formData.experience_level} 
+                <label htmlFor="experience_level" className="block text-sm font-medium mb-1">Experience Level</label>
+                <select
+                    id="experience_level"
+                    name="experience_level"
+                    value={formData.experience_level}
                     onChange={handleChange}
                     className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 >
@@ -151,9 +153,10 @@ export default function ProfilePage() {
             </div>
 
             <div>
-                <label className="block text-sm font-medium mb-1">Weekly Days Available</label>
-                <input 
+                <label htmlFor="weekly_days_available" className="block text-sm font-medium mb-1">Weekly Days Available</label>
+                <input
                     type="number" min="1" max="7"
+                    id="weekly_days_available"
                     name="weekly_days_available"
                     value={formData.weekly_days_available}
                     onChange={handleChange}
@@ -162,9 +165,10 @@ export default function ProfilePage() {
             </div>
 
             <div>
-                <label className="block text-sm font-medium mb-1">Max Heart Rate (bpm)</label>
-                <input 
+                <label htmlFor="max_hr" className="block text-sm font-medium mb-1">Max Heart Rate (bpm)</label>
+                <input
                     type="number" min="100" max="250"
+                    id="max_hr"
                     name="max_hr"
                     value={formData.max_hr || ''}
                     onChange={handleChange}
@@ -177,9 +181,10 @@ export default function ProfilePage() {
             </div>
 
             <div>
-                <label className="block text-sm font-medium mb-1">Resting Heart Rate (bpm)</label>
+                <label htmlFor="resting_hr" className="block text-sm font-medium mb-1">Resting Heart Rate (bpm)</label>
                 <input
                     type="number" min="30" max="120"
+                    id="resting_hr"
                     name="resting_hr"
                     value={formData.resting_hr || ''}
                     onChange={handleChange}
@@ -192,9 +197,10 @@ export default function ProfilePage() {
             </div>
 
             <div>
-                <label className="block text-sm font-medium mb-1">Weight (kg)</label>
+                <label htmlFor="weight_kg" className="block text-sm font-medium mb-1">Weight (kg)</label>
                 <input
                     type="number" min="20" max="300" step="0.1"
+                    id="weight_kg"
                     name="weight_kg"
                     value={formData.weight_kg ?? ''}
                     onChange={handleChange}
@@ -204,9 +210,10 @@ export default function ProfilePage() {
             </div>
 
             <div>
-                <label className="block text-sm font-medium mb-1">Height (cm)</label>
+                <label htmlFor="height_cm" className="block text-sm font-medium mb-1">Height (cm)</label>
                 <input
                     type="number" min="100" max="250" step="0.5"
+                    id="height_cm"
                     name="height_cm"
                     value={formData.height_cm ?? ''}
                     onChange={handleChange}
@@ -221,9 +228,10 @@ export default function ProfilePage() {
             </div>
 
             <div>
-                <label className="block text-sm font-medium mb-1">Current Weekly Volume (km)</label>
+                <label htmlFor="current_weekly_km" className="block text-sm font-medium mb-1">Current Weekly Volume (km)</label>
                 <input
                     type="number" min="0"
+                    id="current_weekly_km"
                     name="current_weekly_km"
                     value={formData.current_weekly_km}
                     onChange={handleChange}
@@ -232,8 +240,9 @@ export default function ProfilePage() {
             </div>
 
             <div>
-                <label className="block text-sm font-medium mb-1">Week Starts On</label>
+                <label htmlFor="week_starts_on" className="block text-sm font-medium mb-1">Week Starts On</label>
                 <select
+                    id="week_starts_on"
                     name="week_starts_on"
                     value={formData.week_starts_on}
                     onChange={handleChange}
@@ -249,8 +258,9 @@ export default function ProfilePage() {
         </div>
 
         <div>
-            <label className="block text-sm font-medium mb-1">Injury / Health Notes</label>
-            <textarea 
+            <label htmlFor="injury_notes" className="block text-sm font-medium mb-1">Injury / Health Notes</label>
+            <textarea
+                id="injury_notes"
                 name="injury_notes"
                 value={formData.injury_notes}
                 onChange={handleChange}
