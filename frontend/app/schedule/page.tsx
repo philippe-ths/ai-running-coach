@@ -10,6 +10,7 @@
 // the done count AND the discipline mix, which no client can correctly patch.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { fetchFromAPI } from "@/lib/api";
 import { formatDateLabel } from "@/lib/format";
@@ -21,7 +22,10 @@ import SessionCard from "@/components/schedule/SessionCard";
 import RulesPanel from "@/components/schedule/RulesPanel";
 import LoggedList from "@/components/schedule/LoggedList";
 import EmptyWeek from "@/components/schedule/EmptyWeek";
+import HorizonView from "@/components/schedule/HorizonView";
 import { addDaysIso, todayIso } from "@/components/schedule/dates";
+
+type View = "week" | "horizon";
 
 const PLACEMENT_RANK: Record<string, number> = { pinned: 0, window: 1, week: 2 };
 
@@ -35,6 +39,9 @@ function sortSessions(sessions: PlannedSession[]): PlannedSession[] {
 }
 
 export default function SchedulePage() {
+  // The week stays the default view: it is what the runner is doing next, and
+  // the horizon is the step back from it.
+  const [view, setView] = useState<View>("week");
   // null = "the current week", which is what the API defaults to. Navigation
   // sets an explicit day and the API resolves it to the runner's own week
   // boundary, so the client never has to know where their week starts.
@@ -158,31 +165,43 @@ export default function SchedulePage() {
             The week ahead, and how it is going.
           </p>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Previous week"
-            onClick={() => week && setWeekParam(addDaysIso(week.week_start, -7))}
-            disabled={!week}
-            className="rounded-md p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700/50"
-          >
-            <ChevronLeft size={18} aria-hidden="true" />
-          </button>
-          <span className="min-w-[8rem] text-center text-sm font-medium text-gray-600 dark:text-gray-400">
-            {label}
-          </span>
-          <button
-            type="button"
-            aria-label="Next week"
-            onClick={() => week && setWeekParam(addDaysIso(week.week_start, 7))}
-            disabled={!week}
-            className="rounded-md p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700/50"
-          >
-            <ChevronRight size={18} aria-hidden="true" />
-          </button>
-        </div>
+        {view === "week" && (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="Previous week"
+              onClick={() => week && setWeekParam(addDaysIso(week.week_start, -7))}
+              disabled={!week}
+              className="rounded-md p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700/50"
+            >
+              <ChevronLeft size={18} aria-hidden="true" />
+            </button>
+            <span className="min-w-[8rem] text-center text-sm font-medium text-gray-600 dark:text-gray-400">
+              {label}
+            </span>
+            <button
+              type="button"
+              aria-label="Next week"
+              onClick={() => week && setWeekParam(addDaysIso(week.week_start, 7))}
+              disabled={!week}
+              className="rounded-md p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700/50"
+            >
+              <ChevronRight size={18} aria-hidden="true" />
+            </button>
+          </div>
+        )}
       </header>
 
+      <ViewTabs view={view} onChange={setView} />
+
+      {view === "horizon" && (
+        <div id="panel-horizon" role="tabpanel" aria-labelledby="tab-horizon">
+          <HorizonView />
+        </div>
+      )}
+
+      {view === "week" && (
+        <div id="panel-week" role="tabpanel" aria-labelledby="tab-week" className="space-y-6">
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
           {error}
@@ -275,6 +294,76 @@ export default function SchedulePage() {
           <LoggedList logged={week.logged} />
         </>
       )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const VIEWS: { value: View; label: string }[] = [
+  { value: "week", label: "This week" },
+  { value: "horizon", label: "Next 3 months" },
+];
+
+/**
+ * The two views of one schedule.
+ *
+ * A real tablist rather than two links: both views are the same page and the
+ * week must stay the default. Roving tabindex plus arrow keys is the WAI
+ * pattern — one Tab stop for the group, arrows to move within it — so the
+ * control is reachable and operable without a pointer.
+ */
+function ViewTabs({
+  view,
+  onChange,
+}: {
+  view: View;
+  onChange: (view: View) => void;
+}) {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const index = VIEWS.findIndex((v) => v.value === view);
+    let next = index;
+    if (event.key === "ArrowRight") next = (index + 1) % VIEWS.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + VIEWS.length) % VIEWS.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = VIEWS.length - 1;
+    else return;
+    event.preventDefault();
+    onChange(VIEWS[next].value);
+    // The newly selected tab is the group's only tab stop, so focus has to
+    // follow the selection or the next Tab press would leave the group.
+    document.getElementById(`tab-${VIEWS[next].value}`)?.focus();
+  };
+
+  return (
+    <div
+      role="tablist"
+      aria-label="Schedule view"
+      onKeyDown={onKeyDown}
+      className="flex gap-1 border-b border-gray-200 dark:border-gray-700"
+    >
+      {VIEWS.map((v) => {
+        const selected = v.value === view;
+        return (
+          <button
+            key={v.value}
+            id={`tab-${v.value}`}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls={`panel-${v.value}`}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(v.value)}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+              selected
+                ? "border-blue-600 text-blue-700 dark:border-blue-400 dark:text-blue-300"
+                : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:text-gray-200"
+            }`}
+          >
+            {v.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

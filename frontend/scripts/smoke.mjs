@@ -306,6 +306,148 @@ const mockScheduleWeek = {
   ],
 };
 
+// #830: the horizon. Twelve weeks carrying every shape the chart has to survive
+// — planned weeks with real mixes, sketched weeks, a phase change, an EMPTY week
+// the plan says nothing about (null load, empty mixes — the divide-by-zero
+// case), a race, and a peak that is not the first or last week.
+const mockScheduleHorizon = {
+  weeks: [
+    {
+      week_start: "2026-03-23",
+      phase: "Base",
+      planned: true,
+      is_current: true,
+      running_distance_m: 42000,
+      effort_score: 210,
+      discipline_mix: { run: 0.72, strength: 0.18, bike: 0.1 },
+      intent_mix: { easy: 0.55, long: 0.3, quality: 0.15 },
+    },
+    {
+      week_start: "2026-03-30",
+      phase: "Base",
+      planned: true,
+      is_current: false,
+      running_distance_m: 46000,
+      effort_score: 232,
+      discipline_mix: { run: 0.7, strength: 0.2, bike: 0.1 },
+      intent_mix: { easy: 0.5, long: 0.32, quality: 0.18 },
+    },
+    {
+      week_start: "2026-04-06",
+      phase: "Base",
+      planned: true,
+      is_current: false,
+      running_distance_m: 34000,
+      effort_score: 168,
+      discipline_mix: { run: 0.64, strength: 0.24, walk: 0.12 },
+      intent_mix: { easy: 0.7, long: 0.3 },
+    },
+    {
+      week_start: "2026-04-13",
+      phase: "Build",
+      planned: false,
+      is_current: false,
+      running_distance_m: 52000,
+      effort_score: 268,
+      discipline_mix: { run: 0.75, strength: 0.15, bike: 0.1 },
+      intent_mix: { easy: 0.45, long: 0.3, quality: 0.25 },
+    },
+    {
+      week_start: "2026-04-20",
+      phase: "Build",
+      planned: false,
+      is_current: false,
+      running_distance_m: 56000,
+      effort_score: 290,
+      discipline_mix: { run: 0.78, strength: 0.14, row: 0.08 },
+      intent_mix: { easy: 0.42, long: 0.3, quality: 0.28 },
+    },
+    // The plan says nothing about this week: it still arrives, so the run of
+    // weeks stays continuous and a gap reads as a gap.
+    {
+      week_start: "2026-04-27",
+      phase: null,
+      planned: false,
+      is_current: false,
+      running_distance_m: null,
+      effort_score: null,
+      discipline_mix: {},
+      intent_mix: {},
+    },
+    {
+      week_start: "2026-05-04",
+      phase: "Build",
+      planned: false,
+      is_current: false,
+      running_distance_m: 60000,
+      effort_score: 312,
+      discipline_mix: { run: 0.8, strength: 0.12, bike: 0.08 },
+      intent_mix: { easy: 0.4, long: 0.3, quality: 0.3 },
+    },
+    {
+      week_start: "2026-05-11",
+      phase: "Build",
+      planned: false,
+      is_current: false,
+      running_distance_m: 44000,
+      effort_score: 226,
+      discipline_mix: { run: 0.7, strength: 0.2, walk: 0.1 },
+      intent_mix: { easy: 0.62, long: 0.28, quality: 0.1 },
+    },
+    {
+      week_start: "2026-05-18",
+      phase: "Peak",
+      planned: false,
+      is_current: false,
+      running_distance_m: 66000,
+      effort_score: 340,
+      discipline_mix: { run: 0.84, strength: 0.1, other: 0.06 },
+      intent_mix: { easy: 0.38, long: 0.3, quality: 0.32 },
+    },
+    {
+      week_start: "2026-05-25",
+      phase: "Peak",
+      planned: false,
+      is_current: false,
+      running_distance_m: 62000,
+      effort_score: 318,
+      discipline_mix: { run: 0.82, strength: 0.12, bike: 0.06 },
+      intent_mix: { easy: 0.4, long: 0.3, quality: 0.3 },
+    },
+    {
+      week_start: "2026-06-01",
+      phase: "Taper",
+      planned: false,
+      is_current: false,
+      running_distance_m: 38000,
+      effort_score: 180,
+      discipline_mix: { run: 0.88, strength: 0.12 },
+      intent_mix: { easy: 0.55, quality: 0.25, rest: 0.2 },
+    },
+    {
+      week_start: "2026-06-08",
+      phase: "Taper",
+      planned: false,
+      is_current: false,
+      running_distance_m: 26000,
+      effort_score: 120,
+      discipline_mix: { run: 0.92, walk: 0.08 },
+      intent_mix: { easy: 0.6, quality: 0.15, rest: 0.25 },
+    },
+  ],
+  races: [
+    {
+      id: "22222222-2222-2222-2222-222222222222",
+      name: "Amsterdam Half",
+      race_date: "2026-06-13",
+      distance_m: 21097,
+      priority: "A",
+    },
+  ],
+  has_plan: true,
+  peak_effort_score: 340,
+};
+
 const mockScheduleDraft = {
   status: "active",
   plan_id: "11111111-1111-1111-1111-111111111111",
@@ -320,6 +462,10 @@ const routesToCheck = [
   { path: "/profile", expectedText: "Loading profile..." },
   { path: "/activity/42", expectedText: "Morning Tempo" },
   { path: "/schedule", expectedText: "The week ahead" },
+  // #830: the horizon is the page's second view. The week stays the default, so
+  // what the server renders is the TAB — checking for it is what catches the
+  // view being dropped from the page.
+  { path: "/schedule", expectedText: "Next 3 months" },
 ];
 
 function createMockApiServer() {
@@ -362,6 +508,29 @@ function createMockApiServer() {
 
     if (pathname === "/api/schedule/week") {
       return sendJson(res, 200, mockScheduleWeek);
+    }
+
+    // #830: the horizon. `weeks` is honoured so the 1M/2M/3M range control is
+    // exercised against a server that actually narrows the window.
+    if (pathname === "/api/schedule/horizon") {
+      const count = Number(searchParams.get("weeks") ?? "12");
+      const weeks = mockScheduleHorizon.weeks.slice(0, count);
+      // The peak and the race list are scoped to the WINDOW, as the real
+      // builder scopes them — a narrower range must not keep scaling its bars
+      // against a peak week it no longer shows.
+      const loads = weeks.map((w) => w.effort_score).filter(Boolean);
+      const lastWeek = weeks[weeks.length - 1];
+      const spanEnd = lastWeek
+        ? new Date(new Date(`${lastWeek.week_start}T00:00:00Z`).getTime() + 6 * 86400000)
+            .toISOString()
+            .slice(0, 10)
+        : "";
+      return sendJson(res, 200, {
+        ...mockScheduleHorizon,
+        weeks,
+        races: mockScheduleHorizon.races.filter((r) => r.race_date <= spanEnd),
+        peak_effort_score: loads.length ? Math.max(...loads) : null,
+      });
     }
 
     // The empty-state CTA polls this on mount to pick up an in-flight draft, so
@@ -520,6 +689,24 @@ async function main() {
         `Route ${route.path} did not include expected text: ${route.expectedText}`,
       );
     }
+  }
+
+  // #830: the horizon fetches client-side, so no server-rendered route touches
+  // it. Drive the endpoint through the app's own proxy instead, which exercises
+  // the same path the browser takes and proves the range control's `weeks`
+  // parameter reaches the backend rather than being ignored.
+  const horizonResponse = await fetch(`${FRONTEND_BASE_URL}/api/schedule/horizon?weeks=4`);
+  if (!horizonResponse.ok) {
+    throw new Error(`Expected 200 for /api/schedule/horizon, received ${horizonResponse.status}`);
+  }
+  const horizon = await horizonResponse.json();
+  if (!Array.isArray(horizon.weeks) || horizon.weeks.length !== 4) {
+    throw new Error(
+      `/api/schedule/horizon?weeks=4 returned ${horizon.weeks?.length} weeks, expected 4`,
+    );
+  }
+  if (typeof horizon.peak_effort_score !== "number" || horizon.peak_effort_score <= 0) {
+    throw new Error("/api/schedule/horizon returned no peak to scale the bars against");
   }
 
   console.log("Frontend smoke checks passed.");
