@@ -60,10 +60,14 @@ class SpacingRule(BaseModel):
         "Long run needs a free morning — Sat or Sun"
             -> preferred_days(intent=long, weekdays=[5, 6])
 
-    `label` is the runner-facing sentence. It is carried rather than generated so
-    the coach can phrase a rule in the runner's own terms; the PREDICATE is what
-    the checker runs, so a mismatched label can mislead a reader but can never
-    change what is enforced.
+    `label` is the coach's OWN prose — carried so the coach can phrase a rule in
+    its own terms — but it is not what the runner is told the rule IS (#844: a
+    live label promised "or an easy walk" against a `rest_day_after` predicate
+    that forbids exactly that, and the runner planned from the label rather than
+    the predicate). The runner-facing STATEMENT of what a rule enforces is
+    derived in code from `kind` + its arguments (`services/schedule/rule_text.py`
+    `describe_rule`) on the READ side only — see `SpacingRuleRead` below — so it
+    can never claim more or less than the PREDICATE (`rules.py`) actually checks.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -117,13 +121,35 @@ class SpacingRule(BaseModel):
 
 
 class RuleViolation(BaseModel):
-    """A rule the current placement cannot satisfy."""
+    """A rule the current placement cannot satisfy.
+
+    `statement` (#844) is the derived runner-facing text — see
+    `SpacingRuleRead`/`rule_text.describe_rule` — and is what a violation should
+    be READ as breaking. `label` is kept unchanged (the coach's own prose) so a
+    caller that already renders it is not silently repointed at different text;
+    it is additive, not a repurposing of what `label` means.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     kind: RuleKind
     label: str
+    statement: str
     detail: str
+
+
+class SpacingRuleRead(SpacingRule):
+    """`SpacingRule` plus its derived runner-facing `statement` (#844).
+
+    Read-only and additive: `SpacingRuleRead` is never the type of a stored rule
+    or of the LLM's drafted output (`draft_contract.DraftedPlan.rules` stays
+    `List[SpacingRule]`), so nothing about what is persisted or what the coach is
+    asked for changes. `statement` is computed at read time
+    (`rule_text.describe_rule`) from `kind` + arguments — never from `label` — so
+    it can never promise more than the rule's predicate (`rules.py`) enforces.
+    """
+
+    statement: str
 
 
 # --- the horizon's week shape ----------------------------------------------
@@ -294,7 +320,7 @@ class ScheduleWeekRead(BaseModel):
     sessions: List[PlannedSessionRead] = Field(default_factory=list)
     logged: List[LoggedActivityRead] = Field(default_factory=list)
     by_discipline: List[DisciplineLoad] = Field(default_factory=list)
-    rules: List[SpacingRule] = Field(default_factory=list)
+    rules: List[SpacingRuleRead] = Field(default_factory=list)
     violations: List[RuleViolation] = Field(default_factory=list)
 
     # The runner's own typical week, straight from the existing volume builder —
@@ -319,6 +345,15 @@ class HorizonWeek(BaseModel):
     # True when the week has real sessions; False when it is shape only. Derived
     # from what is actually there, so it cannot claim more than the plan holds.
     planned: bool
+    # The four states a week can be in (#842). `planned`/`sketched` are the same
+    # committed-session / week-shape derivation `planned` above already reads.
+    # The other two are what used to be one byte-identical `else` branch: an
+    # `empty` week is a genuine GAP the plan's own span covers but says nothing
+    # about, while `beyond_plan` is a week past the plan's last covered week —
+    # the plan never sketched it, so it must not wear the same "shape only, not
+    # written yet" claim a real sketched week earns. `planned == (coverage ==
+    # "planned")` always holds; see `services/schedule/horizon.py`.
+    coverage: Literal["planned", "sketched", "empty", "beyond_plan"]
     is_current: bool
     running_distance_m: Optional[float] = None
     effort_score: Optional[float] = None

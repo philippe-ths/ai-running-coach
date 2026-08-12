@@ -239,9 +239,15 @@ def _validate_rules_are_satisfiable(
     )
     if not satisfiable:
         for violation in violations:
+            # Named by the coach's OWN label, so it can recognise which rule it
+            # wrote, but stating what that rule actually ENFORCES alongside it
+            # (#844) — this text is fed back into the rewrite prompt, and a
+            # label that misdescribes its own predicate would send the rewrite
+            # after the wrong thing.
             check.fail(
                 f"week {week.week_start} cannot satisfy its own rule "
-                f"{violation['label']!r}: {violation['detail']}"
+                f"{violation['label']!r} ({violation['statement']}): "
+                f"{violation['detail']}"
             )
 
 

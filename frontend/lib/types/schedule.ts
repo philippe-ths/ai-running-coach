@@ -47,9 +47,20 @@ export interface SpacingRule {
   count?: number | null;
 }
 
+// #844: the runner-facing rule TEXT the API actually returns. `statement` is
+// derived server-side from `kind` + arguments — the only text guaranteed to
+// match what the rule's predicate enforces. `label` is the coach's own prose,
+// carried alongside as a subordinate note; a runner following `label` used to
+// be able to trigger the very rule it described (a live label promised "or an
+// easy walk" against a predicate that forbade exactly that).
+export interface SpacingRuleRead extends SpacingRule {
+  statement: string;
+}
+
 export interface RuleViolation {
   kind: RuleKind;
   label: string;
+  statement: string;
   detail: string;
 }
 
@@ -135,7 +146,7 @@ export interface ScheduleWeek {
   sessions: PlannedSession[];
   logged: LoggedActivity[];
   by_discipline: DisciplineLoad[];
-  rules: SpacingRule[];
+  rules: SpacingRuleRead[];
   violations: RuleViolation[];
   // The runner's own typical week, from the same builder Trends uses. Present
   // only for the current week, where "as of today" means anything.
@@ -182,11 +193,22 @@ export interface GoalRaceCreate {
 // mixes, so the horizon stays a continuous run of weeks and a gap reads as a
 // gap rather than as a shorter block.
 
+// The four states a week can be in (#842). `planned`/`sketched` mirror the
+// `planned` boolean below; `empty` is a genuine interior GAP the plan's own
+// span covers but says nothing about, while `beyond_plan` is a week past the
+// plan's last covered week — the plan never had a chance to sketch it, so it
+// must not read as "shape only, not written yet" the way a real sketched week
+// does. With no plan at all, every week is `empty`; there is nothing to be
+// beyond.
+export type HorizonCoverage = "planned" | "sketched" | "empty" | "beyond_plan";
+
 export interface HorizonWeek {
   week_start: string;
   phase: string | null;
   // True when the week holds committed sessions; false when it is shape only.
+  // Always equal to `coverage === "planned"`.
   planned: boolean;
+  coverage: HorizonCoverage;
   is_current: boolean;
   running_distance_m: number | null;
   effort_score: number | null;

@@ -88,6 +88,7 @@ export type {
   SessionStatus,
   RuleKind,
   SpacingRule,
+  SpacingRuleRead,
   RuleViolation,
   PlannedSession,
   LoggedActivity,
