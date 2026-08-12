@@ -304,6 +304,16 @@ const mockScheduleWeek = {
       direction_recent: "down",
     },
   ],
+  // The runs-only read the free-mode gauge is driven by. Deliberately well
+  // below the all-activity `norm` above: that gap is the reason the gauge stopped
+  // reading the all-activity figure.
+  running_norm: {
+    typical_weekly_distance_m: 21000,
+    current_distance_m: 18400,
+    pct_vs_norm: -12.4,
+    direction: "in_line",
+    deadband_pct: 15,
+  },
 };
 
 // #830: the horizon. Twelve weeks carrying every shape the chart has to survive
@@ -435,18 +445,42 @@ const mockScheduleHorizon = {
       intent_mix: { easy: 0.6, quality: 0.15, rest: 0.25 },
     },
   ],
+  // A race inside the FIRST few weeks as well as the A race at the end, so the
+  // marker is exercised at every range the control offers — a 1M window that
+  // dropped every race would never draw one.
   races: [
+    {
+      id: "33333333-3333-3333-3333-333333333333",
+      name: "Spring 10K",
+      race_date: "2026-04-11",
+      distance_m: 10000,
+      priority: "B",
+    },
     {
       id: "22222222-2222-2222-2222-222222222222",
       name: "Amsterdam Half",
       race_date: "2026-06-13",
-      distance_m: 21097,
+      // The exact half-marathon distance the capture UI stores.
+      distance_m: 21097.5,
       priority: "A",
     },
   ],
   has_plan: true,
   peak_effort_score: 340,
 };
+
+// #830: the runner's goal races. Mutable, because the panel POSTs and DELETEs
+// against it and the smoke drives both — a create the server forgets would let a
+// broken write pass.
+const mockGoalRaces = [
+  {
+    id: "22222222-2222-2222-2222-222222222222",
+    name: "Amsterdam Half",
+    race_date: "2026-06-13",
+    distance_m: 21097.5,
+    priority: "A",
+  },
+];
 
 const mockScheduleDraft = {
   status: "active",
@@ -466,6 +500,10 @@ const routesToCheck = [
   // what the server renders is the TAB — checking for it is what catches the
   // view being dropped from the page.
   { path: "/schedule", expectedText: "Next 3 months" },
+  // The goal-race panel belongs to the whole schedule, so it is server-rendered
+  // above the tabs in both views. Its races arrive client-side; the heading is
+  // what proves the surface is there at all.
+  { path: "/schedule", expectedText: "Goal race" },
 ];
 
 function createMockApiServer() {
@@ -537,6 +575,54 @@ function createMockApiServer() {
     // it must answer even when the week it renders is not empty.
     if (pathname === "/api/schedule/draft") {
       return sendJson(res, 200, mockScheduleDraft);
+    }
+
+    // #830: the goal-race capture surface. The list is the panel's read; POST
+    // and DELETE are the runner's two writes, and both mutate the list so the
+    // smoke can prove the round trip rather than just the status code.
+    if (pathname === "/api/schedule/races" && req.method === "GET") {
+      return sendJson(res, 200, mockGoalRaces);
+    }
+
+    if (pathname === "/api/schedule/races" && req.method === "POST") {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(body || "{}");
+        } catch {
+          return sendJson(res, 422, { detail: "Body was not JSON" });
+        }
+        if (!parsed.name || !parsed.race_date || !(parsed.distance_m > 0)) {
+          return sendJson(res, 422, { detail: "Incomplete race" });
+        }
+        const race = {
+          id: `44444444-4444-4444-4444-${String(mockGoalRaces.length).padStart(12, "0")}`,
+          name: parsed.name,
+          race_date: parsed.race_date,
+          distance_m: parsed.distance_m,
+          priority: parsed.priority ?? "A",
+        };
+        mockGoalRaces.push(race);
+        mockGoalRaces.sort((a, b) => (a.race_date < b.race_date ? -1 : 1));
+        return sendJson(res, 201, race);
+      });
+      return;
+    }
+
+    if (pathname.startsWith("/api/schedule/races/") && req.method === "DELETE") {
+      const id = pathname.slice("/api/schedule/races/".length);
+      const index = mockGoalRaces.findIndex((r) => r.id === id);
+      if (index === -1) {
+        return sendJson(res, 404, { detail: "No such race" });
+      }
+      mockGoalRaces.splice(index, 1);
+      res.writeHead(204);
+      res.end();
+      return;
     }
 
     if (pathname === "/api/auth/strava/login") {
@@ -707,6 +793,65 @@ async function main() {
   }
   if (typeof horizon.peak_effort_score !== "number" || horizon.peak_effort_score <= 0) {
     throw new Error("/api/schedule/horizon returned no peak to scale the bars against");
+  }
+  // The race marker is drawn from this list, so a horizon that returns no race
+  // inside a narrow window would silently lose it.
+  if (!Array.isArray(horizon.races) || horizon.races.length === 0) {
+    throw new Error("/api/schedule/horizon?weeks=4 returned no race to mark");
+  }
+
+  // #830: goal-race capture. Also client-side only, so the same proxy path is
+  // driven directly — list, create, delete — which is the exact sequence the
+  // panel performs and the one that must survive the metres conversion.
+  const listResponse = await fetch(`${FRONTEND_BASE_URL}/api/schedule/races`);
+  if (!listResponse.ok) {
+    throw new Error(`Expected 200 for /api/schedule/races, received ${listResponse.status}`);
+  }
+  const races = await listResponse.json();
+  if (!Array.isArray(races) || races.length !== 1) {
+    throw new Error(`/api/schedule/races returned ${races?.length} races, expected 1`);
+  }
+
+  const createResponse = await fetch(`${FRONTEND_BASE_URL}/api/schedule/races`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    // The exact half-marathon distance: the UI converts km to metres, and 21.1
+    // km stored as 21000 would be a plan built for the wrong race.
+    body: JSON.stringify({
+      name: "Rotterdam Half",
+      race_date: "2026-05-17",
+      distance_m: 21097.5,
+      priority: "B",
+    }),
+  });
+  if (createResponse.status !== 201) {
+    throw new Error(
+      `Expected 201 from POST /api/schedule/races, received ${createResponse.status}`,
+    );
+  }
+  const created = await createResponse.json();
+  if (created.distance_m !== 21097.5) {
+    throw new Error(
+      `POST /api/schedule/races stored ${created.distance_m} m, expected the exact 21097.5`,
+    );
+  }
+
+  const deleteResponse = await fetch(
+    `${FRONTEND_BASE_URL}/api/schedule/races/${created.id}`,
+    { method: "DELETE" },
+  );
+  if (deleteResponse.status !== 204) {
+    throw new Error(
+      `Expected 204 from DELETE /api/schedule/races/{id}, received ${deleteResponse.status}`,
+    );
+  }
+
+  const afterResponse = await fetch(`${FRONTEND_BASE_URL}/api/schedule/races`);
+  const after = await afterResponse.json();
+  if (!Array.isArray(after) || after.length !== 1) {
+    throw new Error(
+      `/api/schedule/races returned ${after?.length} races after the delete, expected 1`,
+    );
   }
 
   console.log("Frontend smoke checks passed.");

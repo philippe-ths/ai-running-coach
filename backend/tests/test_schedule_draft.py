@@ -824,3 +824,65 @@ async def test_the_prompt_states_the_constraints_the_validator_enforces():
     assert "must stay INSIDE one week" in _SYSTEM_PROMPT
     assert "A rest day is REST" in _SYSTEM_PROMPT
     assert "a distance, a duration, or rep structure" in _SYSTEM_PROMPT
+
+
+async def test_the_context_tells_the_coach_to_build_backwards_from_the_race(db):
+    """A stored race is what the phases, the peak and the taper are measured from.
+
+    Without this the coach is handed a date and left to treat it as trivia — which
+    is what a "volume curve with no structure" looks like. The week the race falls
+    in is stated outright rather than left as date arithmetic for a language model.
+    """
+    from app.models.goal_race import GoalRace
+    from app.services.schedule.draft import _SYSTEM_PROMPT, build_draft_context
+
+    user = _seed_user(db)
+    _seed_history(db, user)
+    db.add(
+        GoalRace(
+            user_id=user.id,
+            name="Autumn Half",
+            race_date=TODAY + timedelta(days=48),
+            distance_m=21097.5,
+            priority="A",
+        )
+    )
+    db.commit()
+
+    context = build_draft_context(db, user, today=TODAY, weeks=12)
+
+    assert "Autumn Half" in context
+    assert "21.1 km" in context
+    assert "7 weeks away" in context
+    # The race's own week, so phase placement is not date arithmetic done in prose.
+    assert (TODAY + timedelta(days=42)).isoformat() in context
+    assert "Build the block backwards from that date" in context
+    assert "built BACKWARDS from its date" in _SYSTEM_PROMPT
+
+
+async def test_a_runner_with_no_race_is_planned_for_progression_not_a_guess(db):
+    """The coach must not invent a race the runner never stated."""
+    from app.services.schedule.draft import build_draft_context
+
+    user = _seed_user(db)
+    _seed_history(db, user)
+
+    context = build_draft_context(db, user, today=TODAY, weeks=12)
+
+    assert "No race stated" in context
+    assert "Do not invent a race" in __import__(
+        "app.services.schedule.draft", fromlist=["_SYSTEM_PROMPT"]
+    )._SYSTEM_PROMPT
+
+
+async def test_the_coach_is_told_not_to_stop_dead_at_the_race():
+    """A horizon that ends at the race leaves blank weeks behind it.
+
+    The runner is looking at three months; if the block simply stops on race day
+    the rest of the chart is a cliff. The weeks after are recovery and should be
+    sketched as such.
+    """
+    from app.services.schedule.draft import _SYSTEM_PROMPT
+
+    assert "do not stop dead at it" in _SYSTEM_PROMPT
+    assert "recovery" in _SYSTEM_PROMPT

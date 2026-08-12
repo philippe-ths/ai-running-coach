@@ -1,3 +1,5 @@
+"use client";
+
 // #830: the horizon — three months of training as load per week.
 //
 // VERTICAL by design. Twelve weeks as horizontal bars running DOWN the page,
@@ -21,12 +23,24 @@
 // ten of twelve rows and costs the reader the ramp to say something a 8px mark
 // says better.
 //
-// The chart itself is aria-hidden and its text alternative is the table twin
-// below it, which carries every number the bars encode plus the phases and the
-// races. Screen readers always reach it; sighted readers toggle it open.
+// EXPANDING A ROW. A week's detail opens IN PLACE under its bar, on a tap. Not a
+// tooltip: this is a phone-first app and hover does not exist on touch. One row
+// at a time, and the panel is inset under the bar rather than replacing it — the
+// bars above and below keep their geometry, so the ramp still reads while a week
+// is open. The panel says the same things in every segmentation mode, because it
+// is the week's detail and not a second view of whichever band is drawn.
+//
+// ACCESSIBILITY. The rows used to be `aria-hidden` with the table below as their
+// text alternative. A focusable control cannot live inside an aria-hidden
+// subtree, so making the rows tappable moved that boundary: each row is now a
+// real button labelled with everything its bar encodes, and the table is drawn
+// only when the reader asks for it. Every value still has a text home; it is now
+// read once rather than twice.
 
+import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 import type { ReactNode } from "react";
-import type { GoalRace, ScheduleHorizon } from "@/lib/types/schedule";
+import type { GoalRace, HorizonWeek, ScheduleHorizon } from "@/lib/types/schedule";
 import { formatDateLabel } from "@/lib/format";
 import { addDaysIso } from "./dates";
 import {
@@ -123,24 +137,25 @@ function Band({
   surface: string;
 }) {
   return (
-    <div className={`flex ${height} gap-[2px] overflow-hidden rounded-r-[3px] ${surface}`}>
+    <span className={`flex ${height} gap-[2px] overflow-hidden rounded-r-[3px] ${surface}`}>
       {segments.map((s) => (
-        <div
+        <span
           key={s.key}
-          className={s.fill}
+          className={`block ${s.fill}`}
           // flex-grow against a zero basis: the shares divide the bar's own
           // length and cannot overflow it, however they round.
           style={{ flexGrow: s.share, flexBasis: 0, minWidth: 0 }}
         />
       ))}
-    </div>
+    </span>
   );
 }
 
 const GRID_STOPS = [25, 50, 75];
 
+// Five columns: date · planned tick · bar · running km · the expand chevron.
 const ROW_GRID =
-  "grid grid-cols-[3.25rem_0.75rem_minmax(0,1fr)_3rem] items-center gap-x-2";
+  "grid grid-cols-[3.25rem_0.75rem_minmax(0,1fr)_3rem_1rem] items-center gap-x-2";
 
 export default function HorizonChart({
   horizon,
@@ -151,6 +166,10 @@ export default function HorizonChart({
   segmentation: Segmentation;
   showTable: boolean;
 }) {
+  // One week open at a time. Keyed by `week_start`, which is the row's identity
+  // — so a range change that drops the open week simply closes it.
+  const [openWeek, setOpenWeek] = useState<string | null>(null);
+
   const peak = horizon.peak_effort_score ?? 0;
   const showDiscipline = segmentation !== "intent";
   const showIntent = segmentation !== "discipline";
@@ -181,6 +200,8 @@ export default function HorizonChart({
     const intent = intentSegments(week.intent_mix);
     const load = week.effort_score ?? 0;
     const length = peak > 0 && load > 0 ? Math.min(100, (load / peak) * 100) : 0;
+    const open = openWeek === week.week_start;
+    const panelId = `horizon-detail-${week.week_start}`;
 
     if (week.phase && week.phase !== lastPhase) {
       rows.push(
@@ -198,11 +219,15 @@ export default function HorizonChart({
     }
 
     // The row's own surface, which is also what shows through the 2px gaps
-    // between segments. The current week is tinted, so the gaps have to be
-    // tinted with it or every gap would read as a white seam.
-    const surface = week.is_current
-      ? "bg-blue-50 dark:bg-blue-950/50"
-      : "bg-white dark:bg-gray-800";
+    // between segments. The current week is tinted, and an open week is tinted
+    // again — so the gaps have to be tinted with it or every gap would read as a
+    // white seam. One value drives both, which is why there is no hover tint:
+    // the gaps cannot follow it.
+    const surface = open
+      ? "bg-gray-100 dark:bg-gray-700/60"
+      : week.is_current
+        ? "bg-blue-50 dark:bg-blue-950/50"
+        : "bg-white dark:bg-gray-800";
 
     const summary = [
       `Week of ${formatDateLabel(week.week_start)}`,
@@ -215,72 +240,101 @@ export default function HorizonChart({
       .join(" · ");
 
     rows.push(
-      <div
-        key={week.week_start}
-        className={`${ROW_GRID} rounded-sm py-1 ${
-          week.is_current ? "bg-blue-50 dark:bg-blue-950/50" : ""
-        }`}
-      >
-        <span
-          className={`font-mono text-[11px] tabular-nums ${
-            week.is_current
-              ? "font-semibold text-blue-800 dark:text-blue-300"
-              : "text-gray-500 dark:text-gray-400"
-          }`}
+      <div key={week.week_start}>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={panelId}
+          aria-label={summary}
+          title={summary}
+          onClick={() => setOpenWeek(open ? null : week.week_start)}
+          className={`group w-full rounded-sm py-1 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${surface}`}
         >
-          {formatDateLabel(week.week_start)}
-        </span>
-
-        {/* Solid = real sessions, hollow = shape only. A tick rather than a
-            fade: fading the sketched weeks washes out most of the chart. */}
-        <span className="flex justify-center">
-          {week.planned ? (
-            <span className="h-2 w-2 rounded-full bg-gray-600 dark:bg-gray-300" />
-          ) : (
-            <span className="h-2 w-2 rounded-full border border-dashed border-gray-400 dark:border-gray-500" />
-          )}
-        </span>
-
-        <div className={`relative ${both ? "h-5" : "h-3.5"} ${surface}`} title={summary}>
-          {GRID_STOPS.map((stop) => (
+          <span className={ROW_GRID}>
             <span
-              key={stop}
-              className="absolute inset-y-0 w-px bg-gray-200 dark:bg-gray-700"
-              style={{ left: `${stop}%` }}
-            />
-          ))}
-          {length > 0 && (
-            <div
-              className={`absolute inset-y-0 left-0 flex flex-col justify-center gap-[2px] ${surface}`}
-              style={{ width: `${length}%` }}
+              className={`font-mono text-[11px] tabular-nums ${
+                week.is_current
+                  ? "font-semibold text-blue-800 dark:text-blue-300"
+                  : "text-gray-500 dark:text-gray-400"
+              }`}
             >
-              {showDiscipline && (
-                <Band
-                  segments={disc}
-                  height={both ? "h-3" : "h-3.5"}
-                  surface={surface}
-                />
-              )}
-              {showIntent && (
-                <Band
-                  segments={intent}
-                  height={both ? "h-1.5" : "h-3.5"}
-                  surface={surface}
-                />
-              )}
-            </div>
-          )}
-        </div>
+              {formatDateLabel(week.week_start)}
+            </span>
 
-        <span
-          className={`text-right font-mono text-[11px] tabular-nums ${
-            week.is_current
-              ? "font-semibold text-blue-800 dark:text-blue-300"
-              : "text-gray-600 dark:text-gray-300"
-          }`}
-        >
-          {km(week.running_distance_m)}
-        </span>
+            {/* Solid = real sessions, hollow = shape only. A tick rather than a
+                fade: fading the sketched weeks washes out most of the chart. */}
+            <span className="flex justify-center" aria-hidden="true">
+              {week.planned ? (
+                <span className="h-2 w-2 rounded-full bg-gray-600 dark:bg-gray-300" />
+              ) : (
+                <span className="block h-2 w-2 rounded-full border border-dashed border-gray-400 dark:border-gray-500" />
+              )}
+            </span>
+
+            <span
+              className={`relative block ${both ? "h-5" : "h-3.5"} ${surface}`}
+              aria-hidden="true"
+            >
+              {GRID_STOPS.map((stop) => (
+                <span
+                  key={stop}
+                  className="absolute inset-y-0 w-px bg-gray-200 dark:bg-gray-700"
+                  style={{ left: `${stop}%` }}
+                />
+              ))}
+              {length > 0 && (
+                <span
+                  className={`absolute inset-y-0 left-0 flex flex-col justify-center gap-[2px] ${surface}`}
+                  style={{ width: `${length}%` }}
+                >
+                  {showDiscipline && (
+                    <Band
+                      segments={disc}
+                      height={both ? "h-3" : "h-3.5"}
+                      surface={surface}
+                    />
+                  )}
+                  {showIntent && (
+                    <Band
+                      segments={intent}
+                      height={both ? "h-1.5" : "h-3.5"}
+                      surface={surface}
+                    />
+                  )}
+                </span>
+              )}
+            </span>
+
+            <span
+              className={`text-right font-mono text-[11px] tabular-nums ${
+                week.is_current
+                  ? "font-semibold text-blue-800 dark:text-blue-300"
+                  : "text-gray-600 dark:text-gray-300"
+              }`}
+            >
+              {km(week.running_distance_m)}
+            </span>
+
+            <span className="flex justify-end" aria-hidden="true">
+              <ChevronDown
+                size={12}
+                className={`text-gray-400 transition-transform group-hover:text-gray-700 dark:text-gray-500 dark:group-hover:text-gray-200 ${
+                  open ? "rotate-180" : ""
+                }`}
+              />
+            </span>
+          </span>
+        </button>
+
+        {open && (
+          <WeekDetail
+            id={panelId}
+            week={week}
+            peak={peak}
+            disciplines={disc}
+            intents={intent}
+          />
+        )}
       </div>,
     );
 
@@ -290,16 +344,17 @@ export default function HorizonChart({
           <span className="font-mono text-[11px] tabular-nums text-rose-700 dark:text-rose-400">
             {formatDateLabel(race.race_date)}
           </span>
-          <span className="flex justify-center">
+          <span className="flex justify-center" aria-hidden="true">
             <span className="h-2 w-0.5 bg-rose-700 dark:bg-rose-400" />
           </span>
           <span className="flex items-center gap-2 truncate text-[11px] font-medium text-rose-700 dark:text-rose-400">
-            <span className="h-px w-3 shrink-0 bg-rose-700 dark:bg-rose-400" />
+            <span className="h-px w-3 shrink-0 bg-rose-700 dark:bg-rose-400" aria-hidden="true" />
             <span className="truncate">{race.name}</span>
           </span>
           <span className="text-right font-mono text-[11px] tabular-nums text-rose-700 dark:text-rose-400">
             {(race.distance_m / 1000).toFixed(0)}k
           </span>
+          <span />
         </div>,
       );
     }
@@ -318,56 +373,150 @@ export default function HorizonChart({
 
   return (
     <div>
-      <div aria-hidden="true">
-        <div className="space-y-0.5">{rows}</div>
+      <div className="space-y-0.5">{rows}</div>
 
-        {/* The scale. Bars are true proportions of the peak week, so the reader
-            is owed the number the proportion is of. */}
-        <div className={`${ROW_GRID} mt-2 border-t border-gray-100 pt-1.5 dark:border-gray-700`}>
-          <span />
-          <span />
-          <span className="flex justify-between text-[10px] text-gray-400 dark:text-gray-500">
-            <span className="font-mono tabular-nums">0</span>
-            <span>
-              {hasAnyLoad ? (
-                <>
-                  <span className="font-mono tabular-nums">{Math.round(peak)}</span> load
-                </>
-              ) : (
-                "no load"
-              )}
-            </span>
+      {/* The scale. Bars are true proportions of the peak week, so the reader
+          is owed the number the proportion is of. */}
+      <div className={`${ROW_GRID} mt-2 border-t border-gray-100 pt-1.5 dark:border-gray-700`}>
+        <span />
+        <span />
+        <span className="flex justify-between text-[10px] text-gray-400 dark:text-gray-500">
+          <span className="font-mono tabular-nums">0</span>
+          <span>
+            {hasAnyLoad ? (
+              <>
+                <span className="font-mono tabular-nums">{Math.round(peak)}</span> load
+              </>
+            ) : (
+              "no load"
+            )}
           </span>
-          <span />
-        </div>
-
-        <div className="mt-3 space-y-1.5">
-          {showDiscipline && legendDisciplines.size > 0 && (
-            <LegendRow
-              title={both ? "Discipline" : "Discipline · thick band"}
-              items={Array.from(legendDisciplines.values())}
-            />
-          )}
-          {showIntent && legendIntents.size > 0 && (
-            <LegendRow
-              title={both ? "Intent" : "Intent · thick band"}
-              items={Array.from(legendIntents.values())}
-            />
-          )}
-          <p className="pt-1 text-[11px] text-gray-400 dark:text-gray-500">
-            Bar length is the week&rsquo;s load against your biggest week. Solid tick =
-            real sessions, hollow tick = shape only. The number on the right is
-            running km, so a long bar beside a small number is a week you cross-train.
-          </p>
-        </div>
+        </span>
+        <span />
+        <span />
       </div>
 
-      <HorizonTable
-        horizon={horizon}
-        peak={peak}
-        unplacedRaces={unplacedRaces}
-        className={showTable ? "mt-6" : "sr-only"}
-      />
+      <div className="mt-3 space-y-1.5">
+        {showDiscipline && legendDisciplines.size > 0 && (
+          <LegendRow
+            title={both ? "Discipline" : "Discipline · thick band"}
+            items={Array.from(legendDisciplines.values())}
+          />
+        )}
+        {showIntent && legendIntents.size > 0 && (
+          <LegendRow
+            title={both ? "Intent" : "Intent · thick band"}
+            items={Array.from(legendIntents.values())}
+          />
+        )}
+        <p className="pt-1 text-[11px] text-gray-400 dark:text-gray-500">
+          Bar length is the week&rsquo;s load against your biggest week. Solid tick =
+          real sessions, hollow tick = shape only. The number on the right is
+          running km, so a long bar beside a small number is a week you cross-train.
+          Tap any week for its detail.
+        </p>
+      </div>
+
+      {showTable && (
+        <HorizonTable
+          horizon={horizon}
+          peak={peak}
+          unplacedRaces={unplacedRaces}
+          className="mt-6"
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * One week's detail, opened in place.
+ *
+ * Inset under the bar rather than replacing it, and deliberately short: rows
+ * below shift down, but no bar changes length, so the ramp survives being read
+ * with a week open. It carries the same four facts in every segmentation mode —
+ * this is the week, not a second view of whichever band happens to be drawn.
+ */
+function WeekDetail({
+  id,
+  week,
+  peak,
+  disciplines,
+  intents,
+}: {
+  id: string;
+  week: HorizonWeek;
+  peak: number;
+  disciplines: Segment[];
+  intents: Segment[];
+}) {
+  const load = week.effort_score ?? 0;
+  const share = peak > 0 && load > 0 ? Math.round((load / peak) * 100) : 0;
+
+  return (
+    <div
+      id={id}
+      className="ml-[4rem] mr-[1rem] mt-1 rounded-md border-l-2 border-gray-300 bg-gray-50 px-3 py-2.5 text-[11px] dark:border-gray-600 dark:bg-gray-900/50"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <span className="font-medium text-gray-700 dark:text-gray-200">
+          {week.phase ?? "No phase"}
+        </span>
+        <span className="text-gray-600 dark:text-gray-300">
+          <span className="font-mono tabular-nums">{km(week.running_distance_m)}</span> km
+          running
+        </span>
+        <span className="text-gray-600 dark:text-gray-300">
+          {load > 0 ? (
+            <>
+              <span className="font-mono tabular-nums">{Math.round(load)}</span> load
+              {" · "}
+              <span className="font-mono tabular-nums">{share}%</span> of your biggest
+              week
+            </>
+          ) : (
+            "Nothing planned"
+          )}
+        </span>
+        <span
+          className={
+            week.planned
+              ? "text-gray-600 dark:text-gray-300"
+              : "text-gray-500 dark:text-gray-400"
+          }
+        >
+          {week.planned ? "Real sessions planned" : "Shape only, not written yet"}
+        </span>
+      </div>
+
+      <dl className="mt-2 space-y-1">
+        <SplitRow label="Discipline" segments={disciplines} />
+        <SplitRow label="Intent" segments={intents} />
+      </dl>
+    </div>
+  );
+}
+
+/** A mix written out as named percentages, each beside its own swatch. */
+function SplitRow({ label, segments }: { label: string; segments: Segment[] }) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <dt className="w-[4.5rem] shrink-0 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+        {label}
+      </dt>
+      {segments.length === 0 ? (
+        <dd className="text-gray-500 dark:text-gray-400">—</dd>
+      ) : (
+        segments.map((s) => (
+          <dd
+            key={s.key}
+            className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300"
+          >
+            <span className={`h-2 w-2 shrink-0 rounded-sm ${s.fill}`} aria-hidden="true" />
+            {s.label} <span className="font-mono tabular-nums">{pct(s.share)}%</span>
+          </dd>
+        ))
+      )}
     </div>
   );
 }
@@ -383,7 +532,7 @@ function LegendRow({ title, items }: { title: string; items: Segment[] }) {
           key={s.key}
           className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-gray-400"
         >
-          <span className={`h-2 w-2 shrink-0 rounded-sm ${s.fill}`} />
+          <span className={`h-2 w-2 shrink-0 rounded-sm ${s.fill}`} aria-hidden="true" />
           {s.label}
         </span>
       ))}
@@ -392,12 +541,11 @@ function LegendRow({ title, items }: { title: string; items: Segment[] }) {
 }
 
 /**
- * The chart's text alternative, and the only place every value is written out.
+ * Every week in one table — the numbers, written out.
  *
- * Always in the DOM: hidden it is `sr-only`, so a screen-reader user reaches the
- * whole ramp, the mixes, the phases and the races without seeing the bars; shown
- * it is the same table for everyone else. The bars are aria-hidden precisely so
- * this is read once rather than twice.
+ * Drawn on request rather than always present: the rows above are now labelled
+ * buttons carrying the same values, so keeping a permanently sr-only copy would
+ * make a screen reader read the whole horizon twice.
  */
 function HorizonTable({
   horizon,
@@ -415,7 +563,7 @@ function HorizonTable({
     "px-2 py-1.5 text-left font-semibold text-gray-600 dark:text-gray-300";
 
   return (
-    <div className={className}>
+    <div className={className} id="horizon-numbers">
       <div className="overflow-x-auto">
         <table className="w-full min-w-[34rem] border-collapse text-[11px] text-gray-600 dark:text-gray-300">
           <caption className="pb-2 text-left text-[11px] text-gray-500 dark:text-gray-400">
