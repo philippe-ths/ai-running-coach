@@ -79,23 +79,30 @@ def _last_covered_week(
     `beyond_plan` reads against.
 
     `horizon_end` (the last DAY of the last week the plan mentions, written by
-    `draft.py`) is authoritative when the plan states one. Nullable for older or
-    edge-case rows, which fall back to the latest week among the plan's own week
-    shapes and its COMMITTED sessions (a suggestion nobody agreed to does not
-    extend the plan's reach, the same reading `planned` above already applies).
-    `rows` is `sessions_in_range`'s result, bounded to the requested window, so
-    this fallback can undercount a plan whose committed sessions run past the
-    window asked for; that is an accepted limitation of the safety net, not of
-    `horizon_end` itself.
+    `draft.py`) is a FLOOR on the plan's reach, never a ceiling: it is always
+    taken together with the latest week among the plan's own week shapes and its
+    COMMITTED sessions (a suggestion nobody agreed to does not extend the plan's
+    reach, the same reading `planned` above already applies), and the later of
+    the two wins (#848). A `TrainingPlan.horizon_end` that understates what was
+    actually written — the writer disagreeing with itself, a correction, a
+    directly-constructed row — must never let a week holding real content read
+    as `beyond_plan`: the view downstream draws a single "Plan ends here"
+    divider on the assumption that once a week is `beyond_plan` every later
+    week is too, so this function is the one place that assumption is made
+    true rather than merely hoped true. `rows` is `sessions_in_range`'s result,
+    bounded to the requested window, so this can still undercount a plan whose
+    committed sessions run past the window asked for; that is an accepted
+    limitation of the safety net, not of `horizon_end` itself.
 
     None (no plan, or a plan stating nothing at all) means there is nothing to
     be beyond — every week then reads `empty`, never `beyond_plan`.
     """
     if plan is None:
         return None
+    candidates: List[date] = []
     if plan.horizon_end is not None:
-        return week_start(plan.horizon_end, starts_on)
-    candidates = list(shapes.keys())
+        candidates.append(week_start(plan.horizon_end, starts_on))
+    candidates.extend(shapes.keys())
     candidates.extend(
         week_start(row.window_start, starts_on)
         for row in rows

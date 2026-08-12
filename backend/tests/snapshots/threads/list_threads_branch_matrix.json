@@ -1,0 +1,132 @@
+[
+  {
+    "anchor": {
+      "activity_id": "00000000-0000-0000-0000-0000000000b1",
+      "distance_m": 8000.0,
+      "name": "Tuesday intervals",
+      "start_date": "2026-07-31T12:00:00",
+      "type": "Run"
+    },
+    "id": "00000000-0000-0000-0000-000000000001",
+    "last_message_at": "2026-08-01T11:59:00",
+    "snippet": "You held the effort well through the middle reps and only faded on the last one, which is \u2026",
+    "title": "Marathon build"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000002",
+    "last_message_at": "2026-08-01T11:57:00",
+    "snippet": "Keep it easy this week.",
+    "title": "What about my calf tightness?"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000003",
+    "last_message_at": "2026-08-01T11:54:00",
+    "snippet": "Nice session today.",
+    "title": "New thread"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000004",
+    "last_message_at": null,
+    "snippet": null,
+    "title": "New thread"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000005",
+    "last_message_at": "2026-08-01T11:52:00",
+    "snippet": "",
+    "title": ""
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000006",
+    "last_message_at": "2026-08-01T11:51:00",
+    "snippet": "Say more?",
+    "title": "New thread"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000007",
+    "last_message_at": "2026-08-01T11:49:00",
+    "snippet": null,
+    "title": "quick question"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000008",
+    "last_message_at": "2026-08-01T11:47:00",
+    "snippet": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa tail beyond the sixty characte\u2026",
+    "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u2026"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000009",
+    "last_message_at": "2026-08-01T11:46:00",
+    "snippet": "first line second line",
+    "title": "first line second line"
+  },
+  {
+    "anchor": {
+      "activity_id": "00000000-0000-0000-0000-0000000000b2",
+      "distance_m": 5000.0,
+      "name": "Deleted from Strava",
+      "start_date": "2026-07-30T12:00:00",
+      "type": "Run"
+    },
+    "id": "00000000-0000-0000-0000-000000000010",
+    "last_message_at": "2026-08-01T11:45:00",
+    "snippet": "what happened here?",
+    "title": "About the deleted run"
+  },
+  {
+    "anchor": {
+      "activity_id": "00000000-0000-0000-0000-0000000000bf",
+      "distance_m": null,
+      "name": null,
+      "start_date": null,
+      "type": null
+    },
+    "id": "00000000-0000-0000-0000-000000000011",
+    "last_message_at": "2026-08-01T11:44:00",
+    "snippet": null,
+    "title": "Orphaned anchor"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000013",
+    "last_message_at": "2026-08-01T11:43:00",
+    "snippet": null,
+    "title": "Tie higher id"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000012",
+    "last_message_at": "2026-08-01T11:43:00",
+    "snippet": null,
+    "title": "Tie lower id"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000014",
+    "last_message_at": "2026-08-01T11:42:00",
+    "snippet": "last turn by id",
+    "title": "first user turn by id"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000015",
+    "last_message_at": "2026-08-01T11:41:00",
+    "snippet": "assistant closes",
+    "title": "older user turn wins the title"
+  },
+  {
+    "anchor": null,
+    "id": "00000000-0000-0000-0000-000000000016",
+    "last_message_at": "2026-08-01T11:40:00",
+    "snippet": "empty title falls back",
+    "title": "empty title falls back"
+  }
+]
