@@ -29,6 +29,23 @@ LIVE code:
      prod-parity contract (.env.example), not to live Railway — keeping .env.example itself
      current with prod stays a human step.
 
+  4. NESTED PACK KEY SET (#763). Checks 1-3 all work one level down from the pack root, so
+     a field added INSIDE an existing section slipped through: #742 added `profile.body` and
+     the guard stayed green, which would have shipped a new coach input undrawn. This check
+     diffs the FULL declared key set the pack can carry (every field of every nested model,
+     as dotted paths) against the set RECORDED in pack-shape.json when the diagram was last
+     regenerated. See _declared_pack_key_paths for why the declaration — not the captured
+     DATA.pack — is the source, and why that is what keeps this check quiet.
+
+  5. GENERATOR CALL SIGNATURES (#840). The generators call into backend/app to build their
+     capture, so they rot when a callee's signature changes: generate_flow_nodes_data.py
+     passed a `voice=` argument that #822 had removed and raised TypeError for four days
+     while `make diagram-check` stayed green — the guard was policing the file's contents
+     while the only tool that can produce those contents was dead. A generator needs a
+     seeded DB, so CI cannot run one; but the observed failure was a SIGNATURE mismatch and
+     not a data problem, so this check statically finds each call into app.* and binds it
+     against the callee's REAL signature (inspect.signature.bind) without any data.
+
 It does NOT verify edge correctness (which upstream stage feeds which node) — that is harder
 to mechanise and still relies on the periodic human/agent audit. This guard's job is narrow
 and high-value: no pack section or metric column can ever again reach the model with no node.
@@ -40,15 +57,27 @@ No DB and no `node` runtime are required — pure schema introspection + text pa
 """
 from __future__ import annotations
 
+import ast
+import importlib
+import inspect
+import json
 import re
 import sys
+import typing
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _BACKEND = _HERE.parents[1] / "backend"
 _FLOW_NODES = _HERE / "flow-nodes.js"
 _GENERATOR = _HERE / "generate_flow_nodes_data.py"
+_CHAT_GENERATOR = _HERE / "generate_chat_flow_data.py"
+_PACK_SHAPE = _HERE / "pack-shape.json"
 _ENV_EXAMPLE = _BACKEND / ".env.example"
+
+# The generators whose calls into backend/app must still bind (check 5). Both build their
+# capture by importing the real pipeline, so both rot the same way; generate_example_chats.py
+# is excluded because it drives the live API rather than importing the backend.
+_GENERATORS = (_GENERATOR, _CHAT_GENERATOR)
 
 # CoachContextPack fields that intentionally have NO node in the diagram. Keep this list
 # tiny and documented — every entry is a field the model carries in the schema but that is
@@ -88,6 +117,279 @@ def _canonical_pack_sections() -> set[str]:
 
     top_level_meta = set(CoachContextPack.model_fields.keys()) - set(_GROUP_NAMES)
     return set(_SECTION_GROUP) | top_level_meta
+
+
+def _models_in(annotation) -> list:
+    """Every Pydantic model reachable from a field annotation.
+
+    Unwraps the containers the pack actually uses — Optional[X], List[X], Dict[str, X],
+    Union[A, B] — recursively, so `Optional[List[BlockMember]]` yields BlockMember. An
+    opaque `Dict[str, Any]` blob yields nothing, which is correct: it has no declared
+    keys, so there is nothing for this guard to pin."""
+    from pydantic import BaseModel  # lazy: needs the app's deps importable
+
+    found = []
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        found.append(annotation)
+    for arg in typing.get_args(annotation) or ():
+        found.extend(_models_in(arg))
+    return found
+
+
+def _walk_model(model, prefix: str, seen: frozenset) -> list[str]:
+    """Dotted key paths for every declared field of `model` and its nested models.
+
+    `seen` guards against a self-referential model looping forever. A list-of-model
+    field contributes ONE path per declared field (`block.members.type`), not one per
+    element — the pack's key set is about what keys exist, not how many rows carry them.
+    """
+    paths: list[str] = []
+    for name, field in model.model_fields.items():
+        path = f"{prefix}.{name}"
+        paths.append(path)
+        for sub in _models_in(field.annotation):
+            if sub in seen:
+                continue
+            paths.extend(_walk_model(sub, path, seen | {sub}))
+    return paths
+
+
+def _declared_pack_key_paths() -> list[str]:
+    """Every key the coach context pack CAN carry, to full nesting depth, as dotted paths.
+
+    Source is the DECLARATION (the Pydantic models), deliberately NOT the captured
+    `DATA.pack` in flow-nodes.js, for two reasons that together decide the whole design
+    of check 4:
+
+      * The capture is one real runner's one real run, so most Optional fields are simply
+        absent from it — `profile.body` is absent right now because that runner has stated
+        no build, `calibration` and `block` drop for a solo run, a kill-switched section
+        drops entirely. Diffing against the capture would fire on all of those, which is
+        the "noisy enough that people regenerate reflexively" failure the issue names, AND
+        it would be unfixable: regenerating cannot conjure a value the runner never stated.
+      * Declaration-vs-declaration means value churn contributes exactly nothing. A capture
+        taken from a different activity, a different day, a different runner produces the
+        same key set. That is what makes it safe to walk to FULL depth rather than stopping
+        at one level: depth costs no noise here, and `profile.body.weight_kg` — the #742
+        field this check exists for — is two levels down.
+
+    So the recorded half (pack-shape.json, rewritten by the generator) is a lockfile on the
+    pack's shape: change what the coach can receive and the guard fails until the diagram is
+    regenerated, which is the standing repo rule this check makes enforceable.
+
+    Sections in _PACK_NOT_SHOWN are excluded — they are never serialized, so their fields
+    never reach the coach and pinning them would only add churn."""
+    from app.schemas.coach_context import (  # lazy: needs the app importable
+        CoachContextPack,
+        _GROUP_NAMES,
+    )
+
+    # ADR 0026: a flat section is declared either on one of the five group models or as a
+    # top-level meta field. Same universe check 1 enumerates, but keeping the ANNOTATION
+    # so the nested models can be walked.
+    section_annotations: dict = {}
+    for group in _GROUP_NAMES:
+        group_model = CoachContextPack.model_fields[group].annotation
+        for name, field in group_model.model_fields.items():
+            section_annotations[name] = field.annotation
+    for name, field in CoachContextPack.model_fields.items():
+        if name not in _GROUP_NAMES:
+            section_annotations[name] = field.annotation
+
+    paths: set[str] = set()
+    for name, annotation in section_annotations.items():
+        if name in _PACK_NOT_SHOWN:
+            continue
+        paths.add(name)
+        for model in _models_in(annotation):
+            paths.update(_walk_model(model, name, frozenset({model})))
+    return sorted(paths)
+
+
+def _recorded_pack_key_paths() -> list[str] | None:
+    """The pack key set recorded when the diagram was last regenerated, or None if the
+    sidecar is missing/unreadable (which is itself drift — the guard reports it)."""
+    if not _PACK_SHAPE.is_file():
+        return None
+    try:
+        blob = json.loads(_PACK_SHAPE.read_text())
+    except ValueError:
+        return None
+    paths = blob.get("paths") if isinstance(blob, dict) else None
+    return sorted(paths) if isinstance(paths, list) else None
+
+
+def write_pack_shape(paths: list[str] | None = None) -> Path:
+    """Rewrite pack-shape.json from the live declaration. Called by the generator, so
+    regenerating the diagram is the ONE supported way to refresh the lockfile — there is
+    deliberately no flag on this guard that would let someone silence check 4 without
+    regenerating the diagram the check exists to keep current."""
+    paths = _declared_pack_key_paths() if paths is None else paths
+    _PACK_SHAPE.write_text(
+        json.dumps(
+            {
+                "_note": (
+                    "Every key the coach context pack can carry, to full nesting depth, as "
+                    "dotted paths, recorded when flow-nodes.js was last regenerated. Read by "
+                    "docs/diagrams/check_diagram_drift.py (#763) so a field added INSIDE an "
+                    "existing pack section cannot ship with the diagram unregenerated. "
+                    "Rewritten by generate_flow_nodes_data.py — do not hand-edit."
+                ),
+                "paths": paths,
+            },
+            indent=1,
+        )
+        + "\n"
+    )
+    return _PACK_SHAPE
+
+
+def _pack_shape_problems(declared: list[str], recorded: list[str] | None) -> list[str]:
+    """Diff the live declared pack key set against the recorded one. Pure, so the suite
+    can prove the check actually fails on an added key without touching the real files."""
+    if recorded is None:
+        return [
+            f"{_PACK_SHAPE.name} is missing or unreadable, so the pack's nested key set is "
+            "unpinned and a new coach input can ship undrawn (the #742 class of bug). "
+            "Regenerate the diagram: python docs/diagrams/generate_flow_nodes_data.py"
+        ]
+    problems: list[str] = []
+    added = sorted(set(declared) - set(recorded))
+    removed = sorted(set(recorded) - set(declared))
+    if added:
+        problems.append(
+            "Pack keys the coach can now receive that are NOT in the recorded shape "
+            f"({_PACK_SHAPE.name}): {added}. A new coach input reaches the model while the "
+            "diagram still depicts the old pack. Regenerate the diagram in this same change "
+            "(python docs/diagrams/generate_flow_nodes_data.py), which rewrites both "
+            "flow-nodes.js and the recorded shape."
+        )
+    if removed:
+        problems.append(
+            f"Pack keys recorded in {_PACK_SHAPE.name} no longer exist on CoachContextPack: "
+            f"{removed}. The diagram depicts data the coach can no longer receive. "
+            "Regenerate the diagram."
+        )
+    return problems
+
+
+def _imported_app_names(tree: ast.AST) -> dict[str, tuple[str, str | None]]:
+    """Map each locally-bound name to the `app.*` module/attribute it was imported from.
+
+    Walks the WHOLE tree, so the function-body imports the generators use (deferred to keep
+    module import cheap) are bound too. Collisions across scopes collapse into one flat
+    namespace, which is fine here: these are single-purpose scripts that import a name once."""
+    bound: dict[str, tuple[str, str | None]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if not node.module or node.module.split(".")[0] != "app":
+                continue
+            for alias in node.names:
+                bound[alias.asname or alias.name] = (node.module, alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == "app":
+                    bound[alias.asname or alias.name] = (alias.name, None)
+    return bound
+
+
+def _resolve_imported(module: str, attr: str | None):
+    """Import `module` and return `attr` off it — falling back to importing `module.attr`
+    as a submodule, which is how `from app.services.coach import chat as chat_mod` binds."""
+    imported = importlib.import_module(module)
+    if attr is None:
+        return imported
+    try:
+        return getattr(imported, attr)
+    except AttributeError:
+        return importlib.import_module(f"{module}.{attr}")
+
+
+def _generator_signature_problems(source: str, label: str) -> list[str]:
+    """Bind every call the generator makes into `app.*` against the callee's real signature.
+
+    This is the #840 check: the generators need a seeded DB, so CI cannot run them, but the
+    failure that went unnoticed for four days (`build_system_prompt(..., voice=...)` after
+    #822 removed the parameter) needed no data to detect — only the callee's signature.
+
+    Two call shapes are resolved: a directly imported name (`build_system_prompt(...)`) and
+    one attribute off an imported name or module (`Classification.from_metrics(...)`,
+    `query_tools.get_session_detail(...)`), which covers everything the generators do.
+    Binding is STRICT (`bind`, which also catches a newly required parameter the call site
+    does not pass) unless the call unpacks `*args`/`**kwargs`, where only the arguments that
+    are actually visible can be checked (`bind_partial`).
+
+    Arguments bind as an opaque placeholder: this proves the call SHAPE is still legal —
+    arity and keyword names, which is what drifts — not that the values have the right types.
+    """
+    placeholder = object()
+    problems: list[str] = []
+    try:
+        tree = ast.parse(source, filename=label)
+    except SyntaxError as exc:
+        return [f"{label} does not parse: {exc}"]
+
+    bound = _imported_app_names(tree)
+
+    # An import that no longer resolves is the same failure class as a bad call site (the
+    # generator dies at import), and it is the shape a DELETED callee takes, so check every
+    # binding even if the generator never calls it.
+    resolved: dict[str, object] = {}
+    for name, (module, attr) in sorted(bound.items()):
+        try:
+            resolved[name] = _resolve_imported(module, attr)
+        except Exception as exc:  # noqa: BLE001 — any import failure is a dead generator
+            problems.append(
+                f"{label} imports {attr or module!r} from {module!r}, which no longer "
+                f"resolves ({exc}). The generator cannot run."
+            )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in resolved:
+            callee, shown = resolved[func.id], func.id
+        elif (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id in resolved
+        ):
+            owner = resolved[func.value.id]
+            shown = f"{func.value.id}.{func.attr}"
+            callee = getattr(owner, func.attr, None)
+            if callee is None:
+                problems.append(
+                    f"{label}:{node.lineno} calls {shown}(), but {func.attr!r} no longer "
+                    f"exists on {func.value.id!r}. The generator cannot run."
+                )
+                continue
+        else:
+            continue
+        if not callable(callee):
+            continue
+        try:
+            signature = inspect.signature(callee)
+        except (ValueError, TypeError):
+            continue  # a builtin/C callable with no introspectable signature
+        positional = [placeholder for a in node.args if not isinstance(a, ast.Starred)]
+        keywords = {k.arg: placeholder for k in node.keywords if k.arg is not None}
+        unpacks = len(positional) != len(node.args) or any(
+            k.arg is None for k in node.keywords
+        )
+        try:
+            if unpacks:
+                signature.bind_partial(*positional, **keywords)
+            else:
+                signature.bind(*positional, **keywords)
+        except TypeError as exc:
+            call = ", ".join(["_"] * len(positional) + [f"{k}=_" for k in keywords])
+            problems.append(
+                f"{label}:{node.lineno} calls {shown}({call}), which no longer binds against "
+                f"the real signature {shown}{signature}: {exc}. The generator cannot run, so "
+                "the diagram cannot be regenerated — fix the call site."
+            )
+    return problems
 
 
 def _canonical_derived_columns() -> set[str]:
@@ -149,6 +451,20 @@ def _env_example_flags() -> dict[str, bool]:
         return {}
     return {k: v == "true" for k, v in
             re.findall(r'^(COACH_[A-Z_]+_ENABLED)=(true|false)', _ENV_EXAMPLE.read_text(), re.M)}
+
+
+def _diagram_captured_prompt_id(flow_src: str) -> str | None:
+    """The prompt id the capture was generated under, from the DATA blob's `meta`."""
+    m = re.search(r'"prompt_id":"([A-Za-z0-9_]+)"', flow_src)
+    return m.group(1) if m else None
+
+
+def _env_example_prompt_id() -> str | None:
+    """The prod-parity COACH_PROMPT_ID documented in backend/.env.example."""
+    if not _ENV_EXAMPLE.is_file():
+        return None
+    m = re.search(r'^COACH_PROMPT_ID=(\S+)', _ENV_EXAMPLE.read_text(), re.M)
+    return m.group(1) if m else None
 
 
 def _generator_dm_fields(src: str) -> set[str]:
@@ -250,6 +566,43 @@ def check_drift() -> list[str]:
                 "under prod-parity config (or update .env.example if prod itself changed), so the "
                 "diagram reflects what prod actually sends.")
 
+    # 3b. PROMPT parity. The kill switches are only half of what decides the pack: the
+    #     prompt id gates whole sections (a section reaches a v9 pack and not a v5 one), so
+    #     a capture taken under the wrong prompt misdraws the coach's input exactly as a
+    #     wrong switch does. This half was unguarded, and the generator's own default had
+    #     been left at grouped_v5 while prod ran grouped_v9 — regenerating without setting
+    #     PROMPT_ID would have silently downgraded the capture with nothing to catch it.
+    captured_prompt = _diagram_captured_prompt_id(flow_src)
+    documented_prompt = _env_example_prompt_id()
+    if captured_prompt and documented_prompt and captured_prompt != documented_prompt:
+        problems.append(
+            f"The diagram was captured under prompt {captured_prompt!r} but backend/.env.example "
+            f"documents {documented_prompt!r} as the prod prompt. A prompt id gates whole pack "
+            "sections, so the diagram is drawing a different coach input than prod sends. "
+            "Regenerate flow-nodes.js under the prod prompt (or update .env.example if prod "
+            "itself changed).")
+
+    # 4. Nested pack key set (#763): checks 1-3 stop at the pack root, so a field added
+    #    INSIDE a section (profile.body) shipped green. Declared shape vs recorded shape.
+    declared_paths = _declared_pack_key_paths()
+    if len(declared_paths) < 200:
+        # Same fail-loud posture as the parsers above: a walker that silently returned
+        # almost nothing would turn check 4 into a check that cannot fail.
+        problems.append(
+            f"PARSER BROKE: walked only {len(declared_paths)} declared pack key paths "
+            "(expected ~575). The nested-key guard cannot be trusted — fix it.")
+    else:
+        problems.extend(_pack_shape_problems(declared_paths, _recorded_pack_key_paths()))
+
+    # 5. Generator call signatures (#840): a generator that cannot execute must fail a
+    #    check rather than pass silently.
+    for generator in _GENERATORS:
+        if not generator.is_file():
+            problems.append(f"missing diagram generator: {generator}")
+            continue
+        problems.extend(
+            _generator_signature_problems(generator.read_text(), generator.name))
+
     return problems
 
 
@@ -265,7 +618,8 @@ def main() -> int:
             print(f"  - {p}\n", file=sys.stderr)
         print("Fix flow-nodes.js / generate_flow_nodes_data.py, then re-run.", file=sys.stderr)
         return 1
-    print("ai-flow-graph diagram is in sync with the code (pack sections + DerivedMetric columns).")
+    print("ai-flow-graph diagram is in sync with the code (pack sections + nested pack keys "
+          "+ DerivedMetric columns + kill-switch parity), and the generators still bind.")
     return 0
 
 
