@@ -39,6 +39,7 @@ from app.services.coach import chat as chat_mod  # noqa: E402
 from app.services.coach import coaching_skills, proposed_actions, query_tools  # noqa: E402
 from app.services.coach import thread_turn as tt  # noqa: E402
 from app.jobs import thread_maintenance as tm  # noqa: E402
+from app.services import intents  # noqa: E402
 
 TARGET = Path(__file__).parent / "coach-chat-nodes.js"
 
@@ -778,7 +779,7 @@ def build() -> dict:
             "thread_send": ThreadMessageSend.model_json_schema(),
             "proposed_action": proposed_actions.ProposedActionRequest.model_json_schema(),
         },
-        "intent_options": proposed_actions.INTENT_OPTIONS_BY_TYPE,
+        "intent_options": intents.INTENT_OPTIONS_BY_TYPE,
         # the floor's canned answers
         "messages": {
             "medical_redirect": chat_mod.MEDICAL_REDIRECT_MESSAGE,

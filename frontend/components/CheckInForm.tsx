@@ -1,16 +1,7 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { fetchFromAPI } from '@/lib/api';
-
-const OPTIONS_BY_TYPE: Record<string, string[]> = {
-  Run: ["Easy Run", "Recovery", "Long Run", "Tempo", "Intervals", "Hills", "Race", "Treadmill"],
-  Walk: ["Leisure Walk", "Power Walk", "Hike", "Commute"],
-  Ride: ["Easy Ride", "Workout", "Long Ride", "Race", "Indoor Ride"],
-  Swim: ["Endurance", "Drills", "Intervals", "Race"],
-  Workout: ["Strength", "Cardio", "Yoga", "Mobility"],
-  Default: ["Easy", "Moderate", "Hard", "Workout"]
-};
 
 interface CheckInData {
   rpe: number;
@@ -23,18 +14,17 @@ interface Props {
   existingCheckIn?: CheckInData | null;
   currentType?: string | null;
   headline?: string | null; // measured classification headline (ADR 0007)
-  sportType?: string; // e.g. "Run", "Walk"
+  // The stated-intent labels this activity accepts, served by the activity
+  // detail read (#779). The vocabulary lives once, in the backend, where the
+  // coach's proposed-action guard validates against the same list; this
+  // component holds no copy of it and so cannot drift from what the coach may
+  // offer. Already resolved for THIS activity, including any stored intent
+  // that predates the current vocabulary.
+  typeOptions?: string[];
 }
 
-export default function CheckInForm({ activityId, existingCheckIn, currentType, headline, sportType = "Run" }: Props) {
+export default function CheckInForm({ activityId, existingCheckIn, currentType, headline, typeOptions = [] }: Props) {
   const router = useRouter();
-  
-  // Determine available options based on sport type
-  const typeOptions = useMemo(() => {
-     // Normalize key (Strava uses "Run", "Walk", "Ride" etc)
-     const key = Object.keys(OPTIONS_BY_TYPE).find(k => k === sportType) || 'Default';
-     return OPTIONS_BY_TYPE[key];
-  }, [sportType]);
 
   // Mode state: If data exists, start in View Mode (isEditing = false)
   const [isEditing, setIsEditing] = useState(!existingCheckIn);
@@ -51,6 +41,16 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
   const [intent, setIntent] = useState(currentType || "");
 
   const [submitting, setSubmitting] = useState(false);
+
+  // The server already appends a stored intent that falls outside the current
+  // vocabulary, so this only matters when the options did not arrive at all
+  // (an older cached response). Losing the picker is acceptable there; silently
+  // dropping what the runner already stated is not, because a <select> with no
+  // matching option displays the wrong value and overwrites it on save.
+  const selectableOptions =
+    currentType && !typeOptions.includes(currentType)
+      ? [...typeOptions, currentType]
+      : typeOptions;
 
   // Sync state with props when server data updates
   useEffect(() => {
@@ -166,7 +166,7 @@ export default function CheckInForm({ activityId, existingCheckIn, currentType, 
           className="w-full border border-gray-300 dark:border-gray-600 rounded p-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all bg-white dark:bg-gray-900 dark:text-gray-100"
         >
           <option value="">{headline ? `Auto-detected: ${headline}` : "Auto-detected"}</option>
-          {typeOptions.map(type => (
+          {selectableOptions.map(type => (
               <option key={type} value={type}>{type}</option>
           ))}
         </select>

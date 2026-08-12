@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from app.models import Activity, CheckIn, User
 from app.services.blocks import assign_activity_to_block
+from app.services import intents
 from app.services.coach import proposed_actions
 
 T0 = datetime(2026, 8, 1, 7, 0, tzinfo=timezone.utc)
@@ -119,7 +120,7 @@ def test_intent_offer_rejects_invalid_intent_for_activity_type(db):
     assert frame is None
     # The model cannot guess a vocabulary it was never shown, so a rejection
     # hands back the labels this activity type accepts and it can offer again.
-    assert result["allowed"] == list(proposed_actions.INTENT_OPTIONS_BY_TYPE["Walk"])
+    assert result["allowed"] == list(intents.INTENT_OPTIONS_BY_TYPE["Walk"])
 
 
 def test_intent_offer_accepts_the_label_as_the_runner_said_it(db):

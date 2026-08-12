@@ -89,7 +89,7 @@ export default async function ActivityDetail({ params }: { params: { id: string 
               existingCheckIn={activity.check_in} 
               currentType={activity.user_intent ?? null}
               headline={activity.metrics?.headline}
-              sportType={activity.raw_summary?.sport_type || activity.raw_summary?.type || 'Run'}
+              typeOptions={activity.intent_options}
           />
           
           {/* Training Load: current-condition read as of this activity (#276) */}
