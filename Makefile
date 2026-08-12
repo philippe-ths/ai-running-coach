@@ -1,4 +1,4 @@
-.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local coach-review eval eval-selftest eval-memory eval-memory-selftest diagram-check verify-local deployed-handshake-smoke post-deploy-verify preflight-env-check
+.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local coach-review eval eval-selftest eval-memory eval-memory-selftest diagram-check alembic-check verify-local deployed-handshake-smoke post-deploy-verify preflight-env-check
 
 # Prefer the project venv interpreter when it exists, fall back to bare python.
 # Path is relative to backend/ since the targets cd there first. CI has no
@@ -67,6 +67,18 @@ verify-local:
 # automatically in the backend-test suite (backend/tests/test_diagram_drift.py).
 diagram-check:
 	cd backend && $(BACKEND_PY) ../docs/diagrams/check_diagram_drift.py
+
+# Model/migration drift guard (#839). Walks the migration history onto the
+# database DATABASE_URL points at, then diffs the result against the model
+# metadata. `make backend-test` is structurally blind to this: the suite builds
+# its schema with `create_all` from the models, so a model edit with no
+# migration passes every test and fails the deploy instead. Runs in CI as the
+# `alembic-check` job against a throwaway Postgres; locally it uses whatever
+# backend/.env points at (docker-compose Postgres on :5433), where the upgrade
+# is a no-op once that database is already at head.
+alembic-check:
+	cd backend && $(BACKEND_PY) -m alembic upgrade head
+	cd backend && $(BACKEND_PY) -m alembic check
 
 # Offline coach-report eval harness (M5) — THE GATE for the learning milestones.
 # Scores the coach reports in the local DB against the deterministic rubric and

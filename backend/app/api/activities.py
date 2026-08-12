@@ -14,6 +14,7 @@ from app.api.deps import (
 )
 from app.models.user_profile import UserProfile
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead, TrainingLoadRead
+from app.schemas.detail import SplitRead
 from app.services import activity_queries, analysis
 from app.services.checkins import write_checkin
 from app.services.intents import selectable_intent_options, write_activity_intent
@@ -231,7 +232,16 @@ def read_activity(
 
     # Convert to Pydantic model manually to inject transient splits + headline
     response = ActivityDetailRead.model_validate(activity)
-    response.splits = splits_data
+    # `calculate_splits` returns plain dicts (it also feeds the coach's data
+    # tools, which want dicts). Assigning them straight to `.splits` skips
+    # Pydantic validation (assignment does not validate unless
+    # `validate_assignment` is set), so the field held raw dicts against a
+    # declared `List[SplitRead]` and the later `jsonable_encoder` serialization
+    # pass warned "serialized value may not be as expected" (#853). Validating
+    # each dict against the declared shape here makes the two agree; had a
+    # field actually been missing or mistyped this would raise rather than
+    # warn (it does not, on real data, per #853's finding).
+    response.splits = [SplitRead.model_validate(s) for s in splits_data]
     response.laps = project_laps(activity.raw_summary, effective_type)
     # The stated-intent picker's options (#779). Served from the one vocabulary the
     # coach's proposed-action guard also validates against, keyed here on the stored

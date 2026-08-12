@@ -45,6 +45,63 @@ jobs:
       - name: Run backend tests
         run: make backend-test
 
+  # Model/migration drift guard (#839). `make backend-test` cannot see this
+  # class of bug: the suite builds its schema with `create_all` from the models,
+  # so a model edit that never got a migration passes every test and then fails
+  # the production deploy (or, worse, silently runs prod on a schema the code no
+  # longer describes). `alembic check` is the deterministic answer -- it walks
+  # the migration history onto an empty database and diffs the result against
+  # the model metadata. It runs against a real Postgres because that is the
+  # engine production runs and the migrations use Postgres-only DDL.
+  alembic-check:
+    name: alembic-check
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: coach
+          POSTGRES_PASSWORD: coach
+          POSTGRES_DB: coach
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://coach:coach@localhost:5432/coach
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      # Core deps only: alembic, SQLAlchemy and psycopg are runtime
+      # dependencies, so the test extra buys nothing here. `psycopg[binary]` is
+      # a CI-step-only addition, not a project dependency: this is the first CI
+      # job that ever actually DIALS Postgres (the backend-test job's own
+      # DATABASE_URL is never connected to -- conftest uses SQLite), and the
+      # plain wheel is the pure-Python implementation, which loads whatever
+      # libpq the runner image happens to ship. The binary extra bundles its
+      # own, so the job cannot start failing on a runner-image change.
+      - name: Install backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./backend "psycopg[binary]"
+
+      # Two steps rather than one `make` target so a broken MIGRATION and a
+      # model/migration DIVERGENCE are distinguishable in the job log.
+      - name: Apply migrations to an empty database
+        run: cd backend && python -m alembic upgrade head
+
+      - name: Check the models match the migrations
+        run: cd backend && python -m alembic check
+
   frontend-test:
     name: frontend-test
     runs-on: ubuntu-latest
@@ -75,7 +132,7 @@ jobs:
   # unset, so the repo is not broken for anyone without prod access.
   post-deploy-verify:
     name: post-deploy-verify
-    needs: [backend-test, frontend-test]
+    needs: [backend-test, frontend-test, alembic-check]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:

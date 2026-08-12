@@ -8,9 +8,10 @@ pre-thread code, and keeping `last_message_at` honest for the switcher ordering.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional, Sequence
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.sql import func
 
 from app.models.activity import Activity
@@ -22,6 +23,39 @@ from app.schemas.thread import ThreadAnchor, ThreadListItem
 _MAX_LISTED_THREADS = 100
 _DISPLAY_TITLE_CHARS = 60
 _SNIPPET_CHARS = 90
+_UNTITLED = "New thread"
+
+
+def _title_from_first_message(content: Optional[str]) -> Optional[str]:
+    """The trimmed first user message, or None when there is nothing usable and
+    the caller should fall back to the placeholder name."""
+    if not content:
+        return None
+    text = " ".join(content.split())
+    return text[:_DISPLAY_TITLE_CHARS].rstrip() + (
+        "…" if len(text) > _DISPLAY_TITLE_CHARS else ""
+    )
+
+
+def _snippet_from_last_message(content: Optional[str]) -> Optional[str]:
+    """The trimmed last message of the thread, or None when there is none."""
+    if not content:
+        return None
+    text = " ".join(content.split())
+    return text[:_SNIPPET_CHARS] + ("…" if len(text) > _SNIPPET_CHARS else "")
+
+
+def _first_user_message_content(db: Session, thread_id) -> Optional[str]:
+    row = (
+        db.query(CoachChatMessage.content)
+        .filter(
+            CoachChatMessage.thread_id == thread_id,
+            CoachChatMessage.role == "user",
+        )
+        .order_by(CoachChatMessage.created_at.asc(), CoachChatMessage.id.asc())
+        .first()
+    )
+    return row[0] if row else None
 
 
 def display_title(db: Session, thread: Thread) -> str:
@@ -30,19 +64,8 @@ def display_title(db: Session, thread: Thread) -> str:
     moment it has one turn in it (design spec)."""
     if thread.title:
         return thread.title
-    first = (
-        db.query(CoachChatMessage.content)
-        .filter(
-            CoachChatMessage.thread_id == thread.id,
-            CoachChatMessage.role == "user",
-        )
-        .order_by(CoachChatMessage.created_at.asc(), CoachChatMessage.id.asc())
-        .first()
-    )
-    if first and first[0]:
-        text = " ".join(first[0].split())
-        return text[:_DISPLAY_TITLE_CHARS].rstrip() + ("…" if len(text) > _DISPLAY_TITLE_CHARS else "")
-    return "New thread"
+    title = _title_from_first_message(_first_user_message_content(db, thread.id))
+    return _UNTITLED if title is None else title
 
 
 def _anchor_for(thread: Thread) -> Optional[ThreadAnchor]:
@@ -60,10 +83,59 @@ def _anchor_for(thread: Thread) -> Optional[ThreadAnchor]:
     )
 
 
+def _one_message_per_thread(
+    db: Session,
+    thread_ids: Sequence,
+    *,
+    newest: bool,
+    user_turns_only: bool = False,
+) -> Dict:
+    """One message per thread in a single query: the newest, or the oldest user
+    turn, under the same ordering the per-thread reads used (#788).
+
+    `ROW_NUMBER() OVER (PARTITION BY …)` is plain SQL:2003, evaluated identically
+    by Postgres (production) and SQLite >= 3.25 (the test suite's create_all
+    database), and the ORDER BY inside the window is byte-for-byte the one the
+    replaced per-thread queries carried, so tie-breaking cannot drift between the
+    two implementations on either dialect.
+    """
+    if not thread_ids:
+        return {}
+    order = (
+        (CoachChatMessage.created_at.desc(), CoachChatMessage.id.desc())
+        if newest
+        else (CoachChatMessage.created_at.asc(), CoachChatMessage.id.asc())
+    )
+    conditions = [CoachChatMessage.thread_id.in_(thread_ids)]
+    if user_turns_only:
+        conditions.append(CoachChatMessage.role == "user")
+    ranked = (
+        select(
+            CoachChatMessage.thread_id.label("thread_id"),
+            CoachChatMessage.content.label("content"),
+            func.row_number()
+            .over(partition_by=CoachChatMessage.thread_id, order_by=order)
+            .label("rank"),
+        )
+        .where(*conditions)
+        .subquery()
+    )
+    rows = db.execute(
+        select(ranked.c.thread_id, ranked.c.content).where(ranked.c.rank == 1)
+    ).all()
+    return {thread_id: content for thread_id, content in rows}
+
+
 def list_threads(db: Session, user_id) -> List[ThreadListItem]:
-    """The runner's threads for the switcher, most recent conversation first."""
+    """The runner's threads for the switcher, most recent conversation first.
+
+    Three queries for the whole list rather than three per thread (#788): the
+    threads with their anchors joined, the last message of each, and the first
+    user message of the untitled ones. The output is unchanged.
+    """
     threads = (
         db.query(Thread)
+        .options(joinedload(Thread.activity))
         .filter(Thread.user_id == user_id)
         .order_by(
             func.coalesce(Thread.last_message_at, Thread.created_at).desc(),
@@ -72,23 +144,25 @@ def list_threads(db: Session, user_id) -> List[ThreadListItem]:
         .limit(_MAX_LISTED_THREADS)
         .all()
     )
+    thread_ids = [thread.id for thread in threads]
+    last_messages = _one_message_per_thread(db, thread_ids, newest=True)
+    untitled_ids = [thread.id for thread in threads if not thread.title]
+    first_user_messages = _one_message_per_thread(
+        db, untitled_ids, newest=False, user_turns_only=True
+    )
+
     items: List[ThreadListItem] = []
     for thread in threads:
-        last = (
-            db.query(CoachChatMessage.content)
-            .filter(CoachChatMessage.thread_id == thread.id)
-            .order_by(CoachChatMessage.created_at.desc(), CoachChatMessage.id.desc())
-            .first()
-        )
-        snippet = None
-        if last and last[0]:
-            text = " ".join(last[0].split())
-            snippet = text[:_SNIPPET_CHARS] + ("…" if len(text) > _SNIPPET_CHARS else "")
+        if thread.title:
+            title = thread.title
+        else:
+            trimmed = _title_from_first_message(first_user_messages.get(thread.id))
+            title = _UNTITLED if trimmed is None else trimmed
         items.append(
             ThreadListItem(
                 id=thread.id,
-                title=display_title(db, thread),
-                snippet=snippet,
+                title=title,
+                snippet=_snippet_from_last_message(last_messages.get(thread.id)),
                 last_message_at=thread.last_message_at,
                 anchor=_anchor_for(thread),
             )

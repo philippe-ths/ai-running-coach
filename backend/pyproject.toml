@@ -4,7 +4,19 @@ version = "0.2.0"
 description = "Running Coach Backend"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.109.0",
+    # BOUNDED DELIBERATELY (#809). FastAPI's router model is not a private
+    # detail here: several security guards sweep the route table, and 0.141
+    # changed `include_router` from flattening routes into `app.routes` to
+    # wrapping them behind `_IncludedRouter`. Under the old unbounded
+    # `>=0.109.0` a developer's venv sat on 0.128 while CI resolved 0.141, so a
+    # local green run and a CI green run were not checking the same things --
+    # and the session-gate fence inspected zero routes in CI while passing.
+    # The floor makes local, CI and the deploy resolve one route model; the
+    # ceiling means the next minor is adopted on purpose, after confirming
+    # `tests/_route_table.py` still enumerates the app (its anti-vacuity test
+    # will say so). `test_route_table.py` asserts the INSTALLED version
+    # satisfies this line, so a stale venv is a failure rather than a surprise.
+    "fastapi>=0.141.0,<0.142.0",
     "uvicorn[standard]>=0.27.0",
     "sqlalchemy>=2.0.0",
     "psycopg>=3.1.0",
