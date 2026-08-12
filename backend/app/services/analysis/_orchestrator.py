@@ -2,7 +2,7 @@ import logging
 import sys
 import uuid
 from dataclasses import fields as dataclass_fields
-from typing import Optional
+from typing import Any, Optional
 from sqlalchemy.orm import Session, undefer
 from sqlalchemy import select
 
@@ -44,32 +44,46 @@ _FLAGS_METRIC_READS = tuple(
     if name in {f.name for f in dataclass_fields(DerivedMetricFields)}
 )
 
-def _extract_planned_workout(check_in) -> dict | None:
-    """
-    Extract structured planned workout from check-in data.
-    Returns None if no planned workout is specified.
+def _resolve_planned_session(db: Session, activity) -> Any:
+    """The planned session this activity most plausibly is, or None.
 
-    Future: this will come from a dedicated planned_workout field.
-    For now, returns None (no planned workout capture yet).
+    Imported lazily: the schedule is a higher layer than analysis, and a
+    top-level import would point the dependency the wrong way for a lookup that
+    is absent for every runner without a plan. Never fatal — a schedule that
+    cannot answer must not stop a run being analysed.
     """
-    # Planned workout capture is not yet implemented in the UI.
-    # When it is, this function will parse the structured input.
-    #
-    # DORMANT CONSEQUENCE (#805). Because this always returns None,
-    # `match_planned_to_detected` never reaches its plan-scoring block, so
-    # `workout_match["match_score"]` is only ever None (stream-derived) or 1.0
-    # (recorded laps, a perfect de-facto plan). That makes ONE branch of
-    # `compute_confidence` unreachable through `analyze()`: the
-    # `match_score < 0.7` test that appends `interval_structure_mismatch`, a
-    # CRITICAL reason that can force a run's confidence to "low". Its unit test
-    # passes against a hand-built dict on a path no composition can reach.
-    #
-    # Recorded as dormant rather than made reachable: making it fire would mean
-    # inventing planned-workout capture, which is a product feature, not a
-    # refactor. `tests/test_analysis_stages.py` pins the dormancy, so the day
-    # this placeholder returns a real plan the pin fails and the branch is
-    # revisited deliberately.
-    return None
+    try:
+        from app.services.schedule.completion import find_matching_session
+
+        return find_matching_session(db, activity)
+    except Exception:  # noqa: BLE001 — analysis must survive a schedule fault
+        logger.exception(
+            "planned-session lookup failed for activity %s; analysing without a plan",
+            getattr(activity, "id", None),
+        )
+        return None
+
+
+def _extract_planned_workout(planned_session) -> dict | None:
+    """The rep structure this activity was PLANNED to have, or None.
+
+    This was a placeholder returning None from the beginning of the project
+    until #830. `workout_matching.match_planned_to_detected` has compared a plan
+    to detected reps all along and had never once been handed one, so its
+    plan-scoring block was unreachable through `analyze()` and with it one branch
+    of `compute_confidence` — the `match_score < 0.7` test that appends the
+    CRITICAL `interval_structure_mismatch` reason. `tests/test_analysis_stages.py`
+    pinned that dormancy precisely so the day a real plan arrived the pin would
+    fail and the branch would be revisited deliberately rather than waking up
+    unnoticed. That day is this one.
+
+    The session is resolved in the load phase (`schedule.completion`), so this
+    stays a pure projection: a planned session carries `structure` only when the
+    coach gave it reps, and everything else still matches with no plan.
+    """
+    if planned_session is None:
+        return None
+    return getattr(planned_session, "structure", None) or None
 
 async def analyze_with_streams(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     """
@@ -274,12 +288,13 @@ def _stage_interval_gate(ctx: StageContext) -> None:
 def _stage_workout_match(ctx: StageContext) -> None:
     """Compare planned vs detected.
 
-    DORMANT BRANCH (#805): `_extract_planned_workout` is a documented placeholder
-    that always returns None until planned-workout capture exists, so this stage
-    only ever runs its no-plan path. The consequence lands downstream in
-    `compute_confidence` — see the note there.
+    Live since #830: `planned_session` is resolved in the load phase, so this
+    stage now runs its plan-scoring path whenever the runner had a planned
+    session with rep structure covering this activity. Without a schedule — or on
+    a session the coach prescribed no reps for — it still runs the no-plan path
+    exactly as before.
     """
-    planned_workout = _extract_planned_workout(ctx.get("check_in"))
+    planned_workout = _extract_planned_workout(ctx.get("planned_session"))
     ctx.set(
         "workout_match",
         match_planned_to_detected(ctx.get("interval_session").structure, planned_workout),
@@ -507,6 +522,12 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     # it is subject to the same declaration as every other stage rather than
     # being a privileged constructor call. `state.to_columns()` still reproduces
     # the exact upsert dict (#701).
+    # The planned session this activity satisfies, if the runner has a schedule.
+    # Read here in the load phase alongside the check-in and the profile, so
+    # every entry point — the pipeline, a re-analysis, the backfill — resolves it
+    # the same way, and so the stage layer stays free of a service import.
+    planned_session = _resolve_planned_session(db, activity)
+
     state = DerivedMetricFields(effort_score=0.0)
     ctx = StageContext(
         db=db,
@@ -514,6 +535,7 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
         history=history,
         streams_dict=streams_dict,
         check_in=check_in,
+        planned_session=planned_session,
         profile=profile,
         max_hr=max_hr,
         zone_boundaries=zone_boundaries,

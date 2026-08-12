@@ -170,6 +170,23 @@ async def receive_webhook(
             .filter(Activity.strava_activity_id == event.object_id)
             .first()
         )
+        if activity is not None:
+            # #830: an AUTO-ticked planned session credited to an activity that
+            # no longer exists is a lie the plan-versus-actual read would carry
+            # forward. A manual or conversational tick is left alone — the runner
+            # said they did it, and deleting a Strava upload does not unsay that.
+            try:
+                from app.services.schedule.completion import (
+                    clear_completions_for_activity,
+                )
+
+                clear_completions_for_activity(db, activity)
+            except Exception:
+                logger.exception(
+                    "strava_delete_schedule_uncomplete_failed strava_id=%s",
+                    event.object_id,
+                )
+
         if activity is not None and activity.block_id is not None:
             try:
                 remove_activity_from_block(db, activity)

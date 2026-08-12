@@ -345,34 +345,93 @@ def test_stage_mutating_its_own_value_in_place_is_allowed():
     assert ctx.state.time_in_zones == {"z1": 1, "z2": 2}
 
 
-# --- 6. The dormant confidence branch, recorded ------------------------------
+# --- 6. The formerly dormant confidence branch, now reachable ----------------
 #
-# `_extract_planned_workout` is a documented placeholder returning None until
-# planned-workout capture exists. These pin the consequence so it is a recorded
-# dormancy rather than an accident nobody notices.
+# `_extract_planned_workout` returned None from the beginning of the project, so
+# `match_planned_to_detected` never reached its plan-scoring block and one branch
+# of `compute_confidence` was unreachable through `analyze`. These pinned that
+# dormancy so the day a real plan arrived it would be revisited deliberately.
+#
+# #830 is that day: the schedule resolves a planned session in the load phase.
+# The pins below now assert the opposite — that the branch is REACHABLE — because
+# a recorded dormancy that outlives the thing it recorded is just a false claim
+# about the system.
 
-def test_planned_workout_capture_is_still_a_placeholder(db):
-    """The blocking placeholder. When this starts returning a plan, the two pins
-    below fail and the dormant branch must be revisited deliberately."""
-    from app.models import CheckIn
+
+def test_a_planned_session_now_feeds_the_interval_matcher(db):
+    """The projection that was a placeholder.
+
+    A session with no rep structure still yields no plan, so every run without
+    prescribed reps matches exactly as it always did.
+    """
+    from app.models.planned_session import PlannedSession
 
     assert _orchestrator._extract_planned_workout(None) is None
+    assert (
+        _orchestrator._extract_planned_workout(PlannedSession(structure=None)) is None
+    )
     assert _orchestrator._extract_planned_workout(
-        CheckIn(rpe=7, pain_score=1, sleep_quality=3, notes="8x400 planned")
-    ) is None
+        PlannedSession(structure={"reps_planned": 8, "rep_distance_m": 400})
+    ) == {"reps_planned": 8, "rep_distance_m": 400}
 
 
-def test_interval_structure_mismatch_cannot_fire_through_analyze(db, monkeypatch):
-    """The dormant branch: `interval_structure_mismatch` is a CRITICAL confidence
-    reason that can force a run to "low", but it needs match_score < 0.7, which
-    needs a planned workout. With the placeholder in place, match_score is only
-    ever None (stream-derived) or 1.0 (recorded laps, a perfect de-facto plan),
-    so no run reaching `analyze` can ever trip it."""
-    from tests.test_analysis_composition import _LAP_STRUCTURE, _seed_run
+def test_interval_structure_mismatch_can_now_fire_through_analyze(db, monkeypatch):
+    """The branch that no composition could reach, reached.
+
+    `interval_structure_mismatch` is a CRITICAL confidence reason that can force a
+    run to "low". It needs `match_score < 0.7`, which needs a planned workout —
+    which nothing could supply until the schedule did. Here the runner planned
+    12 x 400m and the laps show 3 reps, so the plan and the execution genuinely
+    disagree and the run's confidence says so.
+    """
+    from datetime import timedelta
+
+    from app.models.planned_session import PlannedSession
+    from app.models.training_plan import TrainingPlan
+    from tests.test_analysis_composition import _seed_run
+
+    # The matcher scores `work_segments`; a structure carrying only `reps` bails
+    # at `no_work_segments` before a plan is ever consulted.
+    detected = {
+        "source": "recorded_laps",
+        "summary": {
+            "rep_count": 3,
+            "total_work_time_s": 300,
+            "work_duration_cv": 3.0,
+            "consistency_score": 0.9,
+        },
+        "work_segments": [
+            {"duration_s": 100, "distance_m": 400},
+            {"duration_s": 100, "distance_m": 400},
+            {"duration_s": 100, "distance_m": 400},
+        ],
+    }
 
     activity = _seed_run(db)
+    day = activity.local_start.date()
+    plan = TrainingPlan(
+        user_id=activity.user_id, status="active", rules=[], week_shapes=[]
+    )
+    db.add(plan)
+    db.flush()
+    db.add(
+        PlannedSession(
+            plan_id=plan.id,
+            user_id=activity.user_id,
+            window_start=day,
+            window_end=day,
+            intent="quality",
+            discipline="run",
+            commitment="committed",
+            title="12x400m",
+            target_distance_m=10000,
+            structure={"reps_planned": 12, "rep_distance_m": 400, "rest_s": 60},
+        )
+    )
+    db.commit()
+
     monkeypatch.setattr(
-        _orchestrator, "detect_intervals_from_laps", lambda *a, **k: _LAP_STRUCTURE
+        _orchestrator, "detect_intervals_from_laps", lambda *a, **k: detected
     )
     monkeypatch.setattr(_orchestrator, "detect_intervals", lambda *a, **k: None)
 
@@ -387,7 +446,28 @@ def test_interval_structure_mismatch_cannot_fire_through_analyze(db, monkeypatch
 
     dm = analyze(db, activity.id)
 
-    assert dm.interval_structure is not None, "the gate must be open for this pin to mean anything"
+    assert dm.interval_structure is not None, "the gate must be open to mean anything"
+    assert (dm.workout_match or {}).get("match_score") is not None
+    assert (dm.workout_match or {})["match_score"] < 0.7
+    assert "interval_structure_mismatch" in (dm.confidence_reasons or [])
+
+
+def test_a_runner_with_no_schedule_analyses_exactly_as_before(db, monkeypatch):
+    """The no-plan path is untouched.
+
+    Most runners have no schedule, and for them the matcher must behave as it
+    always has: no plan, no plan-scoring, no mismatch reason.
+    """
+    from tests.test_analysis_composition import _LAP_STRUCTURE, _seed_run
+
+    activity = _seed_run(db)
+    monkeypatch.setattr(
+        _orchestrator, "detect_intervals_from_laps", lambda *a, **k: _LAP_STRUCTURE
+    )
+    monkeypatch.setattr(_orchestrator, "detect_intervals", lambda *a, **k: None)
+
+    dm = analyze(db, activity.id)
+
     score = (dm.workout_match or {}).get("match_score")
     assert score is None or score >= 0.7
     assert "interval_structure_mismatch" not in (dm.confidence_reasons or [])

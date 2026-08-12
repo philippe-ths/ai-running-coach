@@ -64,6 +64,7 @@ OWNED_PATH_PARAMS = {
     "thread_id": {deps.get_owned_thread},
     "material_id": {deps.get_owned_material},
     "race_id": {deps.get_owned_goal_race},
+    "session_id": {deps.get_owned_planned_session},
 }
 
 # Every ownership resolver, whatever the resource. The broad sweep below accepts
