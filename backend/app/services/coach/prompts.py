@@ -518,9 +518,14 @@ def render_voice_block(base_prompt_id: str, voice=None) -> str:
     prompt and coach_message_v1/v2 stay byte-stable. For a voice-aware prompt it
     renders the effective dial settings (with pole labels), the selected preset's
     name/flavour and 1-2 example messages (only when a preset is stored), and the
-    fenced free-text (only when present). `voice` is a `voice.VoiceProfile`; None
-    resolves to the moderate default so an undeclared runner under v3 still gets the
-    centre persona rendered explicitly.
+    fenced free-text (only when present). `voice` is a `voice.VoiceProfile`.
+
+    A DEFAULT voice renders nothing. Default is the runner declining a voice, not
+    selecting a middling one, so there is no persona to describe and the coach
+    speaks as written — the same thing Default means on the report, where the
+    rewrite pass simply does not run (ADR 0030). Describing the centre explicitly
+    is not a neutral act: it is an instruction to sound warm, balanced and lightly
+    direct, and it arrives on the surface where the coach can also propose actions.
     """
     if base_prompt_id not in VOICE_PROMPT_IDS:
         return ""
@@ -543,6 +548,9 @@ def render_voice_block(base_prompt_id: str, voice=None) -> str:
         # Defensive: a raw relationship row was passed; resolve it.
         voice = resolve_voice(voice)
 
+    if voice.is_default:
+        return ""
+
     lines = ["\n\n## YOUR VOICE FOR THIS RUNNER", "\nDIALS (1 = low pole, 5 = high pole):"]
     for axis, value in voice.dials.as_ordered():
         descriptor = _describe_dial(value, axis.low_pole, axis.high_pole)
@@ -563,12 +571,6 @@ def render_voice_block(base_prompt_id: str, voice=None) -> str:
 
     if voice.freetext:
         lines.append(_render_freetext(voice.freetext))
-
-    if voice.is_default:
-        lines.append(
-            "\n(This runner has not customised their voice, so this is the default "
-            "moderate coaching voice — warm, balanced, lightly direct.)"
-        )
 
     return "\n".join(lines)
 

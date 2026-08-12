@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -219,10 +220,19 @@ class RewriteOutcome:
     the stored report without it. It is carried onto the report's meta so the
     question "did this runner read the baseline by choice or by failure?" is
     answerable later, without log access.
+
+    `duration_ms` is how long the model call took, set whenever one was made and
+    None when the pass returned before calling. It rides the same meta for the
+    same reason the reason does: how much a rewrite COSTS in wall-clock is the
+    open question about extending this pass to the conversational turn, where
+    latency is felt, and it has only ever been asserted rather than measured.
+    A log line could not answer it -- production drops the body of every log
+    record that carries a logger name -- so it is stored, not logged.
     """
 
     text: Optional[str]
     reason: str
+    duration_ms: Optional[int] = None
 
 
 APPLIED = "applied"
@@ -263,6 +273,11 @@ async def revoice_report(
         return RewriteOutcome(None, "over_budget")
 
     system, user = build_rewrite_prompts(voice, baseline)
+    started = time.perf_counter()
+
+    def _elapsed_ms() -> int:
+        return int((time.perf_counter() - started) * 1000)
+
     try:
         client = build_client(TurnKind.VOICE, user_id)
         text, _usage = await client.generate_json_with_usage(
@@ -270,11 +285,13 @@ async def revoice_report(
         )
     except Exception:  # noqa: BLE001 — a style pass never breaks a report
         logger.exception("voice_rewrite failed; serving the baseline")
-        return RewriteOutcome(None, "transport_error")
+        return RewriteOutcome(None, "transport_error", _elapsed_ms())
+
+    elapsed = _elapsed_ms()
 
     voiced = (text or "").strip()
     if not voiced:
-        return RewriteOutcome(None, "empty_rewrite")
+        return RewriteOutcome(None, "empty_rewrite", elapsed)
 
     invented = invented_numbers(baseline, voiced)
     if invented:
@@ -282,7 +299,9 @@ async def revoice_report(
             "voice_rewrite introduced unsourced numbers %s; serving the baseline",
             invented,
         )
-        return RewriteOutcome(None, f"invented_numbers:{','.join(invented[:3])}")
+        return RewriteOutcome(
+            None, f"invented_numbers:{','.join(invented[:3])}", elapsed
+        )
 
     violations = validate(voiced)
     if violations:
@@ -290,6 +309,6 @@ async def revoice_report(
         logger.warning(
             "voice_rewrite violated policy %s; serving the baseline", rules
         )
-        return RewriteOutcome(None, f"policy:{','.join(rules[:3])}")
+        return RewriteOutcome(None, f"policy:{','.join(rules[:3])}", elapsed)
 
-    return RewriteOutcome(voiced, APPLIED)
+    return RewriteOutcome(voiced, APPLIED, elapsed)

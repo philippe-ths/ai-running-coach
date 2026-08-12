@@ -216,3 +216,38 @@ async def test_the_kill_switch_stops_the_call(monkeypatch):
         )
     assert result.text is None and build.call_count == 0
     assert result.reason == "switched_off"
+
+
+# ---------------------------------------------------------------------------
+# #825: the rewrite's wall-clock cost is recorded, not asserted
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_rewrite_records_how_long_the_model_call_took():
+    """Whether to extend the rewrite to the conversational turn turns on what it
+    COSTS, and that had only ever been asserted -- nothing in the repo timed this
+    pass. Stored rather than logged, because production drops the body of every
+    log record carrying a logger name (#846), so a logged duration would be
+    unreadable exactly where the question is asked.
+    """
+    outcome = await _revoice(_voice(voice_preset="roast"), "Re-voiced.")
+
+    assert outcome.reason == APPLIED
+    assert outcome.duration_ms is not None
+    assert outcome.duration_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_a_pass_that_never_called_the_model_records_no_duration():
+    """None means "no call was made", which a 0 would hide."""
+    with patch("app.services.coach.turn.build_client"):
+        outcome = await revoice_report(
+            baseline=BASELINE,
+            voice=resolve_voice(None),
+            user_id=None,
+            validate=lambda _t: [],
+        )
+
+    assert outcome.reason == "default_voice"
+    assert outcome.duration_ms is None
