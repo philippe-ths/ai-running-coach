@@ -8,7 +8,7 @@ import { useCoachSheet } from '@/components/coach/CoachSheetContext';
 import { clerkEnabled } from '@/lib/authMode';
 
 const LINKS = [
-  { href: '/activities', label: 'Activities' },
+  { href: '/schedule', label: 'Schedule' },
   { href: '/load', label: 'Load' },
   { href: '/trends', label: 'Trends' },
   { href: '/profile', label: 'Profile' },

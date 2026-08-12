@@ -309,3 +309,31 @@ class TestResourcedPolicyFloor:
         profile.hr_zones = [95, 114, 133, 152, 171]
         calibrated, basis = zones_calibration(profile)
         assert calibrated is True and basis == "strava_zones"
+
+
+def test_the_schedule_screen_is_a_pointer_the_server_accepts():
+    """#830: a turn asked from /schedule must not 422.
+
+    `ScreenPointer` is a closed Literal with `extra="forbid"`, so a screen key
+    the frontend sends and the server does not know fails the WHOLE turn — the
+    runner asks a question from the new screen and gets nothing back. The two
+    lists have to move together, and this is what notices when they do not.
+    """
+    from app.schemas.thread import ScreenPointer
+    from app.services.coach.screen_context import _SCREEN_TITLES
+
+    assert ScreenPointer(screen="schedule").screen == "schedule"
+    assert "schedule" in _SCREEN_TITLES
+
+
+def test_every_screen_the_pointer_accepts_has_a_title():
+    """A pointer value with no title would resolve to a blank LOOKING AT label."""
+    from typing import get_args
+
+    from app.schemas.thread import ScreenPointer
+    from app.services.coach.screen_context import _SCREEN_TITLES
+
+    accepted = set(
+        get_args(ScreenPointer.model_fields["screen"].annotation)
+    )
+    assert accepted == set(_SCREEN_TITLES)

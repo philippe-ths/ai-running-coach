@@ -85,12 +85,241 @@ const mockTrends = {
   weekly_zone_load: [],
 };
 
+// #830: the schedule week. A planned week (so free mode is not the only shape
+// exercised) carrying a pinned done session, a floating one whose window has
+// narrowed, a suggestion, a rule with a violation, and logged actuals.
+const mockScheduleWeek = {
+  week_start: "2026-03-23",
+  week_end: "2026-03-29",
+  is_current_week: true,
+  has_plan: true,
+  plan_id: "11111111-1111-1111-1111-111111111111",
+  headline: {
+    planned_running_distance_m: 42000,
+    logged_running_distance_m: 18400,
+    planned_sessions: 5,
+    done_sessions: 2,
+  },
+  sessions: [
+    {
+      id: "aaaaaaaa-0000-0000-0000-000000000001",
+      window_start: "2026-03-23",
+      window_end: "2026-03-23",
+      placement: "pinned",
+      effective_window_start: "2026-03-23",
+      effective_window_end: "2026-03-23",
+      has_narrowed: false,
+      intent: "easy",
+      discipline: "run",
+      commitment: "committed",
+      status: "done",
+      title: "Easy 8k",
+      detail: "Conversational the whole way.",
+      target_distance_m: 8000,
+      target_duration_s: null,
+      target_effort_score: 40,
+      structure: null,
+      completed_at: "2026-03-23T08:12:00Z",
+      completed_activity_id: "42",
+      completion_source: "auto_match",
+      dismissed_at: null,
+    },
+    {
+      id: "aaaaaaaa-0000-0000-0000-000000000002",
+      window_start: "2026-03-24",
+      window_end: "2026-03-24",
+      placement: "pinned",
+      effective_window_start: "2026-03-24",
+      effective_window_end: "2026-03-24",
+      has_narrowed: false,
+      intent: "strength",
+      discipline: "strength",
+      commitment: "committed",
+      status: "upcoming",
+      title: "Lower body",
+      detail: "Squat, hinge, calf raises.",
+      target_distance_m: null,
+      target_duration_s: 2700,
+      target_effort_score: 30,
+      structure: null,
+      completed_at: null,
+      completed_activity_id: null,
+      completion_source: null,
+      dismissed_at: null,
+    },
+    {
+      id: "aaaaaaaa-0000-0000-0000-000000000003",
+      window_start: "2026-03-25",
+      window_end: "2026-03-27",
+      placement: "window",
+      effective_window_start: "2026-03-26",
+      effective_window_end: "2026-03-27",
+      has_narrowed: true,
+      intent: "quality",
+      discipline: "run",
+      commitment: "committed",
+      status: "upcoming",
+      title: "6 x 800m",
+      detail: "Threshold effort, 90s jog between.",
+      target_distance_m: 10000,
+      target_duration_s: null,
+      target_effort_score: 75,
+      structure: { reps_planned: 6, rep_distance_m: 800, rest_s: 90 },
+      completed_at: null,
+      completed_activity_id: null,
+      completion_source: null,
+      dismissed_at: null,
+    },
+    {
+      id: "aaaaaaaa-0000-0000-0000-000000000004",
+      window_start: "2026-03-28",
+      window_end: "2026-03-29",
+      placement: "window",
+      effective_window_start: "2026-03-28",
+      effective_window_end: "2026-03-29",
+      has_narrowed: false,
+      intent: "long",
+      discipline: "run",
+      commitment: "committed",
+      status: "upcoming",
+      title: "Long run 18k",
+      detail: "Easy throughout, fuel from 60 minutes.",
+      target_distance_m: 18000,
+      target_duration_s: null,
+      target_effort_score: 110,
+      structure: null,
+      completed_at: null,
+      completed_activity_id: null,
+      completion_source: null,
+      dismissed_at: null,
+    },
+    {
+      id: "aaaaaaaa-0000-0000-0000-000000000005",
+      window_start: "2026-03-23",
+      window_end: "2026-03-29",
+      placement: "week",
+      effective_window_start: "2026-03-26",
+      effective_window_end: "2026-03-29",
+      has_narrowed: true,
+      intent: "easy",
+      discipline: "bike",
+      commitment: "suggested",
+      status: "upcoming",
+      title: "Spin 45 min",
+      detail: "Optional aerobic top-up if the legs feel good.",
+      target_distance_m: null,
+      target_duration_s: 2700,
+      target_effort_score: 25,
+      structure: null,
+      completed_at: null,
+      completed_activity_id: null,
+      completion_source: null,
+      dismissed_at: null,
+    },
+  ],
+  logged: [
+    {
+      activity_id: "42",
+      local_date: "2026-03-23",
+      activity_type: "Run",
+      discipline: "run",
+      distance_m: 8100,
+      moving_time_s: 2580,
+      effort_score: 42,
+    },
+    {
+      activity_id: null,
+      local_date: "2026-03-25",
+      activity_type: "Walk",
+      discipline: "walk",
+      distance_m: 4200,
+      moving_time_s: 3000,
+      effort_score: 12,
+    },
+  ],
+  by_discipline: [
+    {
+      discipline: "run",
+      planned_effort_score: 225,
+      logged_effort_score: 42,
+      planned_sessions: 4,
+      logged_sessions: 1,
+    },
+    {
+      discipline: "strength",
+      planned_effort_score: 30,
+      logged_effort_score: 0,
+      planned_sessions: 1,
+      logged_sessions: 0,
+    },
+    {
+      discipline: "walk",
+      planned_effort_score: 0,
+      logged_effort_score: 12,
+      planned_sessions: 0,
+      logged_sessions: 1,
+    },
+  ],
+  rules: [
+    {
+      kind: "rest_day_after",
+      label: "A full rest day after the long run",
+      source: "coach",
+      intent: "long",
+    },
+    {
+      kind: "preferred_days",
+      label: "Long run needs a free morning — Sat or Sun",
+      source: "runner",
+      intent: "long",
+      weekdays: [5, 6],
+    },
+  ],
+  violations: [
+    {
+      kind: "no_intent_day_before",
+      label: "No heavy legs the day before a quality run",
+      detail: "Lower body sits the day before the 6 x 800m window opens.",
+    },
+  ],
+  norm: [
+    {
+      metric: "distance_m",
+      current_all: 22600,
+      current_runs: 18400,
+      norm: 38000,
+      norm_recent: 36000,
+      pct_vs_norm: -12,
+      direction: "in_line",
+      direction_recent: "in_line",
+    },
+    {
+      metric: "sessions",
+      current_all: 2,
+      current_runs: 1,
+      norm: 5,
+      norm_recent: 5,
+      pct_vs_norm: -60,
+      direction: "down",
+      direction_recent: "down",
+    },
+  ],
+};
+
+const mockScheduleDraft = {
+  status: "active",
+  plan_id: "11111111-1111-1111-1111-111111111111",
+  generated_at: "2026-03-22T18:00:00Z",
+  message: "Your plan is ready.",
+};
+
 const routesToCheck = [
   { path: "/", expectedText: "Weekly Summary" },
   { path: "/activities", expectedText: "All Activities" },
   { path: "/trends", expectedText: "Track your progress over time." },
   { path: "/profile", expectedText: "Loading profile..." },
   { path: "/activity/42", expectedText: "Morning Tempo" },
+  { path: "/schedule", expectedText: "The week ahead" },
 ];
 
 function createMockApiServer() {
@@ -129,6 +358,16 @@ function createMockApiServer() {
 
     if (pathname === "/api/trends/types") {
       return sendJson(res, 200, ["Run"]);
+    }
+
+    if (pathname === "/api/schedule/week") {
+      return sendJson(res, 200, mockScheduleWeek);
+    }
+
+    // The empty-state CTA polls this on mount to pick up an in-flight draft, so
+    // it must answer even when the week it renders is not empty.
+    if (pathname === "/api/schedule/draft") {
+      return sendJson(res, 200, mockScheduleDraft);
     }
 
     if (pathname === "/api/auth/strava/login") {

@@ -22,7 +22,9 @@ import { useCoachFeatureFlags } from '@/lib/useCoachFeatureFlags';
 // it into the resolved screen-context pointer.
 export interface ScreenIdentity {
   // Stable key stored as asked_from ("home" | "activities" | "activity" |
-  // "load" | "trends" | "profile").
+  // "load" | "trends" | "profile" | "schedule"). MUST stay in step with the
+  // backend `ScreenPointer` literal: that shape forbids extras, so a key the
+  // server does not know fails the whole turn with a 422.
   key: string;
   // Human form for the UI ("Home", "Tuesday's run"…).
   label: string;
@@ -36,6 +38,7 @@ export function screenFromPathname(pathname: string): ScreenIdentity {
     return { key: 'activity', label: 'This run', activityId: activityMatch[1] };
   }
   if (pathname.startsWith('/activities')) return { key: 'activities', label: 'Activities' };
+  if (pathname.startsWith('/schedule')) return { key: 'schedule', label: 'Schedule' };
   if (pathname.startsWith('/load')) return { key: 'load', label: 'Load' };
   if (pathname.startsWith('/trends')) return { key: 'trends', label: 'Trends' };
   if (pathname.startsWith('/profile')) return { key: 'profile', label: 'Profile' };

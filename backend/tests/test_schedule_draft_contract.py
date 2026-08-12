@@ -290,3 +290,72 @@ def test_the_tools_declared_vocabularies_match_the_ones_that_are_coerced():
     from app.services.schedule.rules import RULE_KINDS
 
     assert set(rule_kinds) == set(RULE_KINDS)
+
+
+def test_a_zero_rep_distance_is_read_as_absent_not_rejected():
+    """"Timed reps, no distance" spelled as zero must not cost a whole plan.
+
+    A live draft returned `rep_distance_m: 0` on a 3 x 8 minute session — which
+    is what "these reps are measured in time" looks like when the field is a
+    number. `gt=0` rejected it and took the twelve-week plan with it. It is not
+    a fact being repaired: it is "no distance given", written differently.
+    """
+    from app.services.schedule.draft_contract import normalise
+
+    raw = {
+        "rules": [],
+        "sketch_weeks": [],
+        "weeks": [
+            {
+                "week_start": MON.isoformat(),
+                "sessions": [
+                    _session(
+                        window_start=MON.isoformat(),
+                        window_end=MON.isoformat(),
+                        intent="quality",
+                        title="3 x 8 min",
+                        target_duration_s=2400,
+                        reps_planned=3,
+                        rep_distance_m=0,
+                        rest_s=120,
+                    )
+                ],
+            }
+        ],
+    }
+
+    plan = DraftedPlan.model_validate(normalise(raw))
+    session = plan.weeks[0].sessions[0]
+
+    assert session.rep_distance_m is None
+    assert session.structure() == {"reps_planned": 3, "rest_s": 120}
+
+
+def test_zero_rest_is_left_alone_because_it_is_a_real_instruction():
+    """Unlike a zero distance, "no rest between reps" is something a coach means."""
+    from app.services.schedule.draft_contract import normalise
+
+    raw = {
+        "weeks": [
+            {
+                "week_start": MON.isoformat(),
+                "sessions": [
+                    _session(
+                        window_start=MON.isoformat(),
+                        window_end=MON.isoformat(),
+                        intent="quality",
+                        title="continuous reps",
+                        target_duration_s=1800,
+                        reps_planned=4,
+                        rest_s=0,
+                    )
+                ],
+            }
+        ],
+        "rules": [],
+        "sketch_weeks": [],
+    }
+
+    plan = DraftedPlan.model_validate(normalise(raw))
+
+    assert plan.weeks[0].sessions[0].structure() == {"reps_planned": 4, "rest_s": 0}

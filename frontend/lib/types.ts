@@ -79,3 +79,21 @@ export type {
   ProposedActionFrame,
   ThreadMessageSend,
 } from "./types/thread";
+
+export type {
+  SessionIntent,
+  Discipline,
+  Commitment,
+  Placement,
+  SessionStatus,
+  RuleKind,
+  SpacingRule,
+  RuleViolation,
+  PlannedSession,
+  LoggedActivity,
+  DisciplineLoad,
+  WeekHeadline,
+  ScheduleWeek,
+  DraftStatus,
+  GoalRace,
+} from "./types/schedule";

@@ -68,7 +68,9 @@ class ScreenPointer(BaseModel):
     can never travel from the client through this shape.
     """
 
-    screen: Literal["home", "activities", "activity", "load", "trends", "profile"]
+    screen: Literal[
+        "home", "activities", "activity", "load", "trends", "profile", "schedule"
+    ]
     # activity screens: which run is on screen (owner-verified at resolution).
     activity_id: Optional[UUID] = None
     # trends screens: the selected range and activity-type filter.

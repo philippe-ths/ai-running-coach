@@ -33,6 +33,10 @@ _SCREEN_TITLES = {
     "load": "Load",
     "trends": "Trends",
     "profile": "Profile",
+    # #830. Identity-only, like Home/Load/Profile: the thread turn's baseline
+    # already carries the runner's plan-shaped facts, so resolving the screen
+    # would place a second copy of them in front of the coach.
+    "schedule": "Schedule",
 }
 
 

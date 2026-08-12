@@ -45,6 +45,17 @@ def normalise(raw: dict) -> dict:
     summary = raw.get("summary")
     if isinstance(summary, str) and len(summary) > SUMMARY_MAX_CHARS:
         raw = {**raw, "summary": summary[:SUMMARY_MAX_CHARS].rstrip()}
+
+    # `rep_distance_m: 0` is how a model spells "these reps are timed, not
+    # measured" — a 3 x 8 minute session has no rep distance. Read as absent
+    # rather than rejected: it is not a fact being repaired, it is "no distance
+    # given" written a different way, and a whole twelve-week plan should not be
+    # thrown away over it. `rest_s: 0` is left alone, because zero rest is a
+    # real instruction.
+    for week in raw.get("weeks") or []:
+        for session in (week or {}).get("sessions") or []:
+            if isinstance(session, dict) and session.get("rep_distance_m") == 0:
+                session.pop("rep_distance_m")
     return raw
 
 
@@ -262,7 +273,9 @@ RECORD_TRAINING_PLAN_TOOL = {
                                         "description": (
                                             "Last day it may fall on. Widen the window "
                                             "when the day genuinely does not matter; "
-                                            "the whole week means any day."
+                                            "the whole week means any day. The window "
+                                            "must stay inside ONE week — Saturday to "
+                                            "Sunday is fine, Sunday to Monday is not."
                                         ),
                                     },
                                     "intent": {
