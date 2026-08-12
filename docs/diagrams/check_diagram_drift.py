@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drift guard for the ai-flow-graph data-flow diagram (docs/diagrams/flow-nodes.js).
+"""Drift guard for the two data-flow diagrams (flow-nodes.js, coach-chat-nodes.js).
 
 The diagram's TOPOLOGY (its nodes and fate maps) is HAND-AUTHORED — only the embedded
 DATA blob is regenerated. So the graph silently desyncs from the code as the context pack
@@ -46,9 +46,40 @@ LIVE code:
      not a data problem, so this check statically finds each call into app.* and binds it
      against the callee's REAL signature (inspect.signature.bind) without any data.
 
+Checks 1-4 pin the REPORT diagram. Checks 6-8 pin the CHAT diagram (coach-chat-nodes.js),
+which had no contents guard at all until #855 while `make diagram-check` stayed green over
+it — a reader saw one green guard and reasonably assumed both diagrams were covered:
+
+  6. CHAT SURFACE RECORD (#855). The conversational coach's surface is DECLARED in code:
+     the tools it is handed, the coaching skills it can load, the proposed actions it can
+     mint, the screens a pointer can name, and the system prompt's slots. Those declarations
+     must match the ones RECORDED in the committed CHAT blob. See _recorded_chat_surface for
+     why the blob itself is the record here and no pack-shape.json-style sidecar is added.
+     The names are only half of it, so the same comparison also runs over the CONTENT the
+     blob reproduces verbatim — the system prompt's prose, each tool's description and
+     input schema, each coaching skill's procedure, the authority-tiering briefings and the
+     floor's canned answers. Without that half, RULE 2 ("NEVER diagnose") could be inverted
+     in the code while the diagram kept showing the old wording, green throughout.
+
+  7. CHAT NODE COVERAGE (#855). The report guard's check 1, transferred: every declared tool
+     must have a node in the hand-authored NODES, every prompt slot must have a slot node,
+     and every relationship-baseline section must have a builder node — and the converse in
+     each direction. This is the half a blob comparison cannot see: regenerate the blob and
+     leave the topology alone and the new input is in the data but drawn nowhere. It found
+     the real thing on arrival: #856 gave the conversational coach the runner's SCHEDULE and
+     the diagram had no node for it.
+
+  8. CHAT CAPTURE PARITY (#855). Check 3/3b transferred: the chat capture records the prompt
+     id and the kill-switch states it was taken under, and they must match the prod-parity
+     contract in backend/.env.example. The chat generator pins its prompt with a LITERAL
+     whose own comment says it "goes stale silently" — this is what stops that. It also fails
+     a capture committed with no DB behind it, because a template-only blob has quietly
+     dropped every real value the diagram promises to show.
+
 It does NOT verify edge correctness (which upstream stage feeds which node) — that is harder
 to mechanise and still relies on the periodic human/agent audit. This guard's job is narrow
-and high-value: no pack section or metric column can ever again reach the model with no node.
+and high-value: no pack section, metric column, or conversational input can ever again reach
+the model with no node.
 
 Run standalone:  python docs/diagrams/check_diagram_drift.py   (exit 1 on drift)
 Also enforced by: backend/tests/test_diagram_drift.py (so CI fails on drift)
@@ -69,10 +100,12 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _BACKEND = _HERE.parents[1] / "backend"
 _FLOW_NODES = _HERE / "flow-nodes.js"
+_CHAT_NODES = _HERE / "coach-chat-nodes.js"
 _GENERATOR = _HERE / "generate_flow_nodes_data.py"
 _CHAT_GENERATOR = _HERE / "generate_chat_flow_data.py"
 _PACK_SHAPE = _HERE / "pack-shape.json"
 _ENV_EXAMPLE = _BACKEND / ".env.example"
+_THREAD_TURN = _BACKEND / "app" / "services" / "coach" / "thread_turn.py"
 
 # The generators whose calls into backend/app must still bind (check 5). Both build their
 # capture by importing the real pipeline, so both rot the same way; generate_example_chats.py
@@ -475,6 +508,489 @@ def _generator_dm_fields(src: str) -> set[str]:
     return set(re.findall(r'"(\w+)"', m.group(1)))
 
 
+# --- the CHAT diagram (#855) ------------------------------------------------------
+#
+# The report pack is one declared Pydantic model, so its guard walks that model. A thread
+# turn has no such model: its context is assembled per turn out of several independently
+# declared sets — the tools it is handed, the skills it can load, the actions it can mint,
+# the screens a pointer can name, the prompt's slots, the baseline sections. So the chat
+# guard pins THOSE SETS BY NAME. That is the same principle as check 4 (compare declaration
+# against a record, never against a captured value), reached through a different door.
+
+# What each declared set is called, and what it means, in one place — so a failure message
+# can say which part of the conversational surface moved.
+_CHAT_SURFACE_LABELS = {
+    "tools": "the tools a thread turn is handed",
+    "skills": "the coaching skills it can load",
+    "action_kinds": "the actions it can propose",
+    "screens": "the screens a ScreenPointer can name",
+    "prompt_slots": "the system prompt's slots",
+}
+
+# The CHAT.meta booleans that mirror a COACH_*_ENABLED kill switch, so the capture's
+# config can be checked against the prod-parity contract exactly as flow-nodes.js's is.
+# `threads_enabled` is deliberately absent: COACH_THREADS_ENABLED is not documented in
+# .env.example, and check 8 only ever compares flags that ARE.
+_CHAT_META_FLAG_SETTINGS = {
+    "voice_block_enabled": "COACH_VOICE_BLOCK_ENABLED",
+    "memory_enabled": "COACH_MEMORY_ENABLED",
+}
+
+
+def _literal_values(model, field: str) -> list[str]:
+    """The Literal alternatives declared for one field — the closed vocabularies the
+    conversational surface is built from (an action kind, a screen key)."""
+    return [
+        arg
+        for arg in typing.get_args(model.model_fields[field].annotation)
+        if isinstance(arg, str)
+    ]
+
+
+def _baseline_builder_body() -> ast.FunctionDef | None:
+    """The AST of thread_turn._build_baseline_sections, or None if it was renamed away."""
+    tree = ast.parse(_THREAD_TURN.read_text(), filename=_THREAD_TURN.name)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_build_baseline_sections":
+            return node
+    return None
+
+
+def _declared_baseline_sections() -> list[str]:
+    """The relationship-baseline sections a thread turn assembles, read from the builder.
+
+    `_build_baseline_sections` returns a plain dict built at runtime, so there is no
+    constant to import. The keys are still DECLARED — they are string literals assigned in
+    that function's body — so this reads them statically off the source rather than adding
+    a second list in the app that could drift from the builder it describes. Static, so it
+    needs no DB and no runtime state.
+
+    Paired with _baseline_extractor_problems, which refuses any OTHER way of writing into
+    that dict — because an extractor that understands one syntax and silently ignores the
+    rest is a guard that reads less than it claims to."""
+    body = _baseline_builder_body()
+    if body is None:
+        return []
+    keys: list[str] = []
+    for sub in ast.walk(body):
+        if (
+            isinstance(sub, ast.Subscript)
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id == "sections"
+            and isinstance(sub.slice, ast.Constant)
+            and isinstance(sub.slice.value, str)
+        ):
+            keys.append(sub.slice.value)
+    return sorted(set(keys))
+
+
+def _baseline_extractor_problems() -> list[str]:
+    """Refuse any write into `sections` this reader cannot see the key of.
+
+    _declared_baseline_sections understands exactly one form, `sections["x"] = ...`. A
+    section added by `sections.update({...})`, by rebinding the name to a populated dict,
+    or by a comprehension would be invisible to it — and PARTIAL blindness is worse than
+    total, because the empty-set check would not fire. So an unrecognised write is a loud
+    failure telling the next person to teach the reader that form, not a silent pass."""
+    body = _baseline_builder_body()
+    if body is None:
+        return [
+            "EXTRACTOR BROKE: thread_turn._build_baseline_sections no longer exists, so the "
+            "conversational baseline sections cannot be read. Point the guard at its "
+            "replacement."]
+    problems: list[str] = []
+    for sub in ast.walk(body):
+        # `sections.update(...)`, `sections.setdefault(...)`, and friends.
+        if (
+            isinstance(sub, ast.Attribute)
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id == "sections"
+        ):
+            problems.append(
+                f"EXTRACTOR BROKE: _build_baseline_sections writes into `sections` via "
+                f"`.{sub.attr}()` at line {sub.lineno}, a form this guard cannot read the "
+                "keys of, so a baseline section could reach the coach unseen. Teach "
+                "_declared_baseline_sections that form.")
+        # rebinding `sections` to anything but the empty dict it starts as
+        if isinstance(sub, (ast.Assign, ast.AnnAssign)):
+            targets = sub.targets if isinstance(sub, ast.Assign) else [sub.target]
+            if any(isinstance(t, ast.Name) and t.id == "sections" for t in targets):
+                value = sub.value
+                empty = isinstance(value, ast.Dict) and not value.keys
+                if not empty:
+                    problems.append(
+                        "EXTRACTOR BROKE: _build_baseline_sections binds `sections` to a "
+                        f"populated value at line {sub.lineno}, so its keys are not visible "
+                        "to this guard. Teach _declared_baseline_sections that form.")
+    return problems
+
+
+def _declared_tools() -> list[dict]:
+    """The tool list a thread turn is really handed.
+
+    Assembled through the app's OWN composition (`thread_tools(CHAT_TOOLS)` plus the skill
+    tool, the expression at thread_turn's call site) rather than re-added here from its
+    three parts. A guard that re-implements the decision it is checking is a second copy of
+    that decision, and a tool added at the real assembly site would be invisible to it."""
+    from app.services.coach.coaching_skills import LOAD_SKILL_TOOL
+    from app.services.coach.proposed_actions import thread_tools
+    from app.services.coach.query_tools import CHAT_TOOLS
+
+    return [*thread_tools(CHAT_TOOLS), LOAD_SKILL_TOOL]
+
+
+def _declared_chat_surface() -> dict[str, list[str]]:
+    """Every closed set the conversational coach's surface is made of, from the live code."""
+    from app.schemas.thread import ScreenPointer  # lazy: needs the app importable
+    from app.services.coach import coaching_skills, proposed_actions
+    from app.services.coach import thread_turn as tt
+
+    return {
+        "tools": sorted(t["name"] for t in _declared_tools()),
+        "skills": sorted(s.name for s in coaching_skills.SKILLS),
+        "action_kinds": sorted(
+            _literal_values(proposed_actions.ProposedActionRequest, "action_type")
+        ),
+        "screens": sorted(_literal_values(ScreenPointer, "screen")),
+        # ORDER matters here and nowhere else: the diagram numbers its slot nodes
+        # "slot 1".."slot 8" in template order, so a reordered template misnumbers them.
+        "prompt_slots": re.findall(r"\{(\w+)\}", tt.THREAD_SYSTEM_TEMPLATE),
+    }
+
+
+def _chat_blob(chat_src: str) -> dict | None:
+    """The generated `const CHAT = {...};` object, or None if it is missing/unparseable."""
+    m = re.search(r"(?m)^const CHAT = (.*);$", chat_src)
+    if not m:
+        return None
+    try:
+        blob = json.loads(m.group(1))
+    except ValueError:
+        return None
+    return blob if isinstance(blob, dict) else None
+
+
+def _recorded_chat_surface(blob: dict) -> dict[str, list[str]]:
+    """The same sets as they were RECORDED when coach-chat-nodes.js was last regenerated.
+
+    Deliberately NO sidecar, unlike check 4's pack-shape.json — and the difference is not
+    an inconsistency, it follows from what each generator captures. flow-nodes.js records
+    one runner's one run, so the pack's declared key set is simply not in it (an Optional
+    field the runner never populated is absent from the capture, which is why diffing
+    against the capture would be both noisy and unfixable) and the declaration had to be
+    written down separately. generate_chat_flow_data.py records the DECLARATIONS
+    THEMSELVES, verbatim: the tool JSON schemas, the skill list, the ScreenPointer and
+    ProposedActionRequest JSON schemas, the prompt template. So the blob already IS the
+    lockfile, and adding a sidecar would create a second record of the same facts that can
+    disagree with the first. The refresh path stays the one the standing repo rule already
+    requires — regenerate the diagram — and there is no flag on this guard that silences it.
+    """
+    tools = blob.get("tools") or {}
+    schemas = blob.get("schemas") or {}
+
+    def enum_of(schema_key: str, field: str) -> list[str]:
+        schema = schemas.get(schema_key) or {}
+        prop = (schema.get("properties") or {}).get(field) or {}
+        return sorted(prop.get("enum") or [])
+
+    named = [t.get("name") for t in (tools.get("data") or []) if isinstance(t, dict)]
+    for key in ("action", "skill"):
+        entry = tools.get(key)
+        if isinstance(entry, dict) and entry.get("name"):
+            named.append(entry["name"])
+    return {
+        "tools": sorted(n for n in named if n),
+        "skills": sorted(
+            s.get("name") for s in (blob.get("skills") or []) if isinstance(s, dict) and s.get("name")
+        ),
+        "action_kinds": enum_of("proposed_action", "action_type"),
+        "screens": enum_of("screen_pointer", "screen"),
+        "prompt_slots": list(blob.get("slot_order") or []),
+    }
+
+
+def _chat_surface_problems(
+    declared: dict[str, list[str]], recorded: dict[str, list[str]] | None
+) -> list[str]:
+    """Diff the live conversational surface against the recorded one. Pure, so the suite
+    can prove it actually fails on an added tool without damaging any real file."""
+    if recorded is None:
+        return [
+            f"{_CHAT_NODES.name} carries no readable `const CHAT = ...` blob, so what the "
+            "conversational coach is served is unpinned. Regenerate the diagram: "
+            "python docs/diagrams/generate_chat_flow_data.py"
+        ]
+    problems: list[str] = []
+    for key, label in _CHAT_SURFACE_LABELS.items():
+        live, was = declared.get(key) or [], recorded.get(key) or []
+        # An empty declared set is a broken extractor, not a coach with no tools — and a
+        # check that reads nothing is the vacuous-guard failure this whole issue is about.
+        if not live:
+            problems.append(
+                f"EXTRACTOR BROKE: the declared set for {label} ({key}) is empty. The chat "
+                "drift guard cannot be trusted — fix it.")
+            continue
+        if live != was:
+            problems.append(
+                f"The conversational coach's surface has changed but {_CHAT_NODES.name} still "
+                f"records the old one — {label} ({key}): code has {live}, the diagram records "
+                f"{was}. Regenerate the diagram in this same change "
+                "(python docs/diagrams/generate_chat_flow_data.py).")
+    return problems
+
+
+# The CONTENT the diagram reproduces verbatim, beyond the names of things. Names alone are
+# not the whole of what the coach receives: a tool's description, a skill's procedure and
+# the system prompt's own prose are what the model actually reads, and the blob records
+# every one of them in full. Without this, RULE 2 ("NEVER diagnose") could be inverted in
+# the code while the diagram kept showing the old wording, green throughout.
+def _declared_chat_content() -> dict[str, object]:
+    from app.jobs import thread_maintenance as tm  # lazy: needs the app importable
+    from app.services.coach import chat as chat_mod
+    from app.services.coach import coaching_skills
+    from app.services.coach import thread_turn as tt
+
+    return {
+        "the system prompt template": tt.THREAD_SYSTEM_TEMPLATE,
+        "the tool definitions (description + input schema)": _declared_tools(),
+        "the coaching skill procedures": [
+            {"name": s.name, "use_when": s.use_when, "procedure": s.procedure}
+            for s in coaching_skills.SKILLS
+        ],
+        "the authority-tiering briefings": {
+            "header": chat_mod._TIERING_HEADER,
+            "voice": chat_mod._VOICE_TIER,
+            "memory": chat_mod._MEMORY_TIER,
+            "corpus": chat_mod._CORPUS_TIER,
+            "corpus_only": chat_mod._CORPUS_ONLY_TIER,
+            "training_load": chat_mod._TRAINING_LOAD_TIER,
+            "conversation": chat_mod._RELATIONSHIP_CONVERSATION_TIER,
+        },
+        "the floor's canned answers": {
+            "medical_redirect": chat_mod.MEDICAL_REDIRECT_MESSAGE,
+            "budget_paused": tt.THREAD_BUDGET_PAUSED_MESSAGE,
+            "title_system": tm._TITLE_SYSTEM,
+        },
+    }
+
+
+def _recorded_chat_content(blob: dict) -> dict[str, object]:
+    tools = blob.get("tools") or {}
+    recorded_tools = list(tools.get("data") or [])
+    for key in ("action", "skill"):
+        if isinstance(tools.get(key), dict):
+            recorded_tools.append(tools[key])
+    return {
+        "the system prompt template": blob.get("template"),
+        "the tool definitions (description + input schema)": recorded_tools,
+        "the coaching skill procedures": [
+            {k: s.get(k) for k in ("name", "use_when", "procedure")}
+            for s in (blob.get("skills") or [])
+            if isinstance(s, dict)
+        ],
+        "the authority-tiering briefings": blob.get("tiering"),
+        "the floor's canned answers": blob.get("messages"),
+    }
+
+
+def _difference_hint(live: object, was: object) -> str:
+    """A short, legible description of HOW two recorded artifacts differ.
+
+    These are prompts and tool schemas — thousands of characters each — so dumping both
+    sides would bury the signal. Strings report where they first diverge; dicts and lists
+    report which entries moved."""
+    if isinstance(live, str) and isinstance(was, str):
+        at = next(
+            (i for i, (a, b) in enumerate(zip(live, was)) if a != b), min(len(live), len(was))
+        )
+        return (
+            f"they first differ at character {at} of {len(was)} -> {len(live)}: "
+            f"code has ...{live[at:at + 70]!r}, the diagram records ...{was[at:at + 70]!r}"
+        )
+    if isinstance(live, dict) and isinstance(was, dict):
+        moved = sorted(k for k in set(live) | set(was) if live.get(k) != was.get(k))
+        return f"entries that differ: {moved}"
+    if isinstance(live, list) and isinstance(was, list):
+        if len(live) != len(was):
+            return f"the diagram records {len(was)} entries, the code declares {len(live)}"
+        moved = [
+            (a.get("name") if isinstance(a, dict) else i)
+            for i, (a, b) in enumerate(zip(live, was))
+            if a != b
+        ]
+        return f"entries that differ: {moved}"
+    return "they are not equal"
+
+
+def _chat_content_problems(
+    declared: dict[str, object], recorded: dict[str, object] | None
+) -> list[str]:
+    """Diff the verbatim content the diagram reproduces against the live code. Pure."""
+    if recorded is None:
+        return []  # the surface check already reported the missing blob
+    problems: list[str] = []
+    for label, live in declared.items():
+        if not live:
+            problems.append(
+                f"EXTRACTOR BROKE: {label} read back empty from the code. The chat drift "
+                "guard cannot be trusted — fix it.")
+            continue
+        was = recorded.get(label)
+        if live != was:
+            problems.append(
+                f"{label} — what the conversational coach actually reads — has changed, but "
+                f"{_CHAT_NODES.name} still shows the old text: {_difference_hint(live, was)}. "
+                "Regenerate the diagram in this same change "
+                "(python docs/diagrams/generate_chat_flow_data.py).")
+    return problems
+
+
+def _chat_nodes(chat_src: str) -> list[dict[str, str]]:
+    """The hand-authored NODES entries, as {id, title, tag} triples.
+
+    The generated `const CHAT = ...` line is dropped first: it is one 400 kB line of JSON
+    and nothing in it should be mistaken for a node."""
+    topology = "\n".join(
+        line for line in chat_src.splitlines() if not line.startswith("const CHAT = ")
+    )
+    nodes: list[dict[str, str]] = []
+    starts = [m.start() for m in re.finditer(r"\{\s*id:'", topology)]
+    starts.append(len(topology))
+    for i in range(len(starts) - 1):
+        chunk = topology[starts[i]:starts[i + 1]]
+        id_m = re.match(r"\{\s*id:'(\w+)'", chunk)
+        if not id_m:
+            continue
+        title_m = re.search(r"\btitle:'([^']*)'", chunk)
+        tag_m = re.search(r"\btag:'([^']*)'", chunk)
+        # The explicit binding a builder node declares to the baseline section it builds
+        # (`section:'schedule'`). An explicit binding rather than a `d_<key>` id convention,
+        # because `d_*` is the id prefix for EVERY baseline builder — the profile, the
+        # anchor, the voice — and only some of those correspond to a section. Without the
+        # binding the check could only run one way, and a section REMOVED from the builder
+        # would leave its node drawing an input the coach no longer gets.
+        section_m = re.search(r"\bsection:'([^']*)'", chunk)
+        nodes.append({
+            "id": id_m.group(1),
+            "title": title_m.group(1) if title_m else "",
+            "tag": tag_m.group(1) if tag_m else "",
+            "section": section_m.group(1) if section_m else "",
+        })
+    return nodes
+
+
+def _chat_node_problems(
+    declared: dict[str, list[str]], baseline_sections: list[str], nodes: list[dict[str, str]]
+) -> list[str]:
+    """Every declared conversational input must be DRAWN, and every drawn one must be real.
+
+    This is the half a blob comparison cannot see. The blob is generated; the topology is
+    hand-authored. Regenerate the blob and leave NODES alone and the new tool is in the
+    data with nothing depicting it — which is exactly the stream_view class of bug check 1
+    exists for on the report side."""
+    problems: list[str] = []
+    if len(nodes) < 40:
+        return [
+            f"PARSER BROKE: found only {len(nodes)} nodes in {_CHAT_NODES.name} (expected "
+            "~55). The chat node-coverage guard cannot be trusted — fix it."]
+
+    titles = {n["title"] for n in nodes}
+
+    # Tools: one node each, titled with the tool's own name.
+    declared_tools = set(declared.get("tools") or [])
+    drawn_tools = {n["title"] for n in nodes if n["tag"] == "tool"}
+    if missing := sorted(declared_tools - drawn_tools):
+        problems.append(
+            f"Tools the conversational coach is handed but that have NO node in "
+            f"{_CHAT_NODES.name}: {missing}. Add a tool node and wire it into the loop.")
+    if spurious := sorted(drawn_tools - declared_tools):
+        problems.append(
+            f"Tool nodes in {_CHAT_NODES.name} that no tool declares: {spurious}. The diagram "
+            "draws a lookup the coach cannot make. Remove the node.")
+
+    # Prompt slots: one node each, titled with the slot marker verbatim.
+    declared_slots = {f"{{{s}}}" for s in (declared.get("prompt_slots") or [])}
+    drawn_slots = {t for t in titles if re.fullmatch(r"\{\w+\}", t)}
+    if missing := sorted(declared_slots - drawn_slots):
+        problems.append(
+            f"System-prompt slots with no slot node in {_CHAT_NODES.name}: {missing}. The "
+            "coach reads that slot and the diagram does not show it.")
+    if spurious := sorted(drawn_slots - declared_slots):
+        problems.append(
+            f"Slot nodes in {_CHAT_NODES.name} for slots THREAD_SYSTEM_TEMPLATE no longer "
+            f"carries: {spurious}. Remove them.")
+
+    # Baseline sections: one builder node each, bound by an explicit `section:'<key>'`.
+    if not baseline_sections:
+        problems.append(
+            "EXTRACTOR BROKE: no relationship-baseline sections were read out of "
+            "thread_turn._build_baseline_sections. The chat drift guard cannot be trusted.")
+    drawn_sections = {n["section"] for n in nodes if n["section"]}
+    if missing := sorted(set(baseline_sections) - drawn_sections):
+        problems.append(
+            "Relationship-baseline sections the thread turn assembles but that no node in "
+            f"{_CHAT_NODES.name} binds: {missing}. Add a builder node declaring "
+            f"section:'{missing[0]}'. A new conversational input reaches the coach undrawn — "
+            "the #856 schedule class of bug.")
+    if spurious := sorted(drawn_sections - set(baseline_sections)):
+        problems.append(
+            f"Builder nodes in {_CHAT_NODES.name} bound to baseline sections the thread turn "
+            f"no longer assembles: {spurious}. The diagram draws an input the coach no "
+            "longer receives. Remove the node.")
+    return problems
+
+
+def _chat_capture_problems(blob: dict | None) -> list[str]:
+    """The capture's config must be the prod-parity contract, and it must be a real capture.
+
+    Checks 3/3b for the chat diagram. The chat generator pins its prompt with a LITERAL
+    (PROD_PROMPT_ID) whose own comment says it goes stale silently — this is what makes
+    that loud. A template-only blob is flagged too: the diagram's whole promise is that the
+    values are real, and a regeneration run without a DB drops every one of them."""
+    if blob is None:
+        return []  # already reported by the surface check
+    problems: list[str] = []
+    meta = blob.get("meta") or {}
+
+    captured_prompt = meta.get("coach_prompt_id")
+    documented_prompt = _env_example_prompt_id()
+    if not captured_prompt:
+        problems.append(
+            f"{_CHAT_NODES.name} records no prompt id, so which conversational context it "
+            "depicts cannot be checked. Regenerate the diagram.")
+    elif documented_prompt and captured_prompt != documented_prompt:
+        problems.append(
+            f"The chat diagram was captured under prompt {captured_prompt!r} but "
+            f"backend/.env.example documents {documented_prompt!r} as the prod prompt. The "
+            "prompt id gates the voice block and the pack sections the conversation inherits, "
+            "so the diagram is drawing a different coach than prod runs. Regenerate "
+            "coach-chat-nodes.js under the prod prompt (or update .env.example if prod "
+            "itself changed).")
+
+    documented_flags = _env_example_flags()
+    mismatched = sorted(
+        f"{setting} (diagram={meta[key]}, .env.example={documented_flags[setting]})"
+        for key, setting in _CHAT_META_FLAG_SETTINGS.items()
+        if key in meta and setting in documented_flags and bool(meta[key]) != documented_flags[setting]
+    )
+    if mismatched:
+        problems.append(
+            "The chat diagram was captured under coach kill-switch flags that DISAGREE with "
+            f"the prod-parity set in backend/.env.example: {mismatched}. Regenerate "
+            "coach-chat-nodes.js under prod-parity config (or update .env.example if prod "
+            "itself changed).")
+
+    assembled = blob.get("assembled") or {}
+    if not assembled.get("ok"):
+        problems.append(
+            f"{_CHAT_NODES.name} carries a TEMPLATE-ONLY capture "
+            f"(assembled.ok is false: {assembled.get('reason')!r}), so every node renders "
+            "'no capture' instead of what the coach was really served. It was regenerated "
+            "with no seeded DB reachable. Re-run the generator against a seeded local DB "
+            "(make seed-local) before committing.")
+    return problems
+
+
 def check_drift() -> list[str]:
     """Return a list of human-readable drift problems. Empty list == diagram is in sync."""
     if _BACKEND.is_dir() and str(_BACKEND) not in sys.path:
@@ -603,6 +1119,30 @@ def check_drift() -> list[str]:
         problems.extend(
             _generator_signature_problems(generator.read_text(), generator.name))
 
+    # 6-8. The CHAT diagram (#855). Until now the chat diagram had no contents guard at
+    #      all, so `make diagram-check` was green over a diagram nothing checked.
+    if not _CHAT_NODES.is_file():
+        problems.append(f"missing chat diagram: {_CHAT_NODES}")
+        return problems
+    chat_src = _CHAT_NODES.read_text()
+    chat_blob = _chat_blob(chat_src)
+    declared_chat = _declared_chat_surface()
+    problems.extend(
+        _chat_surface_problems(
+            declared_chat, _recorded_chat_surface(chat_blob) if chat_blob else None
+        )
+    )
+    problems.extend(
+        _chat_content_problems(
+            _declared_chat_content(), _recorded_chat_content(chat_blob) if chat_blob else None
+        )
+    )
+    problems.extend(_baseline_extractor_problems())
+    problems.extend(
+        _chat_node_problems(declared_chat, _declared_baseline_sections(), _chat_nodes(chat_src))
+    )
+    problems.extend(_chat_capture_problems(chat_blob))
+
     return problems
 
 
@@ -613,13 +1153,16 @@ def main() -> int:
         print(f"diagram drift guard ERRORED: {exc}", file=sys.stderr)
         return 2
     if problems:
-        print("ai-flow-graph diagram has DRIFTED from the code:\n", file=sys.stderr)
+        print("the data-flow diagrams have DRIFTED from the code:\n", file=sys.stderr)
         for p in problems:
             print(f"  - {p}\n", file=sys.stderr)
-        print("Fix flow-nodes.js / generate_flow_nodes_data.py, then re-run.", file=sys.stderr)
+        print("Fix flow-nodes.js / coach-chat-nodes.js and their generators, then re-run.",
+              file=sys.stderr)
         return 1
     print("ai-flow-graph diagram is in sync with the code (pack sections + nested pack keys "
-          "+ DerivedMetric columns + kill-switch parity), and the generators still bind.")
+          "+ DerivedMetric columns + kill-switch parity), the coach-chat diagram is in sync "
+          "(tools + skills + actions + screens + prompt slots + baseline sections + the "
+          "prompt/tool/skill text itself + capture parity), and the generators still bind.")
     return 0
 
 

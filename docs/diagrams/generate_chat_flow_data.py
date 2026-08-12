@@ -484,6 +484,11 @@ def _capture_thread(db, user, thread, chat_mod_ref) -> dict:
             "profile": tt._profile_dict(profile),
             "memory": sections.get("memory"),
             "readiness": sections.get("readiness"),
+            # #856, as in _capture_assembled below: present as a key whenever the
+            # coach was given the schedule, None inside it when the runner has no
+            # plan. It was missing here while the turn-level capture had it, so a
+            # selected conversation showed no schedule at all.
+            "schedule": sections.get("schedule"),
             "anchor_block": anchor_block,
             "voice_block": voice_block,
             "cross_thread_block": cross_block,
