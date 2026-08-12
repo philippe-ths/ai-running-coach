@@ -44,22 +44,45 @@ function placementChip(
  * intensity. Load sizes the BARS, where it is a proportion rather than an
  * instruction, and it labels nothing.
  *
- * A rep-structured session usually carries neither a distance nor a duration,
- * because "6 × 400 m off 90 s" already is the prescription. So the structure is
- * the fallback, not a number the app worked out.
+ * A rep-structured session usually carries no `target_distance_m`, because
+ * "6 × 400 m off 90 s" already is the prescription. It is still a distance the
+ * runner covers, though, so #876 gives the measure column BOTH: the session's
+ * total in km on top — the same unit every other card shows, and the number the
+ * week's headline counts — with the rep prescription under it, because that is
+ * what they actually go out and do. Warm-up and cool-down are part of the total
+ * and are now stated as distances, so this is addition, not an estimate.
  */
+function structuredDistance(session: PlannedSession): number {
+  const s = session.structure;
+  if (!s) return 0;
+  const positive = (value: number | undefined) => (value && value > 0 ? value : 0);
+  const reps = positive(s.reps_planned);
+  const repDistance = positive(s.rep_distance_m);
+  return (
+    positive(s.warmup_distance_m) + reps * repDistance + positive(s.cooldown_distance_m)
+  );
+}
+
 function targetLine(session: PlannedSession): string | null {
   const parts: string[] = [];
   if (session.target_distance_m) parts.push(formatDistanceKm(session.target_distance_m));
   if (session.target_duration_s) parts.push(formatDuration(session.target_duration_s));
   if (parts.length) return parts.join(" · ");
 
+  const total = structuredDistance(session);
+  if (total > 0) return formatDistanceKm(total);
+
   const reps = session.structure?.reps_planned;
-  if (reps) {
-    const distance = session.structure?.rep_distance_m;
-    return distance ? `${reps} × ${Math.round(distance)} m` : `${reps} reps`;
-  }
+  if (reps) return `${reps} reps`;
   return null;
+}
+
+/** The reps themselves, shown under the total so the prescription survives it. */
+function repLine(session: PlannedSession): string | null {
+  const reps = session.structure?.reps_planned;
+  const distance = session.structure?.rep_distance_m;
+  if (!reps || !distance) return null;
+  return `${reps} × ${Math.round(distance)} m`;
 }
 
 function actualLine(actual: LoggedActivity): string {
@@ -98,6 +121,7 @@ export default function SessionCard({
   const isSuggestion = session.commitment === "suggested";
   const isDone = session.status === "done";
   const target = targetLine(session);
+  const reps = repLine(session);
 
   return (
     <li
@@ -175,6 +199,11 @@ export default function SessionCard({
             <div className="font-mono text-sm tabular-nums text-gray-700 dark:text-gray-200">
               {target}
             </div>
+            {reps && (
+              <div className="font-mono text-[11px] tabular-nums text-gray-500 dark:text-gray-400">
+                {reps}
+              </div>
+            )}
             <div className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">
               target
             </div>

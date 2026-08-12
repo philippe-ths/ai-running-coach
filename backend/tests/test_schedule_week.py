@@ -275,20 +275,22 @@ def test_the_planned_running_headline_counts_committed_runs_only(db):
     assert week.headline.planned_running_distance_m == 10000
 
 
-def test_a_rep_structured_run_carries_its_distance_into_the_headline(db):
-    """An interval session's work is `reps x rep_distance`, and it counts.
+def test_an_interval_session_counts_warmup_reps_and_cooldown(db):
+    """The session, not just its work -- the whole of #876.
 
     Rep structure is a first-class way to SIZE a run: `plan_validator` accepts it
     in place of a distance precisely because "6 x 400m off 90s" is a fully
-    specified session a coach would never also write as a total, and demanding a
-    total rejected real interval sessions. But the headline only ever summed
-    `target_distance_m`, so every one of those sessions landed in the week as
-    zero km -- the runner's own week read 23.5 km with a 6 x 400m in it, and the
-    2.4 km of work was nowhere.
+    specified session a coach would never also write as a total. But the headline
+    only ever summed `target_distance_m`, so every one of those sessions landed
+    in the week as zero km -- a real week read 23.5 km with a 6 x 400m in it and
+    its distance nowhere.
 
-    The reps are the WORK, not the session: the warm-up and cool-down live in
-    prose and are deliberately not counted, because nothing structured states
-    them and inventing a number for them would be the app making up distance.
+    Counting only the reps was still wrong: it made that session 2.4 km when the
+    runner had agreed 4.5 km door to door. The warm-up and cool-down were the
+    missing 2.1 km, and they were unreachable while the coach wrote them as
+    MINUTES in prose -- recovering a distance from "10 min easy" means assuming a
+    pace, which is the app inventing distance. So the prescription changed: they
+    are stated as distances now, and this is addition rather than inference.
     """
     user = _seed_user(db)
     plan = _seed_plan(db, user)
@@ -301,19 +303,59 @@ def test_a_rep_structured_run_carries_its_distance_into_the_headline(db):
         discipline="run",
         intent="quality",
         title="Intervals: 6x400m @ 4:30/km",
-        structure={"reps_planned": 6, "rep_distance_m": 400.0, "rest_s": 90.0},
+        structure={
+            "reps_planned": 6,
+            "rep_distance_m": 400.0,
+            "rest_s": 90.0,
+            "warmup_distance_m": 1100.0,
+            "cooldown_distance_m": 1000.0,
+        },
     )
 
     week = build_week(db, user, today=MON)
 
-    assert week.headline.planned_running_distance_m == 7400
+    # 1.1 warm-up + 2.4 of reps + 1.0 cool-down = the 4.5 km session, + the easy 5.
+    assert week.headline.planned_running_distance_m == 9500
+
+
+def test_each_part_of_an_interval_session_stands_on_its_own(db):
+    """A part the coach did not write contributes nothing, and blocks nothing.
+
+    A warm-up with no cool-down is a real prescription, and so is a warm-up
+    either side of reps that carry no distance of their own. The missing part
+    must not zero the parts that were stated, nor be filled in with a guess.
+    """
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db,
+        plan,
+        start=TUE,
+        discipline="run",
+        intent="quality",
+        structure={"reps_planned": 6, "rep_distance_m": 400.0, "warmup_distance_m": 1100.0},
+    )
+    _seed_session(
+        db,
+        plan,
+        start=THU,
+        discipline="run",
+        intent="quality",
+        structure={"reps_planned": 8, "warmup_distance_m": 1000.0, "cooldown_distance_m": 1000.0},
+    )
+
+    week = build_week(db, user, today=MON)
+
+    # (1.1 + 2.4) + (1.0 + 1.0, the 8 unmeasured reps adding nothing)
+    assert week.headline.planned_running_distance_m == 5500
 
 
 def test_a_rep_structured_run_that_also_states_a_total_is_not_double_counted(db):
     """`target_distance_m` wins when both are present.
 
     A coach who writes a total has stated the whole session -- warm-up and
-    cool-down included -- so adding the reps on top would count the work twice.
+    cool-down included -- so adding the structured parts on top would count them
+    twice.
     """
     user = _seed_user(db)
     plan = _seed_plan(db, user)
@@ -324,7 +366,12 @@ def test_a_rep_structured_run_that_also_states_a_total_is_not_double_counted(db)
         discipline="run",
         intent="quality",
         target_distance_m=9000,
-        structure={"reps_planned": 6, "rep_distance_m": 400.0},
+        structure={
+            "reps_planned": 6,
+            "rep_distance_m": 400.0,
+            "warmup_distance_m": 1000.0,
+            "cooldown_distance_m": 1000.0,
+        },
     )
 
     week = build_week(db, user, today=MON)
@@ -332,7 +379,7 @@ def test_a_rep_structured_run_that_also_states_a_total_is_not_double_counted(db)
     assert week.headline.planned_running_distance_m == 9000
 
 
-def test_reps_with_no_rep_distance_add_nothing_to_the_headline(db):
+def test_reps_with_no_measurement_at_all_add_nothing_to_the_headline(db):
     """"6 reps" with no distance on them is not a distance, and is not guessed."""
     user = _seed_user(db)
     plan = _seed_plan(db, user)

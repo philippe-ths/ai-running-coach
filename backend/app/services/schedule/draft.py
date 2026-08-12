@@ -147,6 +147,11 @@ mean an easy walk or a gentle spin, that is an easy session of that discipline \
 (intent `easy`, discipline `walk` or `bike`), not a rest day with a target on it.
 - Every other session needs enough to size it: a distance, a duration, or rep \
 structure. A session with none of the three is rejected.
+- Write a warm-up and a cool-down as a DISTANCE, never as minutes. \
+`warmup_distance_m` and `cooldown_distance_m` are part of the session and are \
+added to its reps to give what the runner sees; the same thing said in prose as \
+"10 min easy" is not a distance and counts as nothing. Say it in the detail too \
+if you like, but say it in the fields regardless.
 - Do not plan sessions in the past.
 - Do not invent a race, a goal or an injury the runner has not told you about.
 - Do not give medical advice, diagnose, or prescribe treatment. If something in \

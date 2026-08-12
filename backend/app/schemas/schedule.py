@@ -181,9 +181,17 @@ class PlannedWeekShape(BaseModel):
 class SessionStructure(BaseModel):
     """The interval shape `workout_matching.match_planned_to_detected` expects.
 
-    Its exact keys, unchanged: that function has compared a plan to detected reps
-    since the beginning and has never once been handed one, because
-    `_extract_planned_workout` is a placeholder that returns None.
+    Its rep keys are unchanged: that function has compared a plan to detected
+    reps since the beginning and has never once been handed one, because
+    `_extract_planned_workout` is a placeholder that returns None. It reads every
+    key through `.get`, so the warm-up and cool-down below are invisible to it
+    rather than breaking it.
+
+    The warm-up and cool-down are DISTANCES, in the same unit as everything else
+    the runner reads (#876). They used to live in the detail prose as minutes,
+    which meant the session's real length could only be recovered by multiplying
+    by an assumed pace — so a 4.5 km interval session counted as its 2.4 km of
+    reps. Stated as a distance, the total is addition instead of inference.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -191,6 +199,8 @@ class SessionStructure(BaseModel):
     reps_planned: int = Field(ge=1, le=60)
     rep_distance_m: Optional[float] = Field(default=None, gt=0)
     rest_s: Optional[float] = Field(default=None, ge=0)
+    warmup_distance_m: Optional[float] = Field(default=None, gt=0)
+    cooldown_distance_m: Optional[float] = Field(default=None, gt=0)
 
 
 class PlannedSessionRead(BaseModel):
