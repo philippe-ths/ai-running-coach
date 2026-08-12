@@ -73,6 +73,7 @@ def _seed_session(
     title: str = "Session",
     target_distance_m: float = None,
     target_effort_score: float = None,
+    structure: dict = None,
 ) -> PlannedSession:
     session = PlannedSession(
         plan_id=plan.id,
@@ -84,6 +85,7 @@ def _seed_session(
         commitment=commitment,
         title=title,
         target_distance_m=target_distance_m,
+        structure=structure,
         target_effort_score=target_effort_score,
     )
     db.add(session)
@@ -154,6 +156,34 @@ def test_a_week_with_sessions_is_planned_and_its_numbers_come_from_them(db):
     assert week.effort_score == 100.0
     # The phase is still the shape's: it is the only place a phase is named.
     assert week.phase == "base"
+
+
+def test_a_rep_structured_run_carries_its_distance_into_the_block(db):
+    """#876: the horizon read `target_distance_m` alone, like the week headline.
+
+    Left unfixed here, the week's gap would repeat across every week of a
+    three-month view — and the running number rides ALONGSIDE the load bar
+    precisely so the runner can read it as exact rather than estimate it off a
+    bar, which it is not while a quality session counts as zero.
+    """
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db, plan, start=WEEK_0, target_distance_m=8000, target_effort_score=60.0
+    )
+    _seed_session(
+        db,
+        plan,
+        start=WEEK_0 + timedelta(days=2),
+        intent="quality",
+        title="Intervals: 6x400m",
+        target_effort_score=40.0,
+        structure={"reps_planned": 6, "rep_distance_m": 400.0, "rest_s": 90.0},
+    )
+
+    week = _week(build_horizon(db, user, weeks=2, today=TODAY), WEEK_0)
+
+    assert (week.running_distance_m, week.effort_score) == (10400, 100.0)
 
 
 def test_a_suggestion_carries_no_weight_in_the_blocks_shape(db):

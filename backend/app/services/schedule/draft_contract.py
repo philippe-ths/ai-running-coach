@@ -74,6 +74,11 @@ class DraftedSession(BaseModel):
     reps_planned: Optional[int] = Field(default=None, ge=1, le=60)
     rep_distance_m: Optional[float] = Field(default=None, gt=0, le=50_000)
     rest_s: Optional[float] = Field(default=None, ge=0, le=3_600)
+    # Distances, not durations (#876). A warm-up written as "10 min easy" is only
+    # a distance once multiplied by a pace nobody stated, so the session it
+    # belongs to could not be added up; asked for in metres it simply adds.
+    warmup_distance_m: Optional[float] = Field(default=None, gt=0, le=50_000)
+    cooldown_distance_m: Optional[float] = Field(default=None, gt=0, le=50_000)
 
     @model_validator(mode="after")
     def _validate_shape(self) -> "DraftedSession":
@@ -86,10 +91,20 @@ class DraftedSession(BaseModel):
         # coach wrote and nothing stored is worse than a rejected plan.
         has_reps = self.reps_planned is not None
         has_rep_args = self.rep_distance_m is not None or self.rest_s is not None
-        if (has_reps or has_rep_args) and self.intent != "quality":
+        # The warm-up and cool-down ride with the reps under the same guard: they
+        # describe the session BUILT around an interval block, so on an easy run
+        # they are noise, and stored without a count they would state a distance
+        # for a session whose work is unknown.
+        has_edges = (
+            self.warmup_distance_m is not None or self.cooldown_distance_m is not None
+        )
+        if (has_reps or has_rep_args or has_edges) and self.intent != "quality":
             raise ValueError("rep structure belongs to a quality session")
-        if has_rep_args and not has_reps:
-            raise ValueError("rep_distance_m and rest_s need reps_planned")
+        if (has_rep_args or has_edges) and not has_reps:
+            raise ValueError(
+                "rep_distance_m, rest_s, warmup_distance_m and cooldown_distance_m "
+                "need reps_planned"
+            )
         return self
 
     def structure(self) -> Optional[Dict[str, float]]:
@@ -102,6 +117,10 @@ class DraftedSession(BaseModel):
             shape["rep_distance_m"] = self.rep_distance_m
         if self.rest_s is not None:
             shape["rest_s"] = self.rest_s
+        if self.warmup_distance_m is not None:
+            shape["warmup_distance_m"] = self.warmup_distance_m
+        if self.cooldown_distance_m is not None:
+            shape["cooldown_distance_m"] = self.cooldown_distance_m
         return shape
 
 
@@ -313,11 +332,37 @@ RECORD_TRAINING_PLAN_TOOL = {
                                     },
                                     "title": {"type": "string"},
                                     "detail": {"type": "string"},
-                                    "target_distance_m": {"type": "number"},
+                                    "target_distance_m": {
+                                        "type": "number",
+                                        "description": (
+                                            "The WHOLE session in metres, "
+                                            "door to door. On an interval "
+                                            "session give the warm-up and "
+                                            "cool-down below instead and leave "
+                                            "this out — the app adds them up."
+                                        ),
+                                    },
                                     "target_duration_s": {"type": "integer"},
                                     "reps_planned": {"type": "integer"},
                                     "rep_distance_m": {"type": "number"},
                                     "rest_s": {"type": "number"},
+                                    "warmup_distance_m": {
+                                        "type": "number",
+                                        "description": (
+                                            "The warm-up in METRES, not "
+                                            "minutes. It is part of the "
+                                            "session's distance and the runner "
+                                            "reads it in the same unit as "
+                                            "everything else."
+                                        ),
+                                    },
+                                    "cooldown_distance_m": {
+                                        "type": "number",
+                                        "description": (
+                                            "The cool-down in METRES, not "
+                                            "minutes, for the same reason."
+                                        ),
+                                    },
                                 },
                             },
                         },

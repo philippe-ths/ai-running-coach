@@ -135,6 +135,49 @@ def test_structure_is_exactly_the_shape_the_interval_matcher_expects():
     assert set(session.structure()) == {"reps_planned", "rep_distance_m", "rest_s"}
 
 
+def test_the_warmup_and_cooldown_ride_into_the_structure_as_distances():
+    """#876: they are part of the session, and they are METRES.
+
+    Written as "10 min easy" in the detail they were unrecoverable — a distance
+    only after multiplying by a pace nobody stated — so an interval session the
+    runner had agreed as 4.5 km counted as its 2.4 km of reps.
+    """
+    session = DraftedSession(
+        **_session(
+            intent="quality",
+            reps_planned=6,
+            rep_distance_m=400,
+            rest_s=90,
+            warmup_distance_m=1100,
+            cooldown_distance_m=1000,
+        )
+    )
+
+    assert session.structure() == {
+        "reps_planned": 6,
+        "rep_distance_m": 400,
+        "rest_s": 90,
+        "warmup_distance_m": 1100,
+        "cooldown_distance_m": 1000,
+    }
+
+
+def test_the_warmup_and_cooldown_are_guarded_like_every_other_rep_argument():
+    """Same containment rule: they describe the session built around an interval
+    block, so on an easy run they are noise, and with no count they would state a
+    distance for a session whose work is unknown."""
+    with pytest.raises(ValidationError, match="quality session"):
+        DraftedSession(**_session(warmup_distance_m=1000))
+
+    with pytest.raises(ValidationError, match="need reps_planned"):
+        DraftedSession(**_session(intent="quality", cooldown_distance_m=1000))
+
+    with pytest.raises(ValidationError):
+        DraftedSession(
+            **_session(intent="quality", reps_planned=6, warmup_distance_m=0)
+        )
+
+
 def test_a_session_with_no_reps_carries_no_structure_at_all():
     """None rather than an empty dict: a session with no rep structure must not
     reach the matcher as a plan it can score."""

@@ -32,6 +32,7 @@ from datetime import date, timedelta
 from typing import List, Optional, Sequence
 
 from app.services.schedule.placement import validate_session_window
+from app.services.schedule.planned_distance import planned_distance_m
 from app.services.schedule.rules import check_rules
 from app.services.weeks import MONDAY, week_start
 
@@ -261,8 +262,12 @@ def _validate_volume(
     """
     if not norm_weekly_running_m:
         return
+    # Rep structure counts toward the ceiling (#876). Reading `target_distance_m`
+    # alone scored an interval week's hardest running at zero, which failed
+    # PERMISSIVE: the check that exists to catch an absurd week was blind to the
+    # sessions most able to make one.
     planned = sum(
-        session.target_distance_m or 0.0
+        planned_distance_m(session)
         for session in week.sessions
         if session.discipline == "run" and session.commitment == "committed"
     )
