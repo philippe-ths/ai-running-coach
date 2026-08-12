@@ -58,4 +58,7 @@ export interface Activity {
   splits?: Split[];
   laps?: Lap[];
   training_load?: TrainingLoad | null;
+  // Stated-intent labels the picker offers for this activity, served by the
+  // detail read (#779). The vocabulary lives once, in the backend.
+  intent_options?: string[];
 }
