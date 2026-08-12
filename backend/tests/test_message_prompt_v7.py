@@ -95,9 +95,12 @@ def test_build_system_prompt_v7_both_modes():
 
 def test_v7_report_prompt_is_voiceless():
     """#822: the report prompt is the static constant and nothing else."""
-    from app.services.coach.prompts import render_voice_block
+    from app.services.coach.prompts import VOICE_PROMPT_IDS
     assert build_system_prompt(V7, mode="fuller") == SYSTEM_PROMPT_MESSAGE_V7
-    assert len(render_voice_block(V7, None)) > 0  # v7 IS in VOICE_PROMPT_IDS
+    # Stated directly rather than probed through a render: the point is that
+    # the report is voiceless BECAUSE build_system_prompt carries no voice,
+    # not because v7 sits outside the voice-aware set.
+    assert V7 in VOICE_PROMPT_IDS
 
 
 def test_v1_through_v6_and_report_chain_byte_stable():

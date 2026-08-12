@@ -44,7 +44,6 @@ from app.services.coach.prompts import (
     _VOICE_ADDENDUM,
     build_system_prompt,
     is_user_materials_prompt,
-    render_voice_block,
 )
 from app.services.coach.service import active_schema_version
 
@@ -181,7 +180,10 @@ def test_v8_retune_is_actually_present():
 def test_v8_report_prompt_is_voiceless():
     """#822: the report prompt is the static constant and nothing else."""
     assert build_system_prompt(V8, mode="fuller") == SYSTEM_PROMPT_MESSAGE_V8
-    assert len(render_voice_block(V8, None)) > 0  # v8 IS in VOICE_PROMPT_IDS
+    # Stated directly rather than probed through a render: the point is that the
+    # report is voiceless BECAUSE build_system_prompt carries no voice, not
+    # because v8 sits outside the voice-aware set.
+    assert V8 in VOICE_PROMPT_IDS
 
 
 def test_build_system_prompt_v8_both_modes():
