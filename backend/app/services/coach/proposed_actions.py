@@ -25,36 +25,13 @@ from app.schemas import CheckInCreate
 from app.services import activity_queries
 from app.services.blocks import blocks_are_adjacent, merge_blocks, split_block
 from app.services.checkins import write_checkin
-from app.services.intents import write_activity_intent
+from app.services.intents import intent_options_for, write_activity_intent
 
 logger = logging.getLogger(__name__)
 
 _TOKEN_PREFIX = "coach-action:"
 _TOKEN_TTL_SECONDS = 1800
 _TOKEN_MAX_LENGTH = 64
-
-# The stated-intent vocabulary, mirroring the activity page's picker
-# (frontend/components/CheckInForm.tsx). The intent API itself takes free text,
-# so this list is what keeps a coach-proposed label round-trippable in the UI
-# the runner sees. The two copies must stay in step.
-INTENT_OPTIONS_BY_TYPE: dict[str, tuple[str, ...]] = {
-    "Run": (
-        "Easy Run",
-        "Recovery",
-        "Long Run",
-        "Tempo",
-        "Intervals",
-        "Hills",
-        "Race",
-        "Treadmill",
-    ),
-    "Walk": ("Leisure Walk", "Power Walk", "Hike", "Commute"),
-    "Ride": ("Easy Ride", "Workout", "Long Ride", "Race", "Indoor Ride"),
-    "Swim": ("Endurance", "Drills", "Intervals", "Race"),
-    "Workout": ("Strength", "Cardio", "Yoga", "Mobility"),
-    "Default": ("Easy", "Moderate", "Hard", "Workout"),
-}
-
 
 class ProposedActionFrame(BaseModel):
     action_type: Literal[
@@ -567,18 +544,16 @@ def _require_owned_block(
     return block
 
 
-def intent_options_for(activity: Activity) -> tuple[str, ...]:
-    return INTENT_OPTIONS_BY_TYPE.get(activity.type, INTENT_OPTIONS_BY_TYPE["Default"])
-
-
 def _canonical_intent(activity: Activity, user_intent: Optional[str]) -> str:
     """The picker's own label for what the coach named, or a rejection.
 
     The runner's word for a session rarely matches the picker's casing, and the
     coach echoes the runner. Matching loosely and storing the canonical label
-    keeps the stated intent one vocabulary with the activity page's selector.
+    keeps the stated intent one vocabulary with the activity page's selector —
+    which now reads the SAME list from `services.intents` rather than a copy of
+    it (#779).
     """
-    options = intent_options_for(activity)
+    options = intent_options_for(activity.type)
     wanted = " ".join((user_intent or "").split()).casefold()
     for option in options:
         if option.casefold() == wanted:

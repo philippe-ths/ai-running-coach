@@ -16,7 +16,7 @@ from app.models.user_profile import UserProfile
 from app.schemas import ActivityRead, ActivityDetailRead, CheckInCreate, CheckInRead, SyncResponse, ActivityIntentUpdate, DerivedMetricRead, TrainingLoadRead
 from app.services import activity_queries, analysis
 from app.services.checkins import write_checkin
-from app.services.intents import write_activity_intent
+from app.services.intents import selectable_intent_options, write_activity_intent
 from app.services.analysis.classifier import Classification, compose_headline
 from app.services.analysis.splits import calculate_splits
 from app.services.coach import service as coach_service
@@ -233,6 +233,12 @@ def read_activity(
     response = ActivityDetailRead.model_validate(activity)
     response.splits = splits_data
     response.laps = project_laps(activity.raw_summary, effective_type)
+    # The stated-intent picker's options (#779). Served from the one vocabulary the
+    # coach's proposed-action guard also validates against, keyed here on the stored
+    # `Activity.type` so both sides resolve the same list for the same activity.
+    response.intent_options = selectable_intent_options(
+        activity.type, activity.user_intent
+    )
     if response.metrics:
         response.metrics.headline = compose_headline(
             activity, Classification.from_metrics(activity.metrics)

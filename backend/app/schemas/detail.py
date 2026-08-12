@@ -103,6 +103,13 @@ class ActivityDetailRead(ActivityRead):
     # history. Shown to the runner regardless of the active coach prompt — the model
     # is always computable; the COACH_PROMPT_ID gate governs only the coach surface.
     training_load: Optional[TrainingLoadRead] = None
+    # The stated-intent labels this activity's picker offers, injected at read
+    # time from `services.intents` (the `laps`/`training_load` idiom, #779). The
+    # frontend renders the picker from this rather than holding its own copy of
+    # the vocabulary, so the coach's allowed labels and the runner's selectable
+    # ones cannot drift apart. Carries the activity's own stored intent when that
+    # value predates (or falls outside) the current vocabulary.
+    intent_options: List[str] = []
 
     @model_validator(mode="after")
     def normalize_stream_cadence(self) -> "ActivityDetailRead":
