@@ -77,6 +77,7 @@ export type {
   ThreadListItem,
   ThreadDetail,
   ProposedActionFrame,
+  ProposedActionResult,
   ThreadMessageSend,
 } from "./types/thread";
 

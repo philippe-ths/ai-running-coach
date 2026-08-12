@@ -155,6 +155,37 @@ nothing clinical.
 
 Answer only by calling record_training_plan."""
 
+# #856. Appended when the plan was already settled in conversation. The task then
+# is TRANSCRIPTION, not planning: the coaching decisions were made in front of the
+# runner and they confirmed those, so a model that re-plans here hands back
+# something they never agreed to. Everything the base prompt says about placement,
+# commitment, rules and what not to do still binds — the structure has to be
+# legal, and the coherence gate is unchanged.
+_FROM_CONVERSATION = """
+
+# THIS PLAN IS ALREADY SETTLED
+
+You and this runner worked this block out in conversation, and they have just \
+confirmed they want it in their schedule. The transcript is below.
+
+Your job now is to TRANSCRIBE what you both agreed into the tool's structure — \
+not to plan it again. Where the conversation named a session, write that session. \
+Where it named a week's shape, write that shape. Keep the phases, the progression \
+and the race the conversation was built around.
+
+Fill the gaps the conversation left, and only those. A conversation says "four \
+runs, long one at the weekend" without saying which day the Tuesday easy run \
+falls on; that is yours to place. Use the windows and rules to hold what was \
+agreed loosely, loosely, rather than inventing precision the runner never signed \
+up to. A loose window still lives inside ONE week: widen it within the week, \
+never across the boundary into the next. "The weekend" for a Monday-start runner \
+is Saturday to Sunday; Sunday to Monday is two different weeks.
+
+If the conversation covered fewer weeks than the horizon asks for, sketch the \
+remainder in the same direction rather than stopping short or changing course. If \
+it settled something you would not have chosen, write what was settled: they \
+agreed to that plan, not to your second thoughts about it."""
+
 
 @dataclass
 class DraftOutcome:
@@ -334,6 +365,65 @@ def build_draft_context(
     return "\n".join(parts)
 
 
+# How much of the settling conversation the draft reads. Bounded like every other
+# transcript this project puts in front of a model, but wider than the continuity
+# digests: those carry a flavour of what was discussed, this carries the plan
+# itself, and truncating the message that holds the block would silently drop the
+# thing the runner confirmed.
+_MAX_TRANSCRIPT_TURNS = 16
+_MAX_TRANSCRIPT_CHARS = 2500
+
+
+def _conversation_block(db: Session, user: User, thread_id: Optional[str]) -> str:
+    """The settling conversation, owner-scoped, or "" when there is none (#856).
+
+    Owner-scoped for the usual reason and one specific to this path: the thread id
+    arrives as a job argument rather than from an authenticated request, so it is
+    re-checked against the plan's owner here rather than trusted.
+    """
+    if not thread_id:
+        return ""
+    try:
+        from app.models.coach_chat_message import CoachChatMessage
+        from app.models.thread import Thread
+
+        thread = (
+            db.query(Thread)
+            .filter(Thread.id == uuid.UUID(str(thread_id)), Thread.user_id == user.id)
+            .first()
+        )
+        if thread is None:
+            logger.warning(
+                "schedule draft: thread %s is not this runner's; drafting unseeded",
+                thread_id,
+            )
+            return ""
+        rows = (
+            db.query(CoachChatMessage)
+            .filter(CoachChatMessage.thread_id == thread.id)
+            .order_by(
+                CoachChatMessage.created_at.desc(), CoachChatMessage.id.desc()
+            )
+            .limit(_MAX_TRANSCRIPT_TURNS)
+            .all()
+        )
+    except Exception:  # noqa: BLE001 — an unreadable transcript is not a failed plan
+        logger.exception("schedule draft: could not read thread %s", thread_id)
+        return ""
+
+    lines: List[str] = []
+    for row in reversed(rows):  # chronological
+        text = " ".join((row.content or "").split())
+        if not text:
+            continue
+        if len(text) > _MAX_TRANSCRIPT_CHARS:
+            text = text[:_MAX_TRANSCRIPT_CHARS].rstrip() + "…"
+        lines.append(f"{'Runner' if row.role == 'user' else 'You'}: {text}")
+    if not lines:
+        return ""
+    return "\n\n## THE CONVERSATION\n\n" + "\n\n".join(lines)
+
+
 def _memory_lines(db: Session, user: User) -> List[str]:
     if not settings.COACH_MEMORY_ENABLED:
         return []
@@ -360,9 +450,21 @@ def _memory_lines(db: Session, user: User) -> List[str]:
 
 
 async def draft_plan(
-    db: Session, user: User, plan: TrainingPlan, *, today: Optional[date] = None
+    db: Session,
+    user: User,
+    plan: TrainingPlan,
+    *,
+    today: Optional[date] = None,
+    thread_id: Optional[str] = None,
 ) -> DraftOutcome:
-    """Generate, validate and store one plan. One retry, then fail visibly."""
+    """Generate, validate and store one plan. One retry, then fail visibly.
+
+    `thread_id` (#856) names a conversation in which the runner and the coach
+    already settled this block. It changes the TASK — transcribe what was agreed
+    rather than plan afresh — and nothing else: the same forced tool, the same
+    coercion, the same coherence gate, the same all-or-nothing store. A plan that
+    reaches the schedule through a conversation is not a plan held to a lower bar.
+    """
     today = today or date.today()
     weeks = settings.SCHEDULE_HORIZON_WEEKS
     starts_on = resolve_week_start(getattr(user, "profile", None))
@@ -372,6 +474,11 @@ async def draft_plan(
 
     facts = fetch_draft_facts(db, user, today)
     context = build_draft_context(db, user, today=today, weeks=weeks, facts=facts)
+    system = _SYSTEM_PROMPT
+    transcript = _conversation_block(db, user, thread_id)
+    if transcript:
+        system = _SYSTEM_PROMPT + _FROM_CONVERSATION
+        context = context + transcript
     client = turn.build_client(turn.TurnKind.SCHEDULE, user.id)
 
     load_model = build_load_model(facts, today)
@@ -398,7 +505,7 @@ async def draft_plan(
 
         try:
             raw = await client.generate_structured(
-                system=_SYSTEM_PROMPT,
+                system=system,
                 user=user_message,
                 tool=RECORD_TRAINING_PLAN_TOOL,
                 max_tokens=8192,
@@ -557,18 +664,26 @@ def _shape_for(sketch, load_model) -> Optional[dict]:
     }
 
 
-def enqueue_draft(user_id, plan_id) -> None:
+def enqueue_draft(user_id, plan_id, thread_id=None) -> None:
     """Enqueue the drafting job, decoupled from the request.
 
     Imported lazily and swallowing enqueue errors, the `enqueue_distillation`
     idiom: the queue dependency stays off the read endpoints' import path, and a
     Redis hiccup leaves a `drafting` row the runner can retry rather than a 500
     on a request that has already written one.
+
+    `thread_id` (#856) is the conversation that settled the plan, when there was
+    one; the Schedule screen's own button passes none.
     """
     try:
         from app.core.queue import queue
         from app.jobs.generate_schedule import generate_schedule_job
 
-        queue.enqueue(generate_schedule_job, str(user_id), str(plan_id))
+        queue.enqueue(
+            generate_schedule_job,
+            str(user_id),
+            str(plan_id),
+            str(thread_id) if thread_id else None,
+        )
     except Exception:  # noqa: BLE001 — enqueue is fire-and-forget
         logger.exception("failed to enqueue schedule draft for plan %s", plan_id)

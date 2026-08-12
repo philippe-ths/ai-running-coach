@@ -90,8 +90,9 @@ What is above is a lean baseline, not their record. When a question turns on dat
 Pick the window whose NAME matches how the runner spoke; never work out dates yourself — the tools resolve and report the exact range they used, so ground your answer in that. Only tell the runner you cannot answer once the tools have come up empty too.
 
 OFFERING AN ACTION — THE RUNNER'S CALL:
-When the conversation itself settles a small correction to their record — how a session felt, what a session actually was, or a session grouped wrongly with its neighbours — offer to make it with offer_proposed_action rather than sending them off to tap through the app. That includes a planned session they mention having done — the gym and the turbo never reach Strava, so what they tell you is often the only record there will be. Offer only what the conversation reached, with ids already in front of you, and at most one per reply.
-The card states the change and carries its own button, so let it speak for itself: spend your reply coaching them, and never describe the card, narrate the tap, or report the change as made. Nothing is written unless they confirm it. Write "That was a tempo by any read — 6:00/km at 150bpm is not an easy-day effort.", not "I've put a card up — confirm it and I'll update your record."
+When the conversation settles something that belongs in their record, offer to write it with offer_proposed_action rather than sending them off to tap through the app: how a session felt, what a session actually was, a session grouped wrongly with its neighbours, a planned session they mention having done (the gym and the turbo never reach Strava, so what they tell you is often the only record there will be), or a block of training you have worked out together.
+A plan belongs in their schedule, not in the transcript. Their Schedule screen is part of this app and it is yours to write, so once the shape of a block is agreed, offer draft_plan and let the card do the asking. Never hand a block back as prose for them to copy out, never dictate it a week at a time, and never point them at another app for something this one does.
+Offer only what the conversation reached, with ids already in front of you, and at most one per reply. The card states the change and carries its own button, so let it speak for itself: spend your reply coaching them, not describing the card. Never report a change as made — nothing is written unless they confirm it. Write "That was a tempo by any read — 6:00/km at 150bpm is not an easy-day effort.", not "I've put a card up — confirm it and I'll update your record."
 
 RULES:
 1. Ground every claim in the data above and anything you fetch with your tools, citing the specific numbers (pace, HR, effort score) when they carry the point. Never invent facts.
@@ -157,7 +158,26 @@ def _build_baseline_sections(db: Session, user: User) -> dict:
             "trend": readiness.trend,
             "warming_up": readiness.warming_up,
         }
+    # #856. The key's PRESENCE says the coach was given the schedule; its value
+    # says whether there is a plan in it. The switch is applied here rather than
+    # inside the builder because this is a second seam — the pack's copy is gated
+    # once by `read_time_signals.gather`, and a builder that gated itself would
+    # leave the switch with two owners. Same shape as COACH_RELATIONSHIP_ENABLED,
+    # applied at `turn.relationship_for_user` for both report and conversation.
+    if settings.COACH_SCHEDULE_ENABLED:
+        sections["schedule"] = _schedule_section(db, user)
     return sections
+
+
+def _schedule_section(db: Session, user: User) -> Optional[dict]:
+    """The runner's active plan, or None when they have none."""
+    try:
+        from app.services.schedule.coach_view import build_thread_schedule
+
+        return build_thread_schedule(db, user)
+    except Exception:  # noqa: BLE001 — a schedule hiccup never blocks a reply
+        logger.exception("thread schedule section failed for user %s", user.id)
+        return None
 
 
 def _render_baseline_block(sections: dict) -> str:
@@ -172,7 +192,29 @@ def _render_baseline_block(sections: dict) -> str:
             "\nCURRENT CONDITION (deterministic readiness read):\n"
             + json.dumps(sections["readiness"], default=str)
         )
+    if "schedule" in sections:
+        parts.append(_render_schedule_block(sections["schedule"]))
     return "\n".join(parts) + ("\n" if parts else "")
+
+
+def _render_schedule_block(schedule: Optional[dict]) -> str:
+    """The runner's plan, or the plain fact that there is not one yet (#856).
+
+    The no-plan case is stated rather than left silent on purpose. Silence is
+    what the coach read as "the schedule is somewhere else": absence of a plan
+    and absence of a schedule are different facts, and only one of them is true.
+    """
+    if schedule is None:
+        return (
+            "\nTHEIR SCHEDULE (this app's Schedule screen — yours to write, not "
+            "somewhere else):\nThey have no active plan. If the conversation "
+            "settles what their training should look like, you can put it there."
+        )
+    return (
+        "\nTHEIR SCHEDULE (this app's Schedule screen — yours to write; what was "
+        "ASKED FOR, never a compliance score):\n"
+        + json.dumps(schedule, default=str)
+    )
 
 
 def _render_anchor_block(thread: Thread) -> str:
@@ -381,6 +423,7 @@ async def stream_thread_turn(
         owner_user_id=user.id,
         out=out,
         tools=[*thread_tools(CHAT_TOOLS), LOAD_SKILL_TOOL],
+        thread_id=thread.id,
     ):
         yield event
 

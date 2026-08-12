@@ -70,16 +70,27 @@ class TestBoundaries:
                     named = {word.strip(",.\"'") for word in line.split()}
                     invented = named & {"log_workout", "update_profile", "set_voice"}
                     assert not invented
-        # The set is fixed, narrow and reversible — every member undoable by the
-        # runner. `complete_session` (#830) joined it because a session the runner
-        # says they did is often the only record there will be: Strava never sees
-        # the gym. It unticks, so it keeps the reversibility rule.
+        # The set is fixed and narrow, and nothing in it destroys anything.
+        #
+        # Four members undo with a tap. `complete_session` (#830) joined them
+        # because a session the runner says they did is often the only record
+        # there will be — Strava never sees the gym — and it unticks.
+        #
+        # `draft_plan` (#856) is the one that does not: writing a plan supersedes
+        # the one the runner was training to, and no route brings that back. It
+        # holds the property the undo rule exists to protect — the superseded
+        # plan and every one of its sessions are RETAINED (`activate_plan` only
+        # flips status), and the card names the plan it will replace before the
+        # runner confirms — but "non-destructive and announced" is a weaker
+        # guarantee than "undoable", and it is recorded as weaker rather than
+        # folded in. A restore is tracked separately.
         assert allowed == {
             "check_in",
             "intent",
             "split_block",
             "merge_blocks",
             "complete_session",
+            "draft_plan",
         }
 
     @pytest.mark.parametrize("skill", SKILLS, ids=[s.name for s in SKILLS])

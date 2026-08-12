@@ -335,6 +335,7 @@ async def _buffered_tool_loop(
     owner_user_id,
     out: dict,
     tools: Optional[List[dict]] = None,
+    thread_id=None,
 ):
     """The shared buffer-then-validate generation core (#340/#375/#648), used by
     BOTH chat surfaces: the activity chat box and the thread turn (#766). Yields
@@ -432,7 +433,14 @@ async def _buffered_tool_loop(
 
                         # The model reads `result` (pending, tokenless); the runner's
                         # client gets the `frame` that carries the one-shot token.
-                        result, frame = mint_proposed_action(db, owner_user_id, tool_input)
+                        # #856: `draft_plan` records WHICH conversation settled
+                        # the plan, so the drafting job transcribes this thread
+                        # rather than starting over. The id is the loop's own, not
+                        # the model's — a model-supplied thread id would be a
+                        # route into another runner's conversation.
+                        result, frame = mint_proposed_action(
+                            db, owner_user_id, tool_input, thread_id=thread_id
+                        )
                         if proposed_action is None and frame is not None:
                             proposed_action = frame
                         tool_results.append(

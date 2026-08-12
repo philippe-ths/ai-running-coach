@@ -32,11 +32,25 @@ export interface ThreadDetail {
 }
 
 export interface ProposedActionFrame {
-  action_type: "check_in" | "intent" | "split_block" | "merge_blocks";
+  action_type:
+    | "check_in"
+    | "intent"
+    | "split_block"
+    | "merge_blocks"
+    | "complete_session"
+    | "draft_plan";
   token: string;
   description: string;
   confirm_label: string;
   dismiss_label: string;
+}
+
+/** What the server did, echoed back on confirm. `message` is present only when
+ *  the write lands somewhere the runner is not looking — a plan is drafted on
+ *  the worker, so the card vanishing is otherwise the only feedback there is. */
+export interface ProposedActionResult {
+  action_type: string;
+  message?: string | null;
 }
 
 export interface ThreadMessageSend {

@@ -295,7 +295,34 @@ def test_the_enqueue_hands_the_worker_the_job_it_expects(monkeypatch):
     enqueue_draft(user_id, plan_id)
 
     assert enqueued["func"] is job_mod.generate_schedule_job
-    assert enqueued["args"] == (str(user_id), str(plan_id))
+    # The screen's own button seeds no conversation, so the third argument (#856)
+    # is explicitly None rather than absent — the job signature is one contract,
+    # whichever route reached it.
+    assert enqueued["args"] == (str(user_id), str(plan_id), None)
+
+
+def test_the_enqueue_carries_the_conversation_that_settled_the_plan():
+    """#856: a plan agreed in a thread must tell the worker WHICH thread, or the
+    draft it produces is a fresh plan rather than the one the runner confirmed."""
+    from app.services.schedule.draft import enqueue_draft
+
+    enqueued = {}
+
+    class _FakeQueue:
+        def enqueue(self, func, *args, **kwargs):
+            enqueued["args"] = args
+
+    import app.core.queue as queue_mod
+
+    original = queue_mod.queue
+    queue_mod.queue = _FakeQueue()
+    try:
+        user_id, plan_id, thread_id = uuid4(), uuid4(), uuid4()
+        enqueue_draft(user_id, plan_id, thread_id)
+    finally:
+        queue_mod.queue = original
+
+    assert enqueued["args"] == (str(user_id), str(plan_id), str(thread_id))
 
 
 def test_a_queue_that_is_down_leaves_a_row_the_runner_can_retry_rather_than_a_500(

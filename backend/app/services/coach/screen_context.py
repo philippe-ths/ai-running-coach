@@ -33,9 +33,12 @@ _SCREEN_TITLES = {
     "load": "Load",
     "trends": "Trends",
     "profile": "Profile",
-    # #830. Identity-only, like Home/Load/Profile: the thread turn's baseline
-    # already carries the runner's plan-shaped facts, so resolving the screen
-    # would place a second copy of them in front of the coach.
+    # #830, corrected by #856. Identity-only, like Home/Load/Profile — but only
+    # since #856: when this line was written the baseline carried NO schedule at
+    # all, so "the baseline already has it" was not true and the coach on this
+    # screen could see neither the screen nor the plan. The baseline now carries
+    # the week (`thread_turn._schedule_section`), which is what makes
+    # identity-only the right answer rather than an accidental blind spot.
     "schedule": "Schedule",
 }
 
