@@ -34,6 +34,7 @@ from datetime import timedelta
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from app.services.schedule.placement import PlacedSession, candidate_days
+from app.services.schedule.rule_text import describe_rule
 
 # A predicate reports the first violation it finds as a runner-readable detail,
 # or None when the rule holds for the placements it can see.
@@ -137,6 +138,7 @@ def violations_for(
                 {
                     "kind": rule.kind,
                     "label": getattr(rule, "label", rule.kind),
+                    "statement": describe_rule(rule),
                     "detail": "this rule kind is not one the checker understands",
                 }
             )
@@ -144,7 +146,12 @@ def violations_for(
         detail = predicate(placed, rule)
         if detail is not None:
             found.append(
-                {"kind": rule.kind, "label": getattr(rule, "label", rule.kind), "detail": detail}
+                {
+                    "kind": rule.kind,
+                    "label": getattr(rule, "label", rule.kind),
+                    "statement": describe_rule(rule),
+                    "detail": detail,
+                }
             )
     return found
 
@@ -213,6 +220,7 @@ def check_rules(
         {
             "kind": r.kind,
             "label": getattr(r, "label", r.kind),
+            "statement": describe_rule(r),
             "detail": "this rule kind is not one the checker understands",
         }
         for r in rules
@@ -233,6 +241,7 @@ def check_rules(
                 {
                     "kind": rule.kind,
                     "label": getattr(rule, "label", rule.kind),
+                    "statement": describe_rule(rule),
                     "detail": (
                         "no arrangement of this week satisfies this rule alongside "
                         "the others"
@@ -245,6 +254,7 @@ def check_rules(
             {
                 "kind": r.kind,
                 "label": getattr(r, "label", r.kind),
+                "statement": describe_rule(r),
                 "detail": "these rules cannot all hold for this week at once",
             }
             for r in rules

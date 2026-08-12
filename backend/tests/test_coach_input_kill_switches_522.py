@@ -247,7 +247,9 @@ def test_voice_switch_enforced_inside_shared_render(monkeypatch):
     chat go through, so no call site can bypass it (chat's voice path previously did)."""
     from app.services.coach.prompts import render_voice_block
 
-    voice = resolve_voice(None)
+    # A DECLARED voice, because a default one renders nothing either way (#825)
+    # and so could not tell a working switch from a broken one.
+    voice = resolve_voice(CoachingRelationship(voice_preset="cornerman"))
     assert render_voice_block(V11, voice) != ""  # on by default
     monkeypatch.setattr(settings, "COACH_VOICE_BLOCK_ENABLED", False)
     assert render_voice_block(V11, voice) == ""  # off at the source, every caller

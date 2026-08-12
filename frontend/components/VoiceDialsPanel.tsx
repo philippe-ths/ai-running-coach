@@ -190,7 +190,11 @@ export default function VoiceDialsPanel() {
         <label className="block text-sm font-medium mb-2">Starting character</label>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
           {/* Default is a first-class choice, not the absence of one: it is the
-              only option that adds nothing at all to how your report is written. */}
+              only option that adds nothing at all to how the coach speaks. It
+              means off on BOTH surfaces — the report is written without a voice
+              and never re-voiced, and the conversation carries no voice
+              instruction either — so the promise below holds wherever the
+              runner meets their coach. */}
           <button
             type="button"
             onClick={chooseDefault}

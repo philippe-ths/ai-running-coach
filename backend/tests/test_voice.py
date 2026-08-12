@@ -184,10 +184,13 @@ class TestVoiceComposition:
         assert "EXAMPLE MESSAGES (match the register" not in block
         assert "\nPRESET:" not in block
 
-    def test_voice_block_default_voice_renders_default_note(self):
-        block = render_voice_block(V3, resolve_voice(None))
-        assert "default moderate coaching voice" in block
-        assert "EXAMPLE MESSAGES (match the register" not in block
+    def test_voice_block_is_empty_for_a_default_voice(self):
+        """Default is declining a voice, not choosing a middling one (#825).
+
+        Rendering the centre explicitly is an instruction to sound a particular
+        way, so a runner who asked for no voice was getting one.
+        """
+        assert render_voice_block(V3, resolve_voice(None)) == ""
 
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,7 @@ from app.services.schedule.placement import (
     effective_window,
     session_status,
 )
+from app.services.schedule.rule_text import describe_rule
 from app.services.weeks import resolve_week_start, week_start
 
 logger = logging.getLogger(__name__)
@@ -192,7 +193,14 @@ def build_schedule_context(
         exclude_session_id=matched.id if matched is not None else None,
     )
 
-    rules = [rule.label for rule in store.plan_rules(plan)][:MAX_RULES]
+    # The DERIVED statement, not the coach's own `label` (#844) — the same text
+    # the runner's schedule screen shows them. A label is written by the coach
+    # and tied to nothing, so it can describe a rule its own predicate does not
+    # enforce (a live plan's label promised "easy cross-training" against a
+    # predicate forbidding exactly that). Feeding the label here would leave the
+    # runner reading one rule and the coach reasoning from another, which is
+    # worse than the two being wrong together.
+    rules = [describe_rule(rule) for rule in store.plan_rules(plan)][:MAX_RULES]
 
     if not (planned_for or upcoming or rules):
         # Nothing to say. An empty section is tokens spent on silence.

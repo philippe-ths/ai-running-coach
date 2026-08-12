@@ -1449,14 +1449,19 @@ async def _apply_voice(
     outcome = await revoice_report(
         baseline=baseline, voice=voice, user_id=user_id, validate=_introduced
     )
+    # The wall-clock cost rides the stored reason when a call was actually made,
+    # so "what does a rewrite cost?" is answerable from the reports themselves.
+    stored = outcome.reason
+    if outcome.duration_ms is not None:
+        stored = f"{stored} in {outcome.duration_ms} ms"
     if not outcome.text:
-        return chosen, outcome.reason
+        return chosen, stored
     return (
         replace(
             chosen,
             report=chosen.report.model_copy(update={voiced_field: outcome.text}),
         ),
-        outcome.reason,
+        stored,
     )
 
 

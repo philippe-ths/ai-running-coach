@@ -84,10 +84,13 @@ def test_v4_report_prompt_is_voiceless():
     """#822: the report prompt is the static constant and nothing else, on both
     stages. v4 remains voice-aware for the conversational turn, which still steers
     at prompt time — the report does not, because its voice is applied afterwards."""
-    from app.services.coach.prompts import render_voice_block
+    from app.services.coach.prompts import VOICE_PROMPT_IDS
     assert build_system_prompt(V4, mode="fuller") == SYSTEM_PROMPT_MESSAGE_V4
     assert build_system_prompt(V4, mode="opener") == SYSTEM_PROMPT_MESSAGE_V4_OPENER
-    assert len(render_voice_block(V4, None)) > 0  # v4 IS in VOICE_PROMPT_IDS
+    # Stated directly rather than probed through a render: the point is that
+    # the report is voiceless BECAUSE build_system_prompt carries no voice,
+    # not because v4 sits outside the voice-aware set.
+    assert V4 in VOICE_PROMPT_IDS
 
 
 def test_v1_v2_v3_and_report_chain_byte_stable():

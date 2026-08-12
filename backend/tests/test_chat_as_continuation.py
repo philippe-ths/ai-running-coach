@@ -95,13 +95,32 @@ def test_prompt_speaks_in_the_declared_voice(db, monkeypatch):
     assert "PRESET:" in prompt
 
 
-def test_undeclared_runner_gets_the_moderate_default_voice(db, monkeypatch):
+def test_undeclared_runner_gets_no_voice_at_all(db, monkeypatch):
+    """Default means off HERE too, not just on the report (#825).
+
+    The profile promises "No voice applied; your coach as written". A runner who
+    chose Default was still having a warm, balanced, lightly direct persona
+    described to the model on the conversational surface — the one where the
+    coach can also propose actions. No voice block, and so no VOICE tier either,
+    since that tier exists to rank a voice against the facts.
+    """
     monkeypatch.setattr(settings, "COACH_PROMPT_ID", VOICE_AWARE_PROMPT)
     user, thread = _seed(db, voice_preset=None)
     prompt = build_thread_system_prompt(db, user, thread)
 
+    assert "## YOUR VOICE FOR THIS RUNNER" not in prompt
+    assert "default moderate coaching voice" not in prompt
+    assert "- VOICE (" not in prompt
+
+
+def test_a_declared_voice_still_reaches_the_conversation(db, monkeypatch):
+    """The sensitivity half: Default going quiet must not mute a real voice."""
+    monkeypatch.setattr(settings, "COACH_PROMPT_ID", VOICE_AWARE_PROMPT)
+    user, thread = _seed(db, voice_preset="cornerman")
+    prompt = build_thread_system_prompt(db, user, thread)
+
     assert "## YOUR VOICE FOR THIS RUNNER" in prompt
-    assert "default moderate coaching voice" in prompt
+    assert "- VOICE (" in prompt
 
 
 def test_voice_gating_mirrors_the_report(db, monkeypatch):

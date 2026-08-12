@@ -69,6 +69,41 @@ def _week_from_sessions(sessions: List[Any]) -> Dict[str, Any]:
     }
 
 
+def _last_covered_week(
+    plan: Optional[Any],
+    shapes: Dict[date, Any],
+    rows: List[Any],
+    starts_on: int,
+) -> Optional[date]:
+    """The last week the plan covers, concrete or sketched — the boundary #842's
+    `beyond_plan` reads against.
+
+    `horizon_end` (the last DAY of the last week the plan mentions, written by
+    `draft.py`) is authoritative when the plan states one. Nullable for older or
+    edge-case rows, which fall back to the latest week among the plan's own week
+    shapes and its COMMITTED sessions (a suggestion nobody agreed to does not
+    extend the plan's reach, the same reading `planned` above already applies).
+    `rows` is `sessions_in_range`'s result, bounded to the requested window, so
+    this fallback can undercount a plan whose committed sessions run past the
+    window asked for; that is an accepted limitation of the safety net, not of
+    `horizon_end` itself.
+
+    None (no plan, or a plan stating nothing at all) means there is nothing to
+    be beyond — every week then reads `empty`, never `beyond_plan`.
+    """
+    if plan is None:
+        return None
+    if plan.horizon_end is not None:
+        return week_start(plan.horizon_end, starts_on)
+    candidates = list(shapes.keys())
+    candidates.extend(
+        week_start(row.window_start, starts_on)
+        for row in rows
+        if row.commitment == "committed"
+    )
+    return max(candidates) if candidates else None
+
+
 def build_horizon(
     db: Session,
     user: User,
@@ -100,6 +135,7 @@ def build_horizon(
         sessions_by_week.setdefault(key, []).append(row)
 
     shapes = {shape.week_start: shape for shape in store.plan_week_shapes(plan)}
+    last_covered_week = _last_covered_week(plan, shapes, rows, starts_on)
 
     out: List[HorizonWeek] = []
     for index in range(weeks):
@@ -118,6 +154,7 @@ def build_horizon(
                     week_start=current,
                     phase=shape.phase if shape else None,
                     planned=True,
+                    coverage="planned",
                     is_current=current == first_week,
                     **derived,
                 )
@@ -128,6 +165,7 @@ def build_horizon(
                     week_start=current,
                     phase=shape.phase,
                     planned=False,
+                    coverage="sketched",
                     is_current=current == first_week,
                     running_distance_m=shape.target_running_distance_m,
                     effort_score=shape.target_effort_score,
@@ -138,12 +176,22 @@ def build_horizon(
         else:
             # A week the plan says nothing about is reported as empty rather than
             # omitted, so the horizon stays a continuous run of weeks and a gap
-            # reads as a gap instead of as a shorter block.
+            # reads as a gap instead of as a shorter block. #842: that used to be
+            # the whole story, but a week past the plan's own reach is a
+            # different thing from a genuine interior gap — only the latter is
+            # actually a week the plan "says nothing about"; the former the plan
+            # never had a chance to.
+            coverage = (
+                "beyond_plan"
+                if last_covered_week is not None and current > last_covered_week
+                else "empty"
+            )
             out.append(
                 HorizonWeek(
                     week_start=current,
                     phase=None,
                     planned=False,
+                    coverage=coverage,
                     is_current=current == first_week,
                 )
             )

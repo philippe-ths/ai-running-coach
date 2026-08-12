@@ -43,3 +43,7 @@ Patching the example sets would have fixed those two characters. It would not ha
 **Rollback.** `COACH_VOICE_BLOCK_ENABLED=false` disables the rewrite entirely, and every runner reads the baseline. Because that switch already withheld the voice block, the prod report prompt is byte-identical before and after this change — verified by hashing both modes and both playbook states against `HEAD` in a worktree.
 
 **Not covered.** The conversational thread turn still steers at prompt time via `render_voice_block`, which is unchanged. Moving it to the same seam would add a second model call to the surface where latency is most felt, and is deliberately left as follow-up.
+
+**Amended 2026-08-12 (#825).** Half of that follow-up is closed: a DEFAULT voice now renders no block on the thread turn either, so "Default means off" holds on both surfaces and the profile's promise — "No voice applied; your coach as written" — is true wherever the runner meets their coach. A *declared* voice still steers the conversation at prompt time, so the guarantee this ADR is built on (voice cannot reach the substance) still does not extend there.
+
+The reason it has not moved is that the latency objection above was asserted, never measured: nothing in the repo timed the rewrite pass. `RewriteOutcome.duration_ms` now records it on the report meta, deliberately stored rather than logged, because production drops the body of every log record carrying a logger name (#846). The decision to move the thread turn should be taken against that number.
