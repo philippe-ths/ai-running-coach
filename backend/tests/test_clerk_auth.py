@@ -13,11 +13,13 @@ dependency's enforcement/degrade contract.
 
 import asyncio
 import datetime as dt
+from uuid import uuid4
 
 import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi import APIRouter, Depends, FastAPI
 
 from app.core import clerk_auth
 from app.core.clerk_auth import (
@@ -29,6 +31,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.main import app
 from app.models import StravaAccount, User
+from tests._route_table import api_routes, assert_enumeration_is_not_vacuous
 
 TEST_ISSUER = "https://test-instance.clerk.accounts.dev"
 TEST_JWKS_URL = f"{TEST_ISSUER}/.well-known/jwks.json"
@@ -477,40 +480,161 @@ class TestUserResolution:
 
 
 # --- structural fence: every app route is gated ----------------------------
+#
+# This fence is the thing that notices when a route is added without a session
+# dependency, so it is the one test in this file that must never pass without
+# looking. It did exactly that for as long as CI resolved FastAPI >= 0.141:
+# `include_router` stopped flattening routes into `app.routes`, the sweep found
+# zero routes, and "no ungated routes" was true by construction (#809). The walk
+# now lives in tests/_route_table.py, handles both router models, and refuses to
+# run over an enumeration that has gone empty or short.
 
-def _flatten_calls(dependant):
-    calls, stack = [], [dependant]
-    while stack:
-        d = stack.pop()
-        if getattr(d, "call", None) is not None:
-            calls.append(d.call)
-        stack.extend(getattr(d, "dependencies", []))
-    return calls
+
+def _ungated_application_routes(application=None) -> list:
+    """Every non-exempt /api route on `application` that no session gates.
+
+    `gating_calls` is the union of the route's own dependency tree and the
+    dependencies attached where its router was included -- FastAPI 0.141 stopped
+    merging the latter into the former, and every application router here is
+    gated at include time, so reading only `route.dependant` would report the
+    whole app as ungated.
+    """
+    return [
+        info.label()
+        for info in api_routes(application)
+        if not any(info.path.startswith(p) for p in _EXEMPT_PREFIXES)
+        and clerk_auth.verify_clerk_session not in info.gating_calls
+    ]
 
 
 class TestGateCoverage:
+    def test_the_route_sweep_is_not_vacuous(self):
+        """Before trusting the fence, prove it is looking at the route table.
+
+        Ordered first deliberately: every assertion below is a sweep, and a
+        sweep over nothing passes. The oracle is the app's own OpenAPI document.
+        """
+        assert_enumeration_is_not_vacuous()
+
     def test_every_application_route_requires_a_session(self):
         """No application /api route may be left ungated (fail-closed by review)."""
-        ungated = []
-        for route in app.routes:
-            path = getattr(route, "path", "")
-            dependant = getattr(route, "dependant", None)
-            if dependant is None or not path.startswith("/api/"):
-                continue
-            if any(path.startswith(p) for p in _EXEMPT_PREFIXES):
-                continue
-            if clerk_auth.verify_clerk_session not in _flatten_calls(dependant):
-                ungated.append(f"{getattr(route, 'methods', '')} {path}")
+        ungated = _ungated_application_routes()
         assert not ungated, f"ungated application routes: {ungated}"
 
+    def test_the_fence_catches_a_genuinely_ungated_route(self):
+        """The positive control: prove the fence can FAIL.
+
+        A guard whose failing path has never been exercised is indistinguishable
+        from a guard that cannot fail. This builds a miniature app with one
+        gated router and one that somebody forgot, and asserts the same
+        predicate the fence uses reports exactly the forgotten one.
+
+        (Test setup, not ground truth: the miniature app exists to drive the
+        predicate's negative path, and claims nothing about the real app.)
+        """
+        gated = APIRouter()
+
+        @gated.get("/remembered")
+        def _remembered():
+            return {}
+
+        forgotten = APIRouter()
+
+        @forgotten.get("/forgotten")
+        def _forgotten():
+            return {}
+
+        @forgotten.post("/forgotten/{thing_id}")
+        def _forgotten_write(thing_id: str):
+            return {}
+
+        mini = FastAPI()
+        mini.include_router(
+            gated,
+            prefix="/api",
+            dependencies=[Depends(clerk_auth.verify_clerk_session)],
+        )
+        mini.include_router(forgotten, prefix="/api")
+
+        assert sorted(_ungated_application_routes(mini)) == [
+            "GET /api/forgotten",
+            "POST /api/forgotten/{thing_id}",
+        ]
+
+    def test_a_route_gated_only_where_its_router_is_included_still_counts(self):
+        """The other direction: no FALSE alarm on include-time gating.
+
+        `/api/_debug/sentry-test` declares no session dependency of its own; it
+        is gated by `app.include_router(debug.router, dependencies=...)`. On
+        FastAPI 0.141 that dependency is no longer merged into the route's own
+        dependant, so a fence reading `route.dependant` alone would fail here --
+        and the tempting "fix" is to weaken the fence. Pinning it keeps the
+        union in `gating_calls` load-bearing.
+        """
+        debug_routes = [
+            info for info in api_routes() if info.path == "/api/_debug/sentry-test"
+        ]
+        assert debug_routes, "the debug route moved; update this pin"
+        for info in debug_routes:
+            assert clerk_auth.verify_clerk_session in info.gating_calls
+
     def test_exempt_routers_are_not_gated(self):
-        for route in app.routes:
-            path = getattr(route, "path", "")
-            dependant = getattr(route, "dependant", None)
-            if dependant is None:
+        checked = 0
+        for info in api_routes():
+            if info.path.startswith("/api/health") or info.path.startswith(
+                "/api/webhooks"
+            ):
+                checked += 1
+                assert clerk_auth.verify_clerk_session not in info.gating_calls
+        assert checked >= 3, (
+            f"the exempt-route sweep found only {checked} routes, so it is not "
+            "actually checking the exemption (#809)"
+        )
+
+    def test_every_application_route_denies_an_unauthenticated_request(
+        self, client, clerk_env
+    ):
+        """The same fence from the other side: through the real ASGI stack.
+
+        The sweeps above read the resolved dependency tree, which is a statement
+        about how the app is WIRED. This one asks the app. With Clerk configured
+        and no session token, every non-exempt /api route must answer 401 before
+        its handler runs -- including before body validation, so a 422 here would
+        mean the request got further than the gate.
+
+        Structural and behavioural coverage fail differently: the structural
+        sweep goes blind when FastAPI moves its furniture (#809), this one goes
+        blind only if the enumeration does, which the check above forbids.
+        """
+        ids = (
+            "activity_id",
+            "block_id",
+            "thread_id",
+            "material_id",
+            "race_id",
+            "session_id",
+        )
+        unexpected, checked = [], 0
+        for info in api_routes():
+            if any(info.path.startswith(p) for p in _EXEMPT_PREFIXES):
                 continue
-            if path.startswith("/api/health") or path.startswith("/api/webhooks"):
-                assert clerk_auth.verify_clerk_session not in _flatten_calls(dependant)
+            url = info.path
+            for name in ids:
+                url = url.replace("{" + name + "}", str(uuid4()))
+            if "{" in url:  # some other parameter name; any value will do
+                url = url.split("{")[0].rstrip("/") + "/x"
+            checked += 1
+            resp = client.request(info.methods[0], url, json={})
+            if resp.status_code != 401:
+                unexpected.append(f"{resp.status_code} {info.label()}")
+        assert checked >= 40, (
+            f"only {checked} routes were exercised, so this sweep is not "
+            "actually testing the gate (#809)"
+        )
+        assert not unexpected, (
+            "these /api routes answered something other than 401 to an "
+            f"unauthenticated request: {unexpected}"
+        )
 
 
 # --- production fail-closed -------------------------------------------------

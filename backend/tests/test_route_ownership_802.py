@@ -27,7 +27,6 @@ contents are irrelevant to it.
 import re
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
-from typing import NamedTuple
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -49,6 +48,11 @@ from app.models import (
 from app.models.coach_chat_message import CoachChatMessage
 from app.models.coach_report import CoachReport
 from app.models.thread import Thread
+from tests._route_table import (
+    api_routes,
+    assert_enumeration_is_not_vacuous,
+    flat_body_params,
+)
 
 # A path parameter naming an owned resource -> the dependencies allowed to
 # resolve it. More than one entry means the routes genuinely differ (a different
@@ -112,88 +116,13 @@ BODY_ID_FIELDS_THAT_ARE_NOT_OWNED_RESOURCES: set[tuple[str, str, str]] = {
 }
 
 
-def _flat_dependency_calls(dependant):
-    """Every callable in a route's resolved dependency tree."""
-    calls = []
-    for sub in dependant.dependencies:
-        calls.append(sub.call)
-        calls.extend(_flat_dependency_calls(sub))
-    return calls
-
-
-def _flat_body_params(dependant):
-    """Every body parameter in a route's dependency tree, including nested ones."""
-    params = list(getattr(dependant, "body_params", None) or [])
-    for sub in dependant.dependencies:
-        params.extend(_flat_body_params(sub))
-    return params
-
-
-class RouteInfo(NamedTuple):
-    """One resolved route: its full URL path, and everything gating it.
-
-    `inherited` holds the dependencies attached at `include_router` time. From
-    FastAPI 0.141 those live on the included router rather than on each route's
-    own dependant, so a guard that only walked `route.dependant` would report a
-    route as unguarded when its router guards it. Carrying them keeps the sweeps
-    correct rather than merely safe-failing.
-    """
-
-    path: str
-    methods: tuple
-    route: object
-    inherited: tuple = ()
-
-    @property
-    def dependant(self):
-        return self.route.dependant
-
-    @property
-    def key(self):
-        return (self.methods[0], self.path)
-
-
-def _walk_routes(routes, prefix, out, inherited=()):
-    """Collect every route with a dependency tree, whatever the router shape.
-
-    FastAPI changed this out from under the obvious implementation. Up to ~0.13x
-    `include_router` FLATTENED the included routes into `app.routes`, so
-    `[r for r in app.routes if isinstance(r, APIRoute)]` found all of them. From
-    0.141 it inserts an opaque `_IncludedRouter` wrapper instead and the real
-    routes live behind `original_router`, with the include-time prefix on
-    `include_context`. The old expression then matches NOTHING — it does not
-    error, it silently returns an empty list, and every sweep built on it becomes
-    a vacuous pass. That is exactly how this file first went green locally
-    (FastAPI 0.128) and green-but-empty in CI (0.141).
-
-    So: handle both shapes, and let `test_route_enumeration_is_complete` prove
-    the result against the public OpenAPI document rather than trusting it.
-    """
-    for route in routes:
-        if getattr(route, "dependant", None) is not None and hasattr(route, "path"):
-            methods = tuple(sorted(getattr(route, "methods", None) or ["GET"]))
-            out.append(RouteInfo(prefix + route.path, methods, route, inherited))
-            continue
-        inner = getattr(route, "original_router", None)
-        if inner is not None:
-            ctx = getattr(route, "include_context", None)
-            attached = tuple(
-                d.dependency for d in (getattr(ctx, "dependencies", None) or [])
-            )
-            _walk_routes(
-                inner.routes,
-                prefix + (getattr(ctx, "prefix", "") or ""),
-                out,
-                inherited + attached,
-            )
-        elif hasattr(route, "routes") and not hasattr(route, "path"):
-            _walk_routes(route.routes, prefix, out, inherited)
-
-
-def _api_routes():
-    out = []
-    _walk_routes(app.routes, "", out)
-    return [info for info in out if info.path.startswith("/api/")]
+# The route walk itself lives in tests/_route_table.py so that every structural
+# sweep in the suite -- this file's ownership guards and the session-gate fence
+# in test_clerk_auth.py -- shares one enumeration and one anti-vacuity check.
+# It was written here first, during #802, when this file's sweep returned 16
+# routes locally and 0 in CI; #809 found the session-gate fence had the same
+# hole and had been passing without inspecting a single route.
+_api_routes = api_routes
 
 
 def _methods(route):
@@ -220,7 +149,7 @@ def _routes_with_path_params():
 
 def _routes_with_body():
     """Every route that accepts a request body, however it is declared."""
-    return [r for r in _api_routes() if _flat_body_params(r.dependant)]
+    return [r for r in _api_routes() if flat_body_params(r.dependant)]
 
 
 def _owned_routes():
@@ -252,19 +181,12 @@ def test_route_enumeration_is_complete():
     So the enumeration is checked against the public OpenAPI document, which is
     the app's own statement of what it serves. If a future version moves the
     furniture again, this fails loudly and the guards stay honest.
+
+    The check itself now lives with the walk in `tests/_route_table.py` (#809),
+    where the session-gate fence shares it; `tests/test_route_table.py` proves
+    it actually fails on an empty or short enumeration.
     """
-    served = {
-        path
-        for path, ops in app.openapi()["paths"].items()
-        if path.startswith("/api/")
-    }
-    enumerated = {info.path for info in _api_routes()}
-    assert served, "the app serves no /api paths at all — something is very wrong"
-    assert served <= enumerated, (
-        "the route sweeps below cannot see routes the app actually serves, so "
-        "they would pass without checking them: "
-        f"{sorted(served - enumerated)}"
-    )
+    assert_enumeration_is_not_vacuous()
 
 
 def test_owned_resource_routes_are_discovered():
@@ -318,7 +240,7 @@ def test_owned_resource_id_is_resolved_in_the_route_signature(route, param, allo
     takes `{activity_id}` and queries the table itself fails here — and a route
     that resolves the wrong resource type fails too.
     """
-    calls = set(_flat_dependency_calls(route.dependant)) | set(route.inherited)
+    calls = route.gating_calls
     assert calls & allowed, (
         f"{_methods(route)} {route.path} takes '{param}' but resolves no "
         f"owned-resource dependency. Declare one of "
@@ -345,7 +267,7 @@ def test_any_path_parameter_route_resolves_ownership(route, params):
     """
     if _route_key(route) in PATH_PARAMS_THAT_ARE_NOT_OWNED_RESOURCES:
         pytest.skip("explicitly declared as not addressing an owned resource")
-    calls = set(_flat_dependency_calls(route.dependant)) | set(route.inherited)
+    calls = route.gating_calls
     assert calls & OWNERSHIP_DEPENDENCIES, (
         f"{_methods(route)} {route.path} takes path parameter(s) {params} "
         "but resolves no ownership dependency from app.api.deps. Either declare "
@@ -363,7 +285,7 @@ def _body_model_fields(route):
     sweep does not go quietly vacuous on a version bump.
     """
     names = {}
-    for param in _flat_body_params(route.dependant):
+    for param in flat_body_params(route.dependant):
         model = getattr(param, "type_", None)
         if model is None:
             model = getattr(getattr(param, "field_info", None), "annotation", None)
@@ -415,7 +337,7 @@ def test_no_route_parses_its_body_twice(route):
     The fix is for the dependency to carry the validated body through; this
     guard is what makes the mistake visible instead of silent.
     """
-    body_params = _flat_body_params(route.dependant)
+    body_params = flat_body_params(route.dependant)
     counts = {}
     for param in body_params:
         counts[param.name] = counts.get(param.name, 0) + 1
