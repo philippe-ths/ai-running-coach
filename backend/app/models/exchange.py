@@ -35,9 +35,13 @@ class Exchange(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=generate_uuid)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
-    block_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("blocks.id"), unique=True, index=True
-    )
+    # `unique=True` alone, deliberately (#839): with `index=True` alongside it
+    # SQLAlchemy emits a UNIQUE INDEX, while the creating migration
+    # (c4d5e6f7a8b9) emitted a UNIQUE CONSTRAINT -- the same guarantee spelled
+    # two ways, which made `alembic check` permanently red and unable to guard
+    # real drift. Postgres backs a unique constraint with a btree index, so the
+    # lookup `index=True` was there for is already served.
+    block_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("blocks.id"), unique=True)
 
     # Lifecycle: set when the opener stage has GENERATED (the exchange has
     # opened and spoken for the block), independent of notification delivery —
