@@ -23,6 +23,19 @@
 // ten of twelve rows and costs the reader the ramp to say something a 8px mark
 // says better.
 //
+// COVERAGE (#842). A week the plan says nothing about used to be one
+// byte-identical `else` branch whether the plan's own span covered it (a real
+// gap) or the week simply fell past however far the plan reaches — and the
+// week detail printed "Shape only, not written yet" for BOTH, an outright
+// false claim for the second: the coach never sketched a week past the plan's
+// end. `week.coverage` now tells the two apart. `empty` still reads as a gap
+// (a faint solid tick, distinct from the sketched week's hollow-dashed one).
+// `beyond_plan` carries no tick at all and its whole row is visually muted —
+// and once the first `beyond_plan` week is reached every later week is one
+// too (the run is contiguous), so a single "Plan ends here" divider drawn
+// right before it is the whole boundary; it only appears when the plan
+// actually ends inside the visible window.
+//
 // EXPANDING A ROW. A week's detail opens IN PLACE under its bar, on a tap. Not a
 // tooltip: this is a phone-first app and hover does not exist on touch. One row
 // at a time, and the panel is inset under the bar rather than replacing it — the
@@ -126,6 +139,32 @@ function describeMix(segments: Segment[]): string {
   return segments.map((s) => `${s.label} ${pct(s.share)}%`).join(", ");
 }
 
+// The Plan column's short word, one per coverage (#842) — the numbers table's
+// four-valued reading of the same state the row's tick and detail panel show.
+const PLAN_COLUMN_TEXT: Record<HorizonWeek["coverage"], string> = {
+  planned: "Sessions",
+  sketched: "Shape only",
+  empty: "Nothing planned",
+  beyond_plan: "Past the end of the plan",
+};
+
+// The week-detail's own sentence, one per coverage (#842). `sketched` keeps
+// the literal "Shape only, not written yet" — now true of sketched weeks
+// alone, since it used to be printed for `beyond_plan` weeks too, which the
+// coach never had a chance to sketch.
+function coverageDetailText(coverage: HorizonWeek["coverage"]): string {
+  switch (coverage) {
+    case "planned":
+      return "Real sessions planned";
+    case "sketched":
+      return "Shape only, not written yet";
+    case "empty":
+      return "Nothing planned this week";
+    case "beyond_plan":
+      return "Past the end of the plan";
+  }
+}
+
 /** One band of the bar: the segments, separated by 2px of the row's surface. */
 function Band({
   segments,
@@ -194,6 +233,7 @@ export default function HorizonChart({
 
   const rows: ReactNode[] = [];
   let lastPhase: string | null = null;
+  let boundaryDrawn = false;
 
   for (const week of horizon.weeks) {
     const disc = disciplineSegments(week.discipline_mix);
@@ -202,6 +242,7 @@ export default function HorizonChart({
     const length = peak > 0 && load > 0 ? Math.min(100, (load / peak) * 100) : 0;
     const open = openWeek === week.week_start;
     const panelId = `horizon-detail-${week.week_start}`;
+    const beyondPlan = week.coverage === "beyond_plan";
 
     if (week.phase && week.phase !== lastPhase) {
       rows.push(
@@ -218,6 +259,26 @@ export default function HorizonChart({
       lastPhase = week.phase;
     }
 
+    // The boundary is drawn once, right before the FIRST beyond_plan week —
+    // every week after it is beyond_plan too, since the run is contiguous.
+    if (beyondPlan && !boundaryDrawn) {
+      rows.push(
+        <div
+          key="plan-boundary"
+          role="separator"
+          aria-label="Plan ends here"
+          className="my-2 flex items-center gap-2"
+        >
+          <span className="h-px flex-1 bg-gray-300 dark:bg-gray-600" aria-hidden="true" />
+          <span className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500">
+            Plan ends here
+          </span>
+          <span className="h-px flex-1 bg-gray-300 dark:bg-gray-600" aria-hidden="true" />
+        </div>,
+      );
+      boundaryDrawn = true;
+    }
+
     // The row's own surface, which is also what shows through the 2px gaps
     // between segments. The current week is tinted, and an open week is tinted
     // again — so the gaps have to be tinted with it or every gap would read as a
@@ -229,9 +290,15 @@ export default function HorizonChart({
         ? "bg-blue-50 dark:bg-blue-950/50"
         : "bg-white dark:bg-gray-800";
 
+    // Same single source as the detail panel (#842). A screen reader used to
+    // hear a flat "nothing planned" for any week with no load, which is a lie
+    // for a SKETCHED week whose shape carries no target load — the very
+    // two-independent-load-checks contradiction fixed in `WeekDetail` below,
+    // left in the aria path. One function, so the two cannot disagree again.
+    const zeroLoadCopy = coverageDetailText(week.coverage).toLowerCase();
     const summary = [
       `Week of ${formatDateLabel(week.week_start)}`,
-      load > 0 ? `${Math.round(load)} load` : "nothing planned",
+      load > 0 ? `${Math.round(load)} load` : zeroLoadCopy,
       week.running_distance_m ? `${km(week.running_distance_m)} km running` : null,
       disc.length ? `discipline: ${describeMix(disc)}` : null,
       intent.length ? `intent: ${describeMix(intent)}` : null,
@@ -248,6 +315,13 @@ export default function HorizonChart({
           aria-label={summary}
           title={summary}
           onClick={() => setOpenWeek(open ? null : week.week_start)}
+          // A beyond_plan row is NOT dimmed with opacity. It reads as past the
+          // plan already: no tick, no bar, an em dash for km, and the "Plan
+          // ends here" divider directly above it. Fading it as well cost the
+          // one thing on the row that still carries information — the week's
+          // date sits at text-gray-500 (4.83:1) and `opacity-50` drove it to
+          // 1.97:1, under the 4.5:1 floor, in the same batch as #843's
+          // contrast fix.
           className={`group w-full rounded-sm py-1 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${surface}`}
         >
           <span className={ROW_GRID}>
@@ -261,14 +335,20 @@ export default function HorizonChart({
               {formatDateLabel(week.week_start)}
             </span>
 
-            {/* Solid = real sessions, hollow = shape only. A tick rather than a
-                fade: fading the sketched weeks washes out most of the chart. */}
+            {/* Solid = real sessions, hollow-dashed = shape only, a faint dot =
+                a gap the plan says nothing about, no tick at all = past the
+                plan's own end (#842). A tick rather than a fade for the first
+                three: fading every non-planned row washes out most of the
+                chart, which is exactly why `beyond_plan` gets no mark instead —
+                its whole row is already muted below. */}
             <span className="flex justify-center" aria-hidden="true">
-              {week.planned ? (
+              {week.coverage === "planned" ? (
                 <span className="h-2 w-2 rounded-full bg-gray-600 dark:bg-gray-300" />
-              ) : (
+              ) : week.coverage === "sketched" ? (
                 <span className="block h-2 w-2 rounded-full border border-dashed border-gray-400 dark:border-gray-500" />
-              )}
+              ) : week.coverage === "empty" ? (
+                <span className="h-1 w-1 rounded-full bg-gray-300 dark:bg-gray-600" />
+              ) : null}
             </span>
 
             <span
@@ -411,9 +491,11 @@ export default function HorizonChart({
         )}
         <p className="pt-1 text-[11px] text-gray-400 dark:text-gray-500">
           Bar length is the week&rsquo;s load against your biggest week. Solid tick =
-          real sessions, hollow tick = shape only. The number on the right is
-          running km, so a long bar beside a small number is a week you cross-train.
-          Tap any week for its detail.
+          real sessions, hollow tick = shape only, faint dot = nothing planned.
+          Rows past a &ldquo;Plan ends here&rdquo; line carry no tick at all — your
+          coach has not reached that far yet. The number on the right is running
+          km, so a long bar beside a small number is a week you cross-train. Tap
+          any week for its detail.
         </p>
       </div>
 
@@ -452,10 +534,30 @@ function WeekDetail({
 }) {
   const load = week.effort_score ?? 0;
   const share = peak > 0 && load > 0 ? Math.round((load / peak) * 100) : 0;
+  const beyondPlan = week.coverage === "beyond_plan";
+  // One status line per coverage (#842) — the load figure and the coverage
+  // sentence used to be printed as two independent load>0 checks, which meant
+  // a zero-load week could read "Nothing planned" right next to "Shape only,
+  // not written yet" for the very same week. `coverageDetailText` is now the
+  // single source of that sentence, so the two can never disagree.
+  // Italic, not faint: italic distinguishes without spending contrast, and the
+  // sentence still has to be readable (text-gray-400 is 2.54:1 on this panel,
+  // under the 4.5:1 floor — see the row button above).
+  const coverageClass =
+    week.coverage === "planned"
+      ? "text-gray-600 dark:text-gray-300"
+      : beyondPlan
+        ? "italic text-gray-500 dark:text-gray-400"
+        : "text-gray-500 dark:text-gray-400";
 
   return (
     <div
       id={id}
+      // No opacity here either, for the reason given on the row button: the
+      // panel is all 11px text, and `opacity-70` drove the coverage sentence
+      // to 2.70:1 and the phase heading to 4.28:1, both under the 4.5:1 floor.
+      // "Past the end of the plan" is the sentence #842 exists to say, so it
+      // is the last thing that should be hard to read. Italic carries it.
       className="ml-[4rem] mr-[1rem] mt-1 rounded-md border-l-2 border-gray-300 bg-gray-50 px-3 py-2.5 text-[11px] dark:border-gray-600 dark:bg-gray-900/50"
     >
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
@@ -466,27 +568,15 @@ function WeekDetail({
           <span className="font-mono tabular-nums">{km(week.running_distance_m)}</span> km
           running
         </span>
-        <span className="text-gray-600 dark:text-gray-300">
-          {load > 0 ? (
-            <>
-              <span className="font-mono tabular-nums">{Math.round(load)}</span> load
-              {" · "}
-              <span className="font-mono tabular-nums">{share}%</span> of your biggest
-              week
-            </>
-          ) : (
-            "Nothing planned"
-          )}
-        </span>
-        <span
-          className={
-            week.planned
-              ? "text-gray-600 dark:text-gray-300"
-              : "text-gray-500 dark:text-gray-400"
-          }
-        >
-          {week.planned ? "Real sessions planned" : "Shape only, not written yet"}
-        </span>
+        {load > 0 && (
+          <span className="text-gray-600 dark:text-gray-300">
+            <span className="font-mono tabular-nums">{Math.round(load)}</span> load
+            {" · "}
+            <span className="font-mono tabular-nums">{share}%</span> of your biggest
+            week
+          </span>
+        )}
+        <span className={coverageClass}>{coverageDetailText(week.coverage)}</span>
       </div>
 
       <dl className="mt-2 space-y-1">
@@ -613,7 +703,7 @@ function HorizonTable({
                     {week.is_current && " (this week)"}
                   </th>
                   <td className={cell}>{week.phase ?? "—"}</td>
-                  <td className={cell}>{week.planned ? "Sessions" : "Shape only"}</td>
+                  <td className={cell}>{PLAN_COLUMN_TEXT[week.coverage]}</td>
                   <td className={`${cell} whitespace-nowrap font-mono tabular-nums`}>
                     {load > 0 ? `${share}% of peak` : "—"}
                   </td>

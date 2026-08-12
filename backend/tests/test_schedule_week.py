@@ -333,6 +333,39 @@ def test_the_weeks_rules_and_the_violation_they_cannot_absorb_are_both_reported(
     assert [rule.kind for rule in week.rules] == ["no_intent_day_before"]
     assert [v.kind for v in week.violations] == ["no_intent_day_before"]
     assert week.violations[0].label == "No quality run the day before the long run"
+    # #844: both the rule and its violation carry the derived STATEMENT
+    # alongside the coach's label, and the two are not the same text here.
+    assert week.rules[0].statement == "No quality session the day before a long session."
+    assert week.violations[0].statement == week.rules[0].statement
+
+
+def test_844_a_misleading_label_cannot_make_its_own_rule_statement_permissive(db):
+    """The real incident: a `rest_day_after` rule whose stored label invites a
+    walk must still present a statement that forbids one — the statement is
+    derived from `kind`/`intent`, never from `label`."""
+    user = _seed_user(db)
+    plan = _seed_plan(
+        db,
+        user,
+        rules=[
+            {
+                "kind": "rest_day_after",
+                "label": "Full rest or easy walk only the day after the long run",
+                "intent": "long",
+            }
+        ],
+    )
+    _seed_session(db, plan, start=SAT, intent="long", title="Long run")
+    _seed_session(db, plan, start=SUN, intent="easy", discipline="walk", title="Walk")
+
+    week = build_week(db, user, today=MON)
+
+    assert len(week.rules) == 1
+    assert "walk" not in week.rules[0].statement.lower()
+    assert week.rules[0].statement == "Nothing but rest the day after a long session."
+    assert [v.kind for v in week.violations] == ["rest_day_after"]
+    assert "walk" not in week.violations[0].statement.lower()
+    assert week.violations[0].statement == week.rules[0].statement
 
 
 def test_an_off_shape_stored_rule_is_dropped_rather_than_taking_down_the_week(db):

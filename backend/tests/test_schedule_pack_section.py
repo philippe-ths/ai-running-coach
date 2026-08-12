@@ -236,8 +236,17 @@ def test_a_finished_session_is_counted_but_never_listed_as_outstanding(db):
 
 
 def test_the_rules_ride_along_so_advice_does_not_contradict_the_plan(db):
-    """The coach wrote "a full rest day after the long run"; it should not then
-    tell the runner to train tomorrow."""
+    """The plan forbids training the day after the long run; the coach should
+    not then tell the runner to train tomorrow.
+
+    What rides is the DERIVED statement, not the coach's own `label` (#844).
+    The label below is the real one from a live plan, and it permits something
+    its predicate forbids. Sending it here would leave the runner reading one
+    rule on their schedule screen and the coach reasoning from another — a
+    disagreement worse than both being wrong together, and live under
+    `coach_message_lean_grouped_v9`.
+    """
+    misleading = "Full rest or easy cross-training only the day after the long run"
     user = _seed_user(db)
     plan = _seed_plan(
         db,
@@ -245,7 +254,7 @@ def test_the_rules_ride_along_so_advice_does_not_contradict_the_plan(db):
         rules=[
             {
                 "kind": "rest_day_after",
-                "label": "A full rest day after the long run",
+                "label": misleading,
                 "intent": "long",
                 "source": "coach",
             }
@@ -256,7 +265,9 @@ def test_the_rules_ride_along_so_advice_does_not_contradict_the_plan(db):
 
     section = build_schedule_context(db, activity)
 
-    assert section.rules_in_play == ["A full rest day after the long run"]
+    assert section.rules_in_play == ["Nothing but rest the day after a long session."]
+    assert misleading not in section.rules_in_play
+    assert "cross-training" not in " ".join(section.rules_in_play)
 
 
 # --- byte-stability ----------------------------------------------------------
