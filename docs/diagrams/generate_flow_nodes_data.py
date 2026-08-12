@@ -12,10 +12,11 @@ actually receives at the chosen prompt version. The hand-authored NODES / fate m
 helpers below the data in flow-nodes.js are left untouched.
 
 Usage:
-    python docs/diagrams/generate_flow_nodes_data.py                  # newest good activity, live prod prompt (lean_v1)
+    python docs/diagrams/generate_flow_nodes_data.py                  # newest good activity, the configured COACH_PROMPT_ID
     PROMPT_ID=coach_message_v14 ACTIVITY_ID=<uuid> python ...         # pin both (e.g. to a specific prompt / activity)
 
-Read-only against the DB; rewrites only the two generated lines of flow-nodes.js.
+Read-only against the DB; rewrites the two generated lines of flow-nodes.js plus the
+pack-shape.json sidecar (#763: the pack key set the drift guard pins the diagram to).
 Local DB only.
 """
 from __future__ import annotations
@@ -47,21 +48,27 @@ from app.services.coach.service import (  # noqa: E402
     _resolve_voice_for_activity,
 )
 
-# Default to the live prod prompt so the diagram is a one-to-one picture of what the
-# coach actually receives in production. Prod flipped to coach_message_lean_grouped_v5
-# on 2026-07-14 (the ADR 0026 finale): the SAME canonical pack as lean_v1, but served
-# GROUPED into the five coaching-question groups through the completed coach-native LLM
-# view (coach units, one merged intensity_read + interval_read, readiness verdict-only,
-# salience dropped from the fuller view). So DATA.pack captures the flat canonical
-# SUBSTRATE (to_serializable_dict — what the read-time builders compute and store, and
-# what the flat pack nodes render), while DATA.llm_view captures the ACTUAL grouped
-# message the model receives (coach_llm_view over to_grouped_dict), shown at the llm
-# node. Under grouped_v5 the flat substrate itself already carries the grouped-era
-# sections (readiness / recent_weeks / intensity_read / intensity_mix) and drops the
-# flat originals they replace (training_load / training_volume / recent_training /
-# perceived_effort / calibration / intensity). pack.memory is absent only when the
-# runner has no graduated runner_memory profile yet (cold start drops the section).
-PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_lean_grouped_v5")
+# The prompt the capture is taken under, defaulting to the CONFIGURED one so the
+# diagram is a one-to-one picture of what the coach actually receives. Deliberately
+# not a literal: a hardcoded id rots silently, and this one sat at grouped_v5 while
+# prod ran grouped_v9, so regenerating without setting PROMPT_ID would have
+# downgraded the capture to a pack prod does not send, with nothing to catch it.
+# The drift guard now also compares the captured prompt against .env.example's
+# prod-parity COACH_PROMPT_ID, so a mismatch fails loudly from either direction.
+#
+# Under the grouped prompts (ADR 0026 onward) there are two shapes worth keeping
+# straight, and the diagram shows both. DATA.pack is the flat canonical SUBSTRATE
+# (to_serializable_dict — what the read-time builders compute and store, and what
+# the flat pack nodes render). DATA.llm_view is the ACTUAL grouped message the
+# model receives (coach_llm_view over to_grouped_dict), shown at the llm node:
+# coach-native units, one merged intensity_read + interval_read, readiness reduced
+# to its verdict, salience dropped from the fuller view. The flat substrate itself
+# carries the grouped-era sections (readiness / recent_weeks / intensity_read /
+# intensity_mix) and drops the flat originals they replace (training_load /
+# training_volume / recent_training / perceived_effort / calibration / intensity).
+# pack.memory is absent only when the runner has no graduated runner_memory profile
+# yet, and pack.schedule only when they have no active plan.
+PROMPT_ID = os.environ.get("PROMPT_ID") or settings.COACH_PROMPT_ID
 TARGET = Path(__file__).parent / "flow-nodes.js"
 
 # DerivedMetric columns the diagram shows (order = render order; excludes id / fks /
@@ -311,6 +318,16 @@ def main():
     finally:
         db.close()
     _rewrite(data, system_prompt)
+    # #763: record the pack's declared key set alongside the capture. The drift guard diffs
+    # the live declaration against this file, so a field added INSIDE an existing section
+    # (the #742 `profile.body` case, which every root-level check missed) fails
+    # `make diagram-check` until the diagram is regenerated. Written HERE rather than by a
+    # flag on the guard, so the only way to refresh it is the regenerate the rule already
+    # requires. Import is deferred: the guard lives beside this script, not on sys.path.
+    sys.path.insert(0, str(Path(__file__).parent))
+    from check_diagram_drift import write_pack_shape  # noqa: E402
+
+    shape_path = write_pack_shape()
     pack_sections = list(data["pack"].keys())
     print(f"regenerated flow-nodes.js from activity {activity.id} ({activity.name})")
     def _has(k):
@@ -321,6 +338,7 @@ def main():
           f"intensity_read={_has('intensity_read')} stream_view={_has('stream_view')}")
     print(f"  llm_view top-level keys ({len(llm_sections)}): {llm_sections}")
     print(f"  system prompt: {len(system_prompt):,} chars")
+    print(f"  recorded pack key set -> {shape_path.name}")
 
 
 if __name__ == "__main__":
