@@ -62,9 +62,11 @@ verify-local:
 	trap "kill $$BACK_PID 2>/dev/null" EXIT INT TERM; \
 	( cd frontend && NEXT_PUBLIC_LOCAL_NO_AUTH=true npm run dev )
 
-# Drift guard for the ai-flow-graph data-flow diagram: fails if a CoachContextPack
-# section or a DerivedMetric column has no representation in flow-nodes.js. Also runs
-# automatically in the backend-test suite (backend/tests/test_diagram_drift.py).
+# Drift guard for BOTH data-flow diagrams: fails if a CoachContextPack section or a
+# DerivedMetric column has no representation in flow-nodes.js, or if the conversational
+# coach's declared surface (its tools, skills, proposed actions, screen keys, prompt slots
+# and baseline sections) has moved without coach-chat-nodes.js being regenerated (#855).
+# Also runs automatically in the backend-test suite (backend/tests/test_diagram_drift.py).
 diagram-check:
 	cd backend && $(BACKEND_PY) ../docs/diagrams/check_diagram_drift.py
 

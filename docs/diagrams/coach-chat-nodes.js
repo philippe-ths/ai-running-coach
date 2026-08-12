@@ -205,6 +205,16 @@ function isFirstTurn(){ const a = selectedTurn(); return !!a && a.i <= 1; }
 
 const slotPresent = k => { const c = conv(); return c ? !!(c.present||{})[k] : null; };
 const _B    = () => (conv()||{}).builders || {};
+/* The schedule read (#856) is per-RUNNER, not per-thread, so a conversation captured
+   before it reached the per-thread builders falls back to the turn-level capture of the
+   SAME runner — the same value, never a substitute. Three states, all meaningful:
+   `undefined` = the key was absent, i.e. COACH_SCHEDULE_ENABLED is off and the coach was
+   not given the schedule at all; `null` = the runner has no active plan; an object = the
+   plan as the coach received it. */
+const _SCHED = () => { const b=_B();
+  if(b && 'schedule' in b) return b.schedule;
+  const a=(_CAP().builders)||{};
+  return ('schedule' in a) ? a.schedule : undefined; };
 const _RUNS = () => (conv()||{}).tool_runs || {};
 
 const _DETAIL_TO_WINDOW = {
@@ -498,6 +508,14 @@ const NODES = [
     + jsonHTML(keys.map(k=>({call:k,
         rows:(runs[k].result||{}).count ?? ((runs[k].result||{}).totals||{}).sessions ?? null})), false); } },
 
+{ id:'t_plan', layer:'baseline', kind:'store', tag:'table',
+  title:'TrainingPlan + PlannedSession', path:'app/models/training_plan.py',
+  from:[],
+  body:()=> { const s=_SCHED();
+    if(s===undefined) return none('COACH_SCHEDULE_ENABLED is off — the plan was never read.');
+    return s===null ? none('No active plan row for this runner.')
+                    : head('the active plan, as read') + jsonHTML(s, false); } },
+
 { id:'d_profile', layer:'baseline', kind:'code', tag:'builder',
   title:'_profile_dict', path:'thread_turn.py',
   from:['t_profile'],
@@ -512,6 +530,20 @@ const NODES = [
   title:'build_readiness', path:'services/readiness.py',
   from:['t_activity'],
   body:()=> head('output') + show(_B().readiness, 'returned nothing.', {tall:false}) },
+
+/* #856. The runner's own plan, told to the conversational coach for the first time.
+   The KEY's presence says the coach was given the schedule at all; a null inside it
+   says the runner has no plan — a fact the coach is told in words, because silence is
+   what it previously read as "the schedule lives somewhere else". */
+{ id:'d_schedule', layer:'baseline', kind:'code', tag:'builder',
+  title:'build_thread_schedule', path:'services/schedule/coach_view.py',
+  from:['t_plan'],
+  body:()=> { const s=_SCHED();
+    if(s===undefined)
+      return none('Absent — COACH_SCHEDULE_ENABLED is off, so the coach is not given the schedule.');
+    return head('output') + (s===null
+      ? none('null — the runner has no active plan. The coach is told so in words.')
+      : jsonHTML(s, false)); } },
 
 { id:'d_anchor', layer:'baseline', kind:'code', tag:'builder',
   title:'_render_anchor_block', path:'thread_turn.py',
@@ -557,10 +589,18 @@ const NODES = [
   body:()=> head('slot value') + show(_B().profile, 'empty.', {tall:false}) },
 
 { id:'s_baseline', layer:'prompt', kind:'code', tag:'slot 2', title:'{baseline_block}',
-  path:'conditional', from:['d_memory','d_readiness'],
-  body:()=> { const b=_B(), parts=[];
+  path:'conditional', from:['d_memory','d_readiness','d_schedule'],
+  body:()=> { const b=_B(), s=_SCHED(), parts=[];
     if(b.memory) parts.push('MEMORY — what this runner has told you (their memory profile):\n'+JSON.stringify(b.memory));
     if(b.readiness) parts.push('CURRENT CONDITION (deterministic readiness read):\n'+JSON.stringify(b.readiness));
+    /* #856: the schedule block is emitted whenever the key is PRESENT, including when
+       the runner has no plan — the no-plan case is stated rather than left silent. */
+    if(s!==undefined) parts.push(s===null
+      ? 'THEIR SCHEDULE (this app’s Schedule screen — yours to write, not somewhere else):\n'
+        + 'They have no active plan. If the conversation settles what their training should '
+        + 'look like, you can put it there.'
+      : 'THEIR SCHEDULE (this app’s Schedule screen — yours to write; what was ASKED FOR, '
+        + 'never a compliance score):\n'+JSON.stringify(s));
     return head('slot value') + show(parts.join('\n\n'), 'empty.', {text:true}); } },
 
 { id:'s_anchor', layer:'prompt', kind:'code', tag:'slot 3', title:'{anchor_block}',
