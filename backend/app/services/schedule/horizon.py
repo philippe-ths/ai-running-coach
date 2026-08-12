@@ -22,6 +22,7 @@ from app.models.user import User
 from app.schemas.schedule import GoalRaceRead, HorizonWeek, ScheduleHorizonRead
 from app.services.schedule import store
 from app.services.schedule.placement import WEEK_LENGTH_DAYS
+from app.services.schedule.planned_distance import planned_distance_m
 from app.services.weeks import resolve_week_start, week_start
 
 DEFAULT_HORIZON_WEEKS = 12
@@ -60,7 +61,10 @@ def _week_from_sessions(sessions: List[Any]) -> Dict[str, Any]:
         )
         by_intent[session.intent] = by_intent.get(session.intent, 0.0) + effort
         if session.discipline == "run":
-            running_distance += session.target_distance_m or 0.0
+            # Rep-structured runs count their work here too (#876), so the
+            # three-month view does not repeat the week headline's gap across
+            # every week of the block.
+            running_distance += planned_distance_m(session)
     return {
         "running_distance_m": running_distance,
         "effort_score": load,

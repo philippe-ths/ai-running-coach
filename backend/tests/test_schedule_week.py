@@ -67,6 +67,7 @@ def _seed_session(
     title: str = "Session",
     target_distance_m: float = None,
     target_effort_score: float = None,
+    structure: dict = None,
     completed_at: datetime = None,
     dismissed_at: datetime = None,
 ) -> PlannedSession:
@@ -80,6 +81,7 @@ def _seed_session(
         commitment=commitment,
         title=title,
         target_distance_m=target_distance_m,
+        structure=structure,
         target_effort_score=target_effort_score,
         completed_at=completed_at,
         dismissed_at=dismissed_at,
@@ -271,6 +273,82 @@ def test_the_planned_running_headline_counts_committed_runs_only(db):
     assert week.has_plan is True
     assert week.plan_id == plan.id
     assert week.headline.planned_running_distance_m == 10000
+
+
+def test_a_rep_structured_run_carries_its_distance_into_the_headline(db):
+    """An interval session's work is `reps x rep_distance`, and it counts.
+
+    Rep structure is a first-class way to SIZE a run: `plan_validator` accepts it
+    in place of a distance precisely because "6 x 400m off 90s" is a fully
+    specified session a coach would never also write as a total, and demanding a
+    total rejected real interval sessions. But the headline only ever summed
+    `target_distance_m`, so every one of those sessions landed in the week as
+    zero km -- the runner's own week read 23.5 km with a 6 x 400m in it, and the
+    2.4 km of work was nowhere.
+
+    The reps are the WORK, not the session: the warm-up and cool-down live in
+    prose and are deliberately not counted, because nothing structured states
+    them and inventing a number for them would be the app making up distance.
+    """
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan, start=TUE, discipline="run", target_distance_m=5000)
+    _seed_session(
+        db,
+        plan,
+        start=WED,
+        end=FRI,
+        discipline="run",
+        intent="quality",
+        title="Intervals: 6x400m @ 4:30/km",
+        structure={"reps_planned": 6, "rep_distance_m": 400.0, "rest_s": 90.0},
+    )
+
+    week = build_week(db, user, today=MON)
+
+    assert week.headline.planned_running_distance_m == 7400
+
+
+def test_a_rep_structured_run_that_also_states_a_total_is_not_double_counted(db):
+    """`target_distance_m` wins when both are present.
+
+    A coach who writes a total has stated the whole session -- warm-up and
+    cool-down included -- so adding the reps on top would count the work twice.
+    """
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db,
+        plan,
+        start=WED,
+        discipline="run",
+        intent="quality",
+        target_distance_m=9000,
+        structure={"reps_planned": 6, "rep_distance_m": 400.0},
+    )
+
+    week = build_week(db, user, today=MON)
+
+    assert week.headline.planned_running_distance_m == 9000
+
+
+def test_reps_with_no_rep_distance_add_nothing_to_the_headline(db):
+    """"6 reps" with no distance on them is not a distance, and is not guessed."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan, start=TUE, discipline="run", target_distance_m=5000)
+    _seed_session(
+        db,
+        plan,
+        start=WED,
+        discipline="run",
+        intent="quality",
+        structure={"reps_planned": 6, "rest_s": 90.0},
+    )
+
+    week = build_week(db, user, today=MON)
+
+    assert week.headline.planned_running_distance_m == 5000
 
 
 # --- ONE definition of a run ----------------------------------------------

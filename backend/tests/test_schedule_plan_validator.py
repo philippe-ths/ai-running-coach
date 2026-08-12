@@ -489,6 +489,41 @@ def test_the_volume_ceiling_fires_above_twice_the_runners_own_norm():
     assert "km of running against a typical" in _failures(check)
 
 
+def test_the_volume_ceiling_counts_rep_structured_running():
+    """#876: the ceiling used to read `target_distance_m` alone, so an interval
+    week's hardest running scored zero against it.
+
+    That failed PERMISSIVE — the one check meant to catch an absurd week was
+    blind to exactly the sessions most able to make one. The reps here clear the
+    ceiling on their own, and nothing in the week states a total distance.
+    """
+    norm = 20000.0
+    reps = 50
+    plan = _plan(
+        weeks=[
+            _week(
+                MON,
+                [
+                    _session(
+                        window_start=TUE,
+                        window_end=TUE,
+                        title="Absurd intervals",
+                        intent="quality",
+                        target_distance_m=None,
+                        reps_planned=reps,
+                        rep_distance_m=(norm * MAX_WEEKLY_MULTIPLE + 1000) / reps,
+                    )
+                ],
+            )
+        ]
+    )
+
+    check = validate_drafted_plan(plan, today=MON, norm_weekly_running_m=norm)
+
+    assert check.ok is False
+    assert "km of running against a typical" in _failures(check)
+
+
 def test_a_bold_but_not_absurd_week_is_left_alone():
     """No 10% rule and no cap on quality sessions live here. Whether this week is
     right for this runner is the judgment the coach is FOR."""
