@@ -521,12 +521,12 @@ const NODES = [
   from:['t_profile'],
   body:()=> head('output') + show(_B().profile, 'no profile row.', {tall:false}) },
 
-{ id:'d_memory', layer:'baseline', kind:'memory', tag:'builder',
+{ id:'d_memory', layer:'baseline', kind:'memory', tag:'builder', section:'memory',
   title:'get_memory', path:'memory_store.get_memory',
   from:['t_memory'],
   body:()=> head('output') + show(_B().memory, 'no graduated memory profile.') },
 
-{ id:'d_readiness', layer:'baseline', kind:'code', tag:'builder',
+{ id:'d_readiness', layer:'baseline', kind:'code', tag:'builder', section:'readiness',
   title:'build_readiness', path:'services/readiness.py',
   from:['t_activity'],
   body:()=> head('output') + show(_B().readiness, 'returned nothing.', {tall:false}) },
@@ -535,7 +535,7 @@ const NODES = [
    The KEY's presence says the coach was given the schedule at all; a null inside it
    says the runner has no plan — a fact the coach is told in words, because silence is
    what it previously read as "the schedule lives somewhere else". */
-{ id:'d_schedule', layer:'baseline', kind:'code', tag:'builder',
+{ id:'d_schedule', layer:'baseline', kind:'code', tag:'builder', section:'schedule',
   title:'build_thread_schedule', path:'services/schedule/coach_view.py',
   from:['t_plan'],
   body:()=> { const s=_SCHED();

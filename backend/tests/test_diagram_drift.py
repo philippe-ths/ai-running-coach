@@ -24,15 +24,20 @@ from pathlib import Path
 _DIAGRAMS = Path(__file__).resolve().parents[2] / "docs" / "diagrams"
 sys.path.insert(0, str(_DIAGRAMS))
 
+import check_diagram_drift  # noqa: E402
 from check_diagram_drift import (  # noqa: E402
     _CHAT_NODES,
+    _baseline_extractor_problems,
     _chat_blob,
     _chat_capture_problems,
+    _chat_content_problems,
     _chat_node_problems,
     _chat_nodes,
     _chat_surface_problems,
     _declared_baseline_sections,
+    _declared_chat_content,
     _declared_chat_surface,
+    _recorded_chat_content,
     _declared_pack_key_paths,
     _diagram_captured_prompt_id,
     _env_example_prompt_id,
@@ -274,12 +279,15 @@ def test_the_node_check_fails_when_a_baseline_section_has_no_builder_node():
     """SENSITIVITY, against the REAL defect this check found on arrival: #856 started
     handing the conversational coach the runner's schedule and the diagram drew no node
     for it, so the runner's plan reached the model invisibly."""
+    sections = _declared_baseline_sections()
+    assert "schedule" in sections, "the #856 section moved; pick another"
+    # the diagram as it was before this guard existed: the node simply not there
     nodes = [n for n in _real_chat_nodes() if n["id"] != "d_schedule"]
 
-    problems = _chat_node_problems(_declared_chat_surface(), ["memory", "schedule"], nodes)
+    problems = _chat_node_problems(_declared_chat_surface(), sections, nodes)
 
     assert problems, "the node check did not notice an undrawn baseline section"
-    assert "schedule" in problems[0] and "d_schedule" in problems[0]
+    assert "['schedule']" in problems[0]
 
 
 def test_the_node_check_fails_when_a_prompt_slot_has_no_node():
@@ -336,3 +344,146 @@ def test_the_chat_capture_check_fails_on_a_template_only_capture():
     problems = _chat_capture_problems(blob)
 
     assert problems and "TEMPLATE-ONLY" in problems[0]
+
+
+# --- the content half: names are not the whole of what the coach reads ------
+
+
+def test_the_chat_diagram_reproduces_the_prompt_and_tool_text_the_code_holds():
+    blob = _chat_blob(_CHAT_NODES.read_text())
+
+    problems = _chat_content_problems(_declared_chat_content(), _recorded_chat_content(blob))
+
+    assert not problems, "\n".join(f"  - {p}" for p in problems)
+
+
+def test_the_content_check_fails_when_a_safety_rule_is_reworded_in_the_prompt():
+    """SENSITIVITY, and the sharpest case for checking content rather than only names: the
+    conversation's medical-scope rule could be inverted in the code while the diagram went
+    on showing the old wording, with every name-level set still matching."""
+    declared = _declared_chat_content()
+    label = "the system prompt template"
+    assert "NEVER diagnose" in declared[label]
+    declared[label] = declared[label].replace("NEVER diagnose", "feel free to diagnose")
+
+    problems = _chat_content_problems(
+        declared, _recorded_chat_content(_chat_blob(_CHAT_NODES.read_text()))
+    )
+
+    assert problems, "the content check did not notice a reworded safety rule"
+    assert "system prompt template" in problems[0]
+
+
+def test_the_content_check_fails_when_a_tool_description_is_rewritten():
+    """A tool's description is what tells the model when to reach for it, so rewriting one
+    changes the coach's behaviour as surely as adding a tool does."""
+    declared = _declared_chat_content()
+    label = "the tool definitions (description + input schema)"
+    declared[label] = [dict(t) for t in declared[label]]
+    declared[label][0]["description"] = "something else entirely"
+
+    problems = _chat_content_problems(
+        declared, _recorded_chat_content(_chat_blob(_CHAT_NODES.read_text()))
+    )
+
+    assert problems and "tool definitions" in problems[0]
+
+
+def test_the_content_check_fails_when_a_content_extractor_reads_back_empty():
+    declared = _declared_chat_content()
+    declared["the coaching skill procedures"] = []
+
+    problems = _chat_content_problems(
+        declared, _recorded_chat_content(_chat_blob(_CHAT_NODES.read_text()))
+    )
+
+    assert problems and "EXTRACTOR BROKE" in problems[0]
+
+
+# --- both directions, and an extractor that refuses what it cannot read -----
+
+
+def test_the_node_check_fails_when_a_node_draws_a_section_the_coach_lost():
+    """Drift the other way round from #856: a baseline section removed from the builder
+    leaves its node drawing an input the conversational coach no longer receives. Checked
+    through the node's explicit `section:` binding, because `d_*` is the id prefix for every
+    baseline builder and only some of those correspond to a section."""
+    problems = _chat_node_problems(
+        _declared_chat_surface(), ["memory", "readiness"], _real_chat_nodes()
+    )
+
+    assert problems and "schedule" in problems[0]
+
+
+def test_the_baseline_section_reader_refuses_a_write_form_it_cannot_read(tmp_path, monkeypatch):
+    """SENSITIVITY against PARTIAL blindness, which is worse than total: an extractor that
+    understands `sections["x"] = ...` and silently ignores `sections.update(...)` would let
+    a section through while the empty-set check stayed quiet. Feeds the reader a builder
+    written the other way and asserts it refuses rather than under-reporting."""
+    source = (
+        "def _build_baseline_sections(db, user):\n"
+        "    sections: dict = {}\n"
+        '    sections["memory"] = 1\n'
+        '    sections.update({"races": 2})\n'
+        "    return sections\n"
+    )
+    probe = tmp_path / "thread_turn_probe.py"
+    probe.write_text(source)
+    monkeypatch.setattr(check_diagram_drift, "_THREAD_TURN", probe)
+
+    problems = _baseline_extractor_problems()
+    keys = _declared_baseline_sections()
+
+    assert keys == ["memory"], "the probe's second section is invisible, as expected"
+    assert problems and "EXTRACTOR BROKE" in problems[0] and "update" in problems[0]
+
+
+def test_the_live_baseline_builder_is_written_in_a_form_the_reader_understands():
+    assert _baseline_extractor_problems() == []
+
+
+# --- the wiring itself: a check that is written but not called is no check ---
+#
+# Every test above calls the pure comparison functions directly, so all of them would stay
+# green if check_drift() simply stopped calling them — and the script's success message
+# would go on claiming coverage it was not performing. That is the same shape as the bug
+# #855 is about, one level up, so the wiring gets its own tests.
+
+
+def test_check_drift_actually_runs_the_chat_surface_and_node_checks(monkeypatch):
+    """Make the LIVE conversational surface disagree with the diagram and assert the
+    top-level guard reports it, which it can only do if it calls the checks."""
+    surface = _declared_chat_surface()
+    surface["tools"] = sorted(surface["tools"] + ["get_race_predictions"])
+    monkeypatch.setattr(check_diagram_drift, "_declared_chat_surface", lambda: surface)
+
+    problems = check_drift()
+
+    assert any("get_race_predictions" in p for p in problems), problems
+    assert any("NO node" in p for p in problems), problems
+
+
+def test_check_drift_actually_runs_the_chat_content_and_capture_checks(monkeypatch):
+    content = _declared_chat_content()
+    content["the system prompt template"] = content["the system prompt template"] + " drift"
+    monkeypatch.setattr(check_diagram_drift, "_declared_chat_content", lambda: content)
+    monkeypatch.setattr(
+        check_diagram_drift,
+        "_chat_capture_problems",
+        lambda blob: ["capture check ran"],
+    )
+
+    problems = check_drift()
+
+    assert any("system prompt template" in p for p in problems), problems
+    assert "capture check ran" in problems
+
+
+def test_check_drift_actually_runs_the_baseline_extractor_check(monkeypatch):
+    monkeypatch.setattr(
+        check_diagram_drift,
+        "_baseline_extractor_problems",
+        lambda: ["EXTRACTOR BROKE: probe"],
+    )
+
+    assert "EXTRACTOR BROKE: probe" in check_drift()

@@ -55,6 +55,11 @@ it — a reader saw one green guard and reasonably assumed both diagrams were co
      mint, the screens a pointer can name, and the system prompt's slots. Those declarations
      must match the ones RECORDED in the committed CHAT blob. See _recorded_chat_surface for
      why the blob itself is the record here and no pack-shape.json-style sidecar is added.
+     The names are only half of it, so the same comparison also runs over the CONTENT the
+     blob reproduces verbatim — the system prompt's prose, each tool's description and
+     input schema, each coaching skill's procedure, the authority-tiering briefings and the
+     floor's canned answers. Without that half, RULE 2 ("NEVER diagnose") could be inverted
+     in the code while the diagram kept showing the old wording, green throughout.
 
   7. CHAT NODE COVERAGE (#855). The report guard's check 1, transferred: every declared tool
      must have a node in the hand-authored NODES, every prompt slot must have a slot node,
@@ -542,6 +547,15 @@ def _literal_values(model, field: str) -> list[str]:
     ]
 
 
+def _baseline_builder_body() -> ast.FunctionDef | None:
+    """The AST of thread_turn._build_baseline_sections, or None if it was renamed away."""
+    tree = ast.parse(_THREAD_TURN.read_text(), filename=_THREAD_TURN.name)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_build_baseline_sections":
+            return node
+    return None
+
+
 def _declared_baseline_sections() -> list[str]:
     """The relationship-baseline sections a thread turn assembles, read from the builder.
 
@@ -549,40 +563,90 @@ def _declared_baseline_sections() -> list[str]:
     constant to import. The keys are still DECLARED — they are string literals assigned in
     that function's body — so this reads them statically off the source rather than adding
     a second list in the app that could drift from the builder it describes. Static, so it
-    needs no DB and no runtime state."""
+    needs no DB and no runtime state.
+
+    Paired with _baseline_extractor_problems, which refuses any OTHER way of writing into
+    that dict — because an extractor that understands one syntax and silently ignores the
+    rest is a guard that reads less than it claims to."""
+    body = _baseline_builder_body()
+    if body is None:
+        return []
     keys: list[str] = []
-    tree = ast.parse(_THREAD_TURN.read_text(), filename=_THREAD_TURN.name)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef) or node.name != "_build_baseline_sections":
-            continue
-        for sub in ast.walk(node):
-            if (
-                isinstance(sub, ast.Subscript)
-                and isinstance(sub.value, ast.Name)
-                and sub.value.id == "sections"
-                and isinstance(sub.slice, ast.Constant)
-                and isinstance(sub.slice.value, str)
-            ):
-                keys.append(sub.slice.value)
+    for sub in ast.walk(body):
+        if (
+            isinstance(sub, ast.Subscript)
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id == "sections"
+            and isinstance(sub.slice, ast.Constant)
+            and isinstance(sub.slice.value, str)
+        ):
+            keys.append(sub.slice.value)
     return sorted(set(keys))
+
+
+def _baseline_extractor_problems() -> list[str]:
+    """Refuse any write into `sections` this reader cannot see the key of.
+
+    _declared_baseline_sections understands exactly one form, `sections["x"] = ...`. A
+    section added by `sections.update({...})`, by rebinding the name to a populated dict,
+    or by a comprehension would be invisible to it — and PARTIAL blindness is worse than
+    total, because the empty-set check would not fire. So an unrecognised write is a loud
+    failure telling the next person to teach the reader that form, not a silent pass."""
+    body = _baseline_builder_body()
+    if body is None:
+        return [
+            "EXTRACTOR BROKE: thread_turn._build_baseline_sections no longer exists, so the "
+            "conversational baseline sections cannot be read. Point the guard at its "
+            "replacement."]
+    problems: list[str] = []
+    for sub in ast.walk(body):
+        # `sections.update(...)`, `sections.setdefault(...)`, and friends.
+        if (
+            isinstance(sub, ast.Attribute)
+            and isinstance(sub.value, ast.Name)
+            and sub.value.id == "sections"
+        ):
+            problems.append(
+                f"EXTRACTOR BROKE: _build_baseline_sections writes into `sections` via "
+                f"`.{sub.attr}()` at line {sub.lineno}, a form this guard cannot read the "
+                "keys of, so a baseline section could reach the coach unseen. Teach "
+                "_declared_baseline_sections that form.")
+        # rebinding `sections` to anything but the empty dict it starts as
+        if isinstance(sub, (ast.Assign, ast.AnnAssign)):
+            targets = sub.targets if isinstance(sub, ast.Assign) else [sub.target]
+            if any(isinstance(t, ast.Name) and t.id == "sections" for t in targets):
+                value = sub.value
+                empty = isinstance(value, ast.Dict) and not value.keys
+                if not empty:
+                    problems.append(
+                        "EXTRACTOR BROKE: _build_baseline_sections binds `sections` to a "
+                        f"populated value at line {sub.lineno}, so its keys are not visible "
+                        "to this guard. Teach _declared_baseline_sections that form.")
+    return problems
+
+
+def _declared_tools() -> list[dict]:
+    """The tool list a thread turn is really handed.
+
+    Assembled through the app's OWN composition (`thread_tools(CHAT_TOOLS)` plus the skill
+    tool, the expression at thread_turn's call site) rather than re-added here from its
+    three parts. A guard that re-implements the decision it is checking is a second copy of
+    that decision, and a tool added at the real assembly site would be invisible to it."""
+    from app.services.coach.coaching_skills import LOAD_SKILL_TOOL
+    from app.services.coach.proposed_actions import thread_tools
+    from app.services.coach.query_tools import CHAT_TOOLS
+
+    return [*thread_tools(CHAT_TOOLS), LOAD_SKILL_TOOL]
 
 
 def _declared_chat_surface() -> dict[str, list[str]]:
     """Every closed set the conversational coach's surface is made of, from the live code."""
     from app.schemas.thread import ScreenPointer  # lazy: needs the app importable
-    from app.services.coach import coaching_skills, proposed_actions, query_tools
+    from app.services.coach import coaching_skills, proposed_actions
     from app.services.coach import thread_turn as tt
 
     return {
-        # every tool the turn is given, data + action + skill, the same three sources the
-        # generator dumps
-        "tools": sorted(
-            [t["name"] for t in query_tools.CHAT_TOOLS]
-            + [
-                proposed_actions.PROPOSED_ACTION_TOOL["name"],
-                coaching_skills.LOAD_SKILL_TOOL["name"],
-            ]
-        ),
+        "tools": sorted(t["name"] for t in _declared_tools()),
         "skills": sorted(s.name for s in coaching_skills.SKILLS),
         "action_kinds": sorted(
             _literal_values(proposed_actions.ProposedActionRequest, "action_type")
@@ -675,6 +739,112 @@ def _chat_surface_problems(
     return problems
 
 
+# The CONTENT the diagram reproduces verbatim, beyond the names of things. Names alone are
+# not the whole of what the coach receives: a tool's description, a skill's procedure and
+# the system prompt's own prose are what the model actually reads, and the blob records
+# every one of them in full. Without this, RULE 2 ("NEVER diagnose") could be inverted in
+# the code while the diagram kept showing the old wording, green throughout.
+def _declared_chat_content() -> dict[str, object]:
+    from app.jobs import thread_maintenance as tm  # lazy: needs the app importable
+    from app.services.coach import chat as chat_mod
+    from app.services.coach import coaching_skills
+    from app.services.coach import thread_turn as tt
+
+    return {
+        "the system prompt template": tt.THREAD_SYSTEM_TEMPLATE,
+        "the tool definitions (description + input schema)": _declared_tools(),
+        "the coaching skill procedures": [
+            {"name": s.name, "use_when": s.use_when, "procedure": s.procedure}
+            for s in coaching_skills.SKILLS
+        ],
+        "the authority-tiering briefings": {
+            "header": chat_mod._TIERING_HEADER,
+            "voice": chat_mod._VOICE_TIER,
+            "memory": chat_mod._MEMORY_TIER,
+            "corpus": chat_mod._CORPUS_TIER,
+            "corpus_only": chat_mod._CORPUS_ONLY_TIER,
+            "training_load": chat_mod._TRAINING_LOAD_TIER,
+            "conversation": chat_mod._RELATIONSHIP_CONVERSATION_TIER,
+        },
+        "the floor's canned answers": {
+            "medical_redirect": chat_mod.MEDICAL_REDIRECT_MESSAGE,
+            "budget_paused": tt.THREAD_BUDGET_PAUSED_MESSAGE,
+            "title_system": tm._TITLE_SYSTEM,
+        },
+    }
+
+
+def _recorded_chat_content(blob: dict) -> dict[str, object]:
+    tools = blob.get("tools") or {}
+    recorded_tools = list(tools.get("data") or [])
+    for key in ("action", "skill"):
+        if isinstance(tools.get(key), dict):
+            recorded_tools.append(tools[key])
+    return {
+        "the system prompt template": blob.get("template"),
+        "the tool definitions (description + input schema)": recorded_tools,
+        "the coaching skill procedures": [
+            {k: s.get(k) for k in ("name", "use_when", "procedure")}
+            for s in (blob.get("skills") or [])
+            if isinstance(s, dict)
+        ],
+        "the authority-tiering briefings": blob.get("tiering"),
+        "the floor's canned answers": blob.get("messages"),
+    }
+
+
+def _difference_hint(live: object, was: object) -> str:
+    """A short, legible description of HOW two recorded artifacts differ.
+
+    These are prompts and tool schemas — thousands of characters each — so dumping both
+    sides would bury the signal. Strings report where they first diverge; dicts and lists
+    report which entries moved."""
+    if isinstance(live, str) and isinstance(was, str):
+        at = next(
+            (i for i, (a, b) in enumerate(zip(live, was)) if a != b), min(len(live), len(was))
+        )
+        return (
+            f"they first differ at character {at} of {len(was)} -> {len(live)}: "
+            f"code has ...{live[at:at + 70]!r}, the diagram records ...{was[at:at + 70]!r}"
+        )
+    if isinstance(live, dict) and isinstance(was, dict):
+        moved = sorted(k for k in set(live) | set(was) if live.get(k) != was.get(k))
+        return f"entries that differ: {moved}"
+    if isinstance(live, list) and isinstance(was, list):
+        if len(live) != len(was):
+            return f"the diagram records {len(was)} entries, the code declares {len(live)}"
+        moved = [
+            (a.get("name") if isinstance(a, dict) else i)
+            for i, (a, b) in enumerate(zip(live, was))
+            if a != b
+        ]
+        return f"entries that differ: {moved}"
+    return "they are not equal"
+
+
+def _chat_content_problems(
+    declared: dict[str, object], recorded: dict[str, object] | None
+) -> list[str]:
+    """Diff the verbatim content the diagram reproduces against the live code. Pure."""
+    if recorded is None:
+        return []  # the surface check already reported the missing blob
+    problems: list[str] = []
+    for label, live in declared.items():
+        if not live:
+            problems.append(
+                f"EXTRACTOR BROKE: {label} read back empty from the code. The chat drift "
+                "guard cannot be trusted — fix it.")
+            continue
+        was = recorded.get(label)
+        if live != was:
+            problems.append(
+                f"{label} — what the conversational coach actually reads — has changed, but "
+                f"{_CHAT_NODES.name} still shows the old text: {_difference_hint(live, was)}. "
+                "Regenerate the diagram in this same change "
+                "(python docs/diagrams/generate_chat_flow_data.py).")
+    return problems
+
+
 def _chat_nodes(chat_src: str) -> list[dict[str, str]]:
     """The hand-authored NODES entries, as {id, title, tag} triples.
 
@@ -693,10 +863,18 @@ def _chat_nodes(chat_src: str) -> list[dict[str, str]]:
             continue
         title_m = re.search(r"\btitle:'([^']*)'", chunk)
         tag_m = re.search(r"\btag:'([^']*)'", chunk)
+        # The explicit binding a builder node declares to the baseline section it builds
+        # (`section:'schedule'`). An explicit binding rather than a `d_<key>` id convention,
+        # because `d_*` is the id prefix for EVERY baseline builder — the profile, the
+        # anchor, the voice — and only some of those correspond to a section. Without the
+        # binding the check could only run one way, and a section REMOVED from the builder
+        # would leave its node drawing an input the coach no longer gets.
+        section_m = re.search(r"\bsection:'([^']*)'", chunk)
         nodes.append({
             "id": id_m.group(1),
             "title": title_m.group(1) if title_m else "",
             "tag": tag_m.group(1) if tag_m else "",
+            "section": section_m.group(1) if section_m else "",
         })
     return nodes
 
@@ -716,7 +894,6 @@ def _chat_node_problems(
             f"PARSER BROKE: found only {len(nodes)} nodes in {_CHAT_NODES.name} (expected "
             "~55). The chat node-coverage guard cannot be trusted — fix it."]
 
-    ids = {n["id"] for n in nodes}
     titles = {n["title"] for n in nodes}
 
     # Tools: one node each, titled with the tool's own name.
@@ -743,17 +920,23 @@ def _chat_node_problems(
             f"Slot nodes in {_CHAT_NODES.name} for slots THREAD_SYSTEM_TEMPLATE no longer "
             f"carries: {spurious}. Remove them.")
 
-    # Baseline sections: one builder node each, `d_<section>`.
+    # Baseline sections: one builder node each, bound by an explicit `section:'<key>'`.
     if not baseline_sections:
         problems.append(
             "EXTRACTOR BROKE: no relationship-baseline sections were read out of "
             "thread_turn._build_baseline_sections. The chat drift guard cannot be trusted.")
-    if missing := sorted(s for s in baseline_sections if f"d_{s}" not in ids):
+    drawn_sections = {n["section"] for n in nodes if n["section"]}
+    if missing := sorted(set(baseline_sections) - drawn_sections):
         problems.append(
-            "Relationship-baseline sections the thread turn assembles but that have no "
-            f"builder node in {_CHAT_NODES.name}: {missing} (expected node ids "
-            f"{[f'd_{s}' for s in missing]}). A new conversational input reaches the coach "
-            "undrawn — the #856 schedule class of bug.")
+            "Relationship-baseline sections the thread turn assembles but that no node in "
+            f"{_CHAT_NODES.name} binds: {missing}. Add a builder node declaring "
+            f"section:'{missing[0]}'. A new conversational input reaches the coach undrawn — "
+            "the #856 schedule class of bug.")
+    if spurious := sorted(drawn_sections - set(baseline_sections)):
+        problems.append(
+            f"Builder nodes in {_CHAT_NODES.name} bound to baseline sections the thread turn "
+            f"no longer assembles: {spurious}. The diagram draws an input the coach no "
+            "longer receives. Remove the node.")
     return problems
 
 
@@ -950,6 +1133,12 @@ def check_drift() -> list[str]:
         )
     )
     problems.extend(
+        _chat_content_problems(
+            _declared_chat_content(), _recorded_chat_content(chat_blob) if chat_blob else None
+        )
+    )
+    problems.extend(_baseline_extractor_problems())
+    problems.extend(
         _chat_node_problems(declared_chat, _declared_baseline_sections(), _chat_nodes(chat_src))
     )
     problems.extend(_chat_capture_problems(chat_blob))
@@ -972,8 +1161,8 @@ def main() -> int:
         return 1
     print("ai-flow-graph diagram is in sync with the code (pack sections + nested pack keys "
           "+ DerivedMetric columns + kill-switch parity), the coach-chat diagram is in sync "
-          "(tools + skills + actions + screens + prompt slots + baseline sections + capture "
-          "parity), and the generators still bind.")
+          "(tools + skills + actions + screens + prompt slots + baseline sections + the "
+          "prompt/tool/skill text itself + capture parity), and the generators still bind.")
     return 0
 
 
