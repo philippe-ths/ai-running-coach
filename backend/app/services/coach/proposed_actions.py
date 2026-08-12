@@ -18,6 +18,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.queue import redis_conn
 from app.models import Activity, Block
 from app.schemas import CheckInCreate
@@ -57,7 +58,12 @@ INTENT_OPTIONS_BY_TYPE: dict[str, tuple[str, ...]] = {
 
 class ProposedActionFrame(BaseModel):
     action_type: Literal[
-        "check_in", "intent", "split_block", "merge_blocks", "complete_session"
+        "check_in",
+        "intent",
+        "split_block",
+        "merge_blocks",
+        "complete_session",
+        "draft_plan",
     ]
     token: str
     description: str
@@ -72,7 +78,12 @@ class ProposedActionRequest(BaseModel):
     """
 
     action_type: Literal[
-        "check_in", "intent", "split_block", "merge_blocks", "complete_session"
+        "check_in",
+        "intent",
+        "split_block",
+        "merge_blocks",
+        "complete_session",
+        "draft_plan",
     ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = Field(default=None, ge=1, le=10)
@@ -85,6 +96,10 @@ class ProposedActionRequest(BaseModel):
     planned_session_id: Optional[UUID] = None
 
     model_config = ConfigDict(extra="forbid")
+
+    # `draft_plan` (#856) deliberately takes NO arguments. The block lives in the
+    # conversation, and the thread id is supplied by the server, so there is no
+    # field here a model could get wrong and nothing for it to restate.
 
     @model_validator(mode="after")
     def _validate_shape(self) -> "ProposedActionRequest":
@@ -113,7 +128,12 @@ class ProposedActionRequest(BaseModel):
 class StoredProposedAction(BaseModel):
     owner_user_id: UUID
     action_type: Literal[
-        "check_in", "intent", "split_block", "merge_blocks", "complete_session"
+        "check_in",
+        "intent",
+        "split_block",
+        "merge_blocks",
+        "complete_session",
+        "draft_plan",
     ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = None
@@ -123,6 +143,9 @@ class StoredProposedAction(BaseModel):
     split_at_activity_id: Optional[UUID] = None
     other_block_id: Optional[UUID] = None
     planned_session_id: Optional[UUID] = None
+    # #856: the conversation the plan was settled in. Server-supplied at mint
+    # time, never model-supplied.
+    thread_id: Optional[UUID] = None
 
 
 PROPOSED_ACTION_TOOL: Dict[str, Any] = {
@@ -131,9 +154,13 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
         "Offer ONE narrow, reversible change to the runner's record for them to "
         "confirm: logging a check-in (RPE and/or pain), naming a session's stated "
         "intent, splitting a block at a named member session, merging two "
-        "adjacent blocks, or marking a PLANNED session done when the runner says "
+        "adjacent blocks, marking a PLANNED session done when the runner says "
         "they did it (the gym and the turbo never reach Strava, so a session they "
-        "mention is often the only record there will be). Offering is not doing — this puts a card in front of the "
+        "mention is often the only record there will be), or writing a block of "
+        "training you have settled together into their schedule (draft_plan — "
+        "takes no arguments; this conversation IS the plan, so use it once the "
+        "shape of the block is agreed rather than asking them to copy it out). "
+        "Offering is not doing — this puts a card in front of the "
         "runner and nothing is written unless they tap it, so speak of it as "
         "something you can do, never as done. Use only activity_id and block_id "
         "values already in front of you or returned by your other tools; never "
@@ -150,6 +177,7 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
                     "split_block",
                     "merge_blocks",
                     "complete_session",
+                    "draft_plan",
                 ],
             },
             "activity_id": {"type": "string"},
@@ -187,7 +215,11 @@ def thread_tools(base_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def mint_proposed_action(
-    db: Session, owner_user_id: UUID, tool_input: Dict[str, Any]
+    db: Session,
+    owner_user_id: UUID,
+    tool_input: Dict[str, Any],
+    *,
+    thread_id: Optional[UUID] = None,
 ) -> tuple[dict, Optional[dict]]:
     """Validate a model-authored offer and mint the user-scoped action token.
 
@@ -204,7 +236,7 @@ def mint_proposed_action(
         return {"ok": False, "error": "invalid_action", "detail": str(exc)}, None
 
     try:
-        frame, stored = _build_offer(db, owner_user_id, request)
+        frame, stored = _build_offer(db, owner_user_id, request, thread_id=thread_id)
     except LookupError as exc:
         return {"ok": False, "error": "not_found", "detail": str(exc)}, None
     except _InvalidIntent as exc:
@@ -280,6 +312,32 @@ def consume_and_execute(db: Session, owner_user_id: UUID, token: str) -> dict:
         merged = merge_blocks(db, block, other)
         return {"action_type": "merge_blocks", "block_id": str(merged.id)}
 
+    if stored.action_type == "draft_plan":
+        from app.services.schedule import store as schedule_store
+        from app.services.schedule.draft import enqueue_draft
+
+        if not settings.SCHEDULE_ENABLED:
+            raise ValueError("the schedule is unavailable")
+        # Idempotent against a draft already running, the `POST /api/schedule/draft`
+        # precedent: a second confirm (two devices, a double tap, a stale card)
+        # joins the draft in flight rather than starting a second one that would
+        # race the first to supersede it.
+        existing = schedule_store.draft_in_flight(db, owner_user_id)
+        if existing is None:
+            existing = schedule_store.create_drafting_plan(db, owner_user_id)
+            enqueue_draft(owner_user_id, existing.id, stored.thread_id)
+        # The one action whose write does not land where the runner is looking:
+        # drafting runs on the worker, so without a word back the card simply
+        # disappears and nothing visibly happens for a minute.
+        return {
+            "action_type": "draft_plan",
+            "plan_id": str(existing.id),
+            "message": (
+                "Writing it into your schedule now — it'll be on your Schedule "
+                "screen in a minute."
+            ),
+        }
+
     if stored.action_type == "complete_session":
         from app.services.schedule.completion import (
             CONVERSATION,
@@ -327,8 +385,42 @@ def _describe_complete_session(session) -> str:
 
 
 def _build_offer(
-    db: Session, owner_user_id: UUID, request: ProposedActionRequest
+    db: Session,
+    owner_user_id: UUID,
+    request: ProposedActionRequest,
+    *,
+    thread_id: Optional[UUID] = None,
 ) -> tuple[ProposedActionFrame, StoredProposedAction]:
+    if request.action_type == "draft_plan":
+        from app.services.schedule import store as schedule_store
+
+        if not settings.SCHEDULE_ENABLED:
+            # The surface's kill switch reaches the offer too. Putting a card up
+            # for a screen that answers 503 would be a promise the app cannot keep.
+            raise ValueError("the schedule is unavailable")
+        existing = schedule_store.get_active_plan(db, owner_user_id)
+        frame = ProposedActionFrame(
+            action_type="draft_plan",
+            token="",
+            # The replacement is named on the card, not left to be discovered.
+            # Writing a plan supersedes the one the runner is training to, and
+            # that is the part of this action they most need to see before it
+            # happens — the runner-confirms-before-anything-is-written property
+            # is only worth having if the card says what will be written over.
+            description=(
+                "Write this plan into your schedule, replacing your current one"
+                if existing is not None
+                else "Write this plan into your schedule"
+            ),
+            confirm_label="Put it in my schedule",
+        )
+        stored = StoredProposedAction(
+            owner_user_id=owner_user_id,
+            action_type="draft_plan",
+            thread_id=thread_id,
+        )
+        return frame, stored
+
     if request.action_type == "complete_session":
         session = _require_owned_planned_session(
             db, owner_user_id, request.planned_session_id

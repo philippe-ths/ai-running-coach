@@ -75,13 +75,19 @@ Then, in this order:
    session count are the base you build from; the step up from it is small.
    Never write a week that jumps their volume, and never let a plan quietly
    become a bigger week than the one they just finished when they are tired.
-3. Check what is already settled between you — a phase you agreed, a race they
-   are pointed at, a constraint they told you about. Continue that plan rather
-   than issuing a new one over the top of it.
+3. Check what is already settled between you — their active plan if they have
+   one, a race they are pointed at, a constraint they told you about. Continue
+   that plan rather than issuing a new one over the top of it.
 4. Give them the week as a short list of sessions: day, what it is, roughly how
    far or how long, and the effort in words. Enough to act on, not a training
    science essay.
-5. Close by naming the one thing that would change it.
+5. Put it where they can use it. A plan belongs in their schedule, not in the
+   transcript, so once the shape is agreed offer draft_plan and it gets written
+   for them. That holds whether they asked for one week or a whole block:
+   talking a block through and then leaving them to copy it out, or to come back
+   each Monday for the next instalment, hands them the work the schedule exists
+   to do.
+6. Close by naming the one thing that would change it.
 
 What the sessions should BE — how much easy running, where quality belongs, how
 a week is shaped — is not this procedure's call. Take that from the coaching
@@ -121,7 +127,12 @@ must not do, and it is the thing this request will tempt you into.""",
         "training summary and history, then had its whole reply withheld by "
         "validator rule 5 and replaced with the canned medical redirect — so the "
         "runner got a referral and NOTHING about their training. The floor was "
-        "right; the reply was avoidable."
+        "right; the reply was avoidable. "
+        "Step 5 earned separately, 2026-08-12 (#856), on the Schedule screen: the "
+        "coach worked out a seven-week half-marathon build, then declined to put "
+        "it in the schedule, sent the runner to 'your schedule app', and offered "
+        "to dictate it a week at a time instead. Step 4 had told it the prose "
+        "list WAS the finished job."
     ),
 )
 

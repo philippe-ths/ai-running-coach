@@ -23,6 +23,7 @@ import remarkGfm from 'remark-gfm';
 import {
   ChatMessage,
   ProposedActionFrame,
+  ProposedActionResult,
   ThreadDetail,
   ThreadListItem,
   ToolTraceEntry,
@@ -203,6 +204,7 @@ export default function CoachSheet() {
   const [proposedAction, setProposedAction] = useState<ProposedActionFrame | null>(null);
   const [confirmingAction, setConfirmingAction] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [actionDone, setActionDone] = useState('');
   const hasAutoOpenedThread = useRef(false);
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -412,6 +414,7 @@ export default function CoachSheet() {
     if (!proposedAction || confirmingAction) return;
     setConfirmingAction(true);
     setActionError('');
+    setActionDone('');
     try {
       const res = await fetch('/api/coach/threads/actions/confirm', {
         method: 'POST',
@@ -419,6 +422,10 @@ export default function CoachSheet() {
         body: JSON.stringify({ token: proposedAction.token }),
       });
       if (!res.ok) throw new Error(String(res.status));
+      // A write that lands somewhere the runner is not looking says so; the rest
+      // are visible behind the sheet the moment it refreshes.
+      const result = (await res.json().catch(() => null)) as ProposedActionResult | null;
+      setActionDone(result?.message ?? '');
       setProposedAction(null);
       // The write lands on the runner's record, not in the thread, so refresh
       // the screen behind the sheet and leave the transcript where they are.
@@ -655,6 +662,12 @@ export default function CoachSheet() {
                 {actionError && (
                   <div className="text-[11.5px] text-gray-500 dark:text-gray-400">{actionError}</div>
                 )}
+              </div>
+            )}
+
+            {actionDone && !proposedAction && (
+              <div className="rounded-xl border border-gray-200 px-3 py-2 text-[11.5px] text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                {actionDone}
               </div>
             )}
           </div>

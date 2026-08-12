@@ -21,7 +21,15 @@ from app.services.schedule.draft import draft_plan
 logger = logging.getLogger(__name__)
 
 
-def generate_schedule_job(user_id: str, plan_id: str) -> None:
+def generate_schedule_job(
+    user_id: str, plan_id: str, thread_id: str | None = None
+) -> None:
+    """Draft one plan. `thread_id` (#856) names the conversation that settled it.
+
+    Optional and last, so a job already sitting in Redis when this deploys — RQ
+    serialized it with two arguments — still binds and runs the unseeded path it
+    was enqueued for.
+    """
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == uuid.UUID(str(user_id))).first()
@@ -44,7 +52,7 @@ def generate_schedule_job(user_id: str, plan_id: str) -> None:
             logger.error("schedule draft: plan %s does not belong to %s", plan_id, user_id)
             return
 
-        outcome = asyncio.run(draft_plan(db, user, plan))
+        outcome = asyncio.run(draft_plan(db, user, plan, thread_id=thread_id))
         if outcome.ok:
             logger.info("schedule draft: plan %s is now active", plan.id)
         else:

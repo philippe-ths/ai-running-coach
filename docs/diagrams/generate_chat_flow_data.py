@@ -48,7 +48,10 @@ TARGET = Path(__file__).parent / "coach-chat-nodes.js"
 # carries the #522 kill switches flipped off and an older prompt id, which would
 # render the voice slot absent for a config reason and misrepresent the system.)
 # `CHAT_CAPTURE_CONFIG=local` captures under the local .env as-is instead.
-PROD_PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_lean_grouped_v7")
+# Verified against Railway 2026-08-12. A literal here goes stale silently, which
+# is the failure #841 fixed in the sibling generator — so when this diverges from
+# the live prompt, the capture is of a configuration production does not run.
+PROD_PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_lean_grouped_v9")
 CAPTURE_CONFIG = os.environ.get("CHAT_CAPTURE_CONFIG", "prod")
 
 
@@ -582,6 +585,11 @@ def _capture_assembled() -> dict:
                 "profile": tt._profile_dict(profile),
                 "memory": sections.get("memory"),
                 "readiness": sections.get("readiness"),
+                # #856. Present as a key whenever the coach was given the
+                # schedule; None inside it means the runner has no plan, which is
+                # itself what the coach is told. Absent only when
+                # COACH_SCHEDULE_ENABLED is off.
+                "schedule": sections.get("schedule"),
                 "anchor_block": anchor_block,
                 "voice_block": voice_block,
                 "cross_thread_block": cross_block,
