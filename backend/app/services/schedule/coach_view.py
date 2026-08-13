@@ -215,6 +215,31 @@ def build_schedule_context(
     )
 
 
+def _draft_state(db: Session, user_id) -> Optional[dict]:
+    """What is happening to a plan right now, when anything is (#879).
+
+    Only the two states the coach could otherwise get wrong. A draft that landed
+    needs no note: the plan itself is the evidence, and the runner asking about
+    a plan that is simply there is not the case this exists for.
+
+    A failure is reported for as long as it is the last thing that happened to
+    this runner's plan — not for a fixed window afterwards. A runner whose draft
+    failed and who has not since asked for another is still a runner without the
+    plan they asked for, however long ago they asked, and that is exactly the
+    state the coach was reading as success.
+    """
+    if store.draft_in_flight(db, user_id) is not None:
+        return {"state": "writing"}
+    failed = store.latest_failed_plan(db, user_id)
+    if failed is None:
+        return None
+    active = store.get_active_plan(db, user_id)
+    # A failure can only follow the plan it tried to replace, so it takes a tie.
+    if active is None or failed.created_at >= active.created_at:
+        return {"state": "failed"}
+    return None
+
+
 def build_thread_schedule(
     db: Session, user: Any, *, today: Optional[date] = None
 ) -> Optional[dict]:
@@ -232,12 +257,21 @@ def build_thread_schedule(
     flag, because handing a model a plan and a result invites the compliance
     verdict ADR 0025 exists to remove.
 
-    Returns None when the runner has no active plan — which is itself worth
-    knowing, so the caller says so in words rather than passing an empty shell.
+    Returns None when the runner has no active plan and nothing is being written
+    — which is itself worth knowing, so the caller says so in words rather than
+    passing an empty shell.
+
+    A plan the runner confirmed is written on the worker over about a minute and
+    can fail outright, and until #879 nothing here could tell (#879). The coach
+    went on saying the plan was in while the row sat `failed`, because it was
+    reading a plan that had not changed and had no way to know one had been
+    attempted. `draft` carries that: what is happening to a plan right now, as
+    distinct from what the plan says.
     """
+    draft = _draft_state(db, user.id)
     plan = store.get_active_plan(db, user.id)
     if plan is None:
-        return None
+        return {"has_plan": False, "draft": draft} if draft else None
 
     starts_on = resolve_week_start(getattr(user, "profile", None))
     today = today or date.today()
@@ -245,6 +279,7 @@ def build_thread_schedule(
 
     return {
         "has_plan": True,
+        **({"draft": draft} if draft else {}),
         "runs_through": plan.horizon_end.isoformat() if plan.horizon_end else None,
         "still_to_come_this_week": [item.model_dump() for item in upcoming],
         "committed_this_week": committed,
