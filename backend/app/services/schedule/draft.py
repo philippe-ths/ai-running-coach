@@ -148,10 +148,13 @@ mean an easy walk or a gentle spin, that is an easy session of that discipline \
 - Every other session needs enough to size it: a distance, a duration, or rep \
 structure. A session with none of the three is rejected.
 - Write a warm-up and a cool-down as a DISTANCE, never as minutes. \
-`warmup_distance_m` and `cooldown_distance_m` are part of the session and are \
-added to its reps to give what the runner sees; the same thing said in prose as \
-"10 min easy" is not a distance and counts as nothing. Say it in the detail too \
-if you like, but say it in the fields regardless.
+`warmup_distance_m` and `cooldown_distance_m` are part of the session; the same \
+thing said in prose as "10 min easy" is not a distance and counts as nothing.
+- A session's distance has to ADD UP. Reps plus their warm-up and cool-down do, \
+so leave `target_distance_m` out of a rep session. Nothing else does: give a tempo \
+its whole distance in `target_distance_m`, door to door, with the warm-up and \
+cool-down as the parts inside it. Anything you do not say in metres counts as \
+nothing towards the runner's week.
 - Do not plan sessions in the past.
 - Do not invent a race, a goal or an injury the runner has not told you about.
 - Do not give medical advice, diagnose, or prescribe treatment. If something in \
