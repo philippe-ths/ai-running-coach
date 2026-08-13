@@ -40,6 +40,7 @@ from app.schemas.coach_context import (
 )
 from app.services.schedule import store
 from app.services.schedule.completion import find_matching_session
+from app.services.schedule.planned_distance import planned_distance_m
 from app.services.schedule.placement import (
     WEEK_LENGTH_DAYS,
     derive_placement,
@@ -66,6 +67,29 @@ MAX_UPCOMING = 8
 MAX_RULES = 6
 
 
+def _km(metres: float, unmeasured_runs: int = 0) -> Optional[str]:
+    """The week's planned running, as the runner's own screen writes it.
+
+    Zero is not a number to hand over: a week whose sessions state no distance
+    has no planned running total, and "0.00 km" would read as a week off.
+
+    A run that states no distance — "4 reps off 90 s", a real and legal
+    prescription — contributes nothing to this, so the total can be a real number
+    that is nonetheless not the whole week. Left bare, that is the north star's
+    second question failing: whatever is ambiguous is eventually read wrong, and
+    a coach reading 17 km as the complete week would plan the next one against a
+    figure short by a session. So the total says when it is partial rather than
+    being withheld for it.
+    """
+    if not metres:
+        return None
+    total = f"{metres / 1000:.2f} km"
+    if not unmeasured_runs:
+        return total
+    runs = "run" if unmeasured_runs == 1 else "runs"
+    return f"{total}, plus {unmeasured_runs} {runs} whose distance was not stated"
+
+
 def _target(session: Any) -> Optional[str]:
     """The prescription in a unit a coach would speak.
 
@@ -79,7 +103,15 @@ def _target(session: Any) -> Optional[str]:
         distance = structure.get("rep_distance_m")
         rest = structure.get("rest_s")
         text = f"{int(reps)} x {int(distance)} m" if distance else f"{int(reps)} reps"
-        return f"{text} off {int(rest)} s" if rest else text
+        prescription = f"{text} off {int(rest)} s" if rest else text
+        # The session's own distance leads, exactly as it does on the runner's
+        # card (#880). A rep session states no total, so this used to be the
+        # prescription alone — and a runner looking at "4.50 km" and asking why
+        # their week read 25 was asking about a number the coach had never been
+        # shown. It invented a mechanism for it, then diagnosed the app. The
+        # prescription stays: it is what they actually go out and do.
+        total = planned_distance_m(session)
+        return f"{total / 1000:.2f} km ({prescription})" if total else prescription
     if session.target_distance_m:
         return f"{session.target_distance_m / 1000:.1f} km"
     if session.target_duration_s:
@@ -112,12 +144,19 @@ def _week_view(
     starts_on: int,
     *,
     exclude_session_id: Any = None,
-) -> tuple[List[UpcomingSessionContext], int, int]:
+) -> tuple[List[UpcomingSessionContext], int, int, Optional[str]]:
     """This week's committed sessions, as intent rather than as a scorecard.
 
     Shared by the report pack and the conversation so both read one week the same
     way. `done` is a COUNT and there is deliberately no per-session done flag —
     that shape is a scorecard, and a scorecard is what gets read out.
+
+    The running total is the fourth return (#880). It is the number the runner's
+    own week headline shows them, summed here through the same
+    `planned_distance_m` that produced it, so the coach and the screen cannot
+    hold two opinions about one week. Only what was PLANNED: what was actually
+    run is reachable through the coach's own tools, and pairing the two here is
+    the compliance verdict this module exists not to hand over.
     """
     start = week_start(today, starts_on)
     end = start + timedelta(days=WEEK_LENGTH_DAYS - 1)
@@ -126,10 +165,17 @@ def _week_view(
     upcoming: List[UpcomingSessionContext] = []
     committed = 0
     done = 0
+    planned_running_m = 0.0
+    unmeasured_runs = 0
     for row in rows:
         if row.commitment != "committed":
             continue
         committed += 1
+        if row.discipline == "run":
+            distance = planned_distance_m(row)
+            planned_running_m += distance
+            if not distance:
+                unmeasured_runs += 1
         status = session_status(row, today)
         if status == "done":
             done += 1
@@ -151,7 +197,7 @@ def _week_view(
                     target=_target(row),
                 )
             )
-    return upcoming, committed, done
+    return upcoming, committed, done, _km(planned_running_m, unmeasured_runs)
 
 
 def build_schedule_context(
@@ -184,7 +230,7 @@ def build_schedule_context(
             detail=matched.detail,
         )
 
-    upcoming, committed, done = _week_view(
+    upcoming, committed, done, planned_running = _week_view(
         db,
         user_id,
         plan,
@@ -212,6 +258,7 @@ def build_schedule_context(
         rules_in_play=rules,
         committed_this_week=committed,
         done_this_week=done,
+        planned_running_this_week=planned_running,
     )
 
 
@@ -275,12 +322,19 @@ def build_thread_schedule(
 
     starts_on = resolve_week_start(getattr(user, "profile", None))
     today = today or date.today()
-    upcoming, committed, done = _week_view(db, user.id, plan, today, starts_on)
+    upcoming, committed, done, planned_running = _week_view(
+        db, user.id, plan, today, starts_on
+    )
 
     return {
         "has_plan": True,
         **({"draft": draft} if draft else {}),
         "runs_through": plan.horizon_end.isoformat() if plan.horizon_end else None,
+        # The headline number on the runner's own screen (#880). Without it, a
+        # runner asking why their week read 25 was asking the coach about a
+        # figure it had never been shown, and it answered anyway: first with an
+        # invented mechanism, then by diagnosing the app.
+        "planned_running_this_week": planned_running,
         "still_to_come_this_week": [item.model_dump() for item in upcoming],
         "committed_this_week": committed,
         "done_this_week": done,

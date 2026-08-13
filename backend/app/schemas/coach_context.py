@@ -1310,6 +1310,12 @@ class ScheduleContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     planned_for_this_activity: Optional[PlannedForContext] = None
+    # The headline figure on the runner's own Schedule screen, summed through the
+    # same helper that produced it so the two cannot disagree (#880). Only what
+    # was PLANNED: what was actually run is reachable through the coach's own
+    # tools, and pairing the two here is the compliance verdict this section
+    # exists not to hand over. None when no session states a distance.
+    planned_running_this_week: Optional[str] = None
     still_to_come_this_week: List[UpcomingSessionContext] = Field(default_factory=list)
     # The spacing rules in play, as the runner reads them. Carried so advice does
     # not contradict the plan the coach itself wrote ("do a session tomorrow"

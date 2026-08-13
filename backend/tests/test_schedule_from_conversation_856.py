@@ -548,6 +548,51 @@ def test_the_coach_is_told_that_confirming_is_not_landing(db):
     assert "say that plainly rather than repeating the offer" in THREAD_SYSTEM_TEMPLATE
 
 
+# --- 2c. the numbers the runner is looking at (#880) -------------------------
+
+
+def test_the_conversation_carries_the_week_total_and_each_sessions_distance(db):
+    """The exact turn this exists for.
+
+    "This week was meant to be a total of 28-29 but it's listed as 25", then "it
+    shows the intervals as 2.5k not 4.5k". Both numbers were on the runner's
+    screen and neither was in front of the coach: the section carried "6 x 400 m
+    off 90 s" and no distance at all. It answered anyway — an invented mechanism
+    first, then a diagnosis of the app — about data that was simply stored short.
+    """
+    from app.services.coach import thread_turn
+
+    from app.services.weeks import week_start
+
+    user = _user(db)
+    plan = _active_plan(db, user)
+    # Relative to the real today, because the conversation's read is anchored to
+    # now and takes no date. A fixed Monday would pass for one week and then rot.
+    today = date.today()
+    monday = week_start(today, 0)
+    db.add(
+        PlannedSession(
+            plan_id=plan.id, user_id=user.id,
+            window_start=monday,
+            window_end=monday + timedelta(days=6),
+            intent="quality", discipline="run", commitment="committed",
+            title="Intervals: 6x400m", target_distance_m=None,
+            structure={
+                "reps_planned": 6, "rep_distance_m": 400, "rest_s": 90,
+                "warmup_distance_m": 1050, "cooldown_distance_m": 1050,
+            },
+        )
+    )
+    db.commit()
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule["planned_running_this_week"] == "4.50 km"
+    assert schedule["still_to_come_this_week"][0]["target"] == (
+        "4.50 km (6 x 400 m off 90 s)"
+    )
+
+
 # --- 3. what the coach is told -----------------------------------------------
 
 

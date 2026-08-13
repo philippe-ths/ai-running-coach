@@ -34,6 +34,8 @@ from app.services.schedule.coach_view import build_schedule_context
 
 MON = date(2026, 8, 10)
 TUE = MON + timedelta(days=1)
+WED = MON + timedelta(days=2)
+THU = MON + timedelta(days=3)
 SAT = MON + timedelta(days=5)
 SUN = MON + timedelta(days=6)
 
@@ -130,7 +132,172 @@ def test_the_coach_learns_what_this_run_was_meant_to_be(db):
     assert planned is not None
     assert planned.title == "6x800m"
     assert planned.intent == "quality"
-    assert planned.target == "6 x 800 m off 90 s"
+    # The session's own distance leads and the prescription survives it (#880),
+    # exactly as the runner's card reads. The prescription is what they go out
+    # and do; the distance is the number their week is summed from, and a coach
+    # that could not see it invented an explanation for it.
+    assert planned.target == "9.00 km (6 x 800 m off 90 s)"
+
+
+def test_the_coach_can_read_the_number_the_runners_week_headline_shows(db):
+    """#880: the figure the runner is actually looking at when they ask about it.
+
+    A runner asked why their week read 25 km when 28 had been agreed. The coach
+    had never been shown either number — the section carried prescriptions and
+    counts and no total — so it invented a mechanism ("counting the sessions at
+    their minimum distances"), then diagnosed the app ("a display issue on the
+    app's side") about data that was simply stored short.
+
+    Summed through the same `planned_distance_m` the screen uses, so the two
+    cannot hold different opinions about one week.
+    """
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan, title="Easy", intent="easy", target_distance_m=5000)
+    _seed_session(
+        db,
+        plan,
+        window_start=WED,
+        window_end=WED,
+        title="6x400m",
+        target_distance_m=None,
+        structure={
+            "reps_planned": 6,
+            "rep_distance_m": 400,
+            "warmup_distance_m": 1050,
+            "cooldown_distance_m": 1050,
+        },
+    )
+    activity = _seed_activity(db, user, day=MON)
+
+    section = build_schedule_context(db, activity)
+
+    assert section.planned_running_this_week == "9.50 km"
+
+
+def test_a_bike_session_is_not_counted_as_running(db):
+    """The headline the runner reads is running km, so this has to mean the same
+    thing. A week whose load is half riding must not report it as mileage."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan, title="Easy run", intent="easy", target_distance_m=5000)
+    _seed_session(
+        db,
+        plan,
+        window_start=WED,
+        window_end=WED,
+        title="Turbo",
+        intent="easy",
+        discipline="bike",
+        target_distance_m=30000,
+    )
+    activity = _seed_activity(db, user, day=MON)
+
+    section = build_schedule_context(db, activity)
+
+    assert section.planned_running_this_week == "5.00 km"
+
+
+def test_a_total_that_omits_a_session_says_so_rather_than_reading_as_the_week(db):
+    """A run CAN legally state no distance: "4 reps off 90 s" is a real
+    prescription and one is sitting in a live plan right now. It contributes
+    nothing, so the total is a real number that is not the whole week.
+
+    Left bare that is the north star's second question failing — whatever is
+    ambiguous is read wrong eventually, and a coach reading this as the complete
+    week would build the next one against a figure short by a session. The fix is
+    to frame the number, not to withhold it.
+    """
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan, title="Easy", intent="easy", target_distance_m=5000)
+    _seed_session(
+        db, plan, window_start=WED, window_end=WED, title="4 x 5 min",
+        target_distance_m=None,
+        structure={"reps_planned": 4, "rest_s": 90},
+    )
+    activity = _seed_activity(db, user, day=MON)
+
+    section = build_schedule_context(db, activity)
+
+    assert section.planned_running_this_week == (
+        "5.00 km, plus 1 run whose distance was not stated"
+    )
+
+
+def test_a_week_that_states_no_distance_reports_none_rather_than_zero(db):
+    """"0.00 km" reads as a week off. A week sized only in minutes has no running
+    total to state, and abstaining says that where a zero would lie about it."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db, plan, title="Easy hour", intent="easy",
+        target_distance_m=None, target_duration_s=3600, structure=None,
+    )
+    activity = _seed_activity(db, user, day=MON)
+
+    section = build_schedule_context(db, activity)
+
+    assert section.planned_running_this_week is None
+
+
+def test_the_coach_and_the_runners_screen_report_the_same_week(db):
+    """The property, pinned directly rather than inferred from a shared import.
+
+    Two numbers agreeing today because both call one helper is a fact about the
+    code as it stands; this is a fact about the two answers. It is the whole
+    point of #880 — a coach that reads a different total from the one on the
+    runner's screen is back to explaining a figure it cannot see.
+    """
+    from app.services.schedule.week import build_week
+
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan, title="Easy", intent="easy", target_distance_m=5000)
+    _seed_session(
+        db, plan, window_start=WED, window_end=WED, title="6x400m",
+        target_distance_m=None,
+        structure={
+            "reps_planned": 6, "rep_distance_m": 400,
+            "warmup_distance_m": 1050, "cooldown_distance_m": 1050,
+        },
+    )
+    _seed_session(
+        db, plan, window_start=WED, window_end=WED, title="Turbo",
+        intent="easy", discipline="bike", target_distance_m=30000,
+    )
+    # A run stating no distance at all, so the agreement is checked on the week
+    # shape that actually differs between the two readers rather than only on the
+    # easy one. The coach's string then carries its partial-total clause, and the
+    # FIGURE still has to be the screen's.
+    _seed_session(
+        db, plan, window_start=THU, window_end=THU, title="4 x 5 min",
+        target_distance_m=None, structure={"reps_planned": 4, "rest_s": 90},
+    )
+    activity = _seed_activity(db, user, day=MON)
+
+    section = build_schedule_context(db, activity)
+    week = build_week(db, user, today=MON)
+
+    on_screen = week.headline.planned_running_distance_m
+    assert section.planned_running_this_week.startswith(f"{on_screen / 1000:.2f} km")
+
+
+def test_the_week_total_is_what_was_asked_for_and_never_what_was_done(db):
+    """The discipline this addition had to respect. Handed a plan AND a result a
+    model reaches for a compliance verdict, which is the nagging ADR 0025 exists
+    to have removed — so what actually happened stays out of this section, where
+    it has always been, reachable through the coach's own tools instead."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan, title="Easy", intent="easy", target_distance_m=5000)
+    activity = _seed_activity(db, user, day=MON)
+
+    section = build_schedule_context(db, activity)
+    dumped = section.model_dump()
+
+    assert "planned_running_this_week" in dumped
+    assert not [key for key in dumped if "logged" in key or "actual" in key]
 
 
 def test_the_prescription_is_never_expressed_as_load(db):
