@@ -76,20 +76,27 @@ class TestBoundaries:
         # because a session the runner says they did is often the only record
         # there will be — Strava never sees the gym — and it unticks.
         #
-        # `draft_plan` (#856) is the one that does not: writing a plan supersedes
-        # the one the runner was training to, and no route brings that back. It
-        # holds the property the undo rule exists to protect — the superseded
-        # plan and every one of its sessions are RETAINED (`activate_plan` only
-        # flips status), and the card names the plan it will replace before the
-        # runner confirms — but "non-destructive and announced" is a weaker
-        # guarantee than "undoable", and it is recorded as weaker rather than
-        # folded in. A restore is tracked separately.
+        # `adjust_session` (#881) overwrites one number and does not undo with a
+        # tap either. What it has instead is that the card names BOTH values, so
+        # the previous prescription is written down in the runner's own
+        # transcript, and the same action puts it back — a correction is itself
+        # correctable. Recoverable, in other words, without being one-tap.
+        #
+        # `draft_plan` (#856) is the one that is neither: writing a plan
+        # supersedes the one the runner was training to, and no route brings that
+        # back. It holds the property the undo rule exists to protect — the
+        # superseded plan and every one of its sessions are RETAINED
+        # (`activate_plan` only flips status), and the card names the plan it will
+        # replace before the runner confirms — but "non-destructive and
+        # announced" is a weaker guarantee than "undoable", and it is recorded as
+        # weaker rather than folded in. A restore is tracked separately.
         assert allowed == {
             "check_in",
             "intent",
             "split_block",
             "merge_blocks",
             "complete_session",
+            "adjust_session",
             "draft_plan",
         }
 
