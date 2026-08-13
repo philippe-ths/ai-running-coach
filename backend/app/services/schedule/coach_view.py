@@ -28,7 +28,7 @@ what gets read out.
 """
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, List, Optional
 
 from sqlalchemy.orm import Session
@@ -88,6 +88,40 @@ def _km(metres: float, unmeasured_runs: int = 0) -> Optional[str]:
         return total
     runs = "run" if unmeasured_runs == 1 else "runs"
     return f"{total}, plus {unmeasured_runs} {runs} whose distance was not stated"
+
+
+def describe_written_ago(plan: Any, now: Optional[datetime] = None) -> Optional[str]:
+    """How long ago this plan was written, in the terms a person would use.
+
+    Shared by the runner's confirm card and the coach's own read of the schedule
+    (#883), because both need the same fact and a plan cannot be two ages. A
+    runner asked "Is it added?", was offered a second card, and confirmed it —
+    replacing the plan they had accepted ninety seconds earlier with a differently
+    generated one. Drafting is not deterministic, so that is a different plan, and
+    the card said only "your current one": true, and silent about the part that
+    would have stopped them.
+    """
+    written = getattr(plan, "generated_at", None) or getattr(plan, "created_at", None)
+    if written is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    # SQLite hands back naive datetimes where Postgres does not, and subtracting
+    # across the two raises rather than being wrong quietly.
+    if written.tzinfo is None:
+        written = written.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    minutes = int((now - written).total_seconds() // 60)
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = hours // 24
+    return f"{days} day{'s' if days != 1 else ''} ago"
 
 
 def _target(session: Any) -> Optional[str]:
@@ -329,6 +363,10 @@ def build_thread_schedule(
     return {
         "has_plan": True,
         **({"draft": draft} if draft else {}),
+        # So "Is it added?" can be answered from the record (#883). Without it the
+        # coach could see a plan but not that it was the one written ninety
+        # seconds ago, so it offered to write another and the runner confirmed.
+        "written": describe_written_ago(plan),
         "runs_through": plan.horizon_end.isoformat() if plan.horizon_end else None,
         # The headline number on the runner's own screen (#880). Without it, a
         # runner asking why their week read 25 was asking the coach about a
