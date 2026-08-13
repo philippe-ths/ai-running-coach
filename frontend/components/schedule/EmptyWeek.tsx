@@ -4,69 +4,15 @@
 //
 // The plan is WRITTEN BY THE COACH, not by a form — so the only affordance here
 // is asking for one. Drafting is a slow LLM call on the worker, so the POST
-// returns 202 and this polls, the `ImportStravaHistory` idiom. The status
-// message is rendered verbatim: it is written for the runner, and paraphrasing
-// it here would be a second voice speaking for the coach.
+// returns 202 and `useDraftStatus` polls, the `ImportStravaHistory` idiom. The
+// status message is rendered verbatim: it is written for the runner, and
+// paraphrasing it here would be a second voice speaking for the coach.
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import { CalendarPlus, Loader2 } from "lucide-react";
-import { fetchFromAPI } from "@/lib/api";
-import type { DraftStatus } from "@/lib/types/schedule";
-
-const POLL_INTERVAL_MS = 3000;
+import { useDraftStatus } from "@/lib/useDraftStatus";
 
 export default function EmptyWeek({ onPlanReady }: { onPlanReady: () => void }) {
-  const [draft, setDraft] = useState<DraftStatus | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // The callback identity changes with the parent's week state; a ref keeps the
-  // poll loop from re-subscribing (and double-polling) every time it does.
-  const ready = useRef(onPlanReady);
-  ready.current = onPlanReady;
-
-  const poll = useCallback(async () => {
-    try {
-      const data: DraftStatus | null = await fetchFromAPI("/api/schedule/draft");
-      setDraft(data);
-      if (data?.status === "drafting") {
-        timer.current = setTimeout(poll, POLL_INTERVAL_MS);
-      } else if (data?.status === "active") {
-        ready.current();
-      }
-    } catch {
-      // A failed poll is not worth a red banner: the next tap re-reads it.
-    }
-  }, []);
-
-  // On mount, pick up a draft already in flight (asked for on another device,
-  // or before a reload) and resume polling it.
-  useEffect(() => {
-    poll();
-    return () => {
-      if (timer.current) clearTimeout(timer.current);
-    };
-  }, [poll]);
-
-  const drafting = draft?.status === "drafting";
-
-  const startDraft = async () => {
-    if (starting || drafting) return;
-    setStarting(true);
-    setError(null);
-    try {
-      const data: DraftStatus = await fetchFromAPI("/api/schedule/draft", {
-        method: "POST",
-      });
-      setDraft(data);
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(poll, POLL_INTERVAL_MS);
-    } catch {
-      setError("Could not ask your coach for a plan just now. Nothing has changed — try again.");
-    } finally {
-      setStarting(false);
-    }
-  };
+  const { draft, drafting, starting, error, start } = useDraftStatus(onPlanReady);
 
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
@@ -81,7 +27,7 @@ export default function EmptyWeek({ onPlanReady }: { onPlanReady: () => void }) 
 
       <button
         type="button"
-        onClick={startDraft}
+        onClick={() => void start()}
         disabled={starting || drafting}
         className="mt-4 inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
       >

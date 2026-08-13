@@ -149,6 +149,24 @@ def fail_plan(db: Session, plan: TrainingPlan, reason: str) -> TrainingPlan:
     return plan
 
 
+def latest_failed_plan(db: Session, user_id: uuid.UUID) -> Optional[TrainingPlan]:
+    """The runner's most recent draft that failed, or None.
+
+    Asked separately from `latest_plan` rather than read off it, because the
+    question is different. `latest_plan` answers "where does the newest row
+    stand" and breaks a same-instant tie on an arbitrary id, which is fine for a
+    poll that only needs a stable answer. "Was the last thing that happened a
+    failure" cannot be settled that way: it has to compare the failure against
+    the plan it tried to replace, and a tie there would report the opposite.
+    """
+    return (
+        db.query(TrainingPlan)
+        .filter(TrainingPlan.user_id == user_id, TrainingPlan.status == FAILED)
+        .order_by(TrainingPlan.created_at.desc(), TrainingPlan.id.desc())
+        .first()
+    )
+
+
 def get_active_plan(db: Session, user_id: uuid.UUID) -> Optional[TrainingPlan]:
     """The runner's current plan, or None — which is free mode, not an error."""
     return (

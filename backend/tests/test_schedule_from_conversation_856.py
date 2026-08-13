@@ -427,6 +427,127 @@ def test_a_schedule_fault_costs_the_section_not_the_reply(db):
     assert sections["schedule"] is None
 
 
+# --- 2b. a plan being written, and one that failed (#879) --------------------
+
+
+def test_the_coach_is_told_when_a_plan_it_offered_is_still_being_written(db):
+    """The coach cannot see the worker, so without this it reads an unchanged
+    plan and concludes nothing happened.
+
+    In production it did exactly that: it told the runner "the plan is in" while
+    a draft it had offered was still running, and again after that draft had
+    failed. Both answers were about a plan the coach had no way to know had been
+    attempted.
+    """
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    _active_plan(db, user)
+    store.create_drafting_plan(db, user.id)
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule["has_plan"] is True
+    assert schedule["draft"] == {"state": "writing"}
+    assert "writing" in thread_turn._render_schedule_block(schedule)
+
+
+def test_the_coach_is_told_when_the_last_draft_failed(db):
+    """The state the runner was in for four turns. The plan is the previous one,
+    unchanged, and the coach would read that as success."""
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    _active_plan(db, user)
+    failed = store.create_drafting_plan(db, user.id)
+    store.fail_plan(db, failed, "rejected by the gate")
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule["draft"] == {"state": "failed"}
+
+
+def test_the_failure_is_reported_even_when_it_ties_the_plan_it_replaced(db):
+    """`latest_plan` cannot answer this question, and the tie is where it shows.
+
+    It orders by `created_at` and breaks a tie on the id, which is a UUID — fine
+    for a poll, which only needs a STABLE answer. "Was the last thing that
+    happened a failure" needs the RIGHT one, and here the arbitrary tiebreaker
+    picks the active plan and reports success. The ids below are fixed so the
+    tiebreaker deterministically picks the wrong row: without the explicit
+    comparison this test reports no failure at all.
+    """
+    from app.models.training_plan import TrainingPlan
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    same_instant = datetime(2026, 8, 13, 6, 39, tzinfo=timezone.utc)
+    # The active plan sorts LAST by id, so the tiebreaker prefers it.
+    db.add(
+        TrainingPlan(
+            id=uuid.UUID("ffffffff-ffff-4fff-8fff-ffffffffffff"),
+            user_id=user.id,
+            status=store.ACTIVE,
+            rules=[],
+            week_shapes=[],
+            created_at=same_instant,
+        )
+    )
+    db.add(
+        TrainingPlan(
+            id=uuid.UUID("00000000-0000-4000-8000-000000000000"),
+            user_id=user.id,
+            status=store.FAILED,
+            rules=[],
+            week_shapes=[],
+            created_at=same_instant,
+        )
+    )
+    db.commit()
+
+    assert store.latest_plan(db, user.id).status == store.ACTIVE  # the wrong read
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule["draft"] == {"state": "failed"}
+
+
+def test_a_runner_with_no_plan_still_learns_one_is_being_written(db):
+    """The no-plan case returns None so the caller can say so in words. A draft
+    in flight is a different fact and must survive that shortcut — this is the
+    first plan, so there is nothing else to notice it by."""
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    store.create_drafting_plan(db, user.id)
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule == {"has_plan": False, "draft": {"state": "writing"}}
+
+
+def test_a_plan_that_simply_landed_carries_no_draft_note(db):
+    """Only the two states the coach could get wrong. A plan that is there is its
+    own evidence, and a note on every turn would be noise."""
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    _active_plan(db, user)
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert "draft" not in schedule
+
+
+def test_the_coach_is_told_that_confirming_is_not_landing(db):
+    """The prose half. The rule said "nothing is written unless they confirm it",
+    which is true and stops one turn short: a confirmed plan is written in the
+    background and can fail."""
+    from app.services.coach.thread_turn import THREAD_SYSTEM_TEMPLATE
+
+    assert "written in the background and can fail" in THREAD_SYSTEM_TEMPLATE
+    assert "say that plainly rather than repeating the offer" in THREAD_SYSTEM_TEMPLATE
+
+
 # --- 3. what the coach is told -----------------------------------------------
 
 
