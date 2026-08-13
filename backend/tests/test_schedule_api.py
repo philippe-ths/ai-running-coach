@@ -325,3 +325,110 @@ def test_a_race_being_run_today_is_still_listed(db, client):
     assert "Today's race" in names
     assert "Yesterday" in names
     assert "Last week" not in names
+
+
+# --- the plan records the race it was built for (#884) ----------------------
+
+
+def test_a_plan_drafted_with_a_race_stated_records_that_race(db):
+    """`TrainingPlan.goal_race_id` existed from the start and nothing ever wrote
+    it, so every plan in production carried a null pointer.
+
+    Nothing looked visibly broken — drafting reads the runner's races separately
+    and the horizon draws its marker the same way — but the plan did not know
+    what it was FOR: a runner with two races had no way to tell which block
+    belonged to which, and `delete_goal_race`'s detach could never fire.
+    """
+    from app.services.schedule import store
+
+    user = _seed_user(db)
+    race = store.create_goal_race(
+        db, user.id, name="Autumn half", race_date=date.today() + timedelta(days=60),
+        distance_m=21097.5, priority="A",
+    )
+
+    plan = store.create_drafting_plan(db, user.id)
+
+    assert plan.goal_race_id == race.id
+
+
+def test_the_block_is_built_for_the_runners_own_A_race_not_the_nearest_one(db):
+    """`A` is the runner's word for the race the block is built for. A parkrun
+    three weeks out does not restructure a marathon build, so priority wins over
+    proximity — the ranking is theirs, not the app's."""
+    from app.services.schedule import store
+
+    user = _seed_user(db)
+    store.create_goal_race(
+        db, user.id, name="Local 5k", race_date=date.today() + timedelta(days=21),
+        distance_m=5000, priority="C",
+    )
+    marathon = store.create_goal_race(
+        db, user.id, name="Autumn marathon",
+        race_date=date.today() + timedelta(days=90), distance_m=42195, priority="A",
+    )
+
+    plan = store.create_drafting_plan(db, user.id)
+
+    assert plan.goal_race_id == marathon.id
+
+
+def test_a_race_already_run_is_not_what_the_next_block_is_for(db):
+    """A plan drafted after a race is for what comes next, not for the finish
+    line behind it."""
+    from app.services.schedule import store
+
+    user = _seed_user(db)
+    store.create_goal_race(
+        db, user.id, name="Last month's half",
+        race_date=date.today() - timedelta(days=30), distance_m=21097.5, priority="A",
+    )
+
+    plan = store.create_drafting_plan(db, user.id)
+
+    assert plan.goal_race_id is None
+
+
+def test_a_runner_with_no_race_drafts_a_plan_for_no_race(db):
+    """Free progression is a destination, not a missing pointer."""
+    from app.services.schedule import store
+
+    plan = store.create_drafting_plan(db, _seed_user(db).id)
+
+    assert plan.goal_race_id is None
+
+
+def test_deleting_the_race_detaches_the_plan_that_was_built_for_it(db):
+    """The detach existed and could never fire, because nothing ever attached.
+    Deleting a race must not take the training with it."""
+    from app.services.schedule import store
+
+    user = _seed_user(db)
+    race = store.create_goal_race(
+        db, user.id, name="Autumn half", race_date=date.today() + timedelta(days=60),
+        distance_m=21097.5, priority="A",
+    )
+    plan = store.create_drafting_plan(db, user.id)
+    assert plan.goal_race_id == race.id
+
+    store.delete_goal_race(db, race)
+    db.refresh(plan)
+
+    assert plan.goal_race_id is None
+    assert db.query(TrainingPlan).filter(TrainingPlan.id == plan.id).one() is not None
+
+
+def test_another_runners_race_is_never_what_my_plan_is_built_for(db):
+    """The resolution is owner-scoped like every other read in this store."""
+    from app.services.schedule import store
+
+    stranger = _seed_user(db)
+    store.create_goal_race(
+        db, stranger.id, name="Their race", race_date=date.today() + timedelta(days=30),
+        distance_m=10000, priority="A",
+    )
+    mine = _seed_user(db)
+
+    plan = store.create_drafting_plan(db, mine.id)
+
+    assert plan.goal_race_id is None

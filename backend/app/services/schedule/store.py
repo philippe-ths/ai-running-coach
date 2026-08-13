@@ -95,7 +95,17 @@ def create_drafting_plan(
 
     It exists up front so the runner's client has something to poll and so a
     crashed worker leaves a visible `drafting` row rather than silence.
+
+    The race it is built towards is resolved HERE when the caller does not name
+    one (#884). Neither caller ever did, so every plan in production carried a
+    null pointer, `delete_goal_race`'s detach could never fire, and a runner with
+    two races had no way to tell which block belonged to which. Resolving it at
+    the one place that creates these rows is what stops the two callers drifting
+    into two answers.
     """
+    if goal_race_id is None:
+        target = plan_target_race(db, user_id, on_or_after=date.today())
+        goal_race_id = target.id if target is not None else None
     plan = TrainingPlan(
         user_id=user_id,
         status=DRAFTING,
@@ -243,6 +253,26 @@ def list_goal_races(
     if on_or_after is not None:
         query = query.filter(GoalRace.race_date >= on_or_after)
     return query.order_by(GoalRace.race_date.asc()).all()
+
+
+def plan_target_race(
+    db: Session, user_id: uuid.UUID, *, on_or_after: date
+) -> Optional[GoalRace]:
+    """The race a plan drafted now would be built towards, or None (#884).
+
+    `A` is the runner's own word for the race the block is built for, so an A
+    race wins over a nearer B or C — a runner does not restructure a marathon
+    build around a parkrun three weeks out. Among equals the nearest wins, since
+    that is the one the next twelve weeks actually reach.
+
+    One definition, because two callers create drafting plans and a plan that
+    recorded a different race depending on which button started it would be
+    worse than one that recorded none.
+    """
+    races = list_goal_races(db, user_id, on_or_after=on_or_after)
+    if not races:
+        return None
+    return next((race for race in races if race.priority == "A"), races[0])
 
 
 def create_goal_race(
