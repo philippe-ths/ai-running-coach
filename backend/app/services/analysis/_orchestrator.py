@@ -78,12 +78,24 @@ def _extract_planned_workout(planned_session) -> dict | None:
     unnoticed. That day is this one.
 
     The session is resolved in the load phase (`schedule.completion`), so this
-    stays a pure projection: a planned session carries `structure` only when the
-    coach gave it reps, and everything else still matches with no plan.
+    stays a pure projection.
+
+    A REP COUNT is what makes a plan scoreable, and since #878 a session's
+    `structure` may exist without one: a tempo run carries a warm-up and a
+    cool-down and no reps. `match_planned_to_detected` scores whatever it is
+    handed, and against an edges-only plan it finds nothing to compare, scores
+    0.0, and `compute_confidence` then appends the CRITICAL
+    `interval_structure_mismatch` — so a tempo run with a warm-up would be
+    reported as a botched interval session. A plan with no reps in it is not a
+    rep plan, and saying so here is cheaper than teaching every reader of
+    `structure` to ask.
     """
     if planned_session is None:
         return None
-    return getattr(planned_session, "structure", None) or None
+    structure = getattr(planned_session, "structure", None) or None
+    if structure and not structure.get("reps_planned"):
+        return None
+    return structure
 
 async def analyze_with_streams(db: Session, activity_id: str) -> Optional[DerivedMetric]:
     """

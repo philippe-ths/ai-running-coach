@@ -284,6 +284,55 @@ async def test_the_interval_structure_lands_on_the_row_in_the_matchers_own_shape
     }
 
 
+async def test_878_a_plan_carrying_a_tempo_with_a_warmup_is_accepted_and_stored(
+    db, monkeypatch
+):
+    """The shape a live draft died on, driven through the whole chain.
+
+    Production, 2026-08-13: a runner asked for a plan in conversation and the
+    coach wrote a Week 2 tempo with a warm-up and a cool-down and no reps. The
+    contract refused it, and since a draft gets two attempts and the first had
+    already gone, the whole seven-week block was lost. The runner was told
+    nothing and went on believing the plan was in.
+
+    Coercion, the coherence gate and persistence, not just the schema: the
+    session that killed the plan has to survive all three and land on a row.
+    """
+    user = _seed_user(db)
+    _seed_history(db, user)
+    plan = store.create_drafting_plan(db, user.id)
+
+    payload = _good_plan()
+    payload["weeks"][0]["sessions"].append(
+        {
+            "window_start": SUN.isoformat(),
+            "window_end": SUN.isoformat(),
+            "intent": "quality",
+            "discipline": "run",
+            "title": "Tempo: 5 km @ 4:50/km",
+            "detail": "1 km easy, 5 km at 4:50/km, 1 km easy.",
+            "target_distance_m": 7000,
+            "warmup_distance_m": 1000,
+            "cooldown_distance_m": 1000,
+        }
+    )
+    _inject(monkeypatch, _FakeClient([payload]))
+
+    outcome = await draft_plan(db, user, plan, today=TODAY)
+
+    assert outcome.ok, outcome.failures
+    tempo = (
+        db.query(PlannedSession)
+        .filter(PlannedSession.title == "Tempo: 5 km @ 4:50/km")
+        .one()
+    )
+    assert tempo.target_distance_m == 7000
+    assert tempo.structure == {
+        "warmup_distance_m": 1000,
+        "cooldown_distance_m": 1000,
+    }
+
+
 async def test_an_accepted_plan_becomes_active_and_supersedes_its_predecessor(
     db, monkeypatch
 ):
