@@ -29,6 +29,7 @@ import {
   ToolTraceEntry,
 } from '@/lib/types';
 import { readCoachStream } from '@/lib/coachStream';
+import { useDraftStatus } from '@/lib/useDraftStatus';
 import { useCoachSheet } from './CoachSheetContext';
 import ThreadSwitcher from './ThreadSwitcher';
 import { useRouter } from 'next/navigation';
@@ -206,6 +207,26 @@ export default function CoachSheet() {
   const [actionError, setActionError] = useState('');
   const [actionDone, setActionDone] = useState('');
   const hasAutoOpenedThread = useRef(false);
+
+  // A confirmed plan is written on the worker, so the sheet has to keep looking
+  // (#879). `router.refresh()` alone repaints the screen behind at the moment of
+  // confirming, which is a minute before there is anything to repaint.
+  // `pollOnMount: false` deliberately. The sheet sits over every screen, so
+  // asking on each open would cost a request per open for every runner — and
+  // behind the schedule's kill switch that request 503s. It would also surface a
+  // failure from days ago to someone who never asked for a plan, which is a
+  // different thing from telling the runner what happened to the one they just
+  // confirmed. It speaks only about a draft it was told to watch.
+  const {
+    drafting: draftWriting,
+    failed: draftFailed,
+    watching: draftWatching,
+    draft,
+    watch: watchDraft,
+  } = useDraftStatus(
+    useCallback(() => router.refresh(), [router]),
+    { pollOnMount: false },
+  );
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -426,10 +447,17 @@ export default function CoachSheet() {
       // are visible behind the sheet the moment it refreshes.
       const result = (await res.json().catch(() => null)) as ProposedActionResult | null;
       setActionDone(result?.message ?? '');
+      const kind = proposedAction.action_type;
       setProposedAction(null);
       // The write lands on the runner's record, not in the thread, so refresh
       // the screen behind the sheet and leave the transcript where they are.
       router.refresh();
+      // Every other action has finished by the time the request answers. A plan
+      // has not: it is written on the worker over about a minute and can fail
+      // outright, so the line above is a promise until something checks (#879).
+      // Nothing did, and a runner sat here reading "it'll be on your Schedule
+      // screen in a minute" about a plan that never arrived.
+      if (kind === 'draft_plan') watchDraft();
     } catch (err) {
       // A tap that changed nothing must say so. An offer is single-use and
       // short-lived, so a 404 means it is spent or stale, not that it failed.
@@ -665,10 +693,33 @@ export default function CoachSheet() {
               </div>
             )}
 
-            {actionDone && !proposedAction && (
-              <div className="rounded-xl border border-gray-200 px-3 py-2 text-[11.5px] text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                {actionDone}
+            {/* A plan is the one confirmed action still happening after the
+                request answers, so its own state SUPERSEDES the line the confirm
+                left behind rather than sitting under it (#879). Two lines, one
+                promising and one reporting, is how the runner ended up believing
+                a failed plan was in. The message is the server's, verbatim. */}
+            {(draftWriting || (draftFailed && draftWatching)) && !proposedAction ? (
+              <div
+                role="status"
+                aria-live="polite"
+                className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-[11.5px] ${
+                  draftFailed
+                    ? 'border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300'
+                    : 'border-gray-200 text-gray-500 dark:border-gray-700 dark:text-gray-400'
+                }`}
+              >
+                {draftWriting && (
+                  <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" aria-hidden="true" />
+                )}
+                <span>{draft?.message}</span>
               </div>
+            ) : (
+              actionDone &&
+              !proposedAction && (
+                <div className="rounded-xl border border-gray-200 px-3 py-2 text-[11.5px] text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                  {actionDone}
+                </div>
+              )
             )}
           </div>
         </div>

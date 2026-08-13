@@ -66,6 +66,7 @@ def _seed_session(
     commitment: str = "committed",
     title: str = "Session",
     target_distance_m: float = None,
+    target_duration_s: int = None,
     target_effort_score: float = None,
     structure: dict = None,
     completed_at: datetime = None,
@@ -81,6 +82,7 @@ def _seed_session(
         commitment=commitment,
         title=title,
         target_distance_m=target_distance_m,
+        target_duration_s=target_duration_s,
         structure=structure,
         target_effort_score=target_effort_score,
         completed_at=completed_at,
@@ -377,6 +379,58 @@ def test_a_rep_structured_run_that_also_states_a_total_is_not_double_counted(db)
     week = build_week(db, user, today=MON)
 
     assert week.headline.planned_running_distance_m == 9000
+
+
+def test_a_tempo_with_a_warmup_reaches_the_week_as_the_whole_session(db):
+    """#878: a session whose parts do NOT add up to it reads its stated total.
+
+    A tempo run has a warm-up and a cool-down and no reps, so its work has no
+    field of its own. Summing what is stated would return 2 km of edges and drop
+    the 5 km tempo between them, which is #876's defect one session type further
+    on. The contract makes such a session state its whole distance, and the week
+    reads that.
+    """
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db,
+        plan,
+        start=WED,
+        discipline="run",
+        intent="quality",
+        target_distance_m=7000,
+        structure={"warmup_distance_m": 1000.0, "cooldown_distance_m": 1000.0},
+    )
+
+    week = build_week(db, user, today=MON)
+
+    assert week.headline.planned_running_distance_m == 7000
+
+
+def test_a_tempo_measured_in_minutes_contributes_only_what_it_stated_in_metres(db):
+    """The abstention, unchanged, and improved on rather than made worse.
+
+    A session sized in minutes has always contributed nothing to the week's
+    kilometres, because a duration is not a distance until multiplied by a pace
+    nobody stated. Once its warm-up and cool-down are stated in metres those two
+    parts count, and the block between them still does not. Guessing the rest
+    would be the app inventing distance.
+    """
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db,
+        plan,
+        start=WED,
+        discipline="run",
+        intent="quality",
+        target_duration_s=2400,
+        structure={"warmup_distance_m": 1000.0, "cooldown_distance_m": 1000.0},
+    )
+
+    week = build_week(db, user, today=MON)
+
+    assert week.headline.planned_running_distance_m == 2000
 
 
 def test_reps_with_no_measurement_at_all_add_nothing_to_the_headline(db):

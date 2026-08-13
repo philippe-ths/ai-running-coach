@@ -103,6 +103,14 @@ def planned_distance_m(session: Any) -> float:
     has stated the whole session, warm-up and cool-down included, so adding the
     structured parts on top would count the work twice — and the total is the
     more complete of the two statements, not merely the first one checked.
+
+    That precedence is load-bearing rather than incidental (#878). A tempo run
+    has a warm-up and no reps, so its work has no field of its own: with a total
+    stated this reads it, and without one the session contributes the warm-up and
+    the cool-down and nothing for the tempo block between them. Both answers are
+    the module's own rule — what the coach actually wrote — and the second is the
+    same abstention a duration-sized session has always made, improved on rather
+    than made worse by the edges being stated.
     """
     total = getattr(session, "target_distance_m", None)
     if total:

@@ -99,9 +99,14 @@ _DRAFT_MESSAGES = {
     "drafting": "Your coach is writing your plan. This usually takes a minute.",
     "active": "Your plan is ready.",
     "superseded": "This plan has been replaced by a newer one.",
+    # No "just now" (#879). This is read at the moment of failure and for as long
+    # afterwards as the runner has not asked for another plan, which can be days:
+    # only the empty-week panel used to show it, and only to someone sitting
+    # there watching. Now it is on the Schedule screen of anyone whose last
+    # attempt failed, so it has to stay true when it is no longer news.
     "failed": (
-        "Your coach could not write a plan just now. Nothing has changed — try "
-        "again, or ask in a conversation."
+        "Your coach could not write a plan. Nothing has changed — ask again, or "
+        "talk it through in a conversation."
     ),
 }
 
