@@ -352,6 +352,16 @@ def _require_owned_planned_session(db: Session, owner_user_id: UUID, session_id)
     return session
 
 
+def _replace_description(existing, describe_age) -> str:
+    """What this card will write over, said plainly enough to stop a mistake."""
+    if existing is None:
+        return "Write this plan into your schedule"
+    age = describe_age(existing)
+    if age is None:
+        return "Write this plan into your schedule, replacing your current one"
+    return f"Write this plan into your schedule, replacing the one written {age}"
+
+
 def _describe_complete_session(session) -> str:
     when = (
         session.window_start.strftime("%a %-d %b")
@@ -375,6 +385,8 @@ def _build_offer(
             # The surface's kill switch reaches the offer too. Putting a card up
             # for a screen that answers 503 would be a promise the app cannot keep.
             raise ValueError("the schedule is unavailable")
+        from app.services.schedule.coach_view import describe_written_ago
+
         existing = schedule_store.get_active_plan(db, owner_user_id)
         frame = ProposedActionFrame(
             action_type="draft_plan",
@@ -384,11 +396,14 @@ def _build_offer(
             # that is the part of this action they most need to see before it
             # happens — the runner-confirms-before-anything-is-written property
             # is only worth having if the card says what will be written over.
-            description=(
-                "Write this plan into your schedule, replacing your current one"
-                if existing is not None
-                else "Write this plan into your schedule"
-            ),
+            #
+            # And named with its AGE (#883). A runner asked "Is it added?", was
+            # offered a second card, and confirmed it — replacing the plan they
+            # had accepted ninety seconds earlier. Drafting is not deterministic,
+            # so the replacement was a different plan. "Your current one" was
+            # true and said nothing about the part that would have stopped them:
+            # that the plan in question was the one they had just agreed.
+            description=_replace_description(existing, describe_written_ago),
             confirm_label="Put it in my schedule",
         )
         stored = StoredProposedAction(

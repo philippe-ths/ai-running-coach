@@ -149,10 +149,17 @@ def test_a_second_confirm_joins_the_draft_already_running(db):
     assert len(enqueues) == 1
 
 
-def test_the_card_names_the_plan_it_would_replace(db):
+def test_the_card_names_the_plan_it_would_replace_and_how_recent_it_is(db):
     """Writing a plan supersedes the one the runner is training to, and that is
     the part of this action they most need to see BEFORE it happens. A confirm
-    step is only worth having if the card says what will be written over."""
+    step is only worth having if the card says what will be written over.
+
+    With its AGE (#883). A runner asked "Is it added?", was offered a second
+    card, and confirmed it — replacing the plan they had accepted ninety seconds
+    earlier with a differently generated one, because drafting is not
+    deterministic. "Your current one" was true and silent about the only part
+    that would have stopped them: that it was the plan they had just agreed.
+    """
     user = _user(db)
     with patch.object(proposed_actions, "redis_conn", _FakeRedis()):
         _r, without = proposed_actions.mint_proposed_action(
@@ -164,7 +171,100 @@ def test_the_card_names_the_plan_it_would_replace(db):
         )
 
     assert "replacing" not in without["description"]
-    assert "replacing your current one" in with_plan["description"]
+    assert with_plan["description"] == (
+        "Write this plan into your schedule, replacing the one written just now"
+    )
+
+
+def test_the_card_names_an_older_plans_age_in_its_own_terms(db):
+    """The same fact, when the plan is genuinely old. A runner who has been
+    training to a plan for a fortnight is not making the mistake this exists to
+    catch, and telling them "just now" would be a lie in the other direction."""
+    user = _user(db)
+    plan = _active_plan(db, user)
+    plan.generated_at = datetime.now(timezone.utc) - timedelta(days=14)
+    db.commit()
+
+    with patch.object(proposed_actions, "redis_conn", _FakeRedis()):
+        _r, frame = proposed_actions.mint_proposed_action(
+            db, user.id, {"action_type": "draft_plan"}
+        )
+
+    assert frame["description"].endswith("replacing the one written 14 days ago")
+
+
+@pytest.mark.parametrize(
+    "minutes_ago, expected",
+    [
+        (0, "just now"),
+        (1, "1 minute ago"),
+        (5, "5 minutes ago"),
+        (60, "1 hour ago"),
+        (200, "3 hours ago"),
+        (60 * 24, "1 day ago"),
+        (60 * 24 * 14, "14 days ago"),
+    ],
+)
+def test_a_plans_age_is_said_the_way_a_person_would_say_it(minutes_ago, expected):
+    """One phrasing, two audiences: the runner's card and the coach's own read.
+    A plan cannot be two ages, so neither may invent its own wording."""
+    from app.services.schedule.coach_view import describe_written_ago
+
+    now = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+
+    class _Plan:
+        generated_at = None
+        created_at = now - timedelta(minutes=minutes_ago)
+
+    assert describe_written_ago(_Plan(), now=now) == expected
+
+
+def test_a_plan_with_no_timestamp_yields_no_age_rather_than_raising():
+    """The card must still describe what it replaces when the age is unknown.
+    Unreachable through the app today — every stored plan carries `created_at` —
+    so it is exercised here rather than left as an untested claim in the code."""
+    from app.services.coach.proposed_actions import _replace_description
+    from app.services.schedule.coach_view import describe_written_ago
+
+    class _Timeless:
+        generated_at = None
+        created_at = None
+
+    assert describe_written_ago(_Timeless()) is None
+    assert _replace_description(_Timeless(), describe_written_ago) == (
+        "Write this plan into your schedule, replacing your current one"
+    )
+
+
+def test_a_naive_timestamp_is_read_as_utc_rather_than_raising():
+    """SQLite hands back naive datetimes where Postgres does not, and subtracting
+    across the two raises instead of being quietly wrong."""
+    from app.services.schedule.coach_view import describe_written_ago
+
+    class _Plan:
+        generated_at = None
+        created_at = datetime(2026, 8, 13, 11, 55)  # naive
+
+    assert describe_written_ago(
+        _Plan(), now=datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+    ) == "5 minutes ago"
+
+
+def test_the_coach_can_see_when_the_current_plan_was_written(db):
+    """So "Is it added?" is answered from the record rather than re-offered.
+
+    The offer that caused this was a reasonable reply to a question the coach
+    could not check: it could see a plan but not that the plan WAS the one it had
+    written ninety seconds before.
+    """
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    _active_plan(db, user)
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule["written"] == "just now"
 
 
 def test_the_offer_is_refused_while_the_schedule_is_switched_off(db, monkeypatch):
