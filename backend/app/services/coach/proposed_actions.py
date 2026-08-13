@@ -41,6 +41,7 @@ class ProposedActionFrame(BaseModel):
         "merge_blocks",
         "complete_session",
         "draft_plan",
+        "adjust_session",
     ]
     token: str
     description: str
@@ -61,6 +62,7 @@ class ProposedActionRequest(BaseModel):
         "merge_blocks",
         "complete_session",
         "draft_plan",
+        "adjust_session",
     ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = Field(default=None, ge=1, le=10)
@@ -71,6 +73,12 @@ class ProposedActionRequest(BaseModel):
     other_block_id: Optional[UUID] = None
     # #830: the planned session the conversation settled as done.
     planned_session_id: Optional[UUID] = None
+    # #881: the corrected prescription, for `adjust_session`. Bounded here as
+    # well as in the writer, so an absurd value never reaches a card the runner
+    # could tap — the drafted-session contract's own limits, because a correction
+    # is not a looser channel than the one that wrote the session.
+    target_distance_m: Optional[float] = Field(default=None, gt=0, le=200_000)
+    target_duration_s: Optional[int] = Field(default=None, gt=0, le=86_400)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -99,6 +107,24 @@ class ProposedActionRequest(BaseModel):
         elif self.action_type == "complete_session":
             if self.planned_session_id is None:
                 raise ValueError("complete_session requires planned_session_id")
+        elif self.action_type == "adjust_session":
+            if self.planned_session_id is None:
+                raise ValueError("adjust_session requires planned_session_id")
+            # Exactly one. Both is two prescriptions for one session; neither is
+            # a card that would say only "change this session", which is not
+            # something a runner can agree to.
+            if (self.target_distance_m is None) == (self.target_duration_s is None):
+                raise ValueError(
+                    "adjust_session requires target_distance_m or target_duration_s, "
+                    "not both"
+                )
+        # The correction's arguments belong to the correction. Riding along on
+        # another action they would be silently dropped, and an instruction the
+        # coach wrote and nothing stored is the shape #878 was raised for.
+        if self.action_type != "adjust_session" and (
+            self.target_distance_m is not None or self.target_duration_s is not None
+        ):
+            raise ValueError("only adjust_session takes a corrected target")
         return self
 
 
@@ -111,6 +137,7 @@ class StoredProposedAction(BaseModel):
         "merge_blocks",
         "complete_session",
         "draft_plan",
+        "adjust_session",
     ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = None
@@ -120,6 +147,8 @@ class StoredProposedAction(BaseModel):
     split_at_activity_id: Optional[UUID] = None
     other_block_id: Optional[UUID] = None
     planned_session_id: Optional[UUID] = None
+    target_distance_m: Optional[float] = None
+    target_duration_s: Optional[int] = None
     # #856: the conversation the plan was settled in. Server-supplied at mint
     # time, never model-supplied.
     thread_id: Optional[UUID] = None
@@ -133,10 +162,15 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
         "intent, splitting a block at a named member session, merging two "
         "adjacent blocks, marking a PLANNED session done when the runner says "
         "they did it (the gym and the turbo never reach Strava, so a session they "
-        "mention is often the only record there will be), or writing a block of "
-        "training you have settled together into their schedule (draft_plan — "
-        "takes no arguments; this conversation IS the plan, so use it once the "
-        "shape of the block is agreed rather than asking them to copy it out). "
+        "mention is often the only record there will be), correcting how far or "
+        "how long ONE planned session should be (adjust_session — for a session "
+        "whose prescription is wrong, so a single number does not cost them the "
+        "whole block; it changes nothing else about the session, and their day, "
+        "intent and discipline are not yours to change this way), or writing a "
+        "block of training you have settled together into their schedule "
+        "(draft_plan — takes no arguments; this conversation IS the plan, so use "
+        "it once the shape of the block is agreed rather than asking them to copy "
+        "it out). "
         "Offering is not doing — this puts a card in front of the "
         "runner and nothing is written unless they tap it, so speak of it as "
         "something you can do, never as done. Use only activity_id and block_id "
@@ -155,6 +189,7 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
                     "merge_blocks",
                     "complete_session",
                     "draft_plan",
+                    "adjust_session",
                 ],
             },
             "activity_id": {"type": "string"},
@@ -176,8 +211,24 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
             "planned_session_id": {
                 "type": "string",
                 "description": (
-                    "The planned session the runner has just said they did. Use "
-                    "only an id already in front of you."
+                    "The planned session this is about: the one the runner has "
+                    "just said they did, or the one whose prescription is wrong. "
+                    "Use only an id already in front of you."
+                ),
+            },
+            "target_distance_m": {
+                "type": "number",
+                "description": (
+                    "adjust_session only: what the WHOLE session should be, in "
+                    "metres, door to door. Give this or target_duration_s, not "
+                    "both."
+                ),
+            },
+            "target_duration_s": {
+                "type": "integer",
+                "description": (
+                    "adjust_session only: what the whole session should be, in "
+                    "seconds, when it is prescribed by time rather than distance."
                 ),
             },
         },
@@ -315,6 +366,29 @@ def consume_and_execute(db: Session, owner_user_id: UUID, token: str) -> dict:
             ),
         }
 
+    if stored.action_type == "adjust_session":
+        from app.services.schedule.adjust import adjust_planned_session
+
+        if not settings.SCHEDULE_ENABLED:
+            raise ValueError("the schedule is unavailable")
+        session = _require_owned_planned_session(
+            db, owner_user_id, stored.planned_session_id
+        )
+        # Ownership re-resolved at execute time like every other action here, and
+        # the writer re-checks every refusal the offer already checked: the token
+        # lives for half an hour, and a session can be completed or fall into the
+        # past between the card going up and the runner tapping it.
+        adjust_planned_session(
+            db,
+            session,
+            distance_m=stored.target_distance_m,
+            duration_s=stored.target_duration_s,
+        )
+        return {
+            "action_type": "adjust_session",
+            "planned_session_id": str(session.id),
+        }
+
     if stored.action_type == "complete_session":
         from app.services.schedule.completion import (
             CONVERSATION,
@@ -410,6 +484,46 @@ def _build_offer(
             owner_user_id=owner_user_id,
             action_type="draft_plan",
             thread_id=thread_id,
+        )
+        return frame, stored
+
+    if request.action_type == "adjust_session":
+        from app.services.schedule.adjust import AdjustRefused, describe_adjustment
+
+        if not settings.SCHEDULE_ENABLED:
+            # The surface's kill switch reaches this offer too, exactly as it
+            # reaches `draft_plan`. It is the fast lever when the schedule
+            # misbehaves, and a write path into schedule rows that stays open
+            # through it is not a kill switch.
+            raise ValueError("the schedule is unavailable")
+        session = _require_owned_planned_session(
+            db, owner_user_id, request.planned_session_id
+        )
+        # Refused HERE rather than at confirm time (#881). Every reason a
+        # correction can be refused is knowable before the card goes up — the
+        # session is done, it has passed, it is a rest day — and a card the
+        # runner taps only to be told no is worse than no card: they have already
+        # agreed to something that was never going to happen.
+        try:
+            description = describe_adjustment(
+                session,
+                distance_m=request.target_distance_m,
+                duration_s=request.target_duration_s,
+            )
+        except AdjustRefused as exc:
+            raise ValueError(str(exc)) from exc
+        frame = ProposedActionFrame(
+            action_type="adjust_session",
+            token="",
+            description=description,
+            confirm_label="Change it",
+        )
+        stored = StoredProposedAction(
+            owner_user_id=owner_user_id,
+            action_type="adjust_session",
+            planned_session_id=session.id,
+            target_distance_m=request.target_distance_m,
+            target_duration_s=request.target_duration_s,
         )
         return frame, stored
 

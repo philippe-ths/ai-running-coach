@@ -1272,6 +1272,14 @@ class PlannedForContext(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # The handle the coach needs to ACT on this session (#881). Without it the
+    # two session actions it is offered — marking one done, correcting one — name
+    # an id it has never been shown, so an obedient model can never use either.
+    # Safe to hand over: it is the runner's own session, and ownership is
+    # re-resolved server-side on every offer and every confirm, so a model that
+    # invents one reaches nothing. The `activity_id` in `query_tools` is here for
+    # the same reason.
+    session_id: Optional[str] = None
     title: str
     intent: str
     discipline: str
@@ -1284,6 +1292,7 @@ class UpcomingSessionContext(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    session_id: Optional[str] = None       # the handle for acting on it (#881)
     when: str                              # "Sat" | "Thu-Sat" | "any day"
     title: str
     intent: str
