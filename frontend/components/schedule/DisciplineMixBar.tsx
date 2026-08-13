@@ -3,6 +3,13 @@
 // Sized by effort_score, the only unit that sums across a gym session and a
 // turbo ride. ONE hue in stepped shades, because intent already owns colour;
 // solid = done, faded = still to come.
+//
+// It shows PLANNED AND LOGGED load together, deliberately: a bike ride nobody
+// prescribed is still load in the runner's week, and hiding it would make the
+// bar disagree with the sessions listed below it. #885 is the consequence of
+// saying so badly — the caption read "Planned load by discipline" while a
+// runner whose plan was four runs saw Bike, Walk and Strength under it, none of
+// which their plan had asked for.
 
 import type { DisciplineLoad } from "@/lib/types/schedule";
 import { DISCIPLINE_FILL, DISCIPLINE_LABEL, safeDiscipline } from "./palette";
@@ -35,9 +42,14 @@ function buildSegments(items: DisciplineLoad[], mode: Mode): Segment[] {
         fill: DISCIPLINE_FILL[d],
         total,
         done,
+        // Counted the same way the segment is SIZED (#885). It used to be
+        // "planned, or logged if nothing was planned", so the number meant
+        // planned sessions on one row of the legend and logged sessions on the
+        // next, with nothing to tell them apart. This is how many sessions the
+        // discipline accounts for in the week the bar is drawing.
         sessions:
           mode === "planned"
-            ? item.planned_sessions || item.logged_sessions
+            ? Math.max(item.planned_sessions, item.logged_sessions)
             : item.logged_sessions,
       };
     })
@@ -54,9 +66,12 @@ export default function DisciplineMixBar({
 }) {
   const segments = buildSegments(items, mode);
   const sum = segments.reduce((acc, s) => acc + s.total, 0);
+  // "This week's", not "Planned": the bar carries planned and logged load
+  // together, so a caption claiming the plan asked for all of it puts work the
+  // runner chose to do into a plan they never agreed to (#885).
   const caption =
     mode === "planned"
-      ? "Planned load by discipline · solid = done"
+      ? "This week's load by discipline · solid = done"
       : "Logged load by discipline";
 
   if (sum <= 0) {
