@@ -224,6 +224,7 @@ def _week_view(
         if len(upcoming) < MAX_UPCOMING:
             upcoming.append(
                 UpcomingSessionContext(
+                    session_id=str(row.id),
                     when=_when(row, today, starts_on),
                     title=row.title,
                     intent=row.intent,
@@ -257,6 +258,7 @@ def build_schedule_context(
     matched = find_matching_session(db, activity)
     if matched is not None:
         planned_for = PlannedForContext(
+            session_id=str(matched.id),
             title=matched.title,
             intent=matched.intent,
             discipline=matched.discipline,

@@ -38,6 +38,7 @@ export interface ProposedActionFrame {
     | "split_block"
     | "merge_blocks"
     | "complete_session"
+    | "adjust_session"
     | "draft_plan";
   token: string;
   description: string;
