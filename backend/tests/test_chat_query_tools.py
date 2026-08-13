@@ -280,6 +280,54 @@ def test_summarize_error_result_degrades_to_label_only():
     assert entry["label"] == "Looked up your training history"
 
 
+def test_886_the_trace_says_which_sessions_it_looked_at_not_only_when():
+    """Two lookups over the same window returned contradictory counts under
+    identical chips.
+
+    Observed in production nine hours apart: "Looked up your training history ·
+    last 30 days (17 sessions)" and the same label reading (55 sessions). Both
+    were right — one runs-only, one everything — and the runner had no way to
+    tell that a different question had been asked. The chip exists so they can
+    sanity-check what the coach read; two different questions that look like one
+    do the opposite of that.
+    """
+    runs = qt.summarize_tool_call(
+        "list_activities_in_range",
+        {"window": "last_30_days", "type_filter": "run"},
+        {"count": 17, "showing": 17, "activities": []},
+    )
+    everything = qt.summarize_tool_call(
+        "list_activities_in_range",
+        {"window": "last_30_days", "type_filter": "all"},
+        {"count": 55, "showing": 25, "activities": []},
+    )
+
+    assert runs["detail"] == "runs, last 30 days"
+    assert everything["detail"] == "last 30 days"
+    assert runs["detail"] != everything["detail"]
+
+
+def test_886_a_filter_the_tool_does_not_recognise_puts_no_prose_in_the_trace():
+    """Every field in a trace is server-derived from a server-known token — that
+    is why it needs no policy gate. An unrecognised `type_filter` is model prose,
+    so it renders as nothing rather than being shown to the runner as if the app
+    had said it."""
+    entry = qt.summarize_tool_call(
+        "list_activities_in_range",
+        {"window": "last_30_days", "type_filter": "<script>alert(1)</script>"},
+        {"count": 3, "showing": 3, "activities": []},
+    )
+
+    assert entry["detail"] == "last 30 days"
+
+
+def test_886_every_recognised_filter_has_a_trace_word():
+    """The two tables are keyed by the same tokens, so a modality the tool
+    accepts but the trace cannot name would silently go back to being invisible —
+    which is the defect, for that one filter."""
+    assert set(qt.TYPE_FILTER_TRACE_LABELS) == set(qt._TYPE_FILTER)
+
+
 def test_summarize_unknown_tool_uses_generic_label():
     entry = qt.summarize_tool_call("something_new", {}, {})
     assert entry == {

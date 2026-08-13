@@ -483,9 +483,39 @@ WINDOW_TRACE_LABELS = {
 }
 
 
+# How each modality filter reads in a trace (#886). Keyed by the same tokens
+# `_TYPE_FILTER` accepts, so the chip is server-derived from a server-known
+# value: a `type_filter` the tool did not recognise renders as nothing rather
+# than putting the model's own word in front of the runner.
+TYPE_FILTER_TRACE_LABELS = {
+    "run": "runs",
+    "ride": "rides",
+    "strength": "strength sessions",
+    "swim": "swims",
+    "walk": "walks",
+}
+
+
 def trace_label(name: Optional[str]) -> str:
     """The past-tense trace verb for a tool name (or the generic fallback)."""
     return TOOL_TRACE_LABELS.get(name or "", _DEFAULT_TRACE_LABEL)
+
+
+def _window_detail(tool_input: Dict[str, Any]) -> Optional[str]:
+    """What was looked at: the window, and WHICH sessions in it (#886).
+
+    The filter used to be dropped, so two lookups over the same window returned
+    contradictory counts under identical chips — "last 30 days (17 sessions)"
+    and "last 30 days (55 sessions)" on the same day, one runs-only and one
+    everything. Both were right. The chip exists so the runner can sanity-check
+    what the coach read, and two different questions that look like one question
+    do the opposite of that.
+    """
+    window = WINDOW_TRACE_LABELS.get(tool_input.get("window"))
+    if window is None:
+        return None
+    modality = TYPE_FILTER_TRACE_LABELS.get(tool_input.get("type_filter"))
+    return f"{modality}, {window}" if modality else window
 
 
 def summarize_tool_call(
@@ -509,7 +539,7 @@ def summarize_tool_call(
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
     if name in ("list_activities_in_range", "get_training_summary"):
-        entry["detail"] = WINDOW_TRACE_LABELS.get(tool_input.get("window"))
+        entry["detail"] = _window_detail(tool_input)
         if name == "list_activities_in_range":
             entry["count"] = _int(result.get("count"))
         else:  # get_training_summary: the session total is the natural count
