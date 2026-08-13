@@ -1272,6 +1272,14 @@ class PlannedForContext(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # The handle the coach needs to ACT on this session (#881). Without it the
+    # two session actions it is offered — marking one done, correcting one — name
+    # an id it has never been shown, so an obedient model can never use either.
+    # Safe to hand over: it is the runner's own session, and ownership is
+    # re-resolved server-side on every offer and every confirm, so a model that
+    # invents one reaches nothing. The `activity_id` in `query_tools` is here for
+    # the same reason.
+    session_id: Optional[str] = None
     title: str
     intent: str
     discipline: str
@@ -1284,6 +1292,7 @@ class UpcomingSessionContext(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    session_id: Optional[str] = None       # the handle for acting on it (#881)
     when: str                              # "Sat" | "Thu-Sat" | "any day"
     title: str
     intent: str
@@ -1310,6 +1319,12 @@ class ScheduleContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     planned_for_this_activity: Optional[PlannedForContext] = None
+    # The headline figure on the runner's own Schedule screen, summed through the
+    # same helper that produced it so the two cannot disagree (#880). Only what
+    # was PLANNED: what was actually run is reachable through the coach's own
+    # tools, and pairing the two here is the compliance verdict this section
+    # exists not to hand over. None when no session states a distance.
+    planned_running_this_week: Optional[str] = None
     still_to_come_this_week: List[UpcomingSessionContext] = Field(default_factory=list)
     # The spacing rules in play, as the runner reads them. Carried so advice does
     # not contradict the plan the coach itself wrote ("do a session tomorrow"

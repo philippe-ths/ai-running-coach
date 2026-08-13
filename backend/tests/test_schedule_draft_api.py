@@ -206,9 +206,12 @@ def test_a_runner_who_has_never_had_a_plan_is_told_so_plainly(db, client):
         ("active", "Your plan is ready."),
         ("superseded", "This plan has been replaced by a newer one."),
         (
+            # No "just now" (#879): this is now shown on the Schedule screen for
+            # as long as the last attempt is a failure, which can be days, so a
+            # message that reads as news goes stale in front of the runner.
             "failed",
-            "Your coach could not write a plan just now. Nothing has changed — try "
-            "again, or ask in a conversation.",
+            "Your coach could not write a plan. Nothing has changed — ask again, "
+            "or talk it through in a conversation.",
         ),
     ],
 )

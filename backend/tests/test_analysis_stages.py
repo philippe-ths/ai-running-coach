@@ -375,6 +375,50 @@ def test_a_planned_session_now_feeds_the_interval_matcher(db):
     ) == {"reps_planned": 8, "rep_distance_m": 400}
 
 
+def test_a_tempo_sessions_warmup_is_not_handed_over_as_a_rep_plan(db):
+    """#878: `structure` can exist without reps, and only reps make a plan.
+
+    A tempo run states a warm-up and a cool-down and no reps. Passed to
+    `match_planned_to_detected` that structure finds nothing to score, lands
+    `match_score` at 0.0, and `compute_confidence` then appends the CRITICAL
+    `interval_structure_mismatch` — the run reported as a botched interval
+    session it was never prescribed as. So this projection asks for a rep count,
+    not merely for a structure.
+    """
+    from app.models.planned_session import PlannedSession
+
+    assert (
+        _orchestrator._extract_planned_workout(
+            PlannedSession(
+                structure={"warmup_distance_m": 1000, "cooldown_distance_m": 1000}
+            )
+        )
+        is None
+    )
+
+
+def test_an_edges_only_plan_would_have_graded_a_run_as_a_failed_rep_session(db):
+    """The consequence the guard above exists to prevent, stated once.
+
+    Not a test of the guard: a test of what `match_planned_to_detected` does with
+    an edges-only plan, so the reason the guard is there survives someone reading
+    it later and finding it arbitrary.
+    """
+    from app.services.analysis.workout_matching import match_planned_to_detected
+
+    detected = {
+        "summary": {"rep_count": 6, "consistency_score": "high"},
+        "work_segments": [{"distance_m": 400, "duration_s": 100} for _ in range(6)],
+    }
+
+    graded = match_planned_to_detected(
+        detected, {"warmup_distance_m": 1000, "cooldown_distance_m": 1000}
+    )
+
+    assert graded["match_score"] == 0.0
+    assert graded["detection_confidence"] == "low"
+
+
 def test_interval_structure_mismatch_can_now_fire_through_analyze(db, monkeypatch):
     """The branch that no composition could reach, reached.
 

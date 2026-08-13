@@ -149,10 +149,17 @@ def test_a_second_confirm_joins_the_draft_already_running(db):
     assert len(enqueues) == 1
 
 
-def test_the_card_names_the_plan_it_would_replace(db):
+def test_the_card_names_the_plan_it_would_replace_and_how_recent_it_is(db):
     """Writing a plan supersedes the one the runner is training to, and that is
     the part of this action they most need to see BEFORE it happens. A confirm
-    step is only worth having if the card says what will be written over."""
+    step is only worth having if the card says what will be written over.
+
+    With its AGE (#883). A runner asked "Is it added?", was offered a second
+    card, and confirmed it — replacing the plan they had accepted ninety seconds
+    earlier with a differently generated one, because drafting is not
+    deterministic. "Your current one" was true and silent about the only part
+    that would have stopped them: that it was the plan they had just agreed.
+    """
     user = _user(db)
     with patch.object(proposed_actions, "redis_conn", _FakeRedis()):
         _r, without = proposed_actions.mint_proposed_action(
@@ -164,7 +171,100 @@ def test_the_card_names_the_plan_it_would_replace(db):
         )
 
     assert "replacing" not in without["description"]
-    assert "replacing your current one" in with_plan["description"]
+    assert with_plan["description"] == (
+        "Write this plan into your schedule, replacing the one written just now"
+    )
+
+
+def test_the_card_names_an_older_plans_age_in_its_own_terms(db):
+    """The same fact, when the plan is genuinely old. A runner who has been
+    training to a plan for a fortnight is not making the mistake this exists to
+    catch, and telling them "just now" would be a lie in the other direction."""
+    user = _user(db)
+    plan = _active_plan(db, user)
+    plan.generated_at = datetime.now(timezone.utc) - timedelta(days=14)
+    db.commit()
+
+    with patch.object(proposed_actions, "redis_conn", _FakeRedis()):
+        _r, frame = proposed_actions.mint_proposed_action(
+            db, user.id, {"action_type": "draft_plan"}
+        )
+
+    assert frame["description"].endswith("replacing the one written 14 days ago")
+
+
+@pytest.mark.parametrize(
+    "minutes_ago, expected",
+    [
+        (0, "just now"),
+        (1, "1 minute ago"),
+        (5, "5 minutes ago"),
+        (60, "1 hour ago"),
+        (200, "3 hours ago"),
+        (60 * 24, "1 day ago"),
+        (60 * 24 * 14, "14 days ago"),
+    ],
+)
+def test_a_plans_age_is_said_the_way_a_person_would_say_it(minutes_ago, expected):
+    """One phrasing, two audiences: the runner's card and the coach's own read.
+    A plan cannot be two ages, so neither may invent its own wording."""
+    from app.services.schedule.coach_view import describe_written_ago
+
+    now = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+
+    class _Plan:
+        generated_at = None
+        created_at = now - timedelta(minutes=minutes_ago)
+
+    assert describe_written_ago(_Plan(), now=now) == expected
+
+
+def test_a_plan_with_no_timestamp_yields_no_age_rather_than_raising():
+    """The card must still describe what it replaces when the age is unknown.
+    Unreachable through the app today — every stored plan carries `created_at` —
+    so it is exercised here rather than left as an untested claim in the code."""
+    from app.services.coach.proposed_actions import _replace_description
+    from app.services.schedule.coach_view import describe_written_ago
+
+    class _Timeless:
+        generated_at = None
+        created_at = None
+
+    assert describe_written_ago(_Timeless()) is None
+    assert _replace_description(_Timeless(), describe_written_ago) == (
+        "Write this plan into your schedule, replacing your current one"
+    )
+
+
+def test_a_naive_timestamp_is_read_as_utc_rather_than_raising():
+    """SQLite hands back naive datetimes where Postgres does not, and subtracting
+    across the two raises instead of being quietly wrong."""
+    from app.services.schedule.coach_view import describe_written_ago
+
+    class _Plan:
+        generated_at = None
+        created_at = datetime(2026, 8, 13, 11, 55)  # naive
+
+    assert describe_written_ago(
+        _Plan(), now=datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+    ) == "5 minutes ago"
+
+
+def test_the_coach_can_see_when_the_current_plan_was_written(db):
+    """So "Is it added?" is answered from the record rather than re-offered.
+
+    The offer that caused this was a reasonable reply to a question the coach
+    could not check: it could see a plan but not that the plan WAS the one it had
+    written ninety seconds before.
+    """
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    _active_plan(db, user)
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule["written"] == "just now"
 
 
 def test_the_offer_is_refused_while_the_schedule_is_switched_off(db, monkeypatch):
@@ -425,6 +525,172 @@ def test_a_schedule_fault_costs_the_section_not_the_reply(db):
         sections = thread_turn._build_baseline_sections(db, user)
 
     assert sections["schedule"] is None
+
+
+# --- 2b. a plan being written, and one that failed (#879) --------------------
+
+
+def test_the_coach_is_told_when_a_plan_it_offered_is_still_being_written(db):
+    """The coach cannot see the worker, so without this it reads an unchanged
+    plan and concludes nothing happened.
+
+    In production it did exactly that: it told the runner "the plan is in" while
+    a draft it had offered was still running, and again after that draft had
+    failed. Both answers were about a plan the coach had no way to know had been
+    attempted.
+    """
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    _active_plan(db, user)
+    store.create_drafting_plan(db, user.id)
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule["has_plan"] is True
+    assert schedule["draft"] == {"state": "writing"}
+    assert "writing" in thread_turn._render_schedule_block(schedule)
+
+
+def test_the_coach_is_told_when_the_last_draft_failed(db):
+    """The state the runner was in for four turns. The plan is the previous one,
+    unchanged, and the coach would read that as success."""
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    _active_plan(db, user)
+    failed = store.create_drafting_plan(db, user.id)
+    store.fail_plan(db, failed, "rejected by the gate")
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule["draft"] == {"state": "failed"}
+
+
+def test_the_failure_is_reported_even_when_it_ties_the_plan_it_replaced(db):
+    """`latest_plan` cannot answer this question, and the tie is where it shows.
+
+    It orders by `created_at` and breaks a tie on the id, which is a UUID — fine
+    for a poll, which only needs a STABLE answer. "Was the last thing that
+    happened a failure" needs the RIGHT one, and here the arbitrary tiebreaker
+    picks the active plan and reports success. The ids below are fixed so the
+    tiebreaker deterministically picks the wrong row: without the explicit
+    comparison this test reports no failure at all.
+    """
+    from app.models.training_plan import TrainingPlan
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    same_instant = datetime(2026, 8, 13, 6, 39, tzinfo=timezone.utc)
+    # The active plan sorts LAST by id, so the tiebreaker prefers it.
+    db.add(
+        TrainingPlan(
+            id=uuid.UUID("ffffffff-ffff-4fff-8fff-ffffffffffff"),
+            user_id=user.id,
+            status=store.ACTIVE,
+            rules=[],
+            week_shapes=[],
+            created_at=same_instant,
+        )
+    )
+    db.add(
+        TrainingPlan(
+            id=uuid.UUID("00000000-0000-4000-8000-000000000000"),
+            user_id=user.id,
+            status=store.FAILED,
+            rules=[],
+            week_shapes=[],
+            created_at=same_instant,
+        )
+    )
+    db.commit()
+
+    assert store.latest_plan(db, user.id).status == store.ACTIVE  # the wrong read
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule["draft"] == {"state": "failed"}
+
+
+def test_a_runner_with_no_plan_still_learns_one_is_being_written(db):
+    """The no-plan case returns None so the caller can say so in words. A draft
+    in flight is a different fact and must survive that shortcut — this is the
+    first plan, so there is nothing else to notice it by."""
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    store.create_drafting_plan(db, user.id)
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule == {"has_plan": False, "draft": {"state": "writing"}}
+
+
+def test_a_plan_that_simply_landed_carries_no_draft_note(db):
+    """Only the two states the coach could get wrong. A plan that is there is its
+    own evidence, and a note on every turn would be noise."""
+    from app.services.coach import thread_turn
+
+    user = _user(db)
+    _active_plan(db, user)
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert "draft" not in schedule
+
+
+def test_the_coach_is_told_that_confirming_is_not_landing(db):
+    """The prose half. The rule said "nothing is written unless they confirm it",
+    which is true and stops one turn short: a confirmed plan is written in the
+    background and can fail."""
+    from app.services.coach.thread_turn import THREAD_SYSTEM_TEMPLATE
+
+    assert "written in the background and can fail" in THREAD_SYSTEM_TEMPLATE
+    assert "say that plainly rather than repeating the offer" in THREAD_SYSTEM_TEMPLATE
+
+
+# --- 2c. the numbers the runner is looking at (#880) -------------------------
+
+
+def test_the_conversation_carries_the_week_total_and_each_sessions_distance(db):
+    """The exact turn this exists for.
+
+    "This week was meant to be a total of 28-29 but it's listed as 25", then "it
+    shows the intervals as 2.5k not 4.5k". Both numbers were on the runner's
+    screen and neither was in front of the coach: the section carried "6 x 400 m
+    off 90 s" and no distance at all. It answered anyway — an invented mechanism
+    first, then a diagnosis of the app — about data that was simply stored short.
+    """
+    from app.services.coach import thread_turn
+
+    from app.services.weeks import week_start
+
+    user = _user(db)
+    plan = _active_plan(db, user)
+    # Relative to the real today, because the conversation's read is anchored to
+    # now and takes no date. A fixed Monday would pass for one week and then rot.
+    today = date.today()
+    monday = week_start(today, 0)
+    db.add(
+        PlannedSession(
+            plan_id=plan.id, user_id=user.id,
+            window_start=monday,
+            window_end=monday + timedelta(days=6),
+            intent="quality", discipline="run", commitment="committed",
+            title="Intervals: 6x400m", target_distance_m=None,
+            structure={
+                "reps_planned": 6, "rep_distance_m": 400, "rest_s": 90,
+                "warmup_distance_m": 1050, "cooldown_distance_m": 1050,
+            },
+        )
+    )
+    db.commit()
+
+    schedule = thread_turn._build_baseline_sections(db, user)["schedule"]
+
+    assert schedule["planned_running_this_week"] == "4.50 km"
+    assert schedule["still_to_come_this_week"][0]["target"] == (
+        "4.50 km (6 x 400 m off 90 s)"
+    )
 
 
 # --- 3. what the coach is told -----------------------------------------------

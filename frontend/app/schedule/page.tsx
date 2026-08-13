@@ -22,6 +22,7 @@ import SessionCard from "@/components/schedule/SessionCard";
 import RulesPanel from "@/components/schedule/RulesPanel";
 import LoggedList from "@/components/schedule/LoggedList";
 import EmptyWeek from "@/components/schedule/EmptyWeek";
+import DraftBanner from "@/components/schedule/DraftBanner";
 import HorizonView from "@/components/schedule/HorizonView";
 import GoalRacePanel from "@/components/schedule/GoalRacePanel";
 import { addDaysIso, todayIso } from "@/components/schedule/dates";
@@ -237,6 +238,11 @@ export default function SchedulePage() {
           Loading your week…
         </div>
       )}
+
+      {/* A plan being written lands on the week behind it, so the week is the
+          place that has to say so. The empty-week panel reports its own draft,
+          so this stands down for it rather than the two speaking at once. */}
+      {week && !isEmpty && <DraftBanner onPlanReady={refresh} />}
 
       {week && isEmpty && <EmptyWeek onPlanReady={refresh} />}
 

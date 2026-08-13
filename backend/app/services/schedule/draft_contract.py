@@ -91,28 +91,41 @@ class DraftedSession(BaseModel):
         # coach wrote and nothing stored is worse than a rejected plan.
         has_reps = self.reps_planned is not None
         has_rep_args = self.rep_distance_m is not None or self.rest_s is not None
-        # The warm-up and cool-down ride with the reps under the same guard: they
-        # describe the session BUILT around an interval block, so on an easy run
-        # they are noise, and stored without a count they would state a distance
-        # for a session whose work is unknown.
+        # The warm-up and cool-down do NOT ride with the reps (#878). They tied to
+        # the rep count when they arrived, which made a tempo run — a quality
+        # session with a warm-up and no reps, and the commonest one in coaching —
+        # impossible to write down. A live draft was refused on exactly that and,
+        # with only two attempts, the whole plan died for one session.
+        #
+        # The rep ARGUMENTS keep the count requirement, because they describe
+        # reps: "400s off 60" with no count is an instruction `structure()` would
+        # drop silently, and an instruction the coach wrote and nothing stored is
+        # worse than a rejected plan. The edges describe the SESSION, which exists
+        # whether or not it is built around an interval block.
         has_edges = (
             self.warmup_distance_m is not None or self.cooldown_distance_m is not None
         )
         if (has_reps or has_rep_args or has_edges) and self.intent != "quality":
             raise ValueError("rep structure belongs to a quality session")
-        if (has_rep_args or has_edges) and not has_reps:
-            raise ValueError(
-                "rep_distance_m, rest_s, warmup_distance_m and cooldown_distance_m "
-                "need reps_planned"
-            )
+        if has_rep_args and not has_reps:
+            raise ValueError("rep_distance_m and rest_s need reps_planned")
         return self
 
     def structure(self) -> Optional[Dict[str, float]]:
-        """The `{reps_planned, rep_distance_m, rest_s}` shape `workout_matching`
-        expects, or None when the session has no rep structure."""
-        if self.reps_planned is None:
-            return None
-        shape: Dict[str, float] = {"reps_planned": self.reps_planned}
+        """How this session is built, or None when it is not built out of parts.
+
+        It carries the `{reps_planned, rep_distance_m, rest_s}` shape
+        `workout_matching` expects, and since #878 it may also carry only the
+        edges: a tempo run has a warm-up and no reps, and keying this off the rep
+        count dropped that warm-up on the floor. Whoever reads this reads through
+        `.get`, so a shape with no count is invisible to a reader that wants one
+        rather than misread by it — with one place that has to say so out loud,
+        `_extract_planned_workout`, because the interval matcher scores whatever
+        it is handed and would grade a tempo as a botched rep session.
+        """
+        shape: Dict[str, float] = {}
+        if self.reps_planned is not None:
+            shape["reps_planned"] = self.reps_planned
         if self.rep_distance_m is not None:
             shape["rep_distance_m"] = self.rep_distance_m
         if self.rest_s is not None:
@@ -121,7 +134,7 @@ class DraftedSession(BaseModel):
             shape["warmup_distance_m"] = self.warmup_distance_m
         if self.cooldown_distance_m is not None:
             shape["cooldown_distance_m"] = self.cooldown_distance_m
-        return shape
+        return shape or None
 
 
 class DraftedWeek(BaseModel):
@@ -335,11 +348,11 @@ RECORD_TRAINING_PLAN_TOOL = {
                                     "target_distance_m": {
                                         "type": "number",
                                         "description": (
-                                            "The WHOLE session in metres, "
-                                            "door to door. On an interval "
-                                            "session give the warm-up and "
-                                            "cool-down below instead and leave "
-                                            "this out — the app adds them up."
+                                            "The WHOLE session in metres, door "
+                                            "to door, warm-up and cool-down "
+                                            "included. Leave it out only when "
+                                            "the reps below already add up to "
+                                            "the session."
                                         ),
                                     },
                                     "target_duration_s": {"type": "integer"},
@@ -350,10 +363,9 @@ RECORD_TRAINING_PLAN_TOOL = {
                                         "type": "number",
                                         "description": (
                                             "The warm-up in METRES, not "
-                                            "minutes. It is part of the "
-                                            "session's distance and the runner "
-                                            "reads it in the same unit as "
-                                            "everything else."
+                                            "minutes, so the session adds up "
+                                            "instead of being inferred from a "
+                                            "pace nobody stated."
                                         ),
                                     },
                                     "cooldown_distance_m": {
