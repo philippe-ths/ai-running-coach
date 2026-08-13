@@ -162,15 +162,69 @@ def test_the_warmup_and_cooldown_ride_into_the_structure_as_distances():
     }
 
 
-def test_the_warmup_and_cooldown_are_guarded_like_every_other_rep_argument():
-    """Same containment rule: they describe the session built around an interval
-    block, so on an easy run they are noise, and with no count they would state a
-    distance for a session whose work is unknown."""
+def test_a_tempo_session_may_state_a_warmup_without_any_reps():
+    """#878: the shape a live draft was refused on, and the plan died for it.
+
+    A tempo run has a warm-up. So does almost every quality session. #876 tied
+    the warm-up and cool-down to a rep COUNT along with the rep arguments proper,
+    which made the commonest quality session in coaching unrepresentable — and
+    since a draft gets two attempts, one such session ended the whole plan.
+
+    The rep ARGUMENTS still need a count, because they describe reps. The edges
+    describe the session, and a session can have edges without having reps.
+    """
+    session = DraftedSession(
+        **_session(
+            intent="quality",
+            title="Tempo: 5 km @ 4:50/km",
+            target_distance_m=7000,
+            warmup_distance_m=1000,
+            cooldown_distance_m=1000,
+        )
+    )
+
+    assert session.structure() == {
+        "warmup_distance_m": 1000,
+        "cooldown_distance_m": 1000,
+    }
+
+
+def test_a_tempo_measured_in_minutes_may_still_state_its_warmup():
+    """Nothing here demands a session be sized in the same unit as its edges.
+
+    Coaches write tempos in minutes — "warm up 10 min easy, 4 x 5 min at
+    comfortably hard" is an ordinary prescription — and a contract that refused
+    the metres alongside those minutes would be #878 one shape further on, for
+    the same reason and at the same cost: a draft gets two attempts, so one
+    refused session loses the whole plan.
+
+    Such a session simply contributes the distances that were stated. That is
+    already how a duration-sized session behaves: it contributes nothing to the
+    week's kilometres and nothing rejects it, so stating a warm-up can only
+    improve on that.
+    """
+    session = DraftedSession(
+        **_session(
+            intent="quality",
+            title="Tempo: 4 x 5 min",
+            target_distance_m=None,
+            target_duration_s=2400,
+            warmup_distance_m=1000,
+            cooldown_distance_m=1000,
+        )
+    )
+
+    assert session.structure() == {
+        "warmup_distance_m": 1000,
+        "cooldown_distance_m": 1000,
+    }
+
+
+def test_the_warmup_and_cooldown_are_still_guarded_on_the_intent_and_the_value():
+    """What #876's containment rule keeps: on an easy run the edges are noise,
+    and a non-positive distance is not a distance."""
     with pytest.raises(ValidationError, match="quality session"):
         DraftedSession(**_session(warmup_distance_m=1000))
-
-    with pytest.raises(ValidationError, match="need reps_planned"):
-        DraftedSession(**_session(intent="quality", cooldown_distance_m=1000))
 
     with pytest.raises(ValidationError):
         DraftedSession(
@@ -178,9 +232,9 @@ def test_the_warmup_and_cooldown_are_guarded_like_every_other_rep_argument():
         )
 
 
-def test_a_session_with_no_reps_carries_no_structure_at_all():
-    """None rather than an empty dict: a session with no rep structure must not
-    reach the matcher as a plan it can score."""
+def test_a_session_with_neither_reps_nor_edges_carries_no_structure_at_all():
+    """None rather than an empty dict: a session with no structure at all must
+    not reach the matcher as a plan it can score."""
     assert DraftedSession(**_session()).structure() is None
     assert DraftedSession(**_session(intent="quality")).structure() is None
 
