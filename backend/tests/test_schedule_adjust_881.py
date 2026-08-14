@@ -41,8 +41,16 @@ from app.services.schedule.adjust import (
     describe_adjustment,
 )
 
-TODAY = date(2026, 8, 12)
+# RELATIVE to the real today, not a fixed calendar date. A correction is refused
+# on a session whose window has passed, and the offer path resolves "passed"
+# against `date.today()` rather than any date a test can inject — so a session
+# pinned to a fixed tomorrow is a future session until that date arrives and a
+# past one every day after. These tests were written on 2026-08-12, were green
+# that day and the next, and failed on the third: the suite rots at midnight
+# rather than on a change, which is the worst way for it to fail.
+TODAY = date.today()
 TOMORROW = TODAY + timedelta(days=1)
+_NOON = datetime.combine(TODAY, datetime.min.time(), tzinfo=timezone.utc).replace(hour=9)
 
 
 class _FakeRedis:
@@ -78,8 +86,7 @@ def _history(db, user: User) -> None:
         activity = Activity(
             user_id=user.id,
             strava_activity_id=abs(hash(str(uuid.uuid4()))) % 10**9,
-            start_date=datetime(2026, 8, 12, 9, 0, tzinfo=timezone.utc)
-            - timedelta(days=offset),
+            start_date=_NOON - timedelta(days=offset),
             type="Run", name="Run", distance_m=10000, moving_time_s=3000,
             elapsed_time_s=3000, elev_gain_m=0.0, raw_summary={},
         )
@@ -325,24 +332,39 @@ def test_the_coach_can_actually_name_a_session_to_act_on(db):
     `complete_session` (#830) shipped with the same gap, so this unblocks both.
     """
     from app.services.schedule.coach_view import build_schedule_context
+    from app.services.weeks import week_start
 
     user = _user(db)
     plan = _plan(db, user)
-    session = _session(db, plan)
-    activity = Activity(
-        user_id=user.id,
-        strava_activity_id=abs(hash(str(uuid.uuid4()))) % 10**9,
-        start_date=datetime(2026, 8, 12, 9, 0, tzinfo=timezone.utc),
-        type="Run", name="Run", distance_m=9000, moving_time_s=2700,
-        elapsed_time_s=2700, elev_gain_m=0.0, raw_summary={},
-    )
-    db.add(activity)
-    db.commit()
+    # The window runs from today to the end of today's week: the only shape that
+    # is BOTH still upcoming and inside the week this section reads, whatever day
+    # the suite is run on. A session pinned to "tomorrow" is neither on the last
+    # day of a week, when tomorrow belongs to the next one.
+    week_end = week_start(TODAY, 0) + timedelta(days=6)
+    session = _session(db, plan, window_start=TODAY, window_end=week_end)
 
-    section = build_schedule_context(db, activity)
+    def _activity(kind: str) -> Activity:
+        row = Activity(
+            user_id=user.id,
+            strava_activity_id=abs(hash(str(uuid.uuid4()))) % 10**9,
+            start_date=_NOON,
+            type=kind, name=kind, distance_m=9000, moving_time_s=2700,
+            elapsed_time_s=2700, elev_gain_m=0.0, raw_summary={},
+        )
+        db.add(row)
+        db.commit()
+        return row
 
-    ids = [item.session_id for item in section.still_to_come_this_week]
-    assert str(session.id) in ids
+    # A ride cannot be the run session, so the session stays in the upcoming list.
+    upcoming = build_schedule_context(db, _activity("Ride"))
+    assert str(session.id) in [i.session_id for i in upcoming.still_to_come_this_week]
+
+    # A run on the same day IS matched to it, which moves the session out of the
+    # upcoming list and into `planned_for_this_activity`. The id has to be
+    # reachable there too, or the coach can act on every session except the one
+    # the report it is writing is about.
+    matched = build_schedule_context(db, _activity("Run"))
+    assert matched.planned_for_this_activity.session_id == str(session.id)
 
 
 def test_the_schedule_kill_switch_closes_this_write_path_too(db, monkeypatch):
