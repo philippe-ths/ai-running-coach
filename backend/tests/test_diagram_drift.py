@@ -35,6 +35,8 @@ from check_diagram_drift import (  # noqa: E402
     _chat_nodes,
     _chat_surface_problems,
     _declared_baseline_sections,
+    _declared_screen_builders,
+    _screen_builder_extractor_problems,
     _declared_chat_content,
     _declared_chat_surface,
     _recorded_chat_content,
@@ -257,7 +259,10 @@ def test_every_conversational_input_the_coach_receives_has_a_node():
     """The half a blob comparison cannot see: the blob is generated and the topology is
     hand-authored, so regenerating one without the other leaves a real input undrawn."""
     problems = _chat_node_problems(
-        _declared_chat_surface(), _declared_baseline_sections(), _real_chat_nodes()
+        _declared_chat_surface(),
+        _declared_baseline_sections(),
+        _declared_screen_builders(),
+        _real_chat_nodes(),
     )
 
     assert not problems, "\n".join(f"  - {p}" for p in problems)
@@ -269,7 +274,7 @@ def test_the_node_check_fails_when_a_new_tool_has_no_node():
     declared["tools"] = sorted(declared["tools"] + ["get_race_predictions"])
 
     problems = _chat_node_problems(
-        declared, _declared_baseline_sections(), _real_chat_nodes()
+        declared, _declared_baseline_sections(), _declared_screen_builders(), _real_chat_nodes()
     )
 
     assert problems and "get_race_predictions" in problems[0]
@@ -284,7 +289,9 @@ def test_the_node_check_fails_when_a_baseline_section_has_no_builder_node():
     # the diagram as it was before this guard existed: the node simply not there
     nodes = [n for n in _real_chat_nodes() if n["id"] != "d_schedule"]
 
-    problems = _chat_node_problems(_declared_chat_surface(), sections, nodes)
+    problems = _chat_node_problems(
+        _declared_chat_surface(), sections, _declared_screen_builders(), nodes
+    )
 
     assert problems, "the node check did not notice an undrawn baseline section"
     assert "['schedule']" in problems[0]
@@ -297,7 +304,7 @@ def test_the_node_check_fails_when_a_prompt_slot_has_no_node():
     declared["prompt_slots"] = declared["prompt_slots"] + ["races_block"]
 
     problems = _chat_node_problems(
-        declared, _declared_baseline_sections(), _real_chat_nodes()
+        declared, _declared_baseline_sections(), _declared_screen_builders(), _real_chat_nodes()
     )
 
     assert problems and "{races_block}" in problems[0]
@@ -306,7 +313,9 @@ def test_the_node_check_fails_when_a_prompt_slot_has_no_node():
 def test_the_node_check_fails_loudly_when_the_node_parser_returns_almost_nothing():
     """A parser that quietly stopped matching would turn node coverage into a check that
     cannot fail. Same fail-loud posture as the report guard's parsers."""
-    problems = _chat_node_problems(_declared_chat_surface(), ["memory"], [])
+    problems = _chat_node_problems(
+        _declared_chat_surface(), ["memory"], _declared_screen_builders(), []
+    )
 
     assert problems and "PARSER BROKE" in problems[0]
 
@@ -409,10 +418,171 @@ def test_the_node_check_fails_when_a_node_draws_a_section_the_coach_lost():
     through the node's explicit `section:` binding, because `d_*` is the id prefix for every
     baseline builder and only some of those correspond to a section."""
     problems = _chat_node_problems(
-        _declared_chat_surface(), ["memory", "readiness"], _real_chat_nodes()
+        _declared_chat_surface(),
+        ["memory", "readiness"],
+        _declared_screen_builders(),
+        _real_chat_nodes(),
     )
 
     assert problems and "schedule" in problems[0]
+
+
+# --- screens that resolve a view (#871) --------------------------------------------
+
+
+def test_every_screen_that_resolves_a_view_has_a_resolver_node():
+    """The gap #871 names. `screens` is pinned as NAMES, so a screen key moving from
+    identity-only to view-resolving changes what the coach is served on that screen while
+    the key set, the tools, the skills, the actions and the slots all still match."""
+    problems = _chat_node_problems(
+        _declared_chat_surface(),
+        _declared_baseline_sections(),
+        _declared_screen_builders(),
+        _real_chat_nodes(),
+    )
+
+    assert not problems, "\n".join(f"  - {p}" for p in problems)
+
+
+def test_the_screens_that_resolve_a_view_are_read_off_the_resolver_itself():
+    """There is no registry to import — the fact lives in `resolve_screen_view`'s
+    branches. Pinned against the split as it stands so a reader that quietly stopped
+    matching shows up as a changed set rather than as an empty one."""
+    assert _declared_screen_builders() == ["activity", "trends"]
+
+
+def test_the_node_check_fails_when_a_screen_starts_resolving_a_view_undrawn():
+    """SENSITIVITY, on the exact shape the issue describes: a builder added for a key that
+    already exists. Every other pinned set is untouched by this change."""
+    builders = sorted(_declared_screen_builders() + ["load"])
+
+    problems = _chat_node_problems(
+        _declared_chat_surface(),
+        _declared_baseline_sections(),
+        builders,
+        _real_chat_nodes(),
+    )
+
+    assert problems, "a newly view-resolving screen went unnoticed"
+    assert any("['load']" in p for p in problems), problems
+
+
+def test_the_node_check_fails_when_a_screen_stops_resolving_a_view():
+    """Drift the other way: the diagram still draws that screen's contents reaching the
+    coach after the builder was removed."""
+    problems = _chat_node_problems(
+        _declared_chat_surface(),
+        _declared_baseline_sections(),
+        ["activity"],
+        _real_chat_nodes(),
+    )
+
+    assert problems and any("trends" in p for p in problems), problems
+
+
+def test_the_node_check_fails_loudly_when_no_screen_builder_is_read():
+    """An empty declared set is a broken extractor, not a coach that resolves nothing."""
+    problems = _chat_node_problems(
+        _declared_chat_surface(), _declared_baseline_sections(), [], _real_chat_nodes()
+    )
+
+    assert any("EXTRACTOR BROKE" in p for p in problems), problems
+
+
+def test_the_screen_builder_reader_refuses_a_dispatch_form_it_cannot_read(
+    tmp_path, monkeypatch
+):
+    """SENSITIVITY against PARTIAL blindness, the same posture the baseline reader takes.
+
+    A resolver rewritten as a `match` or as a builder-dict lookup would read as ZERO
+    builders through the equality-comparison reader, and the empty-set check would report
+    a broken extractor rather than let it pass — but a resolver that keeps one `==` branch
+    and adds a `match` for the rest would report a set that is real and incomplete, which
+    is the failure the empty-set check cannot see."""
+    probe = tmp_path / "screen_context.py"
+    probe.write_text(
+        "def resolve_screen_view(db, owner_user_id, pointer):\n"
+        "    if pointer.screen == 'activity':\n"
+        "        return detail()\n"
+        "    match pointer.screen:\n"
+        "        case 'trends':\n"
+        "            return report()\n"
+        "    return None\n"
+    )
+    monkeypatch.setattr(check_diagram_drift, "_SCREEN_CONTEXT", probe)
+
+    problems = _screen_builder_extractor_problems()
+
+    assert problems and "EXTRACTOR BROKE" in problems[0]
+    assert "match" in problems[0]
+    # and it is genuinely partial: the reader still sees the one branch it understands
+    assert _declared_screen_builders() == ["activity"]
+
+
+def test_the_screen_builder_reader_refuses_a_comparison_against_a_name(
+    tmp_path, monkeypatch
+):
+    """The other unreadable form: a branch whose key is not a literal."""
+    probe = tmp_path / "screen_context.py"
+    probe.write_text(
+        "def resolve_screen_view(db, owner_user_id, pointer):\n"
+        "    if pointer.screen == VIEW_RESOLVING_SCREEN:\n"
+        "        return detail()\n"
+        "    return None\n"
+    )
+    monkeypatch.setattr(check_diagram_drift, "_SCREEN_CONTEXT", probe)
+
+    assert any("EXTRACTOR BROKE" in p for p in _screen_builder_extractor_problems())
+
+
+def test_the_screen_builder_reader_reads_a_membership_branch(tmp_path, monkeypatch):
+    """The second form it does understand, so grouping two screens onto one builder is
+    not mistaken for removing them."""
+    probe = tmp_path / "screen_context.py"
+    probe.write_text(
+        "def resolve_screen_view(db, owner_user_id, pointer):\n"
+        "    if pointer.screen in ('trends', 'load'):\n"
+        "        return report()\n"
+        "    return None\n"
+    )
+    monkeypatch.setattr(check_diagram_drift, "_SCREEN_CONTEXT", probe)
+
+    assert _declared_screen_builders() == ["load", "trends"]
+    assert _screen_builder_extractor_problems() == []
+
+
+def test_the_screen_builder_reader_reports_a_resolver_that_was_renamed_away(
+    tmp_path, monkeypatch
+):
+    probe = tmp_path / "screen_context.py"
+    probe.write_text("def resolve(db, owner_user_id, pointer):\n    return None\n")
+    monkeypatch.setattr(check_diagram_drift, "_SCREEN_CONTEXT", probe)
+
+    assert any("no longer exists" in p for p in _screen_builder_extractor_problems())
+
+
+def test_check_drift_actually_runs_the_screen_builder_checks(monkeypatch):
+    """A check that is written but not called is no check. Make the LIVE declaration
+    disagree with the diagram and assert the top-level guard reports it."""
+    monkeypatch.setattr(
+        check_diagram_drift,
+        "_declared_screen_builders",
+        lambda: sorted(_declared_screen_builders() + ["profile"]),
+    )
+
+    problems = check_drift()
+
+    assert any("['profile']" in p for p in problems), problems
+
+
+def test_check_drift_actually_runs_the_screen_builder_extractor_check(monkeypatch):
+    monkeypatch.setattr(
+        check_diagram_drift,
+        "_screen_builder_extractor_problems",
+        lambda: ["EXTRACTOR BROKE: screen probe"],
+    )
+
+    assert "EXTRACTOR BROKE: screen probe" in check_drift()
 
 
 def test_the_baseline_section_reader_refuses_a_write_form_it_cannot_read(tmp_path, monkeypatch):

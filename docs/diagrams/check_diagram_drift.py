@@ -106,6 +106,7 @@ _CHAT_GENERATOR = _HERE / "generate_chat_flow_data.py"
 _PACK_SHAPE = _HERE / "pack-shape.json"
 _ENV_EXAMPLE = _BACKEND / ".env.example"
 _THREAD_TURN = _BACKEND / "app" / "services" / "coach" / "thread_turn.py"
+_SCREEN_CONTEXT = _BACKEND / "app" / "services" / "coach" / "screen_context.py"
 
 # The generators whose calls into backend/app must still bind (check 5). Both build their
 # capture by importing the real pipeline, so both rot the same way; generate_example_chats.py
@@ -625,6 +626,110 @@ def _baseline_extractor_problems() -> list[str]:
     return problems
 
 
+def _screen_resolver_body() -> ast.FunctionDef | None:
+    """The AST of screen_context.resolve_screen_view, or None if it was renamed away."""
+    tree = ast.parse(_SCREEN_CONTEXT.read_text(), filename=_SCREEN_CONTEXT.name)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "resolve_screen_view":
+            return node
+    return None
+
+
+def _screen_key_comparisons(body: ast.FunctionDef) -> list[ast.Compare]:
+    """Every comparison in the resolver that tests which screen the pointer names."""
+    found = []
+    for sub in ast.walk(body):
+        if not isinstance(sub, ast.Compare):
+            continue
+        left = sub.left
+        if isinstance(left, ast.Attribute) and left.attr == "screen":
+            found.append(sub)
+    return found
+
+
+def _declared_screen_builders() -> list[str]:
+    """The screen keys that resolve a real VIEW, read off the resolver's own branches.
+
+    #871. The `screens` set pinned above is the KEYS a ScreenPointer can name, so adding
+    a key trips the guard. It says nothing about which of those keys resolve a view: the
+    keys are split between identity-only screens (the baseline already carries their
+    content, so the coach learns only WHERE the runner is) and screens that run a builder
+    and put a real view in the prompt's LOOKING AT section. Moving a screen from the first
+    group to the second changes what the coach is served and is precisely what the diagram
+    exists to depict, and every other pinned set matched through it.
+
+    There is no registry to read: the fact lives only in `resolve_screen_view`'s
+    if-branches. So this reads them statically, the same door `_declared_baseline_sections`
+    goes through for a dict built at runtime — a declaration in the code that has no
+    constant to import is still a declaration. Static, so it needs no DB and no runtime
+    state.
+
+    A branch on the screen key that does something OTHER than resolve a view would be read
+    as a builder here. That is deliberate: any special-casing of one screen is a fact about
+    what that screen gets, and the guard failing is the prompt to draw it or to say why not.
+
+    Paired with _screen_builder_extractor_problems, which refuses any branch form this
+    reader cannot get the key out of."""
+    body = _screen_resolver_body()
+    if body is None:
+        return []
+    keys: list[str] = []
+    for compare in _screen_key_comparisons(body):
+        for op, comparator in zip(compare.ops, compare.comparators):
+            if isinstance(op, ast.Eq) and isinstance(comparator, ast.Constant):
+                if isinstance(comparator.value, str):
+                    keys.append(comparator.value)
+            elif isinstance(op, ast.In) and isinstance(comparator, (ast.Tuple, ast.List, ast.Set)):
+                for element in comparator.elts:
+                    if isinstance(element, ast.Constant) and isinstance(element.value, str):
+                        keys.append(element.value)
+    return sorted(set(keys))
+
+
+def _screen_builder_extractor_problems() -> list[str]:
+    """Refuse any way of dispatching on the screen key this reader cannot follow.
+
+    _declared_screen_builders understands two forms, `pointer.screen == "x"` and
+    `pointer.screen in ("x", "y")`. A `match pointer.screen:` statement, a lookup into a
+    builder dict, or a comparison against a name rather than a literal would be invisible
+    to it — and PARTIAL blindness is worse than total, because the empty-set check below
+    would not fire. So an unrecognised dispatch is a loud failure telling the next person
+    to teach the reader that form, not a silent pass.
+
+    This is _baseline_extractor_problems' rule applied to the other statically-read
+    declaration, for the same reason: a guard that reads less than it claims to is the
+    vacuous-guard failure this whole file exists against."""
+    body = _screen_resolver_body()
+    if body is None:
+        return [
+            "EXTRACTOR BROKE: screen_context.resolve_screen_view no longer exists, so which "
+            "screens resolve a view cannot be read. Point the guard at its replacement."]
+    problems: list[str] = []
+    for sub in ast.walk(body):
+        if isinstance(sub, ast.Match):
+            problems.append(
+                f"EXTRACTOR BROKE: resolve_screen_view dispatches with `match` at line "
+                f"{sub.lineno}, a form this guard cannot read the screen keys of. Teach "
+                "_declared_screen_builders that form.")
+    for compare in _screen_key_comparisons(body):
+        for op, comparator in zip(compare.ops, compare.comparators):
+            readable = (
+                (isinstance(op, ast.Eq) and isinstance(comparator, ast.Constant)
+                 and isinstance(comparator.value, str))
+                or (isinstance(op, ast.In)
+                    and isinstance(comparator, (ast.Tuple, ast.List, ast.Set))
+                    and all(isinstance(e, ast.Constant) and isinstance(e.value, str)
+                            for e in comparator.elts))
+            )
+            if not readable:
+                problems.append(
+                    f"EXTRACTOR BROKE: resolve_screen_view tests the screen key at line "
+                    f"{compare.lineno} in a form this guard cannot read the key out of "
+                    f"({type(op).__name__} against {type(comparator).__name__}). Teach "
+                    "_declared_screen_builders that form.")
+    return problems
+
+
 def _declared_tools() -> list[dict]:
     """The tool list a thread turn is really handed.
 
@@ -870,17 +975,26 @@ def _chat_nodes(chat_src: str) -> list[dict[str, str]]:
         # binding the check could only run one way, and a section REMOVED from the builder
         # would leave its node drawing an input the coach no longer gets.
         section_m = re.search(r"\bsection:'([^']*)'", chunk)
+        # The same explicit binding, for the screen key whose view a resolver node draws
+        # (`screen:'trends'`). Explicit for the same reason: `screen_*` prefixes the
+        # resolver entry point itself as well as the per-screen builders, so an id
+        # convention could only run the check one way (#871).
+        screen_m = re.search(r"\bscreen:'([^']*)'", chunk)
         nodes.append({
             "id": id_m.group(1),
             "title": title_m.group(1) if title_m else "",
             "tag": tag_m.group(1) if tag_m else "",
             "section": section_m.group(1) if section_m else "",
+            "screen": screen_m.group(1) if screen_m else "",
         })
     return nodes
 
 
 def _chat_node_problems(
-    declared: dict[str, list[str]], baseline_sections: list[str], nodes: list[dict[str, str]]
+    declared: dict[str, list[str]],
+    baseline_sections: list[str],
+    screen_builders: list[str],
+    nodes: list[dict[str, str]],
 ) -> list[str]:
     """Every declared conversational input must be DRAWN, and every drawn one must be real.
 
@@ -937,6 +1051,27 @@ def _chat_node_problems(
             f"Builder nodes in {_CHAT_NODES.name} bound to baseline sections the thread turn "
             f"no longer assembles: {spurious}. The diagram draws an input the coach no "
             "longer receives. Remove the node.")
+
+    # Screens that resolve a view: one resolver node each, bound by `screen:'<key>'` (#871).
+    # The `screens` set is compared as names only, so a screen key moving from identity-only
+    # to view-resolving changes what the coach is served while every name-level set still
+    # matches. This is the one place that shows.
+    if not screen_builders:
+        problems.append(
+            "EXTRACTOR BROKE: no view-resolving screens were read out of "
+            "screen_context.resolve_screen_view. The chat drift guard cannot be trusted.")
+    drawn_screens = {n["screen"] for n in nodes if n["screen"]}
+    if missing := sorted(set(screen_builders) - drawn_screens):
+        problems.append(
+            "Screens that resolve a view into the prompt's LOOKING AT section but that no "
+            f"node in {_CHAT_NODES.name} binds: {missing}. Add a resolver node declaring "
+            f"screen:'{missing[0]}'. The coach is served that screen's contents and the "
+            "diagram shows it learning only where the runner is.")
+    if spurious := sorted(drawn_screens - set(screen_builders)):
+        problems.append(
+            f"Resolver nodes in {_CHAT_NODES.name} bound to screens that no longer resolve "
+            f"a view: {spurious}. That screen is identity-only now and the diagram still "
+            "draws its contents reaching the coach. Remove the node.")
     return problems
 
 
@@ -1138,8 +1273,14 @@ def check_drift() -> list[str]:
         )
     )
     problems.extend(_baseline_extractor_problems())
+    problems.extend(_screen_builder_extractor_problems())
     problems.extend(
-        _chat_node_problems(declared_chat, _declared_baseline_sections(), _chat_nodes(chat_src))
+        _chat_node_problems(
+            declared_chat,
+            _declared_baseline_sections(),
+            _declared_screen_builders(),
+            _chat_nodes(chat_src),
+        )
     )
     problems.extend(_chat_capture_problems(chat_blob))
 
@@ -1161,8 +1302,9 @@ def main() -> int:
         return 1
     print("ai-flow-graph diagram is in sync with the code (pack sections + nested pack keys "
           "+ DerivedMetric columns + kill-switch parity), the coach-chat diagram is in sync "
-          "(tools + skills + actions + screens + prompt slots + baseline sections + the "
-          "prompt/tool/skill text itself + capture parity), and the generators still bind.")
+          "(tools + skills + actions + screens + which of them resolve a view + prompt "
+          "slots + baseline sections + the prompt/tool/skill text itself + capture "
+          "parity), and the generators still bind.")
     return 0
 
 

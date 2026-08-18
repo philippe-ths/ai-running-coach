@@ -467,7 +467,7 @@ const NODES = [
     return head('label') + facts([['label', String(v.label)]])
     + head('view') + show(v.view, 'identity-only screen — no view.'); } },
 
-{ id:'screen_activity', layer:'resolve', kind:'code', tag:'resolver',
+{ id:'screen_activity', layer:'resolve', kind:'code', tag:'resolver', screen:'activity',
   title:'activity screen → get_session_detail', path:'query_tools.get_session_detail',
   from:['screen_resolve','t_activity'],
   body:()=> { const c=conv(), v=_B().screen_view;
@@ -475,7 +475,7 @@ const NODES = [
       return none('This conversation started from '+((c&&c.started_from)||'—')+' — this resolver did not run.');
     return head('resolved view') + show(v?v.view:null, 'nothing resolved.'); } },
 
-{ id:'screen_trends', layer:'resolve', kind:'code', tag:'resolver',
+{ id:'screen_trends', layer:'resolve', kind:'code', tag:'resolver', screen:'trends',
   title:'trends screen → get_volume_report', path:'services/trends.get_volume_report',
   from:['screen_resolve'],
   body:()=> { const c=conv(), v=_B().screen_view;
