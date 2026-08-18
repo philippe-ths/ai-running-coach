@@ -62,6 +62,14 @@ def calculate_splits(
     if len(time) != n_points:
         return [] # Mismatch
 
+    # An empty distance stream has no splits to report (#872). Stated rather
+    # than left to `distance[-1]` below, which would raise IndexError: the
+    # bounds invariant `_compute_split_metrics` asserts is sound only because
+    # every start index it is handed comes from a stream with at least one
+    # sample, and this is the one shape that would not.
+    if n_points == 0:
+        return []
+
     # Boundary detection, vectorized (#364). The split boundary for each km
     # target is the first sample whose cumulative distance reaches that target.
     # For a monotonic cumulative-distance stream np.searchsorted(side="left")
@@ -134,17 +142,20 @@ def _compute_split_metrics(
     altitude_stream=None,
 ) -> Dict[str, Any]:
     
-    # Distance in this split
-    # distance_stream is cumulative
-    d_start = distance_stream[start_idx] if start_idx > 0 else 0
-    # Actually distance stream starts at 0 usually if [0] is 0. 
-    # But usually distance[0] is small number or 0.
-    
-    # Safe access
-    if start_idx >= len(distance_stream): 
-        # Should not happen
-        return {}
-        
+    # `start_idx` is always a valid index into the cumulative distance stream
+    # (#872). `calculate_splits` is the only caller: it returns early on an
+    # empty distance stream, starts at 0, and thereafter passes either a
+    # `np.searchsorted` boundary for a target no larger than `distance[-1]`
+    # (so at most `n_points - 1`) or a start it has just bounds-checked against
+    # `n_points - 1`. Asserted rather than defended: the guard this replaces
+    # returned `{}`, which #853 turned from a malformed split rendered on the
+    # activity page into a `SplitRead` ValidationError, so there is no longer a
+    # degraded-output path worth keeping. The `d_start` line that used to sit
+    # above it indexed the stream before its own bounds check and was never
+    # read afterwards.
+    assert start_idx < len(distance_stream)  # bounded by calculate_splits
+
+    # Distance in this split; distance_stream is cumulative.
     s_dist_start = distance_stream[start_idx]
     s_dist_end = distance_stream[end_idx-1] if end_idx > 0 else 0
     
