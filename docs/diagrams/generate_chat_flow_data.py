@@ -56,19 +56,73 @@ PROD_PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_lean_grouped_v9")
 CAPTURE_CONFIG = os.environ.get("CHAT_CAPTURE_CONFIG", "prod")
 
 
+_ENV_EXAMPLE = Path(__file__).resolve().parents[2] / "backend" / ".env.example"
+
+
+def _prod_flag_contract() -> dict:
+    """The prod-parity value of every COACH_*_ENABLED flag, from .env.example.
+
+    Deliberately NOT the code defaults, which is what #793 suggested. Every
+    COACH_*_ENABLED default is True, while production runs most of the #522 kill
+    switches OFF (.env.example line 100 onward). Pinning to code defaults would
+    make the label honest about being pinned and dishonest about what it was
+    pinned TO -- a capture of a configuration production does not run, which is
+    exactly the failure #841 found in the sibling generator and corrected there
+    by making .env.example the checked contract. The drift guard reads the same
+    file, so pinning here and checking there cannot disagree.
+    """
+    if not _ENV_EXAMPLE.is_file():
+        return {}
+    text = _ENV_EXAMPLE.read_text()
+    return {
+        k: v == "true"
+        for k, v in re.findall(r"^(COACH_[A-Z0-9_]+_ENABLED)=(true|false)", text, re.M)
+    }
+
+
+def _coach_flag_names() -> list[str]:
+    return sorted(
+        n for n in type(settings).model_fields
+        if n.startswith("COACH_") and n.endswith("_ENABLED")
+    )
+
+
 def _pin_config() -> dict:
-    """Pin the settings the assembled capture depends on. Returns what was forced."""
+    """Pin every setting the capture depends on. Returns what was forced, and the
+    full resolved map, so `prod-pinned` is a claim the meta can be checked against.
+
+    Before #793 this pinned the prompt id and THREE flags out of seventeen, and
+    the other fourteen rode whatever the developer's backend/.env held. The
+    sharpest case was COACH_RELATIONSHIP_ENABLED: the runner's voice reaches the
+    prompt only when it AND COACH_VOICE_BLOCK_ENABLED are on, so forcing the
+    voice flag alone did not guarantee the voice slot rendered at all. Same
+    reasoning as #752, which took `make backend-test` off the local env file: a
+    diagram of what the coach receives should not depend on one machine's .env.
+    """
     if CAPTURE_CONFIG == "local":
-        return {"mode": "local .env", "forced": {}}
+        return {"mode": "local .env", "forced": {}, "flags": {}, "contract": None}
     forced = {}
     if settings.COACH_PROMPT_ID != PROD_PROMPT_ID:
         forced["COACH_PROMPT_ID"] = f"{settings.COACH_PROMPT_ID} → {PROD_PROMPT_ID}"
         settings.COACH_PROMPT_ID = PROD_PROMPT_ID
-    for flag in ("COACH_VOICE_BLOCK_ENABLED", "COACH_MEMORY_ENABLED", "COACH_THREADS_ENABLED"):
-        if not getattr(settings, flag):
-            forced[flag] = "False → True"
-            setattr(settings, flag, True)
-    return {"mode": "prod-pinned", "forced": forced}
+
+    contract = _prod_flag_contract()
+    flags = {}
+    for flag in _coach_flag_names():
+        # A flag .env.example does not declare falls back to the code default,
+        # which is what production resolves for it too.
+        want = contract.get(flag, type(settings).model_fields[flag].default)
+        have = getattr(settings, flag)
+        if have != want:
+            forced[flag] = f"{have} → {want}"
+            setattr(settings, flag, want)
+        flags[flag] = want
+    return {
+        "mode": "prod-pinned",
+        "forced": forced,
+        "flags": flags,
+        "contract": "backend/.env.example",
+    }
 
 
 def _guard_local() -> None:
@@ -390,6 +444,12 @@ def _capture_thread(db, user, thread, chat_mod_ref) -> dict:
     first_user = next((r for r in rows if r.role == "user"), None)
 
     # --- the pack as it is built for THIS conversation ---
+    # The conversation-level screen is the FIRST user message's, kept because the
+    # thread/entry nodes are conversation-scoped. Everything downstream of the
+    # pointer is now resolved PER TURN instead (#792): `stream_thread_turn`
+    # resolves `screen` on every call, so a runner who asks from Trends and then
+    # from an activity page gets two different LOOKING AT blocks, and showing the
+    # first one twice is a claim the data cannot back.
     pointer, pointer_caveat = _pointer_for(
         first_user.asked_from if first_user else None, thread
     )
@@ -417,15 +477,73 @@ def _capture_thread(db, user, thread, chat_mod_ref) -> dict:
     # The screen view contributes its session to rule 4 exactly as it does live.
     view_sessions = screen_ctx.sessions_in_play_from_view(screen_view)
 
-    # --- per-turn: what the coach reached for ---
+    # --- per-turn: what the coach reached for, and what it was LOOKING AT ---
+    # Resolving a screen and re-assembling the prompt is memoised on the screen
+    # label, because those are the only inputs that vary within a conversation;
+    # a thread whose every turn came from one screen therefore costs exactly what
+    # it cost before.
+    per_screen: dict = {}
+
+    def _screen_capture(asked_from):
+        if asked_from in per_screen:
+            return per_screen[asked_from]
+        ptr, caveat = _pointer_for(asked_from, thread)
+        view = resolve_screen_view(db, user.id, ptr) if ptr is not None else None
+        cap = {
+            "screen": ptr.screen if ptr is not None else None,
+            "caveat": caveat,
+            "looking_at_block": tt._render_looking_at_block(view),
+            "screen_view": (
+                {"label": view.label, "view": view.view} if view else None
+            ),
+            "view_sessions": screen_ctx.sessions_in_play_from_view(view),
+            "prompt": tt.build_thread_system_prompt(db, user, thread, view),
+        }
+        per_screen[asked_from] = cap
+        return cap
+
     turns = []
+    assistant_seen = 0
+    pending_asked_from = None
     for i, r in enumerate(rows[:_MAX_TURNS_PER_THREAD]):
         tools = r.tools_used if isinstance(r.tools_used, list) else []
         skills = r.skills_used if isinstance(r.skills_used, list) else []
+        if r.role == "user":
+            pending_asked_from = r.asked_from
+        # A generation belongs to the screen the RUNNER's message was asked
+        # from; the assistant row carries no `asked_from` of its own.
+        turn_screen = _screen_capture(
+            pending_asked_from if r.role == "assistant" else r.asked_from
+        )
+        if r.role == "assistant":
+            assistant_seen += 1
         turns.append({
             "i": i,
             "role": r.role,
             "asked_from": r.asked_from,
+            # --- #792: per-turn, not inherited from the first user message ---
+            "screen": turn_screen["screen"],
+            "pointer_caveat": turn_screen["caveat"],
+            "looking_at_block": turn_screen["looking_at_block"],
+            "screen_view": turn_screen["screen_view"],
+            "view_sessions": turn_screen["view_sessions"],
+            # The assembled prompt is ~13k chars, so it is carried per turn ONLY
+            # when this turn's screen actually produced a different one. A turn
+            # storing null reads the conversation-level prompt, which for that
+            # turn IS what was assembled. Measured: carrying it unconditionally
+            # roughly doubled the file.
+            "prompt": (
+                turn_screen["prompt"]
+                if turn_screen["prompt"] != prompt else None
+            ),
+            "prompt_chars": len(turn_screen["prompt"]),
+            # `enqueue_title_generation` returns early unless the thread is
+            # untitled AND this is the FIRST assistant reply, so every later turn
+            # showed a title job that did not run.
+            "assistant_index": (assistant_seen - 1) if r.role == "assistant" else None,
+            # `schedule_thread_quiet_check` is passed the count AT THAT MOMENT;
+            # the node was using the conversation total for every turn.
+            "messages_at_turn": i + 1,
             "at": str(r.created_at),
             "content": (r.content or "")[:_MAX_REPLY_CHARS],
             "truncated": len(r.content or "") > _MAX_REPLY_CHARS,
@@ -715,6 +833,21 @@ def _capture_assembled() -> dict:
 
 # --- code-resident artifacts ----------------------------------------------------
 
+def _declared_screen_builders_for_capture() -> list[str]:
+    """The screen keys that resolve a real view, read through the GUARD's own reader.
+
+    Deliberately not a second AST walk written here. #855's rule is that a guard
+    which re-implements the decision it checks is a second copy of that decision;
+    the same holds for the record it checks against. One reader, two callers, so
+    the only way live and recorded can differ is the one this exists to catch --
+    somebody changed `resolve_screen_view` and did not regenerate the diagram.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from check_diagram_drift import _declared_screen_builders
+
+    return _declared_screen_builders()
+
+
 def build() -> dict:
     pinned = _pin_config()
     catalogue = coaching_skills.render_catalogue()
@@ -730,8 +863,24 @@ def build() -> dict:
             "threads_enabled": bool(settings.COACH_THREADS_ENABLED),
             "voice_block_enabled": bool(settings.COACH_VOICE_BLOCK_ENABLED),
             "memory_enabled": bool(settings.COACH_MEMORY_ENABLED),
+            # #793: every COACH_*_ENABLED flag the capture ran under, so the
+            # `prod-pinned` label is a claim that can be CHECKED rather than
+            # taken on trust. Three used to be pinned and recorded; fourteen
+            # rode the developer's .env unrecorded.
+            "coach_flags": pinned["flags"],
+            "flag_contract": pinned["contract"],
             "block_gap_seconds": settings.BLOCK_GAP_SECONDS,
         },
+        # #871 follow-up: which screen keys actually RESOLVE A VIEW, as opposed
+        # to the identity-only screens whose content the baseline already
+        # carries. The sixth pinned surface set, and deliberately top-level
+        # rather than folded into `assembled.builders.screen_view`: that is a
+        # captured VALUE from one conversation, this is a DECLARATION read off
+        # resolve_screen_view's own branches, and the guard's stated rule is to
+        # compare a declaration against a record, never against a captured
+        # value. #870 is what makes writing it safe -- the generator now refuses
+        # to replace a real capture with none.
+        "screen_builders": sorted(_declared_screen_builders_for_capture()),
         # the prompt template, verbatim, with its {slot} markers intact
         "template": tt.THREAD_SYSTEM_TEMPLATE,
         "slot_order": re.findall(r"\{(\w+)\}", tt.THREAD_SYSTEM_TEMPLATE),
@@ -914,6 +1063,13 @@ def main() -> None:
     print(f"wrote {TARGET.relative_to(Path.cwd()) if TARGET.is_relative_to(Path.cwd()) else TARGET}")
     print(f"  prompt template   {len(data['template'])} chars, slots: {', '.join(data['slot_order'])}")
     print(f"  tools             {len(data['tools']['data'])} data + action + skill")
+    # main() hard-codes each key it reports, so a new pinned set gets no console
+    # line unless one is added here.
+    print(f"  screen builders   {', '.join(data['screen_builders']) or 'none'}")
+    forced = (data['meta'].get('forced') or {})
+    print(f"  coach flags       {len(data['meta'].get('coach_flags') or {})} pinned to "
+          f"{data['meta'].get('flag_contract') or 'the local .env'}"
+          f"{' · forced: ' + ', '.join(sorted(forced)) if forced else ' · nothing to force'}")
     print(f"  skills            {len(data['skills'])} "
           f"({data['skill_cost']['catalogue_chars']} chars catalogue / "
           f"{data['skill_cost']['procedure_chars']} held back)")

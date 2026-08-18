@@ -480,11 +480,18 @@ def _diagram_captured_flags(flow_src: str) -> dict[str, bool]:
 
 
 def _env_example_flags() -> dict[str, bool]:
-    """The prod-parity COACH_*_ENABLED values documented in backend/.env.example."""
+    """The prod-parity COACH_*_ENABLED values documented in backend/.env.example.
+
+    The character class carries DIGITS deliberately. It read `[A-Z_]+` until
+    #793, which silently skipped `COACH_PREVIOUS_30D_ENABLED` -- a flag this
+    guard therefore never checked, and never said it was not checking. A reader
+    that quietly narrows what it reads is the vacuous-guard failure in its
+    smallest form, so if a future flag name takes a character this misses, widen
+    it here rather than accepting the shorter list."""
     if not _ENV_EXAMPLE.is_file():
         return {}
     return {k: v == "true" for k, v in
-            re.findall(r'^(COACH_[A-Z_]+_ENABLED)=(true|false)', _ENV_EXAMPLE.read_text(), re.M)}
+            re.findall(r'^(COACH_[A-Z0-9_]+_ENABLED)=(true|false)', _ENV_EXAMPLE.read_text(), re.M)}
 
 
 def _diagram_captured_prompt_id(flow_src: str) -> str | None:
@@ -525,6 +532,7 @@ _CHAT_SURFACE_LABELS = {
     "skills": "the coaching skills it can load",
     "action_kinds": "the actions it can propose",
     "screens": "the screens a ScreenPointer can name",
+    "screen_builders": "the screens that resolve a real view",
     "prompt_slots": "the system prompt's slots",
 }
 
@@ -757,6 +765,15 @@ def _declared_chat_surface() -> dict[str, list[str]]:
             _literal_values(proposed_actions.ProposedActionRequest, "action_type")
         ),
         "screens": sorted(_literal_values(ScreenPointer, "screen")),
+        # #871's other half. The node check below already notices a screen that
+        # STARTS resolving a view, via the hand-authored bindings; this pins the
+        # set in the generated blob too, so the fact is recorded where every
+        # other closed set is recorded rather than only inferable from the
+        # topology. Both readings go through _declared_screen_builders, and the
+        # generator records it through the same function, so the only way live
+        # and recorded can differ is somebody changing the resolver without
+        # regenerating.
+        "screen_builders": sorted(_declared_screen_builders()),
         # ORDER matters here and nowhere else: the diagram numbers its slot nodes
         # "slot 1".."slot 8" in template order, so a reordered template misnumbers them.
         "prompt_slots": re.findall(r"\{(\w+)\}", tt.THREAD_SYSTEM_TEMPLATE),
@@ -810,6 +827,7 @@ def _recorded_chat_surface(blob: dict) -> dict[str, list[str]]:
         ),
         "action_kinds": enum_of("proposed_action", "action_type"),
         "screens": enum_of("screen_pointer", "screen"),
+        "screen_builders": sorted(blob.get("screen_builders") or []),
         "prompt_slots": list(blob.get("slot_order") or []),
     }
 
@@ -1103,11 +1121,49 @@ def _chat_capture_problems(blob: dict | None) -> list[str]:
             "itself changed).")
 
     documented_flags = _env_example_flags()
+
+    # #793: the capture now records EVERY COACH_*_ENABLED flag it ran under, not
+    # the two that happen to have a `meta` boolean of their own. Before this, a
+    # capture labelled `prod-pinned` had fourteen of its seventeen flags riding
+    # the developer's .env, unrecorded and unchecked -- and the sharpest of them
+    # was COACH_RELATIONSHIP_ENABLED, which gates whether the runner's voice
+    # reaches the prompt at all, so the voice slot could render or not render for
+    # a reason the diagram never showed.
+    captured_flags = meta.get("coach_flags")
+    if not isinstance(captured_flags, dict) or not captured_flags:
+        problems.append(
+            f"{_CHAT_NODES.name} records no `meta.coach_flags` map, so the kill-switch "
+            "configuration its capture ran under is unknown and the `prod-pinned` label "
+            "cannot be checked. Regenerate the diagram: "
+            "python docs/diagrams/generate_chat_flow_data.py")
+        captured_flags = {}
+
     mismatched = sorted(
-        f"{setting} (diagram={meta[key]}, .env.example={documented_flags[setting]})"
-        for key, setting in _CHAT_META_FLAG_SETTINGS.items()
-        if key in meta and setting in documented_flags and bool(meta[key]) != documented_flags[setting]
+        f"{setting} (diagram={captured_flags[setting]}, .env.example={want})"
+        for setting, want in documented_flags.items()
+        if setting in captured_flags and bool(captured_flags[setting]) != want
     )
+    # A flag .env.example documents that the capture does not record at all is
+    # the same failure one step earlier: it means the generator stopped pinning
+    # something the contract names.
+    unrecorded = sorted(set(documented_flags) - set(captured_flags))
+    if captured_flags and unrecorded:
+        problems.append(
+            f"{_CHAT_NODES.name} does not record {unrecorded}, which backend/.env.example "
+            "documents as part of the prod-parity contract. The capture cannot claim to be "
+            "prod-pinned for a flag it did not pin. Regenerate the diagram.")
+    # The two legacy meta booleans must not drift away from the map beside them.
+    inconsistent = sorted(
+        f"{setting} (meta.{key}={meta[key]}, meta.coach_flags={captured_flags[setting]})"
+        for key, setting in _CHAT_META_FLAG_SETTINGS.items()
+        if key in meta and setting in captured_flags
+        and bool(meta[key]) != bool(captured_flags[setting])
+    )
+    if inconsistent:
+        problems.append(
+            f"{_CHAT_NODES.name} carries two disagreeing records of the same flag: "
+            f"{inconsistent}. Regenerate the diagram.")
+
     if mismatched:
         problems.append(
             "The chat diagram was captured under coach kill-switch flags that DISAGREE with "

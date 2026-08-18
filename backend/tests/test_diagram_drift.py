@@ -18,6 +18,7 @@ check that could not fail, so a guard whose own ability to fail is untested repe
 tests feed the pure comparison functions a deliberately broken input and assert the guard
 reports it.
 """
+import copy
 import sys
 from pathlib import Path
 
@@ -657,3 +658,125 @@ def test_check_drift_actually_runs_the_baseline_extractor_check(monkeypatch):
     )
 
     assert "EXTRACTOR BROKE: probe" in check_drift()
+
+
+# --- #793 / #871: the capture's config and the sixth pinned surface set -----------
+# Every one of these is a SENSITIVITY test: the checks below all pass on the real
+# committed diagram, and a check seen only passing is not evidence.
+
+
+def _real_chat_blob() -> dict:
+    from check_diagram_drift import _chat_blob
+
+    blob = _chat_blob(_CHAT_NODES.read_text(encoding="utf-8"))
+    assert blob is not None, "the committed chat diagram carries no readable CHAT blob"
+    return blob
+
+
+def test_the_capture_records_every_documented_coach_flag():
+    """#793: `capture_config: "prod-pinned"` used to pin the prompt id and three
+    flags out of seventeen, and label the result prod-pinned anyway."""
+    from check_diagram_drift import _env_example_flags
+
+    recorded = _real_chat_blob()["meta"].get("coach_flags") or {}
+    documented = _env_example_flags()
+    assert documented, "the .env.example flag reader came back empty"
+    missing = sorted(set(documented) - set(recorded))
+    assert not missing, (
+        f"the capture does not record {missing}, which .env.example documents as "
+        "part of the prod-parity contract"
+    )
+
+
+def test_the_env_example_reader_sees_a_flag_with_a_digit_in_its_name():
+    """The reader's character class was `[A-Z_]+` until #793, which silently
+    skipped COACH_PREVIOUS_30D_ENABLED -- a flag the guard therefore never
+    checked and never said it was not checking."""
+    from check_diagram_drift import _env_example_flags
+
+    assert "COACH_PREVIOUS_30D_ENABLED" in _env_example_flags()
+
+
+def test_the_capture_check_fails_when_a_flag_disagrees_with_the_contract():
+    """SENSITIVITY: a capture taken with a kill switch flipped the other way."""
+    from check_diagram_drift import _chat_capture_problems, _env_example_flags
+
+    blob = copy.deepcopy(_real_chat_blob())
+    flag, want = next(iter(_env_example_flags().items()))
+    blob["meta"]["coach_flags"][flag] = not want
+
+    problems = _chat_capture_problems(blob)
+
+    assert problems and any(flag in p for p in problems), problems
+
+
+def test_the_capture_check_fails_when_the_flag_map_is_missing():
+    """SENSITIVITY: a generator that stops recording the map takes the label's
+    only evidence with it, which must not read as 'nothing to check'."""
+    from check_diagram_drift import _chat_capture_problems
+
+    blob = copy.deepcopy(_real_chat_blob())
+    blob["meta"].pop("coach_flags", None)
+
+    problems = _chat_capture_problems(blob)
+
+    assert problems and any("coach_flags" in p for p in problems), problems
+
+
+def test_the_capture_check_fails_when_a_documented_flag_is_unrecorded():
+    """SENSITIVITY: the generator stops pinning one flag the contract names."""
+    from check_diagram_drift import _chat_capture_problems, _env_example_flags
+
+    blob = copy.deepcopy(_real_chat_blob())
+    flag = next(iter(_env_example_flags()))
+    blob["meta"]["coach_flags"].pop(flag)
+
+    problems = _chat_capture_problems(blob)
+
+    assert problems and any(flag in p for p in problems), problems
+
+
+def test_the_capture_check_fails_when_two_records_of_one_flag_disagree():
+    """SENSITIVITY: the legacy meta boolean and the new map must not drift apart,
+    or the diagram carries two answers to the same question."""
+    from check_diagram_drift import _chat_capture_problems
+
+    blob = copy.deepcopy(_real_chat_blob())
+    blob["meta"]["voice_block_enabled"] = not blob["meta"]["coach_flags"][
+        "COACH_VOICE_BLOCK_ENABLED"
+    ]
+    blob["meta"]["coach_flags"]["COACH_VOICE_BLOCK_ENABLED"] = not blob["meta"][
+        "voice_block_enabled"
+    ]
+
+    problems = _chat_capture_problems(blob)
+
+    assert problems and any("disagreeing" in p for p in problems), problems
+
+
+def test_the_screen_builders_are_pinned_in_the_blob():
+    """#871's other half: the set is recorded where every other closed set is."""
+    assert _real_chat_blob().get("screen_builders") == sorted(
+        _declared_screen_builders()
+    )
+
+
+def test_the_surface_check_fails_when_a_screen_starts_resolving_a_view():
+    """SENSITIVITY, the fact this set exists for: moving a screen from
+    identity-only to view-resolving changes what the coach is served."""
+    declared = _declared_chat_surface()
+    declared["screen_builders"] = sorted(declared["screen_builders"] + ["schedule"])
+
+    problems = _chat_surface_problems(declared, _recorded_chat_surface(_real_chat_blob()))
+
+    assert problems and any("resolve a real view" in p for p in problems), problems
+
+
+def test_the_surface_check_fails_when_the_recorded_builder_set_is_lost():
+    """SENSITIVITY: a blob regenerated by a generator that dropped the key."""
+    blob = copy.deepcopy(_real_chat_blob())
+    blob.pop("screen_builders", None)
+
+    problems = _chat_surface_problems(_declared_chat_surface(), _recorded_chat_surface(blob))
+
+    assert problems and any("resolve a real view" in p for p in problems), problems
