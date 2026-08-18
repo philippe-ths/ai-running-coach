@@ -191,11 +191,23 @@ function askedTurn(){
   for(let i=a.i-1; i>=0; i--) if(c.turns[i].role==='user') return c.turns[i];
   return null;
 }
-/* The rows that existed when this turn generated: everything before the reply
-   (the runner's message is written before generation, so it is included). */
+/* The rows the model actually saw for this turn: everything before the reply
+   (the runner's message is written before generation, so it is included), then
+   the SAME tail bound the turn itself applies -- `thread_messages(...)[-40:]` in
+   thread_turn.py, carried here as CHAT.bounds.max_llm_history_turns rather than
+   a second copy of 40, so the node cannot drift from the constant it draws. */
+function historyBound(){ return (CHAT.bounds||{}).max_llm_history_turns || null; }
 function historyForTurn(){
   const c = conv(), a = selectedTurn(); if(!c || !a) return [];
-  return c.turns.slice(0, a.i);
+  const all = c.turns.slice(0, a.i), b = historyBound();
+  return b ? all.slice(-b) : all;
+}
+/* How many of the oldest rows the bound dropped for this turn. 0 = the whole
+   thread fitted, which is every conversation in the current capture. */
+function historyDroppedForTurn(){
+  const a = selectedTurn(), b = historyBound();
+  if(!a || !b) return 0;
+  return Math.max(0, a.i - b);
 }
 function turnLabel(){
   const a = selectedTurn(); if(!a) return '—';
@@ -635,10 +647,17 @@ const NODES = [
 
 /* ===== 5 · THE TURN ===== */
 { id:'history', layer:'loop', kind:'store', tag:'bounded read',
-  title:'Thread history', path:'threads.thread_messages(...)[-40:]',
+  title:'Thread history', path:'threads.thread_messages(...)[-'+(historyBound()||'')+':]',
   from:['t_chat','t_thread','user_msg'],
-  body:()=> { const h=historyForTurn(), c=conv(); if(!c) return none('no capture');
-    return head('sent to the model for '+turnLabel()+' — '+h.length+' of '+c.turn_count+' rows')
+  body:()=> { const h=historyForTurn(), c=conv(), d=historyDroppedForTurn(); if(!c) return none('no capture');
+    /* Say whether the bound BIT, not just that it exists: a node drawn to show a
+       limit should distinguish "the whole thread fitted" from "the oldest rows
+       were dropped", and every captured conversation is currently the former. */
+    const bound = historyBound();
+    const note = d
+      ? ' · the '+bound+'-row bound dropped the '+d+' oldest'
+      : (bound ? ' · under the '+bound+'-row bound' : '');
+    return head('sent to the model for '+turnLabel()+' — '+h.length+' of '+c.turn_count+' rows'+note)
     + jsonHTML(h.map(t=>({role:t.role, content:t.content})), true); } },
 
 { id:'llm', layer:'loop', kind:'llm', tag:'LLM call', span:true,
