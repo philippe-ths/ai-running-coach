@@ -57,10 +57,13 @@ from app.models import (  # noqa: E402
     CoachingRelationship,
     DerivedMetric,
     Exchange,
+    GoalRace,
+    PlannedSession,
     RunnerBaseline,
     RunnerMemory,
     StravaAccount,
     Thread,
+    TrainingPlan,
     User,
     UserProfile,
 )
@@ -73,11 +76,17 @@ USER_MODELS = [
     RunnerBaseline,
     RunnerMemory,
     CoachingRelationship,
+    # The schedule's user-scoped half (#830). A goal race belongs to the runner
+    # alone; a plan points at one optionally, so the race must land first.
+    GoalRace,
+    TrainingPlan,
 ]
 # activities.block_id <-> blocks.primary_activity_id is circular (A1), so
 # activities are inserted with block_id nulled, blocks/exchanges follow, and
 # block_id is backfilled last (see seed()).
-ACTIVITY_MODELS = [Activity, Block, Exchange, ActivityStream, DerivedMetric, CoachReport, Thread, CoachChatMessage, CheckIn]
+# PlannedSession sits here rather than with its plan because it can point at an
+# activity (the run that completed it), so it must land after activities do.
+ACTIVITY_MODELS = [Activity, Block, Exchange, ActivityStream, DerivedMetric, CoachReport, Thread, CoachChatMessage, CheckIn, PlannedSession]
 ORDERED_MODELS = USER_MODELS + ACTIVITY_MODELS
 
 # Tables keyed off activity_id, filtered when --activities limits the snapshot.
@@ -192,6 +201,21 @@ def seed(source_url: str, target_url: str, activities_limit: int, with_live_toke
         if r.get("activity_id") in keep_activity_ids
         or (r.get("activity_id") is None and r.get("thread_id") in keep_thread_ids)
     ]
+
+    # #830: a planned session is NOT a child of an activity -- it exists whether
+    # or not a run ever completed it -- so it is never dropped by the window.
+    # What can dangle is the completion pointer, which is nullable. Two ways to
+    # get that wrong, both taken deliberately here:
+    #   - Filtering the row out (the ACTIVITY_CHILD_MODELS treatment) would
+    #     delete every uncompleted session, since those carry no activity_id at
+    #     all, and would tear a completed one out of its plan's schedule.
+    #   - Clearing the whole completion would say the runner never did it.
+    # So the row and its completion survive and only the LINK is dropped, the
+    # same call the Thread anchor above makes: the session was completed, by a
+    # run that fell outside the window this snapshot asked for.
+    for row in snapshot[PlannedSession]:
+        if row.get("completed_activity_id") not in keep_activity_ids:
+            row["completed_activity_id"] = None
 
     # Blocks survive only when their primary activity does; exchanges follow
     # their block. Activities are inserted with block_id nulled (circular FK
