@@ -803,8 +803,97 @@ def build() -> dict:
     }
 
 
+# The two keys that ARE the capture: what one real turn was served, and the
+# configuration it was served under. Everything else in the blob is a
+# declaration read straight out of the code, which needs no database at all.
+# They travel together — a fresh `meta` over a preserved `assembled` would
+# describe the capture with a config it was not taken under, which is a subtler
+# version of the dishonesty this is fixing.
+_CAPTURE_KEYS = ("assembled", "meta")
+
+
+def _committed_capture(target_text: str) -> dict | None:
+    """The capture already in the file, if it holds a real one.
+
+    Read straight off the committed `const CHAT = ...` line rather than through
+    the drift guard, so the generator does not import the thing that checks it.
+    """
+    match = re.search(r"(?m)^const CHAT = (.*);$", target_text)
+    if not match:
+        return None
+    try:
+        blob = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    if not (blob.get("assembled") or {}).get("ok"):
+        return None
+    return {key: blob[key] for key in _CAPTURE_KEYS if key in blob}
+
+
+class CaptureRefused(Exception):
+    """Raised rather than writing a diagram that shows less than the one it replaces."""
+
+
+def plan_capture(assembled: dict | None, target_text: str) -> dict:
+    """What to do about a run whose capture came back template-only (#870).
+
+    Returns the capture keys to splice into the fresh data — empty when this
+    run captured a real turn and nothing needs keeping — and raises
+    CaptureRefused when there is neither a fresh capture nor a committed one to
+    fall back on.
+
+    Pure, so its own behaviour can be tested without a database, which is the
+    condition the whole check is about.
+    """
+    if (assembled or {}).get("ok"):
+        return {}
+    reason = (assembled or {}).get("reason")
+    preserved = _committed_capture(target_text)
+    if preserved is None:
+        raise CaptureRefused(
+            f"refusing to write a template-only capture to {TARGET.name}.\n"
+            f"  no turn could be captured: {reason}\n"
+            f"  and the committed file holds no real capture to keep.\n"
+            f"  Every node would render 'no capture' instead of what the coach was\n"
+            f"  really served, which is the diagram's whole promise.\n"
+            f"  Seed a local database first: make seed-local"
+        )
+    print(
+        f"NOTE: no turn could be captured ({reason}).\n"
+        f"  The declarations below were refreshed; the committed capture and the\n"
+        f"  config it was taken under were kept as they were, so nothing the\n"
+        f"  diagram shows has been downgraded.\n"
+        f"  Run against a seeded local DB (make seed-local) to refresh the capture\n"
+        f"  itself."
+    )
+    return preserved
+
+
 def main() -> None:
     data = build()
+
+    # #870: without a seeded database the capture comes back template-only, and
+    # writing it would silently replace every real value in the committed
+    # diagram with "no capture". The standing project rule is that a change to
+    # what the coach receives regenerates the diagram in the same PR, so an
+    # agent or a developer with no seeded DB could satisfy that rule
+    # mechanically and leave the artifact showing LESS than it did before.
+    # #855's capture-parity check catches the aftermath at the guard; this
+    # refuses to produce it in the first place, one step earlier and with a
+    # message that says what is missing rather than reading as a guard
+    # complaint.
+    #
+    # Preserving beats hard-failing, and the issue's acceptance criteria allow
+    # either: most regenerations exist to refresh the DECLARATIONS (the tools,
+    # the skills, the prompt template — the sets #855 pins), and none of those
+    # need a database. Refusing outright would make a declaration refresh
+    # impossible without a production snapshot, for no gain. What must never
+    # happen is a real capture being replaced by an empty one.
+    try:
+        data.update(plan_capture(data.get("assembled"), TARGET.read_text(encoding="utf-8")))
+    except CaptureRefused as refusal:
+        sys.exit(str(refusal))
+
     blob = json.dumps(data, default=str, separators=(",", ":"))
     line = f"const CHAT = {blob};\n"
 
