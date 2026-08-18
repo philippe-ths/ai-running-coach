@@ -173,9 +173,10 @@ export default function ProfilePage() {
                     value={formData.max_hr || ''}
                     onChange={handleChange}
                     placeholder="e.g. 190"
+                    aria-describedby="max_hr-hint"
                     className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 />
-                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                 <p id="max_hr-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     Used to calculate zones. If unknown, estimate with 220 minus age.
                 </p>
             </div>
@@ -189,9 +190,10 @@ export default function ProfilePage() {
                     value={formData.resting_hr || ''}
                     onChange={handleChange}
                     placeholder="e.g. 50"
+                    aria-describedby="resting_hr-hint"
                     className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 />
-                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                 <p id="resting_hr-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     Your typical morning resting HR. Helps the coach read fatigue trends.
                 </p>
             </div>
@@ -218,9 +220,10 @@ export default function ProfilePage() {
                     value={formData.height_cm ?? ''}
                     onChange={handleChange}
                     placeholder="e.g. 178"
+                    aria-describedby="height_cm-hint"
                     className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
                 />
-                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                 <p id="height_cm-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     Optional. Your coach uses your build to judge how fast to ramp volume
                     and how much strength work to prescribe &mdash; not to set a target
                     weight. Leave blank and it simply won&apos;t be considered.
@@ -244,6 +247,7 @@ export default function ProfilePage() {
                 <select
                     id="week_starts_on"
                     name="week_starts_on"
+                    aria-describedby="week_starts_on-hint"
                     value={formData.week_starts_on}
                     onChange={handleChange}
                     className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
@@ -251,7 +255,7 @@ export default function ProfilePage() {
                     <option value={0}>Monday</option>
                     <option value={6}>Sunday</option>
                 </select>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                <p id="week_starts_on-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     Sets which day your training week begins, for &ldquo;this week&rdquo; on the coach and Trends.
                 </p>
             </div>
