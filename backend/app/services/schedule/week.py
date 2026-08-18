@@ -54,7 +54,6 @@ from app.services.schedule.placement import (
     session_status,
 )
 from app.services.schedule.norms import running_vs_norm
-from app.services.schedule.planned_distance import planned_distance_m
 from app.services.schedule.rule_text import describe_rule
 from app.services.schedule.rules import check_rules
 from app.services.weeks import days_into_week, resolve_week_start, week_start
@@ -217,10 +216,15 @@ def build_week(
     committed = [s for s in sessions if s.commitment == "committed"]
     headline = WeekHeadline(
         planned_running_distance_m=(
-            # Via `planned_distance_m`, so a run sized by rep structure rather
-            # than by a total counts its work instead of summing as zero (#876).
+            # Read off the session the client is handed, not recomputed from
+            # the row beside it (#887). `PlannedSessionRead.planned_distance_m`
+            # is `planned_distance.planned_distance_m` either way, so a run
+            # sized by rep structure counts its work instead of summing as zero
+            # (#876) — but summing the carried value makes the headline and the
+            # card arithmetically the same number rather than two readings that
+            # happen to agree.
             sum(
-                planned_distance_m(s)
+                s.planned_distance_m
                 for s in committed
                 if s.discipline == "run"
             )
