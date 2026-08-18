@@ -1,0 +1,60 @@
+# The renewal trigger for the FastAPI upper pin (#874).
+#
+# #809 pinned `fastapi>=0.141.0,<0.142.0` because an unbounded constraint let CI
+# resolve a route model the local venv never saw, which is how the auth-gate
+# coverage guard came to inspect zero routes while reporting green. The bound is
+# the right call and it is also a standing commitment to periodic maintenance
+# that nothing in this repository was producing: the project would just stop
+# receiving FastAPI releases, security fixes included.
+#
+# This job is the thing that notices. It does not only compare version numbers:
+# when a release exists past the pin it installs that release and runs the
+# route-model guards under it, so the report distinguishes "the pin is now only
+# holding us back" from "the pin is earning its keep, here is what broke".
+#
+# It fails rather than warns. A warning in a scheduled job's log is the same as
+# no signal, which is the failure mode this exists to remove. A red scheduled
+# run emails the repository owner; a green-with-a-note run does not.
+name: fastapi-pin
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC. Weekly is the right cadence for a maintenance signal:
+    # often enough that a release is noticed within days, rare enough that a
+    # standing red run is a decision left unmade rather than background noise.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  fastapi-pin:
+    name: fastapi-pin
+    runs-on: ubuntu-latest
+    env:
+      # Required by app.core.config.Settings at import time; the guards use
+      # SQLite in-memory via conftest, so this URL is never dialled.
+      DATABASE_URL: postgresql+psycopg://test:test@localhost/test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./backend[test]"
+
+      # Exits 0 while the pin still covers the newest release. Past that it
+      # installs the candidate, runs the guards under it, and exits 1 with the
+      # verdict — so the job's own result is the signal.
+      - name: Is the pin still needed?
+        run: python backend/scripts/check_fastapi_pin.py
