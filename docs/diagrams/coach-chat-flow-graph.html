@@ -429,7 +429,13 @@ const NODE_ACTIVE = {
   s_anchor:  () => !!P_().anchor,       d_anchor:   () => !!P_().anchor,
   s_voice:   () => !!P_().voice,        d_voice:    () => !!P_().voice,
   s_cross:   () => !!P_().cross_thread, d_cross:    () => !!P_().cross_thread,
-  s_looking: () => !!P_().looking_at,   d_looking:  () => !!P_().looking_at,
+  /* #792: LOOKING AT is the one slot whose presence is genuinely PER TURN --
+     `stream_thread_turn` resolves the screen on every call -- so it reads the
+     selected turn's own block rather than the conversation-level `present` flag
+     taken from the first user message. The others (anchor, voice, cross-thread,
+     memory, readiness) really are conversation-scoped in the code. This is what
+     makes the Key's per-turn promise below true rather than nearly true. */
+  s_looking: () => !!lookingForTurn(),  d_looking:  () => !!lookingForTurn(),
   d_memory:  () => !!P_().memory,       d_readiness:() => !!P_().readiness,
   s_baseline:() => !!(P_().memory || P_().readiness),
   // a tool the SELECTED conversation never called reads absent — the point of the
