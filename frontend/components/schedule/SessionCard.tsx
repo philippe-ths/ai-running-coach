@@ -51,27 +51,25 @@ function placementChip(
  * week's headline counts — with the rep prescription under it, because that is
  * what they actually go out and do. Warm-up and cool-down are part of the total
  * and are now stated as distances, so this is addition, not an estimate.
+ *
+ * That distance is `session.planned_distance_m`, computed server-side by the
+ * one definition every other reader asks (#887). This card used to reimplement
+ * it and then not reach its own copy: a session carrying rep structure AND a
+ * duration returned early on the duration, so the card showed "40 min" while
+ * the headline counted the structured kilometres from the same row. Both axes
+ * are shown now, distance first, the way `adjust.py` already names every axis a
+ * session carries rather than the first one.
  */
-function structuredDistance(session: PlannedSession): number {
-  const s = session.structure;
-  if (!s) return 0;
-  const positive = (value: number | undefined) => (value && value > 0 ? value : 0);
-  const reps = positive(s.reps_planned);
-  const repDistance = positive(s.rep_distance_m);
-  return (
-    positive(s.warmup_distance_m) + reps * repDistance + positive(s.cooldown_distance_m)
-  );
-}
-
 function targetLine(session: PlannedSession): string | null {
   const parts: string[] = [];
-  if (session.target_distance_m) parts.push(formatDistanceKm(session.target_distance_m));
+  if (session.planned_distance_m > 0) {
+    parts.push(formatDistanceKm(session.planned_distance_m));
+  }
   if (session.target_duration_s) parts.push(formatDuration(session.target_duration_s));
   if (parts.length) return parts.join(" · ");
 
-  const total = structuredDistance(session);
-  if (total > 0) return formatDistanceKm(total);
-
+  // Reps with no measurement at all: the count is all there is to show, and it
+  // adds nothing to the headline either.
   const reps = session.structure?.reps_planned;
   if (reps) return `${reps} reps`;
   return null;

@@ -17,9 +17,12 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from app.schemas.coach_context import VolumeMetricComparison
+from app.services.schedule.planned_distance import (
+    planned_distance_m as _planned_distance_m,
+)
 
 # --- the three axes --------------------------------------------------------
 
@@ -240,6 +243,29 @@ class PlannedSessionRead(BaseModel):
     completed_activity_id: Optional[UUID] = None
     completion_source: Optional[str] = None
     dismissed_at: Optional[datetime] = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def planned_distance_m(self) -> float:
+        """How far this session goes, decided once (#887).
+
+        `services/schedule/planned_distance.py` is the single answer the week
+        headline, the horizon and the volume ceiling all ask; the client used to
+        be a fourth reader that reimplemented it instead, and the two readings
+        disagreed the moment a session carried rep structure AND a duration —
+        the card showed the duration and never a distance while the headline
+        counted the structured kilometres from the very same row.
+
+        Carried rather than left for the client to re-derive, the same reason
+        `has_narrowed` above is. Computed rather than assigned at construction
+        so no future builder of this model can forget it.
+
+        0.0 means the session states no distance — a duration-only session is
+        not converted into one, because that would be the app inventing a
+        distance from an assumed pace, which `planned_distance.py` abstains
+        from by design.
+        """
+        return _planned_distance_m(self)
 
 
 # --- logged actuals --------------------------------------------------------
