@@ -1,4 +1,4 @@
-.PHONY: smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local coach-review eval eval-selftest eval-memory eval-memory-selftest diagram-check alembic-check verify-local deployed-handshake-smoke post-deploy-verify preflight-env-check
+.PHONY: voice-probe voice-probe-selftest smoke backend-smoke frontend-smoke test backend-test frontend-test seed-local coach-review eval eval-selftest eval-memory eval-memory-selftest diagram-check alembic-check verify-local deployed-handshake-smoke post-deploy-verify preflight-env-check
 
 # Prefer the project venv interpreter when it exists, fall back to bare python.
 # Path is relative to backend/ since the targets cd there first. CI has no
@@ -78,6 +78,20 @@ diagram-check:
 # `alembic-check` job against a throwaway Postgres; locally it uses whatever
 # backend/.env points at (docker-compose Postgres on :5433), where the upgrade
 # is a no-op once that database is already at head.
+# Run the coach Voices against real stored baselines and write the result where
+# a human can read it (#828). Needs a seeded DB (`make seed-local`) and an API
+# key; nothing is regenerated, so the cost is one cheap voice-lane call per
+# (case, voice) pair. Pass flags via PROBE_ARGS, e.g.:
+#   make voice-probe PROBE_ARGS="--voice roast --report-id <uuid>"
+voice-probe:
+	cd backend && $(BACKEND_PY) scripts/probe_voice.py $(PROBE_ARGS)
+
+# Grade the harness against scripted outcomes. No DB and no API key, so this is
+# safe in CI -- and it is where the harness's own reporting is PROVED rather
+# than observed passing.
+voice-probe-selftest:
+	cd backend && $(BACKEND_PY) scripts/probe_voice.py --self-test
+
 alembic-check:
 	cd backend && $(BACKEND_PY) -m alembic upgrade head
 	cd backend && $(BACKEND_PY) -m alembic check
