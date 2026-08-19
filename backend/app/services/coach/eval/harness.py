@@ -3,8 +3,15 @@ rubric, aggregate into a repeatable scorecard, and flag regressions across runs.
 
 Default scope is the current ``(prompt_id, schema_version)`` pair — exactly the
 versioned-cache identity M0 introduced — so a scorecard is comparable across
-prompt/model iterations. Reports whose stored pack predates the current schema
-do not parse cleanly; they are recorded as errors rather than crashing the run.
+prompt/model iterations.
+
+A stored pack that no longer parses has TWO meanings and the scorecard keeps
+them apart (#810). A pack written under a prompt id declared beyond the pack
+readability cutoff (`UNREADABLE_PACK_PROMPT_IDS`) is settled history: it is
+counted in `skipped_unreadable_pack`, listed in `unreadable_packs`, and scores
+nothing. Any other parse failure is live drift and stays in `errors`, loud. A
+row in either bucket contributes no assertions at all, so it can never be
+mistaken for a report that parsed and scored badly.
 """
 
 from __future__ import annotations
@@ -17,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.coach_report import CoachReport
 from app.schemas.coach import CoachMessageReport, CoachReportContent
-from app.schemas.coach_context import CoachContextPack
+from app.schemas.coach_context import StoredPackUnreadable, load_stored_pack
 from app.services.coach.eval.fixtures import (
     deliberately_bad_message_report,
     deliberately_bad_report,
@@ -69,6 +76,15 @@ class Scorecard:
     # fuller turn never landed). The harness scores the fuller turn only; an
     # opener row has no message to score. Operational health, not a rubric assertion.
     skipped_opener_only: int = 0
+    # #810: rows whose stored context_pack does not parse under the CURRENT schema
+    # AND was written under a prompt id declared beyond the readability cutoff.
+    # A KNOWN, counted, non-scoring outcome (the `skipped_opener_only` idiom), not
+    # an error: those packs are settled history that is deliberately neither
+    # migrated nor rescued by widening the schema. Each entry carries the row's
+    # prompt id and the first line of the rejection, so the census is inspectable
+    # rather than a bare number. An unreadable pack under any other prompt id
+    # stays in `errors`.
+    unreadable_packs: List[Dict[str, Any]] = field(default_factory=list)
     # #164 semantic-judge layer (OPT-IN, advisory only). Empty unless the judge was
     # explicitly run. The judge NEVER affects the deterministic pass/fail above; its
     # scores are aggregated into a separate, clearly-labelled `judge` section.
@@ -111,6 +127,11 @@ class Scorecard:
             "reports_scored": len(self.report_scores),
             "skipped_fallback": self.skipped_fallback,
             "skipped_opener_only": self.skipped_opener_only,
+            # #810: the known figure, always present so a scorecard states it even
+            # when it is zero. Zero is the reassuring reading; a surprise is what
+            # the issue was filed about.
+            "skipped_unreadable_pack": len(self.unreadable_packs),
+            "unreadable_packs": self.unreadable_packs,
             "tail_degraded": self.tail_degraded,
             "errors": self.errors,
             "overall_pass_rate": self.overall_pass_rate,
@@ -164,6 +185,7 @@ def score_db_reports(
     skipped_opener_only = 0
     tail_degraded = 0
     errors: List[Dict[str, Any]] = []
+    unreadable_packs: List[Dict[str, Any]] = []
     for row in rows:
         if row.is_fallback and not include_fallback:
             skipped_fallback += 1
@@ -180,7 +202,7 @@ def score_db_reports(
             # Parse (drifted/corrupt pack) and score (a pathological assertion)
             # both guarded: one bad report becomes an error, never a crashed run.
             content = _validate_report(row.schema_version, row.report)
-            pack = CoachContextPack.load(row.context_pack)
+            pack = load_stored_pack(row.context_pack, prompt_id=row.prompt_id)
             score = score_report(
                 content, pack,
                 report_id=str(row.id),
@@ -188,6 +210,18 @@ def score_db_reports(
                 prompt_id=row.prompt_id,
                 schema_version=row.schema_version,
             )
+        except StoredPackUnreadable as exc:
+            # #810: settled history, not a failure. Counted and listed, never
+            # scored, and deliberately BEFORE the generic handler below so it can
+            # never be swallowed into the error bucket.
+            unreadable_packs.append({
+                "report_id": str(row.id),
+                "activity_id": str(row.activity_id),
+                "prompt_id": row.prompt_id,
+                "schema_version": row.schema_version,
+                "detail": exc.detail,
+            })
+            continue
         except Exception as exc:
             # Keep the summary to one line; pydantic ValidationError is multi-line.
             summary = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
@@ -203,6 +237,7 @@ def score_db_reports(
         skipped_opener_only=skipped_opener_only,
         tail_degraded=tail_degraded,
         errors=errors,
+        unreadable_packs=unreadable_packs,
     )
 
 
@@ -253,8 +288,13 @@ async def judge_db_reports(
             continue
         try:
             content = _validate_report(row.schema_version, row.report)
-            pack = CoachContextPack.load(row.context_pack)
+            pack = load_stored_pack(row.context_pack, prompt_id=row.prompt_id)
             verdict = await judge_report(client, content, pack)
+        except StoredPackUnreadable:
+            # #810: settled history. The deterministic scorecard carries the census;
+            # the advisory judge simply has nothing to judge, so it says nothing
+            # rather than filing a pack the policy already accounts for as an error.
+            continue
         except Exception as exc:
             summary = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
             errors.append(
@@ -328,6 +368,19 @@ def compare_scorecards(
         regressions.append(
             f"overall pass rate dropped {before_overall:.3f} -> {after_overall:.3f}"
         )
+
+    # #810: the unreadable-pack census is a figure, so a RISE in it is a regression
+    # the same way a pass-rate drop is: more of the corpus has stopped being
+    # readable than the declared cutoff accounts for. Compared only when BOTH
+    # scorecards carry the key (the judge-section idiom), so a scorecard written
+    # before this field existed does not read as a jump from zero.
+    before_unreadable = before.get("skipped_unreadable_pack")
+    after_unreadable = after.get("skipped_unreadable_pack")
+    if before_unreadable is not None and after_unreadable is not None:
+        if after_unreadable > before_unreadable:
+            regressions.append(
+                f"unreadable stored packs rose {before_unreadable} -> {after_unreadable}"
+            )
 
     before_summary = before.get("assertion_summary", {})
     after_summary = after.get("assertion_summary", {})

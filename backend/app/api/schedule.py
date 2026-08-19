@@ -7,10 +7,15 @@ this router writes.
 
 The kill switch is a ROUTER-level dependency (`COACH_THREADS_ENABLED`'s shape),
 so a route added later cannot forget it. Ownership is a property of the route:
-the one path parameter that names an owned resource resolves through
-`deps.get_owned_goal_race`, which `tests/test_route_ownership_802.py` enforces
+every path parameter that names an owned resource resolves through its
+`deps.get_owned_*` dependency, which `tests/test_route_ownership_802.py` enforces
 structurally. Every other read carries `CurrentUser` into a store function whose
 `user_id` argument is required.
+
+#857 adds the one write here that is not the runner's own record of their week:
+restoring a plan the coach replaced. It is still not a form for editing a plan
+(it selects between plans the coach wrote), and it is the undo the rest of the
+proposed-action set already had.
 """
 
 import logging
@@ -24,12 +29,14 @@ from app.api.deps import (
     DbSession,
     OwnedGoalRace,
     OwnedPlannedSession,
+    OwnedTrainingPlan,
 )
 from app.core.config import settings
 from app.schemas.schedule import (
     DraftStatusRead,
     GoalRaceCreate,
     GoalRaceRead,
+    PreviousPlanRead,
     ScheduleHorizonRead,
     ScheduleWeekRead,
 )
@@ -150,6 +157,62 @@ def start_draft(db: DbSession, user: CurrentUser) -> DraftStatusRead:
 def read_draft_status(db: DbSession, user: CurrentUser) -> DraftStatusRead:
     """Where the runner's most recent plan stands. Polled while drafting."""
     return _draft_status(store.latest_plan(db, user.id))
+
+
+_NO_PREVIOUS_PLAN = "You have no earlier plan to go back to."
+_PREVIOUS_PLAN_AVAILABLE = (
+    "Your previous plan is still here. Going back to it keeps this one, so you "
+    "can swap again."
+)
+
+
+@router.get("/plans/previous", response_model=PreviousPlanRead)
+def read_previous_plan(db: DbSession, user: CurrentUser) -> PreviousPlanRead:
+    """The plan the runner was training to before this one (#857).
+
+    Writing a plan supersedes the one it replaces and nothing destroys it, but
+    until now nothing could reach it either, which made drafting the only proposed
+    action in the set that did not come back with a tap. This read is what makes the way back
+    visible on the screen the replacement landed on.
+    """
+    plan = store.previous_plan(db, user.id)
+    if plan is None:
+        return PreviousPlanRead(message=_NO_PREVIOUS_PLAN)
+    blocker = store.restore_blocker(plan)
+    return PreviousPlanRead(
+        plan_id=plan.id,
+        superseded_at=plan.superseded_at,
+        generated_at=plan.generated_at,
+        horizon_end=plan.horizon_end,
+        sessions_ahead=store.count_sessions_from(
+            db, user.id, plan.id, on_or_after=date.today()
+        ),
+        restorable=blocker is None,
+        message=blocker or _PREVIOUS_PLAN_AVAILABLE,
+    )
+
+
+@router.post("/plans/{plan_id}/restore", status_code=204)
+def restore_plan(plan: OwnedTrainingPlan, db: DbSession) -> None:
+    """Go back to a plan that was replaced.
+
+    The id is in the PATH rather than implied, and it is the id the runner was
+    shown. If a new plan landed between the read and the tap, this restores the
+    plan they agreed to or fails. It never quietly restores a different one.
+
+    Symmetric and non-destructive, the property the whole issue is about: the
+    plan being stepped away from is retained exactly the way this one was, and
+    becomes what `GET /plans/previous` offers next.
+
+    204 rather than the plan, matching the session writes above. A restore
+    changes the week's headline, its sessions, its rules and its horizon at once,
+    so handing back one object would invite a client to patch state it cannot
+    correctly patch.
+    """
+    try:
+        store.restore_plan(db, plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/races", response_model=list[GoalRaceRead])

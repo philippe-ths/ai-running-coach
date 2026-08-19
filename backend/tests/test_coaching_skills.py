@@ -82,14 +82,16 @@ class TestBoundaries:
         # transcript, and the same action puts it back — a correction is itself
         # correctable. Recoverable, in other words, without being one-tap.
         #
-        # `draft_plan` (#856) is the one that is neither: writing a plan
-        # supersedes the one the runner was training to, and no route brings that
-        # back. It holds the property the undo rule exists to protect — the
-        # superseded plan and every one of its sessions are RETAINED
-        # (`activate_plan` only flips status), and the card names the plan it will
-        # replace before the runner confirms — but "non-destructive and
-        # announced" is a weaker guarantee than "undoable", and it is recorded as
-        # weaker rather than folded in. A restore is tracked separately.
+        # `draft_plan` (#856) was the one that was neither: writing a plan
+        # supersedes the one the runner was training to, and nothing brought that
+        # back. #857 closed it. The superseded plan and all of its sessions were
+        # already RETAINED (`activate_plan` only flips status) and the card
+        # already named the plan it would replace, but retention nobody can reach
+        # is not an undo. `POST /api/schedule/plans/{id}/restore` reaches it, the
+        # Schedule screen offers it where the replacement landed, and the restore
+        # supersedes symmetrically, so going back is itself something you can go
+        # back from. Recoverable in the `adjust_session` sense: not one tap on the
+        # card itself, but a real route back that destroys nothing.
         assert allowed == {
             "check_in",
             "intent",
