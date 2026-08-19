@@ -780,3 +780,111 @@ def test_the_surface_check_fails_when_the_recorded_builder_set_is_lost():
     problems = _chat_surface_problems(_declared_chat_surface(), _recorded_chat_surface(blob))
 
     assert problems and any("resolve a real view" in p for p in problems), problems
+
+
+# ---------------------------------------------------------------------------
+# #909: the two guard blind spots that were green while both defects were live.
+# ---------------------------------------------------------------------------
+
+
+def _real_flow_src():
+    from check_diagram_drift import _FLOW_NODES
+
+    return _FLOW_NODES.read_text()
+
+
+def test_the_captured_flag_reader_sees_a_flag_with_a_digit_in_its_name():
+    """The report half's reader stayed `[A-Z_]+` when #793 widened the .env.example
+    half, so COACH_PREVIOUS_30D_ENABLED -- the one flag whose name carries a digit
+    -- was dropped from an INTERSECTION and went unchecked without saying so.
+
+    Its sibling `test_the_env_example_reader_sees_a_flag_with_a_digit_in_its_name`
+    covered only the copy that was fixed, which is how one of two identical readers
+    stayed blind through a fix aimed at exactly that blindness.
+    """
+    from check_diagram_drift import _diagram_captured_flags
+
+    captured = _diagram_captured_flags(_real_flow_src())
+
+    assert captured, "the flow-nodes flag reader came back empty"
+    assert "COACH_PREVIOUS_30D_ENABLED" in captured
+
+
+def test_both_flag_readers_agree_on_which_flags_exist():
+    """The two halves of the parity check must read the same NAMES, or the
+    comparison between them quietly narrows to their intersection."""
+    from check_diagram_drift import _diagram_captured_flags, _env_example_flags
+
+    documented = _env_example_flags()
+    captured = _diagram_captured_flags(_real_flow_src())
+
+    assert documented and captured
+    assert not sorted(set(documented) - set(captured)), (
+        "flags .env.example documents that the capture does not record are "
+        "unchecked rather than in parity"
+    )
+
+
+def test_the_flag_reader_reports_an_unreadable_blob_rather_than_no_flags():
+    """SENSITIVITY: a blob that cannot be parsed must be distinguishable from one
+    carrying no flags, since only one of those is benign."""
+    from check_diagram_drift import _diagram_captured_flags
+
+    assert _diagram_captured_flags("const DATA = not-json;") is None
+    assert _diagram_captured_flags("") is None
+
+
+def test_the_generator_covers_every_screen_a_pointer_can_name():
+    """#909 defect 2: `schedule` reached ScreenPointer's Literal and never reached
+    the generator, so 34 of 60 captured turns recorded `screen: null` and the
+    diagram drew the coach receiving no screen context where it receives a real
+    one. No existing check could see it: every other one compares the app's
+    declarations against the DIAGRAM's nodes, and the capture was internally
+    consistent, just built from less than the app offers."""
+    from app.schemas.thread import ScreenPointer
+    from check_diagram_drift import _generator_screen_coverage, _literal_values
+
+    covered, broke = _generator_screen_coverage()
+
+    assert broke is None, broke
+    assert sorted(_literal_values(ScreenPointer, "screen")) == sorted(covered)
+
+
+def test_the_screen_coverage_check_fails_when_the_generator_misses_a_screen():
+    """SENSITIVITY: the historical bug itself, replayed."""
+    import check_diagram_drift as guard
+
+    original = guard._generator_screen_coverage
+    guard._generator_screen_coverage = lambda: (["home"], None)
+    try:
+        problems = guard._screen_coverage_problems()
+    finally:
+        guard._generator_screen_coverage = original
+
+    assert problems and any("cannot rebuild" in p for p in problems), problems
+    assert any("schedule" in p for p in problems), problems
+
+
+def test_the_screen_coverage_check_fails_when_its_extractor_breaks():
+    """SENSITIVITY: a declaration that stops being statically readable must be a
+    loud failure, not an empty set that passes."""
+    import check_diagram_drift as guard
+
+    original = guard._CHAT_GENERATOR
+    guard._CHAT_GENERATOR = _tmp_generator_without_declaration()
+    try:
+        covered, broke = guard._generator_screen_coverage()
+    finally:
+        guard._CHAT_GENERATOR = original
+
+    assert covered is None
+    assert broke and "EXTRACTOR BROKE" in broke
+
+
+def _tmp_generator_without_declaration():
+    import pathlib
+    import tempfile
+
+    path = pathlib.Path(tempfile.mkdtemp()) / "generate_chat_flow_data.py"
+    path.write_text("SOMETHING_ELSE = ('home',)\n")
+    return path
