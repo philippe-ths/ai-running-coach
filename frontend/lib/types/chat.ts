@@ -20,7 +20,10 @@ export interface ChatMessage {
   // #765: null for a thread-only turn (a thread need not be anchored to an
   // activity); the activity chat box's rows always carry it.
   activity_id?: string | null;
-  role: "user" | "assistant";
+  // #778: "event" is the app's record of a proposed action the runner confirmed
+  // here — neither side speaking, so it renders as a quiet ledger line rather
+  // than a bubble or coach prose.
+  role: "user" | "assistant" | "event";
   content: string;
   // #648 f/u / #664: the on-demand data tools the coach ran for this assistant turn
   // (null/absent when none), so the UI can show a persistent "looked up …" trace

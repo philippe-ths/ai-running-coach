@@ -150,8 +150,12 @@ class StoredProposedAction(BaseModel):
     target_distance_m: Optional[float] = None
     target_duration_s: Optional[int] = None
     # #856: the conversation the plan was settled in. Server-supplied at mint
-    # time, never model-supplied.
+    # time, never model-supplied. Carried by EVERY action since #778, because a
+    # confirmed change leaves its trace in the conversation that reached it.
     thread_id: Optional[UUID] = None
+    # #778: the card's own words, so the trace records what the runner actually
+    # agreed to rather than a second description of it. Server-supplied.
+    description: Optional[str] = None
 
 
 PROPOSED_ACTION_TOOL: Dict[str, Any] = {
@@ -281,6 +285,15 @@ def mint_proposed_action(
     except ValueError as exc:
         return {"ok": False, "error": "invalid_action", "detail": str(exc)}, None
 
+    # Stamped here rather than in each `_build_offer` branch, so an action added
+    # later carries its conversation and its wording without having to remember.
+    stored = stored.model_copy(
+        update={
+            "thread_id": stored.thread_id or thread_id,
+            "description": frame.description,
+        }
+    )
+
     try:
         token = _mint_token(owner_user_id, stored)
     except Exception:  # noqa: BLE001 -- the card is a side affordance, not the reply
@@ -308,6 +321,31 @@ def consume_and_execute(db: Session, owner_user_id: UUID, token: str) -> dict:
     if stored is None:
         raise LookupError("Proposed action not found")
 
+    result = _execute(db, owner_user_id, stored)
+    _record_confirmed(db, stored)
+    return result
+
+
+def _record_confirmed(db: Session, stored: StoredProposedAction) -> None:
+    """Write the confirmation into the conversation that reached it (#778).
+
+    Only after the change has been made: a refused or failed confirm leaves no
+    trace, because nothing happened. Fail-soft — the write has already landed on
+    the runner's record, and losing the trace is a smaller harm than answering a
+    successful confirm with a 500. A token minted before this shipped carries no
+    thread or wording and simply records nothing.
+    """
+    try:
+        from app.services.coach import threads as thread_service
+
+        thread_service.record_action_event(
+            db, stored.thread_id, stored.activity_id, stored.description or ""
+        )
+    except Exception:  # noqa: BLE001 -- the change is made; the trace is not worth a 500
+        logger.exception("coach proposed-action trace write failed")
+
+
+def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> dict:
     if stored.action_type == "check_in":
         activity = _require_owned_activity(db, owner_user_id, stored.activity_id)
         payload = CheckInCreate(rpe=stored.rpe, pain_score=stored.pain_score)

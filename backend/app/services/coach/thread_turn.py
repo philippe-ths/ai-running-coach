@@ -81,7 +81,7 @@ THREAD_SYSTEM_TEMPLATE = """You are a running coach in an ongoing conversation w
 
 THE RUNNER:
 {profile_json}
-{baseline_block}{anchor_block}{voice_block}{cross_thread_block}{looking_at_block}{skills_block}
+{baseline_block}{anchor_block}{voice_block}{cross_thread_block}{confirmed_block}{looking_at_block}{skills_block}
 YOUR TOOLS — LOOKING UP THEIR TRAINING:
 What is above is a lean baseline, not their record. When a question turns on data that is not already in front of you — a specific run, how something has trended, how much they have trained — LOOK IT UP with your tools instead of asking the runner for it. You have their whole training record:
 - list_activities_in_range: their past sessions (any activity type, newest first) over a named window, each with distance, pace, effort, and shape.
@@ -93,7 +93,7 @@ OFFERING AN ACTION — THE RUNNER'S CALL:
 When the conversation settles something that belongs in their record, offer to write it with offer_proposed_action rather than sending them off to tap through the app: how a session felt, what a session actually was, a session grouped wrongly with its neighbours, a planned session they mention having done (the gym and the turbo never reach Strava, so what they tell you is often the only record there will be), or a block of training you have worked out together.
 A plan belongs in their schedule, not in the transcript. Their Schedule screen is part of this app and it is yours to write, so once the shape of a block is agreed, offer draft_plan and let the card do the asking. Never hand a block back as prose for them to copy out, never dictate it a week at a time, and never point them at another app for something this one does.
 Offer only what the conversation reached, with ids already in front of you, and at most one per reply. The card states the change and carries its own button, so let it speak for itself: spend your reply coaching them, not describing the card. Write "That was a tempo by any read — 6:00/km at 150bpm is not an easy-day effort.", not "I've put a card up — confirm it and I'll update your record."
-Never report a change as made. Confirming is the runner's step, and a confirmed plan is then written in the background and can fail — so the record above is what says whether anything landed, not the fact that you offered. If it shows a plan being written, say so and wait; if it shows one failed, say that plainly rather than repeating the offer.
+An offer is not a change. Confirming is the runner's step, and a confirmed plan is then written in the background and can fail — so the record above is what says whether anything landed, not the fact that you offered. If it shows a plan being written, say so and wait; if it shows one failed, say that plainly rather than repeating the offer.
 
 RULES:
 1. Ground every claim in the data above and anything you fetch with your tools, citing the specific numbers (pace, HR, effort score) when they carry the point. Never invent facts.
@@ -279,6 +279,33 @@ def _build_cross_thread_block(db: Session, thread: Thread, user_id) -> str:
     )
 
 
+_CONFIRMED_HEADER = "ALREADY IN THEIR RECORD — what this conversation has written:"
+
+_CONFIRMED_GUIDANCE = (
+    """The runner confirmed each of these and the app wrote it, so coach from them as facts. Write "That's set to Long Run now — how did the week around it feel?", not "Want me to mark it as Long Run?" and not "Nice, that's logged." Undoing or changing one is a new offer. A plan is written in the background, so THEIR SCHEDULE above, not this list, says whether one landed."""
+)
+
+
+def _render_confirmed_block(db: Session, thread: Thread) -> str:
+    """The changes this conversation has already written (#778); "" when none.
+
+    The coach's history is the conversation, so a confirmed action that lives
+    only in the runner's record is invisible to the next turn: it re-offers what
+    is done and talks about the record as unchanged. Each line is the card's own
+    wording — what the runner agreed to, in the words they agreed to.
+
+    No timestamps. A good coach does not need the wall-clock time of a button
+    tap, and a bare UTC clock in front of a model is a number waiting to be
+    quoted back wrong; the order is what carries the meaning, so the order is
+    all that is given.
+    """
+    events = thread_service.recent_action_events(db, thread.id)
+    if not events:
+        return ""
+    lines = "\n".join(f"- {text}" for text in events)
+    return f"\n{_CONFIRMED_HEADER}\n{lines}\n{_CONFIRMED_GUIDANCE}\n"
+
+
 def _resolve_voice_block_for_user(db: Session, user_id) -> str:
     """The runner's declared voice, rendered for this turn.
 
@@ -326,6 +353,7 @@ def build_thread_system_prompt(
     sections = _build_baseline_sections(db, user)
     voice_block = _resolve_voice_block_for_user(db, user.id)
     cross_thread_block = _build_cross_thread_block(db, thread, user.id)
+    confirmed_block = _render_confirmed_block(db, thread)
     tiering_block = _render_authority_tiering(
         sections,
         voice_present=bool(voice_block),
@@ -337,6 +365,7 @@ def build_thread_system_prompt(
         anchor_block=_render_anchor_block(thread),
         voice_block=voice_block,
         cross_thread_block=cross_thread_block,
+        confirmed_block=confirmed_block,
         looking_at_block=_render_looking_at_block(screen_view),
         skills_block=render_catalogue(),
         tiering_block=tiering_block,
@@ -410,7 +439,15 @@ async def stream_thread_turn(
     )
     system_prompt = build_thread_system_prompt(db, user, thread, screen_view)
 
-    history = thread_service.thread_messages(db, thread)[-_MAX_LLM_HISTORY_TURNS:]
+    # Only what was SAID becomes a turn. An action event (#778) is the app's own
+    # record of a confirmed change, so it reaches the model through the ledger in
+    # the system prompt, where it can be labelled for what it is, and never as a
+    # message that would read as the runner's words or the coach's.
+    history = [
+        row
+        for row in thread_service.thread_messages(db, thread)
+        if row.role in thread_service.CONVERSATIONAL_ROLES
+    ][-_MAX_LLM_HISTORY_TURNS:]
     llm_messages = [{"role": row.role, "content": row.content} for row in history]
 
     client = build_client(TurnKind.THREAD, user.id)

@@ -132,6 +132,7 @@ class TestThreadTurnIntegration:
             anchor_block="",
             voice_block="",
             cross_thread_block="",
+            confirmed_block="",
             looking_at_block="",
             skills_block=render_catalogue(),
             tiering_block="",

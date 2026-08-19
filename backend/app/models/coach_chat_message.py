@@ -27,7 +27,13 @@ class CoachChatMessage(Base):
     activity_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("activities.id"), nullable=True, index=True
     )
-    role: Mapped[str] = mapped_column(String(16))  # "user" or "assistant"
+    # "user" or "assistant" — what was said — plus "event" (#778), the app's own
+    # record of a proposed action the runner confirmed in this thread. An event
+    # row is neither side speaking: it never becomes a turn sent to the model, is
+    # never read as a runner statement or a coach claim, and reaches the coach
+    # only through the system prompt's ledger, where it is labelled for what it
+    # is. `services/coach/threads.CONVERSATIONAL_ROLES` is the filter.
+    role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
     # #648 follow-up / #664: the on-demand data tools the coach ran to produce this
     # assistant turn, one record per call ({tool, label, detail, count}) describing
