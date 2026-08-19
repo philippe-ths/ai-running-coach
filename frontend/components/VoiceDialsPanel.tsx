@@ -334,9 +334,10 @@ export default function VoiceDialsPanel() {
           rows={2}
           maxLength={1000}
           placeholder="e.g. talk to me like a calm, dry mentor; no hype."
+          aria-describedby="voice-freetext-hint"
           className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
         />
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+        <p id="voice-freetext-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
           Your coach reads this only to shape its tone. It can never change your data or
           skip a safety message.
         </p>
