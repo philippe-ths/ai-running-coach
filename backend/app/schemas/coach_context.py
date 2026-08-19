@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.schemas.material import DistilledMaterial
 from app.services.coach.prompt_features import PromptFeature
@@ -1952,3 +1952,69 @@ def _assert_descriptors_match_fields() -> None:
 
 
 _assert_descriptors_match_fields()
+
+
+# ---------------------------------------------------------------------------
+# The stored pack's readability lifetime (#810)
+#
+# A `context_pack` is stored on every `coach_reports` row, and the offline eval
+# harness re-parses it long afterwards to score the report it was generated
+# from. The pack schema keeps evolving (a new required section, a renamed
+# field), and every model here is `extra="forbid"`, so a pack written under an
+# old shape can stop parsing in either direction: a field that is now required
+# and was never written, or a field that was written and no longer exists.
+#
+# THE POLICY. `extra="forbid"` is KEPT. It is what makes pack drift visible in
+# both directions, which the whole coach-pack discipline (the byte-stable-drop
+# registry, the diagram guard, the grouped/flat equivalence) is built on. It is
+# not relaxed to rescue a closed historical set of rows. Instead:
+#
+#   A stored pack is expected to strict-parse under the CURRENT schema unless it
+#   was written under one of the retired prompt ids named below, which predate
+#   the pack shape settling. Those are declared unreadable rather than migrated,
+#   rescued, or deleted: the rows keep their stored pack verbatim, and every
+#   reader that re-parses one reports "unreadable, written under a retired
+#   prompt" as a distinct, counted outcome instead of a per-row error.
+#
+# An unreadable pack under any OTHER prompt id is NOT covered by this policy and
+# stays a loud error, because that is live drift rather than settled history.
+# ADR 0032 states the reasoning; this constant is the operative declaration.
+UNREADABLE_PACK_PROMPT_IDS: frozenset = frozenset({"coach_report_v1"})
+
+
+class StoredPackUnreadable(Exception):
+    """A stored `context_pack` the current schema rejects, written under a prompt
+    id declared beyond the readability cutoff (`UNREADABLE_PACK_PROMPT_IDS`).
+
+    A distinct type so a caller can tell three outcomes apart: the pack parsed,
+    the pack is settled history that no longer parses (this), or the pack failed
+    for a reason nobody has declared (a plain `ValidationError`, still loud).
+    """
+
+    def __init__(self, prompt_id: Optional[str], detail: str):
+        self.prompt_id = prompt_id
+        self.detail = detail
+        super().__init__(
+            f"stored pack written under retired prompt {prompt_id!r} does not parse "
+            f"under the current schema: {detail}"
+        )
+
+
+def load_stored_pack(
+    data: Any, *, prompt_id: Optional[str] = None
+) -> "CoachContextPack":
+    """Load a pack read back out of the database, applying the readability policy.
+
+    Returns the parsed pack; raises `StoredPackUnreadable` when the row is one of
+    the declared-unreadable retired prompts, and re-raises the underlying
+    `ValidationError` otherwise. Use this at every site that re-parses a STORED
+    pack, rather than a bare `CoachContextPack.load`, so settled history and live
+    drift never collapse into the same bucket.
+    """
+    try:
+        return CoachContextPack.load(data)
+    except ValidationError as exc:
+        if prompt_id in UNREADABLE_PACK_PROMPT_IDS:
+            detail = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+            raise StoredPackUnreadable(prompt_id, detail) from exc
+        raise
