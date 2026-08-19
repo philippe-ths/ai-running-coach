@@ -168,6 +168,27 @@ export interface DraftStatus {
   message: string;
 }
 
+// #857: the plan the runner was training to before this one.
+//
+// Always an object: "you have no earlier plan" is an answer with its own
+// sentence, not a 404. `restorable` is the SERVER's verdict: the refusal has a
+// reason the runner is owed (a plan whose horizon has passed would leave them
+// with nothing planned), and a client re-deriving it from the dates would
+// eventually derive it differently from the endpoint that enforces it.
+export interface PreviousPlan {
+  plan_id: string | null;
+  // When it stopped being current, and when its thinking was written. Two
+  // different facts: a plan replaced this morning can be one drafted in June.
+  superseded_at: string | null;
+  generated_at: string | null;
+  horizon_end: string | null;
+  // Sessions of that plan that still lie ahead: whether going back to it would
+  // actually give the runner anything.
+  sessions_ahead: number;
+  restorable: boolean;
+  message: string;
+}
+
 // A is the race the block is built towards; B and C are races run along the
 // way. The read keeps `priority` as a plain string because the stored column is
 // one — only the WRITE is closed to the three the API accepts.
