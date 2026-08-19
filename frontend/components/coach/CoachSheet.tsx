@@ -17,7 +17,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { ChevronDown, Loader2, Plus, Search, Send, X } from 'lucide-react';
+import { Check, ChevronDown, Loader2, Plus, Search, Send, X } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -448,9 +448,22 @@ export default function CoachSheet() {
       const result = (await res.json().catch(() => null)) as ProposedActionResult | null;
       setActionDone(result?.message ?? '');
       const kind = proposedAction.action_type;
+      // #778: the tap leaves a mark. The server stores this same wording (the
+      // card's own description) against the thread, so the line rendered now and
+      // the line loaded on the next open are the same sentence.
+      const confirmed = proposedAction.description;
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `event-${proposedAction.token}`,
+          role: 'event',
+          content: confirmed,
+          created_at: new Date().toISOString(),
+        },
+      ]);
       setProposedAction(null);
-      // The write lands on the runner's record, not in the thread, so refresh
-      // the screen behind the sheet and leave the transcript where they are.
+      // The change itself lands on the runner's record, so refresh the screen
+      // behind the sheet too.
       router.refresh();
       // Every other action has finished by the time the request answers. A plan
       // has not: it is written on the worker over about a minute and can fail
@@ -623,7 +636,19 @@ export default function CoachSheet() {
 
           <div className="space-y-4">
             {messages.map(msg =>
-              msg.role === 'user' ? (
+              /* #778: a confirmed action leaves a mark in the conversation, but a
+                 change the runner can already see on the activity or schedule
+                 screen does not deserve a chat bubble. One quiet ledger line,
+                 carrying the card's own words back. */
+              msg.role === 'event' ? (
+                <div
+                  key={msg.id}
+                  className="flex items-start gap-1.5 text-[11.5px] leading-relaxed text-gray-500 dark:text-gray-400"
+                >
+                  <Check className="mt-[3px] h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                  <span>{msg.content}</span>
+                </div>
+              ) : msg.role === 'user' ? (
                 <div key={msg.id} className="flex flex-col items-end gap-0.5">
                   {msg.asked_from && msg.asked_from !== screen.key && (
                     <span className="font-mono text-[9px] tracking-wide text-gray-400 dark:text-gray-500">

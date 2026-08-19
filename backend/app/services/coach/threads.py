@@ -25,6 +25,18 @@ _DISPLAY_TITLE_CHARS = 60
 _SNIPPET_CHARS = 90
 _UNTITLED = "New thread"
 
+# The roles a thread row can carry. "user" and "assistant" are the conversation;
+# "event" is the app's own record of a change the runner confirmed here (#778) —
+# not something either of them said, so it is never sent to the model as a turn
+# and never read as a runner statement or a coach claim. Readers that care about
+# what was SAID filter to `CONVERSATIONAL_ROLES`; the transcript shows all three.
+ACTION_EVENT_ROLE = "event"
+CONVERSATIONAL_ROLES = ("user", "assistant")
+
+# A long conversation can accumulate confirmations. The ledger the coach reads is
+# bounded like every other injected history here, and keeps the most recent.
+_MAX_LEDGER_EVENTS = 10
+
 
 def _title_from_first_message(content: Optional[str]) -> Optional[str]:
     """The trimmed first user message, or None when there is nothing usable and
@@ -106,9 +118,15 @@ def _one_message_per_thread(
         if newest
         else (CoachChatMessage.created_at.asc(), CoachChatMessage.id.asc())
     )
-    conditions = [CoachChatMessage.thread_id.in_(thread_ids)]
-    if user_turns_only:
-        conditions.append(CoachChatMessage.role == "user")
+    conditions = [
+        CoachChatMessage.thread_id.in_(thread_ids),
+        # The switcher shows what was SAID. An action event is the app's record
+        # of a confirmed change (#778), so it is never a thread's snippet or the
+        # source of its fallback title.
+        CoachChatMessage.role.in_(
+            ("user",) if user_turns_only else CONVERSATIONAL_ROLES
+        ),
+    ]
     ranked = (
         select(
             CoachChatMessage.thread_id.label("thread_id"),
@@ -285,6 +303,43 @@ def delete_threads_for_activity(db: Session, activity: Activity) -> None:
             synchronize_session=False
         )
     db.commit()
+
+
+def record_action_event(db: Session, thread_id, activity_id, description: str) -> None:
+    """Leave the trace a confirmed proposed action used to leave nowhere (#778).
+
+    One row per change the runner confirmed in this thread, carrying the card's
+    own words — what they agreed to, not a re-description of it. Written only
+    after the change has actually been made, so the ledger records writes rather
+    than taps.
+    """
+    text = " ".join((description or "").split())
+    if not thread_id or not text:
+        return
+    db.add(
+        CoachChatMessage(
+            thread_id=thread_id,
+            activity_id=activity_id,
+            role=ACTION_EVENT_ROLE,
+            content=text,
+        )
+    )
+    db.commit()
+
+
+def recent_action_events(db: Session, thread_id) -> List[str]:
+    """This thread's confirmed changes, oldest first, bounded."""
+    rows = (
+        db.query(CoachChatMessage.content)
+        .filter(
+            CoachChatMessage.thread_id == thread_id,
+            CoachChatMessage.role == ACTION_EVENT_ROLE,
+        )
+        .order_by(CoachChatMessage.created_at.desc(), CoachChatMessage.id.desc())
+        .limit(_MAX_LEDGER_EVENTS)
+        .all()
+    )
+    return [content for (content,) in reversed(rows) if content]
 
 
 def touch_thread(db: Session, thread: Thread) -> None:

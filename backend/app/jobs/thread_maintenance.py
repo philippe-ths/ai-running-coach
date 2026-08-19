@@ -17,6 +17,7 @@ from app.models.coach_chat_message import CoachChatMessage
 from app.models.thread import Thread
 from app.services.coach.budget import record as budget_record
 from app.services.coach.llm import AnthropicClient
+from app.services.coach.threads import CONVERSATIONAL_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,14 @@ def generate_thread_title_job(thread_id: str) -> None:
             return
         rows = (
             db.query(CoachChatMessage)
-            .filter(CoachChatMessage.thread_id == thread.id)
+            .filter(
+                CoachChatMessage.thread_id == thread.id,
+                # The title names what the conversation is about, so it reads
+                # only what was said (#778): an action event is neither side
+                # speaking, and labelling it "Coach:" would put the app's words
+                # in the coach's mouth.
+                CoachChatMessage.role.in_(CONVERSATIONAL_ROLES),
+            )
             .order_by(CoachChatMessage.created_at.asc(), CoachChatMessage.id.asc())
             .limit(4)
             .all()
@@ -116,6 +124,23 @@ def generate_thread_title_job(thread_id: str) -> None:
         db.close()
 
 
+def _conversational_count(db, thread: Thread) -> int:
+    """How many turns this thread has SAID, the quiet debounce's watermark.
+
+    Action events are excluded (#778): a confirmation tapped after the check was
+    armed would otherwise move the count, the debounce would read the thread as
+    still busy, and the memory pass it was armed for would never fire.
+    """
+    return (
+        db.query(CoachChatMessage)
+        .filter(
+            CoachChatMessage.thread_id == thread.id,
+            CoachChatMessage.role.in_(CONVERSATIONAL_ROLES),
+        )
+        .count()
+    )
+
+
 def schedule_thread_quiet_check(db, thread: Thread) -> None:
     """Debounce: check back after the block-gap; if the thread stayed quiet,
     fire one memory pass for the runner (bounded per interval)."""
@@ -123,11 +148,7 @@ def schedule_thread_quiet_check(db, thread: Thread) -> None:
 
     from app.core.queue import queue
 
-    message_count = (
-        db.query(CoachChatMessage)
-        .filter(CoachChatMessage.thread_id == thread.id)
-        .count()
-    )
+    message_count = _conversational_count(db, thread)
     queue.enqueue_in(
         timedelta(seconds=settings.BLOCK_GAP_SECONDS),
         thread_quiet_job,
@@ -147,11 +168,7 @@ def thread_quiet_job(thread_id: str, as_of_message_count: int) -> None:
         )
         if thread is None:
             return
-        current = (
-            db.query(CoachChatMessage)
-            .filter(CoachChatMessage.thread_id == thread.id)
-            .count()
-        )
+        current = _conversational_count(db, thread)
         if current != as_of_message_count:
             return  # not quiet: the newer turn's check owns the debounce
         from app.jobs.batch_chain import acquire_enqueue_slot
