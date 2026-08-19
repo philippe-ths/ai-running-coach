@@ -55,6 +55,11 @@ def _print_summary(card: Scorecard) -> None:
     print("=" * 60)
     print(f"reports scored:    {data['reports_scored']}")
     print(f"skipped (fallback): {data['skipped_fallback']}")
+    # #810: always printed, including the zero. The point of the census is that the
+    # figure is stated rather than discovered.
+    print(f"skipped (unreadable pack, retired prompt): {data['skipped_unreadable_pack']}")
+    for row in data["unreadable_packs"]:
+        print(f"  - {row['report_id']} [{row['prompt_id']}]: {row['detail']}")
     if data["errors"]:
         print(f"errors (unparseable): {len(data['errors'])}")
         for err in data["errors"]:
@@ -206,7 +211,16 @@ def main() -> int:
         print(f"Wrote scorecard to {args.output}")
 
     if not card.report_scores:
-        if card.errors:
+        if card.unreadable_packs and not card.errors:
+            print(
+                f"\n{len(card.unreadable_packs)} report(s) found but none could be scored: every "
+                "stored context pack was written under a prompt id declared beyond the pack "
+                "readability cutoff (ADR 0032). Those packs are not migrated by design; target a "
+                "readable version via --prompt-id/--schema-version, or regenerate with "
+                "--regenerate.",
+                file=sys.stderr,
+            )
+        elif card.errors:
             print(
                 f"\n{len(card.errors)} report(s) found but none could be scored: the stored "
                 "context packs do not match the current schema (version drift). Regenerate "

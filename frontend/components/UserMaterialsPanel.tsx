@@ -199,6 +199,7 @@ export default function UserMaterialsPanel() {
             <select
               value={kind}
               onChange={(e) => setKind(e.target.value as MaterialKind)}
+              aria-describedby={kind === 'philosophy' ? 'materials-kind-hint' : undefined}
               className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
             >
               {KIND_OPTIONS.map((o) => (
@@ -208,7 +209,7 @@ export default function UserMaterialsPanel() {
               ))}
             </select>
             {kind === 'philosophy' && (
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <p id="materials-kind-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 Your own coaching philosophy, in your own words — what you believe makes
                 training work for you.
               </p>
@@ -234,9 +235,10 @@ export default function UserMaterialsPanel() {
             type="file"
             accept=".md,.markdown,text/markdown,text/plain"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            aria-describedby="materials-file-hint"
             className="block w-full text-sm text-gray-600 dark:text-gray-300 file:mr-3 file:py-2 file:px-4 file:rounded file:border-0 file:bg-blue-50 dark:file:bg-blue-950 file:text-blue-700 dark:file:text-blue-300 hover:file:bg-blue-100 dark:hover:file:bg-blue-900"
           />
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          <p id="materials-file-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             UTF-8 text/markdown, up to 256 KB.
           </p>
         </div>
