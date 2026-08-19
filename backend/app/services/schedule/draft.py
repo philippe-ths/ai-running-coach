@@ -51,7 +51,11 @@ from app.services.schedule.draft_contract import (
 )
 from app.services.schedule.effort import build_load_model, estimate_effort
 from app.services.schedule.norms import running_norm_weekly_m
-from app.services.schedule.plan_validator import validate_drafted_plan
+from app.services.schedule.plan_validator import (
+    VOLUME_CEILING,
+    validate_drafted_plan,
+    volume_ceilings,
+)
 from app.services.weeks import resolve_week_start, week_start
 
 logger = logging.getLogger(__name__)
@@ -155,6 +159,10 @@ so leave `target_distance_m` out of a rep session. Nothing else does: give a tem
 its whole distance in `target_distance_m`, door to door, with the warm-up and \
 cool-down as the parts inside it. Anything you do not say in metres counts as \
 nothing towards the runner's week.
+- Do not plan a week whose running volume is a leap from what this runner \
+actually does. Their own recent weeks set a ceiling, stated in kilometres in the \
+context below, and a week above it is rejected outright — the same as a week \
+whose rules cannot be satisfied. It is a limit, not a target.
 - Do not plan sessions in the past.
 - Do not invent a race, a goal or an injury the runner has not told you about.
 - Do not give medical advice, diagnose, or prescribe treatment. If something in \
@@ -201,6 +209,12 @@ class DraftOutcome:
     plan_id: Optional[uuid.UUID] = None
     failures: Optional[List[str]] = None
     summary: Optional[str] = None
+    # WHY it failed, as one of `store`'s closed categories, decided here where
+    # the failure is known rather than re-derived from the prose at the API layer
+    # (#859). The runner is owed different advice for a plan that ramps too hard
+    # than for a coach that could not be reached, and `failures` is internal text
+    # written to be fed back into a rewrite prompt — not something to pattern-match.
+    failure_kind: str = store.FAILURE_UNKNOWN
 
 
 def fetch_draft_facts(db: Session, user: User, today: date) -> List[Any]:
@@ -318,10 +332,30 @@ def build_draft_context(
         # their running — so the running-only norm sits beside it rather than
         # being left to be inferred from a label.
         running_norm = running_norm_weekly_m(facts, today)
-        if running_norm:
+        ceilings = volume_ceilings(running_norm)
+        if running_norm and ceilings:
             parts.append(
                 f"- Typical week, RUNNING ONLY: {running_norm / 1000:.1f} km. This is "
                 f"the figure a running plan is built against."
+            )
+            # The bound the plan will actually be judged against, said out loud
+            # (#859). It was enforced silently: every other gate — the rules, the
+            # sizing, the rest day, the past — is stated in the prompt, and this
+            # one was not, so a block the runner had already settled in
+            # conversation could be rejected against a number the coach was never
+            # shown. Derived from `volume_ceilings`, the same function the gate
+            # calls, so the ceiling said here IS the ceiling enforced there.
+            #
+            # Framed as a rejection threshold rather than a goal because that is
+            # what it is, and a bare "38 km" beside a typical 19 reads to a model
+            # as the number to aim at — the North Star's second question.
+            parts.append(
+                f"- A concrete week above {ceilings[0] / 1000:.0f} km of committed "
+                f"running is rejected outright as a jump this runner's history "
+                f"cannot support. That is a limit, not a target — most weeks "
+                f"should sit near their typical, and a build climbs towards the "
+                f"limit rather than starting at it. A sketched week further out "
+                f"may reach {ceilings[1] / 1000:.0f} km."
             )
     else:
         parts.append(
@@ -487,7 +521,11 @@ async def draft_plan(
     starts_on = resolve_week_start(getattr(user, "profile", None))
 
     if turn.over_budget(user.id):
-        return DraftOutcome(ok=False, failures=["over the spend cap for this period"])
+        return DraftOutcome(
+            ok=False,
+            failures=["over the spend cap for this period"],
+            failure_kind=store.FAILURE_OVER_BUDGET,
+        )
 
     facts = fetch_draft_facts(db, user, today)
     context = build_draft_context(db, user, today=today, weeks=weeks, facts=facts)
@@ -508,6 +546,7 @@ async def draft_plan(
     # a provider's exception text back would put its internals into model input
     # to no purpose, since the coach cannot act on them.
     failures: List[str] = []
+    failure_kind = store.FAILURE_UNKNOWN
     rewrites_left = 2
     transport_retries_left = 1
 
@@ -533,7 +572,9 @@ async def draft_plan(
                 transport_retries_left -= 1
                 continue
             return DraftOutcome(
-                ok=False, failures=["the coach could not be reached"]
+                ok=False,
+                failures=["the coach could not be reached"],
+                failure_kind=store.FAILURE_UNREACHABLE,
             )
 
         rewrites_left -= 1
@@ -543,6 +584,7 @@ async def draft_plan(
         except Exception as exc:
             logger.warning("schedule draft: off-contract plan: %s", exc)
             failures = [f"the plan was not the shape the tool requires: {exc}"]
+            failure_kind = store.FAILURE_UNKNOWN
             continue
 
         check = validate_drafted_plan(
@@ -555,12 +597,20 @@ async def draft_plan(
         if not check.ok:
             logger.info("schedule draft: rejected: %s", check.failures)
             failures = check.failures
+            # Structural, not a substring match on the gate's prose: the check
+            # reports WHICH kind of rejection fired, so improving the wording of
+            # a failure can never silently change what the runner is told.
+            failure_kind = (
+                store.FAILURE_TOO_BIG_A_JUMP
+                if VOLUME_CEILING in check.codes
+                else store.FAILURE_UNKNOWN
+            )
             continue
 
         _persist(db, user, plan, drafted, load_model, model_id=client.model)
         return DraftOutcome(ok=True, plan_id=plan.id, summary=drafted.summary)
 
-    return DraftOutcome(ok=False, failures=failures)
+    return DraftOutcome(ok=False, failures=failures, failure_kind=failure_kind)
 
 
 def _persist(

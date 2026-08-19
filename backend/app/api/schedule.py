@@ -102,20 +102,58 @@ def read_horizon(
     return build_horizon(db, user, weeks=weeks)
 
 
-_DRAFT_MESSAGES = {
-    "drafting": "Your coach is writing your plan. This usually takes a minute.",
-    "active": "Your plan is ready.",
-    "superseded": "This plan has been replaced by a newer one.",
-    # No "just now" (#879). This is read at the moment of failure and for as long
-    # afterwards as the runner has not asked for another plan, which can be days:
-    # only the empty-week panel used to show it, and only to someone sitting
-    # there watching. Now it is on the Schedule screen of anyone whose last
-    # attempt failed, so it has to stay true when it is no longer news.
-    "failed": (
+# One sentence per failure CATEGORY (#859). A draft can fail for reasons the
+# runner has genuinely different moves for, and until now all of them arrived as
+# the same sentence: someone whose coach had ramped too hard was told to "ask
+# again", which produces the same plan and the same rejection.
+#
+# What each sentence is held to: it says what happened in the runner's own terms,
+# it names the move available to them, it states that nothing they had has
+# changed, and it carries none of the gate's machinery. The category is chosen in
+# `draft.py` where the failure is known; nothing internal ever travels here.
+_DRAFT_FAILURE_MESSAGES = {
+    store.FAILURE_TOO_BIG_A_JUMP: (
+        "Your coach wrote a block that climbs much faster than your recent weeks, "
+        "so it was not saved. Nothing has changed — ask again for a gentler "
+        "build, or talk it through and have the same block spread over more weeks."
+    ),
+    store.FAILURE_UNREACHABLE: (
+        "Your coach could not be reached, so no plan was written. Nothing has "
+        "changed — try again in a few minutes."
+    ),
+    store.FAILURE_OVER_BUDGET: (
+        "You have used this period's coaching allowance, so no plan was written. "
+        "Nothing has changed — your runs still sync and your reports still "
+        "arrive. Ask again once the allowance resets."
+    ),
+    # The fallback, and the sentence every failure used to get. No "just now"
+    # (#879). This is read at the moment of failure and for as long afterwards as
+    # the runner has not asked for another plan, which can be days: only the
+    # empty-week panel used to show it, and only to someone sitting there
+    # watching. Now it is on the Schedule screen of anyone whose last attempt
+    # failed, so it has to stay true when it is no longer news.
+    store.FAILURE_UNKNOWN: (
         "Your coach could not write a plan. Nothing has changed — ask again, or "
         "talk it through in a conversation."
     ),
 }
+
+_DRAFT_MESSAGES = {
+    "drafting": "Your coach is writing your plan. This usually takes a minute.",
+    "active": "Your plan is ready.",
+    "superseded": "This plan has been replaced by a newer one.",
+    "failed": _DRAFT_FAILURE_MESSAGES[store.FAILURE_UNKNOWN],
+}
+
+
+def _failure_message(plan) -> str:
+    """The sentence for THIS failure. Falls back for a row with no category —
+    every plan that failed before the column existed, and any category a future
+    writer adds without a sentence to go with it."""
+    return _DRAFT_FAILURE_MESSAGES.get(
+        getattr(plan, "failure_kind", None) or store.FAILURE_UNKNOWN,
+        _DRAFT_FAILURE_MESSAGES[store.FAILURE_UNKNOWN],
+    )
 
 
 def _draft_status(plan) -> DraftStatusRead:
@@ -125,11 +163,19 @@ def _draft_status(plan) -> DraftStatusRead:
     # One fallback, not two. Reporting `status=None` beside a real `plan_id` and
     # a "you have no plan yet" message would be three answers to one question the
     # moment a fifth status is added.
+    #
+    # The message is still the WHOLE runner-facing surface: the category chooses
+    # which sentence, and `DraftStatusRead` deliberately gains no reason field,
+    # so there is no second channel a client could render raw.
+    if plan.status == store.FAILED:
+        message = _failure_message(plan)
+    else:
+        message = _DRAFT_MESSAGES.get(plan.status, "You have no plan yet.")
     return DraftStatusRead(
         status=plan.status if known else None,
         plan_id=plan.id if known else None,
         generated_at=plan.generated_at if known else None,
-        message=_DRAFT_MESSAGES.get(plan.status, "You have no plan yet."),
+        message=message,
     )
 
 
