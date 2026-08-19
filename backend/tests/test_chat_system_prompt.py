@@ -112,6 +112,29 @@ def test_tiering_gated_on_pack_contents():
     # With every section present each tier is briefed.
     for tier in ("- VOICE", "- MEMORY", "- COACHING CORPUS & USER MATERIALS", "- TRAINING LOAD"):
         assert tier in full, f"full pack should brief {tier}"
+
+
+def test_the_voice_tier_covers_what_the_coach_offers_to_write():
+    """#825: on this surface the delivery-only rule is instructed, not structural.
+
+    The report is generated with no voice input at all, so a voice cannot reach
+    its substance (ADR 0030). A conversational reply cannot buy that guarantee —
+    the rewrite pass costs ~9.5 s median and the turn already buffers in full
+    before streaming, so a second pass would double the wait rather than hide
+    behind it. The voice therefore still arrives at generation time here, and the
+    lane has to be stated where it arrives.
+
+    The tier already named the things a voice must not bend. It did not name the
+    one thing unique to this surface: the coach can mint a proposed action here,
+    and nothing said a voice may not change what it offers to write.
+    """
+    full = _full_tiering()
+    voice_line = next(l for l in full.splitlines() if l.startswith("- VOICE"))
+    assert "tone, register, and delivery ONLY" in voice_line
+    assert "what you offer to write" in voice_line
+    # And it is briefed only when there is a voice to brief.
+    bare = _render_authority_tiering({}, voice_present=False, conversation_present=False)
+    assert "- VOICE" not in bare
     assert "- RELATIONSHIP CONVERSATION" in full  # cross-activity digest present
 
     # With an empty pack (nothing in front of the coach) every tier is dropped.
