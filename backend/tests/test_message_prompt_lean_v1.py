@@ -78,6 +78,9 @@ def test_lean_v1_has_full_capability_parity_with_v14():
         _F.READINESS, _F.RECENT_WEEKS, _F.TRAINING_HISTORY_2WK,
         _F.INTENSITY_READ, _F.INTENSITY_MIX, _F.METRICS_COACH_FRAMED, _F.SALIENCE_DROPPED,
         _F.PACK_COACH_VIEW,
+        # #655's SALIENCE_DEPTH is the mirror of SALIENCE_DROPPED (the same section
+        # re-admitted to the view, trimmed), so it is a view flag too.
+        _F.SALIENCE_DEPTH,
         # #800 relocated the grouped-serialization flag into the manifest. Like the
         # three view flags above it is presentation-only (the same sections, re-nested),
         # so lean_v1 -- which serves the flat pack -- does not carry it.

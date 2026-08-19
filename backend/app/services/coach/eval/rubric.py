@@ -1,10 +1,11 @@
 """The coach-report eval rubric (M5) — the oracle for coach reports.
 
-Fourteen deterministic assertions (five M5 + one M10 adherence-framing + one #168
+Fifteen deterministic assertions (five M5 + one M10 adherence-framing + one #168
 load-vs-intensity framing + one #171 coach-the-data framing + four
 preserved-safety-floor regression sensors, one each for the P1.1 voice, the P1.2
 coaching corpus, the P4 user materials and the ADR 0025 runner memory + one
-ADR 0025 non-nag sensor + one #742 body-as-subject sensor), each returning
+ADR 0025 non-nag sensor + one #742 body-as-subject sensor + one #655 depth
+sensor), each returning
 PASS / FAIL / NOT_APPLICABLE plus a human-readable reason and small
 JSON-serialisable evidence. A report is scored from its own ``CoachReportContent``
 plus its ``CoachContextPack`` only, so scoring is self-contained and repeatable.
@@ -54,6 +55,12 @@ The assertions:
                                index. Covers an edge validator rule 5 does not:
                                "lose ten kilos" is neither a dose, a diagnosis, a
                                medication directive, nor a clinical claim.
+ 15. depth_matched_the_session — (#655) when the pack shows the session gave the
+                               coach nothing new to say — no first of its kind, no
+                               flag, no referral, no open commitment — the report
+                               stays under a word ceiling instead of running to a
+                               full write-up. The only assertion about a report's
+                               SHAPE, and one-sided: it never asks for more words.
 
 Assertions 2, 4, 5, 7 and 8 inspect free text with documented keyword / overlap
 heuristics; they are the deterministic floor, not a semantic judge. The
@@ -969,6 +976,105 @@ def assert_coached_direction_not_nagged(content: ReportLike, pack: CoachContextP
     )
 
 
+# #655: how long a report may run when the session gave the coach nothing new to say.
+#
+# Grounded in the seeded production corpus (151 stored reports, 36 whose stored pack
+# still carries salience). Of those 36, 18 met the unremarkable predicate below and
+# their prose ran 49 / 151 / 159 / 190 / 212 / 218 / 226 / 231 / 234 / 240 / 241 / 244 /
+# 253 / 254 / 267 / 304 / 331 / 362 words — a median of 237, against a median of 285 for
+# the runs the same predicate calls remarkable. The two distributions barely separate,
+# which IS the finding this sensor exists to measure: depth did not track what the
+# session actually gave the coach to say.
+#
+# 120 sits deliberately in the empty gap between the two things being told apart. The
+# prompt asks for "two or three sentences" on a run like this, which is 40-75 words of
+# coach prose, so a genuinely brief report clears the ceiling with room to spare; the
+# shortest of today's uniform write-ups is 151 words, so none of them scrape under it by
+# accident. It is a CEILING on the unremarkable case and never a target: a nine-word
+# report passes, because "nothing much to say about this one" is a complete answer.
+UNREMARKABLE_REPORT_WORD_CEILING = 120
+
+
+def _prose_words(content: ReportLike) -> int:
+    """How many words the runner reads.
+
+    For the A3 prose shape that is the message itself — the tail is bookkeeping the
+    runner never reads as prose, so counting it would penalise a short message with a
+    well-filled tail. The legacy structured shape has no single prose field, so its
+    whole scoreable surface stands in for one."""
+    if _is_message(content):
+        return len((content.message or "").split())
+    return len(_report_text(content).split())
+
+
+def assert_depth_matched_the_session(content: ReportLike, pack: CoachContextPack) -> AssertionResult:
+    """#655: an unremarkable session earns an honest read, not a long one.
+
+    With several sessions a day, a uniformly long write-up for each is not generosity —
+    it buries the one that mattered, and a runner who gets four full reports a day
+    learns to skim all four. This is the only assertion about the SHAPE of a report
+    rather than its content, and it is deliberately one-sided: it never asks a report to
+    be longer, only to stop when the session has stopped giving.
+
+    Applies only when the pack says, deterministically, that there was nothing much to
+    say: no first-of-its-kind axis (with enough history for that read to mean anything),
+    no risk flag, no referral nudge, and no prior commitment awaiting an answer. Any one
+    of those is a legitimate reason to run long, so its presence makes the assertion
+    NOT_APPLICABLE rather than lenient — a report is never failed for a dimension that
+    does not apply to it.
+
+    It reads the CANONICAL pack, which carries `salience` whatever the outgoing LLM view
+    did with it, so one measurement covers a prompt that was served the novelty read and
+    one that was not. That is what makes this a measurement of the change rather than a
+    rubber stamp on it: the versions that never saw the signal are scored by it too.
+
+    NOT_APPLICABLE when something in the pack earned length, or when `salience` is absent
+    or still abstaining — an unknown novelty read is not evidence of an unremarkable run,
+    and `COACH_SALIENCE_ENABLED=false` drops the section outright, so this must abstain
+    there rather than call every run unremarkable. PASS when nothing earned length and
+    the report stayed under the ceiling; FAIL when nothing earned length and it did not."""
+    salience = pack.salience
+    novelty = salience.novelty if salience is not None else None
+    if novelty is None or not novelty.has_history:
+        return AssertionResult(
+            "depth_matched_the_session", AssertionStatus.NOT_APPLICABLE,
+            "No usable novelty read in the pack (the section is absent or still "
+            "abstaining), so whether this session was unremarkable is unknown.",
+        )
+
+    earned: Dict[str, Any] = {}
+    if novelty.first_of_kind:
+        earned["first_of_kind"] = list(novelty.first_of_kind)
+    if pack.metrics.flags:
+        earned["flags"] = list(pack.metrics.flags)
+    if pack.referral is not None or getattr(pack.calibration, "referral", None) is not None:
+        earned["referral"] = True
+    if pack.adherence.outcomes:
+        earned["adherence_outcomes"] = len(pack.adherence.outcomes)
+    if earned:
+        return AssertionResult(
+            "depth_matched_the_session", AssertionStatus.NOT_APPLICABLE,
+            "The session gave the coach something to say, so length is earned and this "
+            "assertion has no opinion about it.",
+            earned,
+        )
+
+    words = _prose_words(content)
+    if words <= UNREMARKABLE_REPORT_WORD_CEILING:
+        return AssertionResult(
+            "depth_matched_the_session", AssertionStatus.PASS,
+            "Nothing in the pack earned length and the report kept it short.",
+            {"words": words, "ceiling": UNREMARKABLE_REPORT_WORD_CEILING},
+        )
+    return AssertionResult(
+        "depth_matched_the_session", AssertionStatus.FAIL,
+        "Nothing in this session earned length — no first of its kind, no flag, no "
+        "referral, no open commitment — yet the report ran to a full write-up. Padding "
+        "an unremarkable run makes the next one that matters harder to find.",
+        {"words": words, "ceiling": UNREMARKABLE_REPORT_WORD_CEILING},
+    )
+
+
 # --- the rubric ---------------------------------------------------------------
 
 ASSERTIONS: List[Callable[[ReportLike, CoachContextPack], AssertionResult]] = [
@@ -986,6 +1092,7 @@ ASSERTIONS: List[Callable[[ReportLike, CoachContextPack], AssertionResult]] = [
     assert_memory_preserved_safety_surface,
     assert_coached_direction_not_nagged,
     assert_body_not_made_the_subject,
+    assert_depth_matched_the_session,
 ]
 
 

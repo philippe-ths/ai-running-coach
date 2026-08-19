@@ -230,6 +230,12 @@ METRICS_COACH_FRAMED_PROMPT_IDS = ids_with(PromptFeature.METRICS_COACH_FRAMED)
 # is unchanged. Salience steered only the LLM opener, which prod's receipt cadence never runs.
 SALIENCE_DROPPED_PROMPT_IDS = ids_with(PromptFeature.SALIENCE_DROPPED)
 
+# #655: prompt ids whose FULLER LLM view KEEPS `salience`, trimmed to `novelty`. The
+# opposite of the flag above and mutually exclusive with it. Also view-only: the
+# canonical pack always carried the whole section, so the deterministic safety force,
+# the validator, tiering and the eval read exactly what they always did.
+SALIENCE_DEPTH_PROMPT_IDS = ids_with(PromptFeature.SALIENCE_DEPTH)
+
 # ADR 0026 Slice 5 (#682): prompt ids whose outgoing LLM view gets the COMPLETED coach
 # reshape (readiness verdict-only, recent_weeks bpm, one `interval_read`, plan-less
 # workout_match/hr_drift/training-history dupes/empty our_thread cleaned). A view-only flag
@@ -375,6 +381,21 @@ def is_salience_dropped_prompt(prompt_id: Optional[str]) -> bool:
     is unchanged, so the fuller loses only dead weight. A view-only flag (like metrics-coach-
     framing); false for every prior prompt, which keeps salience in the pack byte-stably."""
     return has_feature(prompt_id, PromptFeature.SALIENCE_DROPPED)
+
+
+def is_salience_depth_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt KEEPS `salience` in its FULLER LLM view, trimmed to
+    `novelty` (#655).
+
+    The depth signal, narrowly: novelty says whether this session was a first of its
+    kind for this runner, which is one of the things that earns a longer report. The
+    routing bit `safety_override` is not re-admitted — it answers "does a second turn
+    fire", a question the fuller turn is already the answer to, and `force_fuller: true`
+    sitting in a report model's context reads as a claim that something is wrong.
+
+    False for every other prompt, including the SALIENCE_DROPPED versions this replaces,
+    so a rollback restores their view byte-for-byte."""
+    return has_feature(prompt_id, PromptFeature.SALIENCE_DEPTH)
 
 
 def is_pack_coach_view_prompt(prompt_id: Optional[str]) -> bool:

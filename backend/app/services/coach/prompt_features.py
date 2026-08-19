@@ -53,6 +53,7 @@ class PromptFeature(Enum):
     INTENSITY_MIX = "intensity_mix"    # ADR 0026 Slice 3 (#673): recent intensity distribution + trend `right_now.intensity_mix` (the "how hard lately" half of the retired intensity section)
     METRICS_COACH_FRAMED = "metrics_coach_framed"  # ADR 0026 Slice 4 (#680): reframe the pack's numeric leaves to coach-native units/precision for the LLM view (km/pace/%max/MM:SS); presentation only, no new section
     SALIENCE_DROPPED = "salience_dropped"  # ADR 0026 Slice 5 (#682): drop the `salience` routing section from the FULLER LLM view (it steers only the opener's depth + scheduling, which prod's receipt cadence never runs); the canonical pack keeps it so the deterministic safety force is unchanged; view-only, no new section
+    SALIENCE_DEPTH = "salience_depth"  # #655: re-admit `salience` to the FULLER LLM view, TRIMMED to `novelty` — the depth signal a coach needs to vary how much it says. Mutually exclusive with SALIENCE_DROPPED (a version carries one or the other, never both): under the receipt cadence there is no opener, so dropping salience left the ONLY live LLM call with no read of whether this session gave the coach anything to say. `safety_override` stays out — it is a routing bit about whether a second turn fires, and `force_fuller: true` in front of a report model reads as "this one is serious". View-only, no new section: the canonical pack is unchanged
     BODY = "body"                      # #742: the runner's stated build in `profile.body` + the BODY clause
     GROUPED_PACK = "grouped_pack"      # ADR 0026 Slice 1: serve the pack GROUPED (pack.to_grouped_dict()) rather than flat. Presentation-only, exactly like METRICS_COACH_FRAMED / SALIENCE_DROPPED / PACK_COACH_VIEW — it changes the SHAPE the pack is serialized in, never which sections it CONTAINS. #800 moved it here from a hand-maintained frozenset in prompts.py, the last prompt-id set that did not derive from this manifest.
     SCHEDULE = "schedule"              # #830: the runner's own plan for this week in `right_now.schedule` — what this session was FOR and what it sets up
@@ -446,6 +447,40 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.SCHEDULE,
         }
     ),
+    # #655: grouped_v10 = grouped_v9 with SALIENCE_DROPPED SWAPPED for SALIENCE_DEPTH.
+    # The first version to REPLACE a view flag rather than add one, because the two say
+    # opposite things about the same section and a version carrying both would leave the
+    # view's behaviour resolved by branch order rather than by declaration.
+    #
+    # Why the swap: report depth did not track how much the session actually gave the
+    # coach to say. Salience is computed deterministically on every run and then thrown
+    # away before the only LLM call the receipt cadence makes, so the report writer had
+    # no read of whether this run was first-of-its-kind or one more Tuesday. v10 hands
+    # back `salience.novelty` and nothing else, and its prose (the relocated depth clause
+    # + the matched worked-example pair) is what tells the coach to spend it.
+    # Ships INERT (flip target: grouped_v9 -> grouped_v10).
+    "coach_message_lean_grouped_v10": frozenset(
+        {
+            _F.GROUPED_PACK,
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.READINESS,
+            _F.USER_MATERIALS,
+            _F.RECENT_WEEKS,
+            _F.STREAM_VIEW,
+            _F.TRAINING_HISTORY_2WK,
+            _F.MEMORY,
+            _F.INTENSITY_READ,
+            _F.INTENSITY_MIX,
+            _F.METRICS_COACH_FRAMED,
+            _F.SALIENCE_DEPTH,
+            _F.PACK_COACH_VIEW,
+            _F.BODY,
+            _F.SCHEDULE,
+        }
+    ),
 }
 
 
@@ -518,6 +553,10 @@ ALTERNATIVE_FEATURES: frozenset[PromptFeature] = frozenset(
         # ADR 0026 Slice 5 (#682): a view-only section REMOVAL, the opposite of additive, so
         # it likewise must not count toward "the fullest pack" additive ranking.
         PromptFeature.SALIENCE_DROPPED,
+        # #655: a view-only section TRIM (salience re-admitted, narrowed to novelty). It
+        # adds no stored section either — the canonical pack carried salience all along —
+        # so it is non-additive for exactly the reason its opposite is.
+        PromptFeature.SALIENCE_DEPTH,
         # ADR 0026 Slice 5 (#682): a view-only reshape (reframe + collapse), no stored
         # section, so it likewise must not count toward the additive ranking.
         PromptFeature.PACK_COACH_VIEW,

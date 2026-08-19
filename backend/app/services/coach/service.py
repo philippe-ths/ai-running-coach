@@ -147,11 +147,13 @@ def _llm_pack_message(pack_dict: dict, prompt_id: Optional[str], *, mode: str = 
 
     - metrics-coach-framing (ADR 0026 Slice 4, #680): leaf VALUES reframed to coach-native
       units (km / min:sec/km / MM:SS / % of max).
-    - salience drop (ADR 0026 Slice 5, #682): the `salience` routing section is removed from
-      the FULLER view (`mode != "opener"`). Salience steers only the opener; the deterministic
-      safety force reads the canonical object, so the fuller loses only dead weight. Fuller-
-      only so the opener view (which the opener prose reads) stays intact under a two-stage
-      cadence; prod's receipt cadence runs no opener, so in prod salience is gone entirely."""
+    - salience settlement on the FULLER view (`mode != "opener"`), one of two mutually
+      exclusive flags. SALIENCE_DROPPED (ADR 0026 Slice 5, #682) removes the section
+      outright, on the reasoning that salience steers only the opener. SALIENCE_DEPTH
+      (#655) keeps it, TRIMMED to `novelty`, because under the receipt cadence there IS
+      no opener, which left the only LLM call prod makes with no read of whether the
+      session gave the coach anything to say. Either way the deterministic safety force
+      reads the canonical object, and the opener view is untouched by both."""
     return json.dumps(coach_llm_view(pack_dict, prompt_id, mode=mode), default=str)
 
 

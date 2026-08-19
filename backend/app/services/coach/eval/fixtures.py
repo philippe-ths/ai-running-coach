@@ -58,6 +58,14 @@ _BASE_PACK = {
     "believed_facts": {"facts": []},
     "calibration": {"hr_drift": {"calibrated": False, "observed_drift_pct": None, "basis": "n/a"}, "referral": None},
     "preference_profile": {"themes": []},
+    # #655: a runner with enough history for the novelty read to mean something, and
+    # nothing first-of-its-kind about this session. With no flags, no referral and no
+    # adherence outcome either, the base pack is the depth assertion's APPLICABLE case,
+    # so the known-good fixtures exercise its pass branch instead of abstaining past it.
+    "salience": {
+        "novelty": {"first_of_kind": [], "has_history": True},
+        "safety_override": {"force_fuller": False, "reasons": []},
+    },
     "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
 }
 
@@ -269,3 +277,56 @@ def deliberately_bad_message_report() -> Tuple[CoachMessageReport, CoachContextP
         profile={"body": {"weight_kg": 109.0, "height_cm": 193.0}},
     )
     return content, pack
+
+
+# --- #655 the depth dimension ------------------------------------------------
+# This one cannot ride on the deliberately-bad fixtures above, and the reason is not a
+# technicality. Those packs fire a referral, and a red-flag run is exactly a run whose
+# length is EARNED — the depth assertion abstains on them, correctly. A single synthetic
+# report cannot be both a red-flag session and an unremarkable one, so the depth failure
+# needs its own pair. `run_self_test` unions the failures across both bad fixtures and
+# still requires every assertion to be covered.
+
+_OVER_CEILING_PROSE = (
+    "Comfortable easy run, exactly what the day called for. Your HR sat at 150 bpm "
+    "average against a 175 maximum, which is right in the aerobic band we have been "
+    "living in, and the 9% drift is a heat artefact at 29C rather than anything to read "
+    "as fatigue. Cadence came in at 170, which is where it has been all month, and the "
+    "50 metres of climb is barely worth mentioning on a ten-kilometre loop. You logged "
+    "it as a 6 out of 10 with no pain, which is a touch higher than I would expect for "
+    "the effort but entirely consistent with running in that heat. The hour of moving "
+    "time is your standard mid-week shape and it slots into the week the way it should. "
+    "Nothing in the splits stands out, nothing in the zones stands out, and the session "
+    "did the job it was there to do. Recovery is the only thing on the agenda before the "
+    "next one, so keep the food and the sleep boring and let this one sit in the bank "
+    "where it belongs, because that is genuinely all there is to say about it today."
+)
+
+
+def deliberately_verbose_report() -> Tuple[CoachReportContent, CoachContextPack]:
+    """A structured report on a session that gave the coach nothing new to say, run out
+    to a full write-up anyway (#655). The base pack carries the unremarkable novelty
+    read and no flag, referral or adherence outcome, so the depth assertion applies."""
+    content = CoachReportContent(
+        headline="Comfortable easy run",
+        thesis=_OVER_CEILING_PROSE,
+        lead_argument=CoachTakeaway(text="The effort sat squarely in the easy band."),
+        key_takeaways=[CoachTakeaway(text="Nothing in the splits or the zones stands out.")],
+        next_steps=[CoachNextStep(action="Recover", details="eat and sleep", why="nothing else is due")],
+        risks=[],
+        questions=[],
+    )
+    return content, _pack()
+
+
+def deliberately_verbose_message_report() -> Tuple[CoachMessageReport, CoachContextPack]:
+    """The prose-shape twin of `deliberately_verbose_report` (#655)."""
+    content = CoachMessageReport(
+        message=_OVER_CEILING_PROSE,
+        headline="Comfortable easy run",
+        next_steps=[CoachNextStep(action="Recover", details="eat and sleep", why="nothing else is due")],
+        risks=[],
+        questions=[],
+        tail_degraded=False,
+    )
+    return content, _pack()

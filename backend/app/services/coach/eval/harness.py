@@ -28,6 +28,8 @@ from app.schemas.coach_context import StoredPackUnreadable, load_stored_pack
 from app.services.coach.eval.fixtures import (
     deliberately_bad_message_report,
     deliberately_bad_report,
+    deliberately_verbose_message_report,
+    deliberately_verbose_report,
     known_good_message_report,
     known_good_report,
 )
@@ -415,13 +417,23 @@ def compare_scorecards(
 def run_self_test() -> tuple[bool, str]:
     """Validate the harness against its own synthetic fixtures (the brief's
     deliberately-bad-fails / known-good-passes check), for BOTH output shapes —
-    the legacy structured report and the A3 prose message. Returns (ok, report)."""
+    the legacy structured report and the A3 prose message. Returns (ok, report).
+
+    The bad side takes a LIST of fixtures per shape, not one, because #655 added an
+    assertion whose applicability contradicts the existing bad fixture's: the depth
+    sensor only speaks about a session that earned no length, and that fixture fires a
+    referral, which earns length. One synthetic report cannot be both, so each bad
+    fixture covers the dimensions it can and every assertion must be failed by at least
+    one of them. Each bad fixture must also fail something, so a fixture that quietly
+    stopped provoking anything is caught rather than carried by its sibling."""
     lines: List[str] = []
     ok = True
 
-    for label, good_fn, bad_fn in (
-        ("structured", known_good_report, deliberately_bad_report),
-        ("message", known_good_message_report, deliberately_bad_message_report),
+    for label, good_fn, bad_fns in (
+        ("structured", known_good_report,
+         (deliberately_bad_report, deliberately_verbose_report)),
+        ("message", known_good_message_report,
+         (deliberately_bad_message_report, deliberately_verbose_message_report)),
     ):
         good_content, good_pack = good_fn()
         good = score_report(good_content, good_pack, report_id=f"self-test-good-{label}")
@@ -436,15 +448,25 @@ def run_self_test() -> tuple[bool, str]:
                 f"OK   known-good {label} fixture passes all {good.applicable_count} applicable assertions"
             )
 
-        bad_content, bad_pack = bad_fn()
-        bad = score_report(bad_content, bad_pack, report_id=f"self-test-bad-{label}")
-        failed_names = {a.name for a in bad.assertions if a.status is AssertionStatus.FAIL}
+        failed_names: set[str] = set()
+        for bad_fn in bad_fns:
+            bad_content, bad_pack = bad_fn()
+            bad = score_report(
+                bad_content, bad_pack, report_id=f"self-test-{bad_fn.__name__}-{label}"
+            )
+            names = {a.name for a in bad.assertions if a.status is AssertionStatus.FAIL}
+            if not names:
+                ok = False
+                lines.append(f"FAIL {bad_fn.__name__} ({label}) failed no assertion at all")
+            failed_names |= names
         expected = set(_assertion_names())
         missing = expected - failed_names
         if missing:
             ok = False
-            lines.append(f"FAIL deliberately-bad {label} fixture did not fail: {sorted(missing)}")
+            lines.append(f"FAIL deliberately-bad {label} fixtures did not fail: {sorted(missing)}")
         else:
-            lines.append(f"OK   deliberately-bad {label} fixture fails all {len(expected)} assertions")
+            lines.append(
+                f"OK   deliberately-bad {label} fixtures fail all {len(expected)} assertions"
+            )
 
     return ok, "\n".join(lines)

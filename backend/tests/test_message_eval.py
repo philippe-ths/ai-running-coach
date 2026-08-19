@@ -12,6 +12,7 @@ from app.models import Activity, StravaAccount, User
 from app.models.coach_report import CoachReport
 from app.services.coach.eval.fixtures import (
     deliberately_bad_message_report,
+    deliberately_verbose_message_report,
     known_good_message_report,
 )
 from app.services.coach.eval.harness import run_self_test, score_db_reports
@@ -25,12 +26,32 @@ class TestMessageRubric:
         assert score.failed_count == 0
         assert score.applicable_count > 0
 
-    def test_deliberately_bad_message_fails_every_assertion(self):
-        content, pack = deliberately_bad_message_report()
-        score = score_report(content, pack)
-        failed = {a.name for a in score.assertions if a.status is AssertionStatus.FAIL}
-        all_names = {a.name for a in score.assertions}
+    def test_the_bad_message_fixtures_between_them_fail_every_assertion(self):
+        """Every assertion is provoked by one of the bad fixtures.
+
+        Two rather than one since #655: the depth assertion only speaks about a session
+        that earned no length, and the original bad fixture fires a referral, which is
+        exactly a session whose length IS earned. One synthetic report cannot be both,
+        so the coverage claim is a union — and each fixture must still fail something,
+        so a fixture that quietly stopped provoking anything is caught rather than
+        carried by its sibling."""
+        failed = set()
+        all_names = set()
+        for fixture in (deliberately_bad_message_report, deliberately_verbose_message_report):
+            content, pack = fixture()
+            score = score_report(content, pack)
+            names = {a.name for a in score.assertions if a.status is AssertionStatus.FAIL}
+            assert names, f"{fixture.__name__} failed no assertion at all"
+            failed |= names
+            all_names |= {a.name for a in score.assertions}
         assert failed == all_names, f"not failed: {sorted(all_names - failed)}"
+
+    def test_the_verbose_fixture_is_the_one_that_carries_the_depth_dimension(self):
+        """Named, so the union above cannot silently start relying on the wrong half."""
+        content, pack = deliberately_verbose_message_report()
+        score = score_report(content, pack)
+        depth = next(a for a in score.assertions if a.name == "depth_matched_the_session")
+        assert depth.status is AssertionStatus.FAIL
 
     def test_self_test_covers_both_shapes(self):
         ok, report = run_self_test()
