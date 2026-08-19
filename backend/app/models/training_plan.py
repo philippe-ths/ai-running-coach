@@ -74,6 +74,23 @@ class TrainingPlan(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # When this plan STOPPED being the runner's plan; null while it is active or
+    # has never been active (#857). Written only by `store.activate_plan`, on the
+    # rows it supersedes, and cleared on the row it activates.
+    #
+    # It exists because "the plan I was training to before this one" is a
+    # question no other column answers. `created_at` orders plans by when they
+    # were WRITTEN, and a restore makes an older row current again, so after two
+    # swaps the newest superseded row is no longer the one just stepped away
+    # from. `generated_at` orders them by when they were last made active, which
+    # works only if a restore re-stamps it, and re-stamping would destroy the one
+    # field saying how old the plan's thinking is, on the feature whose whole
+    # point is that stepping between plans destroys nothing. So the transition
+    # gets its own recorded fact rather than being inferred from a proxy.
+    superseded_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

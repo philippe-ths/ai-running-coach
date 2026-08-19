@@ -454,3 +454,32 @@ class DraftStatusRead(BaseModel):
     # Runner-facing. The validator's own failure text is internal and stays in the
     # log; what the runner is owed is a plain sentence.
     message: str
+
+
+class PreviousPlanRead(BaseModel):
+    """The plan the runner was training to before this one (#857).
+
+    Always an object, never a 404: "you have no earlier plan" is an answer, and
+    the surface that asks needs a sentence for it either way. The
+    `DraftStatusRead` precedent.
+
+    `restorable` is the server's verdict rather than something the client works
+    out from the dates. The refusal has a reason the runner is owed (a plan whose
+    horizon has passed would leave them with nothing planned), and a client
+    re-deriving it would eventually derive it differently from the endpoint that
+    enforces it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan_id: Optional[UUID] = None
+    # When it stopped being current, and when its thinking was written. Two
+    # different facts: a plan replaced this morning can be one drafted in June.
+    superseded_at: Optional[datetime] = None
+    generated_at: Optional[datetime] = None
+    horizon_end: Optional[date] = None
+    # Sessions of that plan that still lie ahead. The number that says whether
+    # going back to it would actually give the runner anything.
+    sessions_ahead: int = 0
+    restorable: bool = False
+    message: str

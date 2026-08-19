@@ -46,6 +46,7 @@ from app.core.clerk_auth import require_current_user
 from app.db.session import get_db
 from app.models import Activity, Block, CoachingRelationship, GoalRace, StravaAccount, User, UserMaterial
 from app.models.planned_session import PlannedSession
+from app.models.training_plan import TrainingPlan
 from app.models.thread import Thread
 from app.services import activity_queries
 
@@ -221,6 +222,34 @@ def get_owned_planned_session(
 OwnedPlannedSession = Annotated[
     PlannedSession, Depends(get_owned_planned_session)
 ]
+
+
+def require_owned_training_plan(
+    db: Session, plan_id: UUID, user: User
+) -> TrainingPlan:
+    """The training plan by id IF it belongs to ``user``; 404 otherwise (#857).
+
+    Any status. Which statuses a given route will act on is that route's rule,
+    not this gate's: flattening "not yours" and "not in a state you can restore"
+    into one answer here would tell a runner their own plan does not exist.
+    """
+    plan = (
+        db.query(TrainingPlan)
+        .filter(TrainingPlan.id == plan_id, TrainingPlan.user_id == user.id)
+        .first()
+    )
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return plan
+
+
+def get_owned_training_plan(
+    plan_id: UUID, db: DbSession, user: CurrentUser
+) -> TrainingPlan:
+    return require_owned_training_plan(db, plan_id, user)
+
+
+OwnedTrainingPlan = Annotated[TrainingPlan, Depends(get_owned_training_plan)]
 
 
 # --- user materials --------------------------------------------------------

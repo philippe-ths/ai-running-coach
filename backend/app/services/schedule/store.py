@@ -120,20 +120,39 @@ def create_drafting_plan(
     return plan
 
 
-def activate_plan(db: Session, plan: TrainingPlan) -> TrainingPlan:
+def activate_plan(
+    db: Session, plan: TrainingPlan, *, stamp_generated: bool = True
+) -> TrainingPlan:
     """Make this plan the runner's active one, superseding any predecessor.
 
     Two rows change together, so it is one transaction: the old plan stops being
     active in the same commit that makes the new one active. At no instant does
     the runner have two active plans or none.
+
+    The outgoing plan is stamped `superseded_at` (#857), the recorded fact "this
+    stopped being your plan then", which is what `previous_plan` orders on.
+    The incoming one has it cleared, because a plan that is current was not
+    stepped away from and must not sort into the history it just left.
+
+    `stamp_generated` is False for a RESTORE. `generated_at` says when the plan's
+    thinking was written, and a plan brought back is not newly written; re-dating
+    it would report a plan drafted three weeks ago as fresh and would destroy the
+    only field that says otherwise. The transition is recorded in
+    `superseded_at`, which is a different fact and has its own column.
     """
+    now = datetime.now(timezone.utc)
     db.query(TrainingPlan).filter(
         TrainingPlan.user_id == plan.user_id,
         TrainingPlan.status == ACTIVE,
         TrainingPlan.id != plan.id,
-    ).update({TrainingPlan.status: SUPERSEDED}, synchronize_session=False)
+    ).update(
+        {TrainingPlan.status: SUPERSEDED, TrainingPlan.superseded_at: now},
+        synchronize_session=False,
+    )
     plan.status = ACTIVE
-    plan.generated_at = datetime.now(timezone.utc)
+    plan.superseded_at = None
+    if stamp_generated:
+        plan.generated_at = now
     db.commit()
     db.refresh(plan)
     return plan
@@ -184,6 +203,110 @@ def get_active_plan(db: Session, user_id: uuid.UUID) -> Optional[TrainingPlan]:
         .filter(TrainingPlan.user_id == user_id, TrainingPlan.status == ACTIVE)
         .order_by(TrainingPlan.created_at.desc())
         .first()
+    )
+
+
+def previous_plan(db: Session, user_id: uuid.UUID) -> Optional[TrainingPlan]:
+    """The plan the runner was training to before the current one (#857).
+
+    "The previous plan" has to mean ONE thing once several have been superseded,
+    and the honest answer is the one most recently stepped away from: not the most
+    recently written, and not an arbitrary pick from the superseded set.
+    Those come apart the moment a plan is restored: a restore makes an OLDER row
+    current again, so the newest-written superseded row is then the one the
+    runner has just come back from rather than the one they are on.
+
+    Ordering on `superseded_at` gives the property the acceptance criteria ask
+    for. Going back and going back again returns you to where you were each time,
+    because every swap records its own transition and the reader asks about the
+    last one rather than reconstructing it.
+
+    Rows superseded before `superseded_at` existed carry a null and sort LAST:
+    unknown is older than anything known, and a plan replaced before this feature
+    shipped is by definition not the one just stepped away from.
+    """
+    return (
+        db.query(TrainingPlan)
+        .filter(TrainingPlan.user_id == user_id, TrainingPlan.status == SUPERSEDED)
+        .order_by(
+            TrainingPlan.superseded_at.desc().nullslast(),
+            TrainingPlan.created_at.desc(),
+            TrainingPlan.id.desc(),
+        )
+        .first()
+    )
+
+
+def restore_blocker(plan: TrainingPlan, *, today: Optional[date] = None) -> Optional[str]:
+    """Why this plan cannot be brought back, or None. Runner-facing wording.
+
+    Two refusals, and only two.
+
+    A plan that is not SUPERSEDED is not a plan to go back to: the active one is
+    already current, a draft is not written yet, and a failed one was never a
+    plan at all. None of those is a state the restore control offers, so reaching
+    this is a stale client or a hand-made request.
+
+    A plan whose horizon has entirely passed is the more interesting refusal.
+    Restoring it would be worse than doing nothing: the week would report a plan
+    while holding no session, the headline would measure against a target that
+    ran out weeks ago, and free mode (a real answer, not an empty state) would be
+    replaced by a plan that says nothing. `horizon_end` is the last
+    DAY the plan covers, so the test is against today rather than a week boundary.
+    A null horizon means the plan never recorded its reach; that is not evidence
+    it has expired, and refusing on unknown would block a legitimate restore.
+    """
+    today = today or date.today()
+    if plan.status != SUPERSEDED:
+        return "That plan is not one you can go back to."
+    if plan.horizon_end is not None and plan.horizon_end < today:
+        return (
+            "That plan finished on "
+            f"{plan.horizon_end.isoformat()}, so going back to it would leave "
+            "you with nothing planned."
+        )
+    return None
+
+
+def restore_plan(
+    db: Session, plan: TrainingPlan, *, today: Optional[date] = None
+) -> TrainingPlan:
+    """Bring a superseded plan back, keeping the one it steps away from (#857).
+
+    Symmetric by construction: this is the same `activate_plan` transition the
+    coach's draft uses, so the plan being left behind is retained exactly the way
+    this one was, and becomes what `previous_plan` offers next. Going back is
+    itself something you can go back from.
+
+    Nothing is copied. The plan keeps its identity, its sessions, their
+    completions and its provenance, because the runner asked for the plan they
+    were training to and a duplicate of it is a different plan, one whose ticked
+    sessions would have to be either re-ticked or silently invented.
+    """
+    blocker = restore_blocker(plan, today=today)
+    if blocker is not None:
+        raise ValueError(blocker)
+    return activate_plan(db, plan, stamp_generated=False)
+
+
+def count_sessions_from(
+    db: Session, user_id: uuid.UUID, plan_id: uuid.UUID, *, on_or_after: date
+) -> int:
+    """How many of a plan's sessions still lie ahead (#857).
+
+    The one number that says whether going back to this plan would give the
+    runner anything: a plan whose sessions have all been passed is intact but
+    empty from here. Owner-scoped like every other read in this module, even
+    though the caller has already resolved the plan to this owner.
+    """
+    return (
+        db.query(PlannedSession)
+        .filter(
+            PlannedSession.user_id == user_id,
+            PlannedSession.plan_id == plan_id,
+            PlannedSession.window_end >= on_or_after,
+        )
+        .count()
     )
 
 
