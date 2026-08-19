@@ -56,7 +56,7 @@ interface EffRow extends EfficiencyPoint {
 }
 
 // Per-activity dot that outlines confounded activities (#746) so a hilly /
-// stop-heavy point is flagged at a glance, not only on hover. Colored by the
+// stop-heavy / hot point is flagged at a glance, not only on hover. Colored by the
 // row's own type (each dot's payload is a single activity), and rendered as one
 // shared element across every type Line. Module-level + named so it is a proper
 // component (recharts clones it with cx/cy/value/payload props).
@@ -71,7 +71,7 @@ function EfficiencyDot(props: {
   const { cx, cy, value, payload, dataKey } = props;
   const v = value ?? (payload && dataKey ? (payload[dataKey] as number | null) : null);
   if (cx == null || cy == null || v == null) return null;
-  const confounded = !!(payload && (payload.hilly || payload.stoppy));
+  const confounded = !!(payload && (payload.hilly || payload.stoppy || payload.hot));
   return (
     <circle
       cx={cx}
@@ -86,9 +86,9 @@ function EfficiencyDot(props: {
 }
 
 // Day-grouped tooltip (#745/#746): lists every activity on the hovered day with
-// its type, m/beat value, and any condition confounders (hills, stops), plus the
-// trend. Confounders are surfaced, not baked into the number (#746). Passed as an
-// element so recharts injects active/payload alongside the byDay prop.
+// its type, m/beat value, and any condition confounders (hills, stops, heat), plus
+// the trend. Confounders are surfaced, not baked into the number (#746). Passed as
+// an element so recharts injects active/payload alongside the byDay prop.
 function EfficiencyTooltip(props: {
   active?: boolean;
   payload?: Array<{ payload?: EffRow }>;
@@ -106,10 +106,11 @@ function EfficiencyTooltip(props: {
           <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: getColor(a.type) }} />
           <span className="capitalize text-gray-600 dark:text-gray-300">{a.type}</span>
           <span className="font-mono text-gray-800 dark:text-gray-100">{M_PER_BEAT(a.efficiency_mps_per_bpm).toFixed(2)} m/beat</span>
-          {(a.hilly || a.stoppy) && (
+          {(a.hilly || a.stoppy || a.hot) && (
             <span className="text-gray-400 dark:text-gray-500">
               {a.hilly ? ` · hilly ${Math.round(a.gain_per_km)} m/km` : ""}
               {a.stoppy ? ` · stops ${Math.round(a.stopped_frac * 100)}%` : ""}
+              {a.hot && a.average_temp != null ? ` · heat ${Math.round(a.average_temp)}°C` : ""}
             </span>
           )}
         </div>
@@ -312,9 +313,12 @@ export default function EfficiencyTrendChart({ data, delta }: Props) {
       )}
 
       <div className="mt-3 text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 p-2 rounded">
-        Efficiency is affected by heat, hills, wind, terrain, and stops. Hilly and
-        stop-heavy activities are outlined and flagged on hover; heat is not yet
-        flagged. Compare similar routes/efforts for best signal.
+        Efficiency is affected by heat, hills, wind, terrain, and stops. Hilly,
+        stop-heavy and hot activities are outlined and flagged on hover, and the
+        comparison above uses clean-conditions activities when there are enough of
+        them. The value itself is never adjusted. Not flagged: wind, and terrain
+        type underfoot. Temperature is what the device recorded, with no humidity,
+        so it is a temperature and not a heat index.
       </div>
     </div>
   );

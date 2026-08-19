@@ -6,7 +6,7 @@ If multiple activities occur on the same local date, they are summed.
 """
 
 from datetime import date, timedelta
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -36,6 +36,10 @@ from app.services.activity_facts import (
     zone_minutes,
 )
 from app.services.weeks import MONDAY, resolve_week_start
+# #746: the efficiency chart's condition flags reuse the analysis layer's own
+# thresholds rather than restating them; see the constants below.
+from app.services.analysis.classifier import _HILLY_GAIN_PER_KM
+from app.services.analysis.discount_signals import HEAT_TEMP_C
 from app.schemas.trends import (
     TrendsResponse,
     TrendsSummary,
@@ -281,12 +285,21 @@ def build_continuous_suffer_scores(
     return result
 
 # Efficiency (m/beat) is affected by conditions we can flag from fields already on
-# the projection, so a hilly or stop-heavy activity is not silently read as less
-# fit (#746). Thresholds mirror the analysis layer: HILLY matches the classifier's
-# hilly gate; STOPPY marks a meaningful share of elapsed time stopped (the speed
+# the projection, so a hilly, stop-heavy or hot activity is not silently read as
+# less fit (#746). The two thresholds that already exist elsewhere are IMPORTED
+# rather than restated, so the chart cannot drift from the analysis layer's own
+# definition of "hilly" and "hot": HILLY is the classifier's hilly gate, HOT is the
+# heat threshold the coach's discount signals already fire on. STOPPY has no prior
+# home and is defined here — a meaningful share of elapsed time stopped (the speed
 # term already uses moving time, so stops act mainly on avg_hr).
-_EFFICIENCY_HILLY_GAIN_PER_KM = 15.0  # mirrors analysis.classifier._HILLY_GAIN_PER_KM
+_EFFICIENCY_HILLY_GAIN_PER_KM = _HILLY_GAIN_PER_KM
+_EFFICIENCY_HOT_TEMP_C = HEAT_TEMP_C
 _EFFICIENCY_STOPPY_FRACTION = 0.10
+
+# Which of the two means the headline should rest on is a DISPLAY decision, so the
+# threshold lives with its only reader (`MIN_CLEAN_ACTIVITIES_FOR_COMPARISON` in
+# frontend/app/trends/page.tsx). This module supplies the counts it needs, and
+# `efficiency_window_stats` computes both means unconditionally.
 
 
 def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
@@ -295,11 +308,18 @@ def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
     Only includes activities with distance > 1km and valid HR.
 
     Each point also carries a stable activity_id (#745, so same-day activities are
-    individually addressable) and condition flags (hills, stops) derived from
-    fields already on the projection so the chart can surface confounders (#746)
-    rather than present an unadjusted number as pure fitness. Heat is a further
-    known confounder but lives in the deferred raw_summary (not projected here for
-    perf, #359/#367) and is left as a follow-up.
+    individually addressable) and condition flags — hills, stops and heat — derived
+    from fields already on the projection, so the chart can SURFACE the confounders
+    (#746) rather than present an unadjusted number as pure fitness.
+
+    The confounders are flagged, never folded into the value: the metric itself is
+    unchanged. A grade- or heat-ADJUSTED efficiency is deliberately not computed,
+    because neither could be honestly grounded from what is stored — `elev_gain_m`
+    is a single scalar with no climb/descent split, so a credible grade adjustment
+    has nothing to work from, and `average_temp` is dry-bulb with no humidity, so
+    there is no true heat index. An opaque "adjusted" figure would fail the issue's
+    own explainability bar. The flags plus the like-for-like clean-window mean
+    (`efficiency_window_stats`) do the work instead.
     """
     points = []
     for f in facts:
@@ -330,6 +350,12 @@ def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
         )
         stopped_frac = max(0.0, min(1.0, stopped_frac))
 
+        # Heat. An UNRECORDED temperature is not hot — absent is absent, and
+        # inventing heat that was never measured is exactly what the analysis
+        # layer's own `confidence` field refuses to do.
+        average_temp = f.average_temp
+        hot = average_temp is not None and average_temp >= _EFFICIENCY_HOT_TEMP_C
+
         points.append({
             "date": f.local_date.isoformat(),
             "activity_id": str(f.activity_id),
@@ -340,6 +366,8 @@ def build_efficiency_trend(facts: List[ActivityFact]) -> List[dict]:
             "hilly": gain_per_km >= _EFFICIENCY_HILLY_GAIN_PER_KM,
             "stopped_frac": round(stopped_frac, 3),
             "stoppy": stopped_frac >= _EFFICIENCY_STOPPY_FRACTION,
+            "average_temp": round(average_temp, 1) if average_temp is not None else None,
+            "hot": hot,
         })
 
     return sorted(points, key=lambda p: p["date"])
@@ -417,14 +445,44 @@ def _zone_points(
     return result
 
 
-def _avg_efficiency(facts: List[ActivityFact]) -> Optional[float]:
-    """Mean HR-efficiency (m/s per bpm) over the window, or None when no
-    activity qualifies. Reuses build_efficiency_trend so the average is taken
-    over exactly the activities the efficiency chart plots (#385)."""
+class EfficiencyWindowStats(NamedTuple):
+    """One window's efficiency means, on both bases (#385, #746)."""
+    avg: Optional[float]
+    avg_clean: Optional[float]
+    clean_count: int
+    total_count: int
+
+
+def efficiency_window_stats(facts: List[ActivityFact]) -> EfficiencyWindowStats:
+    """Mean HR-efficiency (m/s per bpm) over the window on two bases.
+
+    Reuses build_efficiency_trend so both means are taken over exactly the
+    activities the efficiency chart plots (#385) and read the same condition flags
+    the chart draws — one definition of "which activities count" and one of "which
+    of them were clean", rather than a second opinion computed here.
+
+    ``avg`` is the unweighted mean over every plotted activity, unchanged and
+    retained so nothing reading it breaks. ``avg_clean`` is the mean over the
+    CLEAN ones only — not hilly, not stoppy, not hot — which is what makes the
+    headline "+X% vs prev" a like-for-like comparison instead of a mixed-conditions
+    window mean that moves for reasons that are not fitness (#746). Both are None
+    when the respective set is empty; the counts let the caller (and the runner)
+    see which basis a comparison actually rests on.
+    """
     points = build_efficiency_trend(facts)
-    if not points:
-        return None
-    return round(sum(p["efficiency_mps_per_bpm"] for p in points) / len(points), 4)
+    clean = [p for p in points if not (p["hilly"] or p["stoppy"] or p["hot"])]
+
+    def _mean(rows) -> Optional[float]:
+        if not rows:
+            return None
+        return round(sum(p["efficiency_mps_per_bpm"] for p in rows) / len(rows), 4)
+
+    return EfficiencyWindowStats(
+        avg=_mean(points),
+        avg_clean=_mean(clean),
+        clean_count=len(clean),
+        total_count=len(points),
+    )
 
 
 def _summarise_window(facts: List[ActivityFact]) -> WeeklyStatsSummary:
@@ -538,12 +596,16 @@ def get_trends_report(
 
     # Summary totals across the entire range
     cur_easy, cur_mod, cur_hard = zone_minutes(activity_facts)
+    cur_eff = efficiency_window_stats(activity_facts)
     summary = TrendsSummary(
         total_distance_m=sum(d.total_distance_m for d in daily_facts),
         total_moving_time_s=sum(d.total_moving_time_s for d in daily_facts),
         activity_count=sum(d.activity_count for d in daily_facts),
         total_suffer_score=sum(d.total_effort_score for d in daily_facts),
-        avg_efficiency_mps_per_bpm=_avg_efficiency(activity_facts),
+        avg_efficiency_mps_per_bpm=cur_eff.avg,
+        avg_efficiency_clean_mps_per_bpm=cur_eff.avg_clean,
+        efficiency_clean_count=cur_eff.clean_count,
+        efficiency_total_count=cur_eff.total_count,
         zone_easy_minutes=cur_easy,
         zone_moderate_minutes=cur_mod,
         zone_hard_minutes=cur_hard,
@@ -554,12 +616,16 @@ def get_trends_report(
     if prev_start is not None and prev_end is not None:
         prev_facts = query_facts(db, prev_start, prev_end, types=types, user_id=user_id)
         prev_easy, prev_mod, prev_hard = zone_minutes(prev_facts)
+        prev_eff = efficiency_window_stats(prev_facts)
         previous_summary = TrendsSummary(
             total_distance_m=sum(f.distance_m for f in prev_facts),
             total_moving_time_s=sum(f.moving_time_s for f in prev_facts),
             activity_count=len(prev_facts),
             total_suffer_score=sum(f.effort_score or 0.0 for f in prev_facts),
-            avg_efficiency_mps_per_bpm=_avg_efficiency(prev_facts),
+            avg_efficiency_mps_per_bpm=prev_eff.avg,
+            avg_efficiency_clean_mps_per_bpm=prev_eff.avg_clean,
+            efficiency_clean_count=prev_eff.clean_count,
+            efficiency_total_count=prev_eff.total_count,
             zone_easy_minutes=prev_easy,
             zone_moderate_minutes=prev_mod,
             zone_hard_minutes=prev_hard,
