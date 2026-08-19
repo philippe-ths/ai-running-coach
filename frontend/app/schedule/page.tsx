@@ -23,6 +23,7 @@ import RulesPanel from "@/components/schedule/RulesPanel";
 import LoggedList from "@/components/schedule/LoggedList";
 import EmptyWeek from "@/components/schedule/EmptyWeek";
 import DraftBanner from "@/components/schedule/DraftBanner";
+import PreviousPlanBanner from "@/components/schedule/PreviousPlanBanner";
 import HorizonView from "@/components/schedule/HorizonView";
 import GoalRacePanel from "@/components/schedule/GoalRacePanel";
 import { addDaysIso, todayIso } from "@/components/schedule/dates";
@@ -57,6 +58,10 @@ export default function SchedulePage() {
   // the horizon owns its own fetch, so it is told through this token — the race
   // marker is part of the horizon payload, not something the client can draw.
   const [raceToken, setRaceToken] = useState(0);
+  // #857: bumped when the ACTIVE plan may have changed for a reason the
+  // previous-plan offer cannot see (a draft landed). The offer re-reads itself
+  // after its own restore, so it does not need telling about that one.
+  const [planToken, setPlanToken] = useState(0);
 
   const coach = useCoachSheet();
 
@@ -88,6 +93,15 @@ export default function SchedulePage() {
   const onRaceChanged = useCallback(() => {
     load(weekParam, true);
     setRaceToken((t) => t + 1);
+  }, [load, weekParam]);
+
+  // A new plan landing, and going back to the previous one, both swap what the
+  // whole schedule says: the week AND the horizon change together, so both are
+  // told. #857.
+  const onPlanChanged = useCallback(() => {
+    load(weekParam, true);
+    setRaceToken((t) => t + 1);
+    setPlanToken((t) => t + 1);
   }, [load, weekParam]);
 
   // One in-flight write at a time. The guard is a REF, not the state: two taps
@@ -242,7 +256,15 @@ export default function SchedulePage() {
       {/* A plan being written lands on the week behind it, so the week is the
           place that has to say so. The empty-week panel reports its own draft,
           so this stands down for it rather than the two speaking at once. */}
-      {week && !isEmpty && <DraftBanner onPlanReady={refresh} />}
+      {week && !isEmpty && <DraftBanner onPlanReady={onPlanChanged} />}
+
+      {/* #857: the way back to a plan the coach replaced, on the week the
+          replacement landed on. Draws nothing when there is nothing to go back
+          to, and shares the empty-week stand-down for the same reason the draft
+          banner does: a runner with no plan at all has no superseded one. */}
+      {week && !isEmpty && (
+        <PreviousPlanBanner onRestored={onPlanChanged} refreshToken={planToken} />
+      )}
 
       {week && isEmpty && <EmptyWeek onPlanReady={refresh} />}
 

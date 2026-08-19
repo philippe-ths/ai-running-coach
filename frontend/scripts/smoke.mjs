@@ -527,6 +527,25 @@ const mockScheduleDraft = {
   message: "Your plan is ready.",
 };
 
+// #857: the way back to a plan the coach replaced. Two plan ids that trade
+// places, so the smoke can prove the round trip -- restore, and the plan just
+// stepped away from becomes the one on offer -- rather than only a status code.
+const PLAN_A = "11111111-1111-1111-1111-111111111111";
+const PLAN_B = "22222222-2222-2222-2222-222222222222";
+const mockPlans = { active: PLAN_B, previous: PLAN_A };
+
+function previousPlanPayload() {
+  return {
+    plan_id: mockPlans.previous,
+    superseded_at: "2026-03-22T18:00:00Z",
+    generated_at: "2026-03-01T09:00:00Z",
+    horizon_end: "2026-12-31",
+    sessions_ahead: 14,
+    restorable: true,
+    message: "Your previous plan is still here.",
+  };
+}
+
 const routesToCheck = [
   { path: "/", expectedText: "Weekly Summary" },
   { path: "/activities", expectedText: "All Activities" },
@@ -613,6 +632,30 @@ function createMockApiServer() {
     // it must answer even when the week it renders is not empty.
     if (pathname === "/api/schedule/draft") {
       return sendJson(res, 200, mockScheduleDraft);
+    }
+
+    // #857: the previous-plan offer and the restore. The restore answers 204
+    // and SWAPS which plan is on offer, so the mock holds the property the real
+    // endpoint holds: going back is itself something you can go back from.
+    if (pathname === "/api/schedule/plans/previous") {
+      return sendJson(res, 200, previousPlanPayload());
+    }
+
+    if (
+      pathname.startsWith("/api/schedule/plans/") &&
+      pathname.endsWith("/restore") &&
+      req.method === "POST"
+    ) {
+      const id = pathname.slice("/api/schedule/plans/".length, -"/restore".length);
+      if (id !== mockPlans.previous) {
+        return sendJson(res, 422, {
+          detail: "That plan is not one you can go back to.",
+        });
+      }
+      mockPlans.previous = mockPlans.active;
+      mockPlans.active = id;
+      res.writeHead(204);
+      return res.end();
     }
 
     // #830: the goal-race capture surface. The list is the panel's read; POST
@@ -889,6 +932,42 @@ async function main() {
   if (!Array.isArray(after) || after.length !== 1) {
     throw new Error(
       `/api/schedule/races returned ${after?.length} races after the delete, expected 1`,
+    );
+  }
+
+  // #857: the restore round trip through the proxy. Client-side only, like the
+  // races above, so the same path is driven directly.
+  const previousResponse = await fetch(
+    `${FRONTEND_BASE_URL}/api/schedule/plans/previous`,
+  );
+  if (!previousResponse.ok) {
+    throw new Error(
+      `Expected 200 for /api/schedule/plans/previous, received ${previousResponse.status}`,
+    );
+  }
+  const previous = await previousResponse.json();
+  if (!previous.plan_id || previous.restorable !== true) {
+    throw new Error(
+      `/api/schedule/plans/previous returned nothing to go back to: ${JSON.stringify(previous)}`,
+    );
+  }
+
+  const restoreResponse = await fetch(
+    `${FRONTEND_BASE_URL}/api/schedule/plans/${previous.plan_id}/restore`,
+    { method: "POST" },
+  );
+  if (restoreResponse.status !== 204) {
+    throw new Error(
+      `Expected 204 from POST /api/schedule/plans/{id}/restore, received ${restoreResponse.status}`,
+    );
+  }
+
+  const swapped = await (
+    await fetch(`${FRONTEND_BASE_URL}/api/schedule/plans/previous`)
+  ).json();
+  if (swapped.plan_id === previous.plan_id) {
+    throw new Error(
+      "restoring left the same plan on offer: going back must itself be reversible",
     );
   }
 
