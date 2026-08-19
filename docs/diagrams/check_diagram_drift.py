@@ -471,12 +471,42 @@ def _fate_derived_keys(src: str) -> set[str]:
     return keys
 
 
-def _diagram_captured_flags(flow_src: str) -> dict[str, bool]:
-    """The COACH_*_ENABLED values the capture was generated under, read from the DATA blob's
-    `flags` object. These `"COACH_X_ENABLED":true|false` pairs appear ONLY inside that object
-    (the JS logic references the flags as single-quoted string literals, never `"...":bool`)."""
-    return {k: v == "true" for k, v in
-            re.findall(r'"(COACH_[A-Z_]+_ENABLED)":(true|false)', flow_src)}
+def _flow_blob(flow_src: str) -> dict | None:
+    """The generated `const DATA = {...};` object, or None if it is missing/unparseable.
+
+    The sibling of `_chat_blob`. Reading the blob STRUCTURALLY is the point: this
+    used to be a regex scrape of `"COACH_X_ENABLED":true|false` pairs out of the
+    raw JS, and that scrape read `[A-Z_]+`, so it could not see the one flag whose
+    name carries a digit. A reader that quietly narrows what it reads is the
+    vacuous-guard failure in its smallest form, and widening the character class
+    would only have moved the next such name one character further away."""
+    m = re.search(r"(?ms)^const DATA =\s*(.*?);\s*$", flow_src)
+    if not m:
+        return None
+    try:
+        blob = json.loads(m.group(1))
+    except ValueError:
+        return None
+    return blob if isinstance(blob, dict) else None
+
+
+def _diagram_captured_flags(flow_src: str) -> dict[str, bool] | None:
+    """The COACH_*_ENABLED values the capture was generated under, read from the DATA
+    blob's top-level `flags` object.
+
+    Returns None when the blob or its `flags` map cannot be read at all, which the
+    caller must report rather than treat as "no flags to check" -- the two are the
+    same silence and only one of them is benign. Note `flags` also occurs DEEPER in
+    the blob (`pack.metrics.flags` and friends are the risk-flag lists), which is
+    exactly why the top-level key is addressed by path rather than by pattern."""
+    blob = _flow_blob(flow_src)
+    if blob is None:
+        return None
+    captured = blob.get("flags")
+    if not isinstance(captured, dict):
+        return None
+    return {k: bool(v) for k, v in captured.items()
+            if k.startswith("COACH_") and k.endswith("_ENABLED")}
 
 
 def _env_example_flags() -> dict[str, bool]:
@@ -692,6 +722,68 @@ def _declared_screen_builders() -> list[str]:
                     if isinstance(element, ast.Constant) and isinstance(element.value, str):
                         keys.append(element.value)
     return sorted(set(keys))
+
+
+def _generator_screen_coverage() -> tuple[list[str] | None, str | None]:
+    """The screens generate_chat_flow_data declares it can rebuild a pointer for.
+
+    Read from the generator's SOURCE, not by importing it: every other generator
+    check in this file is static for the same reason, since the generators need a
+    seeded database and CI has none.
+    """
+    tree = ast.parse(_CHAT_GENERATOR.read_text())
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == "SCREENS_COVERED":
+                try:
+                    value = ast.literal_eval(node.value)
+                except ValueError:
+                    return None, (
+                        "EXTRACTOR BROKE: generate_chat_flow_data.SCREENS_COVERED is no longer a "
+                        "literal, so the generator's screen coverage cannot be read statically. "
+                        "Keep it a plain tuple of strings, or teach _generator_screen_coverage "
+                        "the new form.")
+                return sorted(str(v) for v in value), None
+    return None, (
+        "EXTRACTOR BROKE: generate_chat_flow_data no longer declares SCREENS_COVERED, so nothing "
+        "checks that the generator can rebuild every screen a ScreenPointer accepts. Restore the "
+        "declaration or replace this check with one that reads whatever succeeded it.")
+
+
+def _screen_coverage_problems() -> list[str]:
+    """The generator must cover every screen the schema accepts.
+
+    The gap this closes is not hypothetical. `schedule` was added to ScreenPointer's
+    Literal and the generator was not taught it, so 34 of 60 captured turns recorded
+    `screen: null` and the rendered diagram showed the coach receiving no screen
+    context for the majority of the conversation. It actually received a label and a
+    real LOOKING AT block. Every other check here compares the app's declarations
+    against the DIAGRAM's nodes, and none of them can see this: the capture was
+    internally consistent, just built from less than the app offers.
+    """
+    from app.schemas.thread import ScreenPointer  # lazy: needs the app importable
+
+    covered, broke = _generator_screen_coverage()
+    if broke:
+        return [broke]
+    accepted = sorted(_literal_values(ScreenPointer, "screen"))
+    missing = sorted(set(accepted) - set(covered or []))
+    spurious = sorted(set(covered or []) - set(accepted))
+    problems: list[str] = []
+    if missing:
+        problems.append(
+            f"generate_chat_flow_data cannot rebuild a screen pointer for {missing}, which "
+            "ScreenPointer accepts. Every turn asked from one of those screens captures as "
+            "`screen: null`, so the diagram draws the coach receiving no screen context where "
+            "it receives a real one. Add the screen to SCREENS_COVERED and to the branch that "
+            "handles it in _pointer_for.")
+    if spurious:
+        problems.append(
+            f"generate_chat_flow_data declares screen coverage for {spurious}, which "
+            "ScreenPointer does not accept. Remove them from SCREENS_COVERED.")
+    return problems
 
 
 def _screen_builder_extractor_problems() -> list[str]:
@@ -1253,9 +1345,10 @@ def check_drift() -> list[str]:
     documented = _env_example_flags()
     if not captured:
         problems.append(
-            "The diagram carries NO captured COACH_*_ENABLED flags — regenerate it under the "
-            "prod-parity config (backend/.env mirroring .env.example) so the off-state chips are "
-            "capture-driven. See generate_flow_nodes_data.py.")
+            "The diagram carries NO readable captured COACH_*_ENABLED flags — its `const DATA` "
+            "blob, or the top-level `flags` map inside it, could not be read. Regenerate it under "
+            "the prod-parity config (backend/.env mirroring .env.example) so the off-state chips "
+            "are capture-driven. See generate_flow_nodes_data.py.")
     elif not documented:
         problems.append(
             "backend/.env.example documents no COACH_*_ENABLED prod-parity block, so the diagram's "
@@ -1272,6 +1365,17 @@ def check_drift() -> list[str]:
                 f"prod-parity set in backend/.env.example: {mismatched}. Regenerate flow-nodes.js "
                 "under prod-parity config (or update .env.example if prod itself changed), so the "
                 "diagram reflects what prod actually sends.")
+        # The comparison above is an INTERSECTION, so a flag .env.example documents that the
+        # capture does not record is not a match and not a mismatch -- it is simply unchecked,
+        # and silently so. That is the same failure one step earlier: the capture stopped
+        # pinning something the parity contract names. The chat half already reports this;
+        # the report half did not, which is how a whole flag can go unguarded while green.
+        unrecorded = sorted(set(documented) - set(captured))
+        if unrecorded:
+            problems.append(
+                f"backend/.env.example documents COACH_*_ENABLED flags the flow-nodes.js capture "
+                f"does not record at all, so they are unchecked rather than in parity: {unrecorded}. "
+                "Regenerate flow-nodes.js so its `flags` map covers every flag the parity block names.")
 
     # 3b. PROMPT parity. The kill switches are only half of what decides the pack: the
     #     prompt id gates whole sections (a section reaches a v9 pack and not a v5 one), so
@@ -1330,6 +1434,7 @@ def check_drift() -> list[str]:
     )
     problems.extend(_baseline_extractor_problems())
     problems.extend(_screen_builder_extractor_problems())
+    problems.extend(_screen_coverage_problems())
     problems.extend(
         _chat_node_problems(
             declared_chat,

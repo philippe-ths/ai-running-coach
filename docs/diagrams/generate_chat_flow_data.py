@@ -406,6 +406,19 @@ _MAX_TURNS_PER_THREAD = 24
 _MAX_REPLY_CHARS = 2600
 
 
+# Screens this generator can rebuild a pointer for. Coverage is a DECLARATION
+# rather than something a reader has to infer from the branches below, because
+# `check_diagram_drift` compares it against `ScreenPointer`'s own screen Literal:
+# a screen the schema accepts and this file does not name draws every turn asked
+# from it as having NO screen context at all, which is what happened to
+# `schedule` between the enum gaining it and this being noticed. The two tuples
+# are split because they carry different obligations — an identity-only screen
+# needs only its name here, a rebuilt one needs a branch as well.
+_REBUILT_SCREENS = ("activity", "trends")
+_IDENTITY_ONLY_SCREENS = ("home", "activities", "load", "profile", "schedule")
+SCREENS_COVERED = ("activity", "trends", "home", "activities", "load", "profile", "schedule")
+
+
 def _pointer_for(asked_from, thread):
     """Rebuild the screen pointer a turn was asked under, from its stored label.
 
@@ -414,6 +427,11 @@ def _pointer_for(asked_from, thread):
     the thread anchor and a trends turn falls back to the resolver's own default
     range. The runner's actual range/type selections are NOT recoverable — they
     were inputs to that turn, not stored facts.
+
+    Returns `(pointer, caveat)`. A screen named in `SCREENS_COVERED` that still
+    yields no pointer returns a caveat saying so, so the gap shows up IN the
+    capture rather than as an indistinguishable `screen: null` — the state a turn
+    asked from no screen at all legitimately has.
     """
     if asked_from == "activity" and thread.activity_id is not None:
         return ScreenPointer(screen="activity", activity_id=thread.activity_id), None
@@ -422,8 +440,13 @@ def _pointer_for(asked_from, thread):
             "the runner's actual range/type selections are not stored, so this "
             "resolves at the builder's default range"
         )
-    if asked_from in ("home", "activities", "load", "profile"):
+    if asked_from in _IDENTITY_ONLY_SCREENS:
         return ScreenPointer(screen=asked_from), None
+    if asked_from in SCREENS_COVERED:
+        return None, (
+            f"{asked_from!r} is a screen this capture claims to cover but could not "
+            "rebuild a pointer for, so its context is missing rather than absent"
+        )
     return None, None
 
 
