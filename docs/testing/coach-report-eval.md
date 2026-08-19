@@ -98,8 +98,26 @@ versioned-cache identity from M0 — so a scorecard is comparable across prompt
 and model iterations.
 
 Production reports predate the current schema (older pack shape), so they do not
-parse and are reported as errors, not scored. To score **real** reports you
-regenerate them under the current code first:
+parse and are not scored. The scorecard says which kind of not-parsing it was
+(#810, ADR 0032): a pack written under a prompt id past the declared readability
+cutoff is counted in `skipped_unreadable_pack` and listed in `unreadable_packs`,
+settled history rather than a fault; any other parse failure stays in `errors`,
+which is live schema drift and should be investigated. Neither contributes a
+single rubric assertion, so an unreadable pack is never mistaken for a report
+that scored badly, and `--compare` flags a RISE in the unreadable count as a
+regression.
+
+To take the census over the whole database rather than one version:
+
+```bash
+make eval EVAL_ARGS="--all-versions --output /tmp/census.json"
+```
+
+The `skipped_unreadable_pack` figure in that scorecard is the answer to "how many
+stored packs no longer parse", and `unreadable_packs` names each one with its
+prompt id and the first line of the rejection.
+
+To score **real** reports you regenerate them under the current code first:
 
 ```bash
 make seed-local SEED_ARGS="--activities 20"          # freeze ~20 real activities
