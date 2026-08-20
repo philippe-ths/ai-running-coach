@@ -128,6 +128,7 @@ def test_trends_buckets_on_local_day_across_midnight():
         distance_m=5000, moving_time_s=1800, elapsed_time_s=1900,
         elev_gain_m=10.0, avg_hr=150.0, avg_cadence=170.0, average_speed_mps=2.78,
         effort_score=10.0, effort="easy", time_in_zones=None,
+        average_temp=None,
     )
     fact = ActivityFact.from_row(row)
     assert fact.local_date == datetime(2026, 6, 21).date()
@@ -142,6 +143,7 @@ def test_trends_bucket_falls_back_without_local():
         distance_m=5000, moving_time_s=1800, elapsed_time_s=1900,
         elev_gain_m=10.0, avg_hr=150.0, avg_cadence=170.0, average_speed_mps=2.78,
         effort_score=10.0, effort="easy", time_in_zones=None,
+        average_temp=None,
     )
     fact = ActivityFact.from_row(row)
     assert fact.local_date == datetime(2026, 6, 20).date()

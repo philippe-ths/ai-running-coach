@@ -582,13 +582,14 @@ def render_voice_block(base_prompt_id: str, voice=None) -> str:
 
     if voice.preset is not None:
         lines.append(f"\nPRESET: {voice.preset.name} - {voice.preset.flavour}")
-        if voice.preset.example_messages:
-            lines.append(
-                "\nEXAMPLE MESSAGES (match the register, rhythm, and attitude, "
-                "NOT the content — they are about other runs):"
-            )
-            for i, msg in enumerate(voice.preset.example_messages, start=1):
-                lines.append(f'{i}. "{msg}"')
+        lines.append(
+            "\nEXAMPLE MESSAGES (match the register, rhythm, and attitude, "
+            "NOT the content — they are about other runs). Each preset shows the "
+            "voice on welcome news and on unwelcome news, because the second is "
+            "where a voice is actually tested:"
+        )
+        lines.append(f'1. GOOD NEWS: "{voice.preset.example_good}"')
+        lines.append(f'2. UNWELCOME NEWS: "{voice.preset.example_bad}"')
 
     if voice.freetext:
         lines.append(_render_freetext(voice.freetext))

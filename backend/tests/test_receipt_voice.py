@@ -267,3 +267,40 @@ async def test_generate_under_budget_with_user_proceeds(monkeypatch):
         assert out is not None
     finally:
         B.set_gate(None)
+
+
+# ---------------------------------------------------------------------------
+# The fingerprint covers what the generator actually reads (#827)
+# ---------------------------------------------------------------------------
+
+
+def test_the_fingerprint_moves_when_a_characters_exemplars_are_rewritten():
+    """A preset is a name over a body of text, and this generator reads the text.
+
+    `_render_voice_data` puts the preset's example messages into the generation
+    prompt, so rewriting an exemplar changes what the templates are generated
+    FROM. A fingerprint over the preset KEY alone would report fresh while every
+    runner sat on templates written from prose that no longer exists.
+    """
+    from dataclasses import replace as dc_replace
+
+    from app.services.coach.voice import PRESETS, resolve_voice
+    from app.services.coach.receipt_voice import voice_fingerprint
+
+    voice = resolve_voice(SimpleNamespace(
+        voice_preset="sage", voice_warmth=None, voice_humor=None,
+        voice_force=None, voice_energy=None, voice_length=None, voice_freetext=None,
+    ))
+    before = voice_fingerprint(voice)
+
+    # Same key, same dials, one exemplar rewritten — the state a house-wide
+    # rewrite of the cast leaves every stored template set in.
+    rewritten = dc_replace(
+        PRESETS["sage"], example_bad="Something else entirely, in the same voice."
+    )
+    after = voice_fingerprint(dc_replace(voice, preset=rewritten))
+
+    assert before != after, (
+        "rewriting a character's exemplars left the fingerprint unchanged, so no "
+        "runner's receipt templates would ever be regenerated from the new prose"
+    )

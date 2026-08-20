@@ -56,7 +56,16 @@ def generate_schedule_job(
         if outcome.ok:
             logger.info("schedule draft: plan %s is now active", plan.id)
         else:
-            store.fail_plan(db, plan, "; ".join(outcome.failures or ["unknown"]))
+            store.fail_plan(
+                db,
+                plan,
+                "; ".join(outcome.failures or ["unknown"]),
+                # The category the draft itself decided (#859). Classified where
+                # the failure is known rather than re-derived from the joined
+                # prose here, which would be string-matching text written for a
+                # rewrite prompt.
+                kind=outcome.failure_kind,
+            )
     except Exception:
         logger.exception("schedule draft: job failed for plan %s", plan_id)
         try:
@@ -66,7 +75,12 @@ def generate_schedule_job(
                 .first()
             )
             if plan is not None and plan.status == store.DRAFTING:
-                store.fail_plan(db, plan, "the drafting job raised")
+                store.fail_plan(
+                    db,
+                    plan,
+                    "the drafting job raised",
+                    kind=store.FAILURE_UNKNOWN,
+                )
         except Exception:
             logger.exception("schedule draft: could not mark plan %s failed", plan_id)
     finally:

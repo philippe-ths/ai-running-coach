@@ -73,6 +73,36 @@ def local_day(start_date, start_date_local) -> date:
     return chosen.date() if isinstance(chosen, datetime) else chosen
 
 
+def coerce_temp(value: Any) -> Optional[float]:
+    """Ambient temperature from untyped JSON as a float, or None (#746).
+
+    `raw_summary` is untyped: Strava sends `average_temp` as a number, but a stray
+    non-numeric value must degrade to "unrecorded" rather than raise — the same
+    defensive read `analysis.discount_signals` and `analysis.baseline.temp_band`
+    already make against this exact field.
+
+    It also reconciles a real dialect disagreement. The SQL projection extracts the
+    key as TEXT, which Postgres honours ('29') while SQLite hands back the JSON
+    value's own type (29). Coercing HERE, in Python, means both dialects agree —
+    and, critically, that a bad value cannot abort the query: casting to float in
+    SQL raises `DataError` on Postgres for a non-numeric value while SQLite passes
+    it through silently, so a SQLite-backed test suite would never see the failure.
+
+    A bool is rejected outright: `float(True)` is 1.0, a plausible-looking 1 degrees C.
+    That guard is exact only where Python sees a real bool. A JSON boolean arriving
+    through SQL is 'true' on Postgres (rejected) but 1 on SQLite (read as 1 degrees C),
+    and the two cannot be reconciled without also rejecting a genuine 1 degrees C.
+    Left as-is: Strava sends a number, the divergence needs a boolean in the JSON to
+    reach, and both outcomes are merely "not hot" rather than wrong or raising.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class ActivityFact:
     """One row per activity — the minimal projection needed for trend charts."""
 
@@ -92,6 +122,12 @@ class ActivityFact:
         # the narrow query would have applied (see `facts_in_window`). Never used for
         # bucketing — that is always `local_date`.
         "start_date",
+        # #746: dry-bulb ambient temperature (degrees C) as Strava recorded it, so
+        # the efficiency chart can flag a hot activity rather than read the heat as
+        # lost fitness. It lives in the DEFERRED `raw_summary` JSON, so the
+        # projection extracts THIS ONE SCALAR in SQL (see `query_facts`) rather than
+        # undeferring the blob — the N+1 #359/#367 removed. None when unrecorded.
+        "average_temp",
     )
 
     def __init__(self, activity: Activity):
@@ -133,6 +169,12 @@ class ActivityFact:
         self.hr_drift: Optional[float] = (
             activity.metrics.hr_drift if activity.metrics else None
         )
+        # #746. NOTE this touches the deferred `raw_summary`; the caller already
+        # holds a whole ORM Activity, so it is not the loop `from_row` exists to
+        # avoid, but prefer `from_row` for any batch read.
+        self.average_temp: Optional[float] = coerce_temp(
+            (activity.raw_summary or {}).get("average_temp")
+        )
 
     @classmethod
     def from_row(cls, row) -> "ActivityFact":
@@ -159,6 +201,9 @@ class ActivityFact:
         self.effort_score = row.effort_score
         self.effort = row.effort
         self.time_in_zones = row.time_in_zones
+        # #746: extracted from raw_summary in SQL as text; coerced here (see
+        # `coerce_temp` for why the cast is not done in the query).
+        self.average_temp = coerce_temp(row.average_temp)
         # #650: present only when the caller opted into the shape projection; absent
         # from the lean default projection, so getattr falls back to None.
         self.structure = getattr(row, "structure", None)
@@ -350,6 +395,12 @@ def query_facts(
             Activity.avg_hr,
             Activity.avg_cadence,
             Activity.average_speed_mps,
+            # #746: the ONE scalar the efficiency chart needs out of the deferred
+            # `raw_summary` blob, indexed out in SQL (`->>` on Postgres,
+            # `json_extract` on SQLite) so the projection stays lean — undeferring
+            # the column instead would reinstate the JSON load #367 removed.
+            # Extracted as TEXT and coerced in Python: see `coerce_temp`.
+            Activity.raw_summary["average_temp"].as_string().label("average_temp"),
             DerivedMetric.effort_score,
             DerivedMetric.effort,
             DerivedMetric.time_in_zones,

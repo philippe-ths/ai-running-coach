@@ -24,6 +24,77 @@ import type {
 
 type WindowMode = "rolling" | "calendar";
 
+// #746: the efficiency headline compares CLEAN-conditions activities (not hilly,
+// stop-heavy or hot) when both windows hold enough of them, because an
+// all-activity window mean moves for reasons that are not fitness. Below this many
+// on either side the clean mean is too thin to be the steadier read, so the
+// all-activity pair is used instead — and either way the basis is stated on screen.
+// Which basis to use is a display decision, so this threshold lives here, its only
+// reader; the backend computes both means and the counts and picks neither.
+const MIN_CLEAN_ACTIVITIES_FOR_COMPARISON = 3;
+
+/**
+ * The efficiency card's period-over-period comparison, plus one line naming the
+ * basis it is computed on. Which basis is used depends on the data, so it is
+ * always stated: an adjustment the runner cannot see is one they cannot reason
+ * about, which is the failure #746 is about.
+ */
+function EfficiencyComparison({
+  data,
+  prevLabel,
+}: {
+  data: TrendsData;
+  prevLabel?: string;
+}) {
+  const cur = data.summary;
+  const prev = data.previous_summary;
+
+  const cleanCount = cur.efficiency_clean_count ?? 0;
+  const prevCleanCount = prev?.efficiency_clean_count ?? 0;
+  const totalCount = cur.efficiency_total_count ?? 0;
+
+  // Clean requires BOTH sides: a clean current window compared against an
+  // all-conditions previous one would be a worse comparison than either basis
+  // alone, not a better one.
+  const useClean =
+    cur.avg_efficiency_clean_mps_per_bpm != null &&
+    prev?.avg_efficiency_clean_mps_per_bpm != null &&
+    cleanCount >= MIN_CLEAN_ACTIVITIES_FOR_COMPARISON &&
+    prevCleanCount >= MIN_CLEAN_ACTIVITIES_FOR_COMPARISON;
+
+  const current = useClean
+    ? cur.avg_efficiency_clean_mps_per_bpm
+    : cur.avg_efficiency_mps_per_bpm;
+  const previous = useClean
+    ? prev?.avg_efficiency_clean_mps_per_bpm
+    : prev?.avg_efficiency_mps_per_bpm;
+
+  if (current == null) return null;
+
+  const basis = useClean
+    ? `Comparing clean-conditions activities only (${cleanCount} of ${totalCount}) — flat, few stops, not hot.`
+    : totalCount > 0
+      ? `Comparing all activities: too few clean-conditions ones to compare (${cleanCount} of ${totalCount} here, ${prevCleanCount} in the previous period). Hills, stops and heat are in this number.`
+      : null;
+
+  return (
+    <>
+      {/* Display in meters-per-heartbeat (×60), matching the chart. */}
+      <ComparisonRows
+        current={current * 60}
+        previous={previous != null ? previous * 60 : undefined}
+        format={(v) => `${v.toFixed(2)} m/beat`}
+        prevLabel={prevLabel}
+      />
+      {basis && (
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-md">
+          {basis}
+        </p>
+      )}
+    </>
+  );
+}
+
 export default function TrendsPage() {
   const [range, setRange] = useState<TrendsRange>("30D");
   const [mode, setMode] = useState<WindowMode>("rolling");
@@ -373,21 +444,7 @@ export default function TrendsPage() {
           {data.efficiency_trend && (
             <EfficiencyTrendChart
               data={data.efficiency_trend}
-              delta={
-                data.summary.avg_efficiency_mps_per_bpm != null ? (
-                  // Display in meters-per-heartbeat (×60), matching the chart.
-                  <ComparisonRows
-                    current={data.summary.avg_efficiency_mps_per_bpm * 60}
-                    previous={
-                      data.previous_summary?.avg_efficiency_mps_per_bpm != null
-                        ? data.previous_summary.avg_efficiency_mps_per_bpm * 60
-                        : undefined
-                    }
-                    format={(v) => `${v.toFixed(2)} m/beat`}
-                    prevLabel={prevLabel}
-                  />
-                ) : undefined
-              }
+              delta={<EfficiencyComparison data={data} prevLabel={prevLabel} />}
             />
           )}
           <ZoneLoadChart

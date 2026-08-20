@@ -57,6 +57,14 @@ MAX_SKETCH_MULTIPLE = 3.0
 # this catches the impossible rather than expressing an opinion.
 ABSURD_SESSIONS_PER_DAY = 4
 
+# The code a volume-ceiling rejection carries, so the caller can tell a plan that
+# ramps absurdly from one whose week cannot be arranged WITHOUT reading the
+# failure prose. The runner is owed different advice in the two cases ("ask for a
+# gentler build" against "ask again"), and matching on the message text to work
+# out which is the string-matching that goes wrong the first time the wording is
+# improved.
+VOLUME_CEILING = "volume_ceiling"
+
 # How far past the configured horizon a plan may reach before it is nonsense.
 # The count caps in `draft_contract` bound how MANY weeks a plan holds, not how
 # far out they sit, so without this a plan could put a week two years away and
@@ -64,14 +72,42 @@ ABSURD_SESSIONS_PER_DAY = 4
 HORIZON_SLACK_WEEKS = 2
 
 
+def volume_ceilings(
+    norm_weekly_running_m: Optional[float],
+) -> Optional[tuple]:
+    """The concrete and sketched running ceilings this runner's own norm implies.
+
+    One definition, because the number is now SAID as well as enforced: the
+    drafting context tells the coach where the ceiling sits and the conversation
+    tells it too, and a ceiling the coach is told about that differs from the one
+    it is judged against is worse than saying nothing. Both callers and the gate
+    itself read this, so the stated bound and the enforced bound cannot drift.
+
+    None when there is no norm — the gate abstains there, so there is no bound to
+    state and inventing one would put a population figure in front of the coach.
+    """
+    if not norm_weekly_running_m:
+        return None
+    return (
+        norm_weekly_running_m * MAX_WEEKLY_MULTIPLE,
+        norm_weekly_running_m * MAX_SKETCH_MULTIPLE,
+    )
+
+
 @dataclass
 class PlanCheck:
     ok: bool = True
     failures: List[str] = field(default_factory=list)
+    # The machine-readable companion to `failures`, carrying a code only for the
+    # failures a caller acts on differently. Everything else stays prose: a code
+    # nothing reads is a vocabulary to maintain for nothing.
+    codes: List[str] = field(default_factory=list)
 
-    def fail(self, message: str) -> None:
+    def fail(self, message: str, *, code: Optional[str] = None) -> None:
         self.ok = False
         self.failures.append(message)
+        if code is not None:
+            self.codes.append(code)
 
 
 @dataclass(frozen=True)
@@ -148,16 +184,17 @@ def validate_drafted_plan(
             )
         seen_weeks.add(sketch.week_start)
         _within_horizon(sketch.week_start, "sketched week")
+        ceilings = volume_ceilings(norm_weekly_running_m)
         if (
-            norm_weekly_running_m
+            ceilings
             and sketch.target_running_distance_m
-            and sketch.target_running_distance_m
-            > norm_weekly_running_m * MAX_SKETCH_MULTIPLE
+            and sketch.target_running_distance_m > ceilings[1]
         ):
             check.fail(
                 f"sketched week {sketch.week_start} plans "
                 f"{sketch.target_running_distance_m / 1000:.0f} km of running against "
-                f"a typical {norm_weekly_running_m / 1000:.0f} km"
+                f"a typical {norm_weekly_running_m / 1000:.0f} km",
+                code=VOLUME_CEILING,
             )
 
     return check
@@ -260,7 +297,8 @@ def _validate_volume(
     Abstains when there is no norm: a runner with no history is exactly the
     person a population figure would serve worst.
     """
-    if not norm_weekly_running_m:
+    ceilings = volume_ceilings(norm_weekly_running_m)
+    if ceilings is None:
         return
     # Rep structure counts toward the ceiling (#876). Reading `target_distance_m`
     # alone scored an interval week's hardest running at zero, which failed
@@ -271,8 +309,9 @@ def _validate_volume(
         for session in week.sessions
         if session.discipline == "run" and session.commitment == "committed"
     )
-    if planned > norm_weekly_running_m * MAX_WEEKLY_MULTIPLE:
+    if planned > ceilings[0]:
         check.fail(
             f"week {week.week_start} plans {planned / 1000:.0f} km of running "
-            f"against a typical {norm_weekly_running_m / 1000:.0f} km"
+            f"against a typical {norm_weekly_running_m / 1000:.0f} km",
+            code=VOLUME_CEILING,
         )

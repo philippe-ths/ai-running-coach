@@ -50,6 +50,7 @@ def _fact(start: datetime, *, zones=None) -> ActivityFact:
     f.effort_score = 10.0
     f.effort = "easy"
     f.time_in_zones = zones
+    f.average_temp = None
     f.structure = None
     f.interval_structure = None
     f.duration_class = None
