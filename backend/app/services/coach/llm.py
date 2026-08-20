@@ -304,6 +304,18 @@ class AnthropicClient:
         discipline as `generate_json`. Raises ValueError if no matching tool_use block
         is returned (a logic error, not transient — not retried here; the caller
         treats it as a failed distillation).
+
+        A `max_tokens` stop ALSO raises (#931). The SDK cannot assemble a partial
+        tool call, so a truncated response arrives as a tool_use block whose input
+        is `{}` — which, to the caller, is indistinguishable from a model that
+        legitimately answered with nothing. That is only SILENT for a schema whose
+        fields all carry defaults, which is exactly how the runner-memory writer
+        stored an empty profile over a large history and stamped it as a successful
+        pass. Raising makes truncation visible to every structured caller.
+
+        Not retried, for the same reason a missing block is not: the same call at
+        the same cap truncates again. The right fix is a cap that fits the work,
+        and this raise is what makes an undersized one findable instead of silent.
         """
         tool_name = tool["name"]
         ladder = RetryLadder("anthropic_structured")
@@ -320,6 +332,15 @@ class AnthropicClient:
                     timeout=_TIMEOUT_SECONDS,
                 )
                 usage = _usage_from_response(response)
+                stop_reason = (
+                    response.get("stop_reason") if isinstance(response, dict)
+                    else getattr(response, "stop_reason", None)
+                )
+                if stop_reason == "max_tokens":
+                    raise ValueError(
+                        f"{tool_name} tool call truncated at max_tokens={max_tokens}; "
+                        "the tool input is incomplete and must not be read as an answer"
+                    )
                 for block in response.content:
                     btype = (
                         block.get("type") if isinstance(block, dict)
