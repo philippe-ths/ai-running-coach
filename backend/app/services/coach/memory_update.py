@@ -78,7 +78,19 @@ _MAX_CHAT_MESSAGES = 120
 # (the ones that matter) stay complete since real threads are short.
 _MAX_COACH_CHAT_MESSAGES = 80
 _MAX_RECENT_DIGESTS = 5
-_MAX_WRITER_TOKENS = 2000
+# The writer's OUTPUT ceiling. Sized from the work, not guessed (#931): the gather
+# caps above bound the source set at ~325 items, and a measured pass over a real
+# 206-source history emitted 43-56 candidates costing ~3.5-4.7k output tokens.
+# Scaling that to the gather ceiling lands under 8k, with headroom for the run-to-run
+# variance a temperature-0 call still has.
+#
+# It was 2000, which truncated that real history mid-tool-call. The truncated call
+# returned `{}`, `candidates` defaulted to `[]`, and an EMPTY profile was stored and
+# stamped as a successful pass — silently, for as long as the runner's history was
+# large. A cap is still a number that could one day be too small, so the durable half
+# of the fix is in `generate_structured_with_usage`, which now RAISES on a max_tokens
+# stop: undersizing this constant is now a visible failure rather than an empty profile.
+_MAX_WRITER_TOKENS = 8000
 
 _SectionKey = Literal[
     "who_you_are",
@@ -435,6 +447,50 @@ def build_writer_messages(sources: MemorySources) -> tuple[str, str]:
 
 
 # --------------------------------------------------------------------------- #
+# Per-candidate coercion (#931).
+# --------------------------------------------------------------------------- #
+def coerce_candidates(raw: object, *, user_id: object = None) -> List[MemoryCandidate]:
+    """Coerce the writer's tool output one candidate at a time, dropping the
+    off-shape ones and keeping the rest.
+
+    Whole-object validation made the pass ALL-OR-NOTHING: a real 206-source history
+    produced 43 candidates of which 2 overran `MAX_LINE_LENGTH`, and the strict
+    `model_validate` discarded all 43. The tool schema does declare `maxLength`, but
+    a JSON-schema bound is guidance to the model rather than a guarantee from the
+    API, so an over-long line is an expected output, not an exceptional one.
+
+    Dropping the offending line is the module's existing idiom rather than a new one:
+    a candidate whose cited sources are all unknown already drops here while the raw
+    source keeps the fact. Truncating the text instead would silently put words in
+    the writer's mouth. A drop is logged, never silent.
+
+    Raises only when the payload itself is not a candidate list — that is off-contract
+    output rather than one bad line, and the caller fails the pass.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(f"memory writer output is {type(raw).__name__}, not an object")
+    items = raw.get("candidates")
+    if items is None:
+        items = []
+    if not isinstance(items, list):
+        raise ValueError(f"memory writer candidates is {type(items).__name__}, not a list")
+
+    kept: List[MemoryCandidate] = []
+    dropped = 0
+    for item in items:
+        try:
+            kept.append(MemoryCandidate.model_validate(item))
+        except Exception:  # noqa: BLE001 — one bad line never costs the pass
+            dropped += 1
+    if dropped:
+        logger.info(
+            "memory writer: dropped %s off-shape candidate(s) of %s for user %s",
+            dropped, len(items), user_id,
+        )
+    return kept
+
+
+# --------------------------------------------------------------------------- #
 # Deterministic graduate-or-drop (the structural half of the incident fix).
 # --------------------------------------------------------------------------- #
 def _dedupe_keep_order(lines: Iterable[str]) -> List[str]:
@@ -577,13 +633,13 @@ async def update_memory(
     )
 
     try:
-        output = RunnerMemoryWriterOutput.model_validate(raw)
+        candidates = coerce_candidates(raw, user_id=user_id)
     except Exception:  # noqa: BLE001 — off-shape tool output fails the pass, not the worker
         logger.exception("memory writer returned off-shape output for user %s", user_id)
         return None
 
     profile = apply_graduation(
-        output.candidates,
+        candidates,
         sources.source_ids,
         durable_source_ids=sources.durable_source_ids,
         plan_min_sources=settings.COACH_MEMORY_PLAN_GRADUATION_MIN,
