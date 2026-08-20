@@ -114,6 +114,12 @@ class EfficiencyPoint(BaseModel):
     hilly: bool = False
     stopped_frac: float = 0.0
     stoppy: bool = False
+    # Dry-bulb ambient temperature (degrees C) as the device recorded it — no
+    # humidity, so this is a temperature and not a heat index. None when unrecorded,
+    # which is NOT the same as cool: `hot` is False either way rather than inventing
+    # heat that was never measured.
+    average_temp: Optional[float] = None
+    hot: bool = False
 
 
 class ZoneLoadWeekPoint(BaseModel):
@@ -150,6 +156,14 @@ class TrendsSummary(BaseModel):
     # usable HR/distance. Zone minutes are split per HR band so the Zone-Load
     # card can show an Easy / Moderate / Hard delta.
     avg_efficiency_mps_per_bpm: Optional[float] = None
+    # #746: the same mean over CLEAN activities only — not hilly, not stop-heavy,
+    # not hot — so the headline "vs prev" can be a like-for-like comparison rather
+    # than a mixed-conditions window mean that moves for reasons other than fitness.
+    # None when the window has no clean activity. The counts are carried so the
+    # caller can decide which basis is sound and TELL the runner which it used.
+    avg_efficiency_clean_mps_per_bpm: Optional[float] = None
+    efficiency_clean_count: int = 0
+    efficiency_total_count: int = 0
     zone_easy_minutes: float = 0.0
     zone_moderate_minutes: float = 0.0
     zone_hard_minutes: float = 0.0

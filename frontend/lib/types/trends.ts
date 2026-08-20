@@ -64,6 +64,10 @@ export interface EfficiencyPoint {
   hilly: boolean;
   stopped_frac: number;
   stoppy: boolean;
+  // Dry-bulb ambient temperature (C) as recorded, or null when unrecorded — which
+  // is not the same as cool, so `hot` is false either way.
+  average_temp: number | null;
+  hot: boolean;
 }
 
 export interface ZoneLoadWeekPoint {
@@ -125,6 +129,12 @@ export interface TrendsSummary {
   // when no activity in the window has usable HR/distance. Zone minutes are
   // split per HR band for the Zone-Load card's Easy / Moderate / Hard deltas.
   avg_efficiency_mps_per_bpm?: number | null;
+  // #746: the same mean over CLEAN activities only (not hilly, stop-heavy or hot),
+  // so the headline "vs prev" can be like-for-like. Null when the window has no
+  // clean activity; the counts say which basis a comparison can honestly rest on.
+  avg_efficiency_clean_mps_per_bpm?: number | null;
+  efficiency_clean_count?: number;
+  efficiency_total_count?: number;
   zone_easy_minutes?: number;
   zone_moderate_minutes?: number;
   zone_hard_minutes?: number;
