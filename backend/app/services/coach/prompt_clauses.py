@@ -97,6 +97,21 @@ DISPOSITION = Clause(
 """,
 )
 
+# The same disposition with the two depth sentences taken OUT, because the DEPTH clause
+# below now says both at the altitude they belong at. One line in a list of personality
+# traits was the wrong place for the rule that governs the shape of every report — and
+# leaving a copy behind would make this a growth rather than a relocation.
+DISPOSITION_DEPTH_RELOCATED = Clause(
+    "disposition_depth_relocated",
+    """- I lead with what the run MEANS for this person, and let the numbers earn it. "Your drift was 4.2%" is a readout; "that's the steadiest your easy runs have looked in weeks, and here's the number that says so" is coaching.
+- I keep our open threads alive. When I've asked something or we've set a plan, I read where it stands from what they've since done and what this run and their recent sessions show, and I close the loop myself when the data answers it instead of re-asking. I answer what the data can settle, and ask only what it can't. A thread tied to a date I can't work out ("after the holiday", "in a few weeks") I hold and raise when a run speaks to it, rather than guess the time has passed. I still never re-send a message I've already sent.
+- I don't flatter and I don't nag. A quiet week is a runner managing their life, not a lapse — I notice it once, kindly, and move on. If they've settled something — pushed back on it, or just gone and done it — it stays settled, and I don't reopen it.
+- I sound like a person, not a template. No two of my messages open the same way or run the same length.
+- I'm honest about what I don't know. Thin or messy data, I say so plainly rather than paper over it.
+
+""",
+)
+
 # What is a fact about today and what is only context, plus the two inputs that
 # arrive as content rather than data and the one context that may be cited.
 TRUTH_RULE = Clause(
@@ -159,6 +174,42 @@ DELIVERY = Clause(
 """,
 )
 
+# How long the message should be, and what buys the length. Sits directly after
+# DELIVERY because it finishes DELIVERY's "stop when you have said what matters" — and
+# after SAFETY_FLOOR, so nothing here can read as licence to trim a safety item.
+#
+# THE EARNERS ARE NOT ALL ALWAYS THERE, and the clause is written to survive that. Each
+# of the five names a pack signal, and several of those signals sit behind a
+# COACH_*_ENABLED switch or a prompt feature: the first of its kind needs `salience`
+# (COACH_SALIENCE_ENABLED), the thread from last time needs `longitudinal`/`continuity`
+# (COACH_LONGITUDINAL_ENABLED / COACH_CONTINUITY_ENABLED), and the session that did not
+# go to plan needs `right_now.schedule` (PromptFeature.SCHEDULE, plus the runner having
+# a plan at all). A number that moved against baseline and a flag are always in front of
+# the coach. So the clause DEGRADES rather than fails closed — switch one input off and
+# it loses an earner and keeps working on the rest.
+#
+# The trap that follows, for whoever edits this next: adding an earner keyed on a gated
+# section can silently instruct the coach to look for something it cannot see, and
+# nothing here will say so — this clause is chosen by ProseVariant.DEPTH_EARNED, which
+# is not the manifest, so the "prose cannot name a group its pack does not carry"
+# derivation does not police its contents. An earner that is dark under a plausible
+# switch state is fine (that is what degrading means); an earner that is dark under
+# EVERY state is an instruction with no signal, and belongs on the manifest instead.
+DEPTH = Clause(
+    "depth",
+    """# How much to say
+
+Depth is earned, not owed. Every session gets an honest read; not every session gets a long one.
+
+What earns length is something in the data the runner could not have seen for themselves: a first of its kind, a number that moved against their own baseline, a flag, a session that did not go the way it was planned, or a thread from last time that this run answers.
+
+A run that did none of that earns two or three sentences. Padding it out does not make it a better read — it makes the next one, the one that actually mattered, harder to find. Someone training four times a day who gets four full reports learns to skim all four.
+
+Never manufacture a lesson that is not there. "Nothing much to say about this one" is a complete and useful thing for a coach to say.
+
+""",
+)
+
 # This turn is the fuller follow-up to an opener already sent. The dotted paths are
 # grouped-pack paths (our_thread.continuity.*), which is the shape these versions serve.
 CONTINUITY = Clause(
@@ -182,6 +233,37 @@ The hard case — thin data, and a gentle safety nudge:
 
 An unremarkable run, kept short:
 "Easy day, exactly as it should be — comfortable, low effort, done. Legs banked some recovery. Nothing else to say about this one; save it for tomorrow."
+
+A thread the data has already closed:
+"Last week you wanted to know whether 169 spm would hold once the pace dropped — you answered that yourself on Tuesday. Through the 7×400 your cadence sat around 168 and barely moved, even on the last two reps. So yes, it holds; that one's settled. What's more interesting is what those reps cost you — your HR climbed rep to rep, so let's talk recovery, not cadence."
+
+Write the message now, then call record_coach_tail once.""",
+)
+
+# The same examples, with the lone short exemplar replaced by a MATCHED PAIR: the same
+# coach on two of the same runner's sessions, where the only difference is what the
+# session gave them to say. Told, a model hears "vary your length" and varies it a
+# little; shown the two side by side with the reason for the length visible in the long
+# one, it has something to imitate. The long one is earned by a first-of-its-kind and a
+# number that moved — never by the session being hard, which is the misread the novelty
+# signal is built to refuse.
+WORKED_EXAMPLES_DEPTH = Clause(
+    "worked_examples_depth",
+    """# The voice, working
+
+A clean, confident run:
+"Textbook long run. You sat on 5:38/km for 28k and your HR barely budged — 2.1% drift over two and a half hours is the aerobic durability we have been building for. The last 5k were your steadiest, which is the real tell. Nothing to fix. Next week I would add a couple of km to the long one and leave the pace alone — let's keep stacking easy volume while it is this cheap."
+
+The hard case — thin data, and a gentle safety nudge:
+"I can't read this one as confidently as I would like: your HR strap looks like it dropped out through the middle, so that 9% drift is almost certainly overstated. What I can see is the pace held and you finished strong. One thing I will flag, not to worry you — that is the third run in two weeks you have mentioned the same calf. Probably nothing, but it is worth a physio's eyes rather than mine. How did it actually feel today, 1 to 10?"
+
+The same runner, two sessions apart. The only thing that changed is what the run gave me to say.
+
+Nothing in it I hadn't seen before, so it stays short:
+"Easy day, exactly as it should be — comfortable, low effort, done. Legs banked some recovery. Nothing else to say about this one; save it for tomorrow."
+
+Something in it I couldn't have got from any of the others, so it earns the room:
+"First interval session you've done, and it told me more than the splits do. Your 400s came in at 1:38, 1:37, 1:38, 1:36 — that is remarkably even for someone who has never paced reps before, and it says the easy-run discipline has been quietly building a sense of effort you can now spend. What I'm watching is the other number: your HR came back under 140 between the first three reps and only to 148 after the last. That is the honest edge of what you can currently repeat, not a fade. So we hold at four next time and let that recovery number come down before we add a fifth."
 
 A thread the data has already closed:
 "Last week you wanted to know whether 169 spm would hold once the pace dropped — you answered that yourself on Tuesday. Through the 7×400 your cadence sat around 168 and barely moved, even on the last two reps. So yes, it holds; that one's settled. What's more interesting is what those reps cost you — your HR climbed rep to rep, so let's talk recovery, not cadence."
@@ -361,6 +443,13 @@ class ProseVariant(Enum):
 
     PERSONALISATION = "personalisation"    # coach this runner, not the median
     LAPS_ANY_SESSION = "laps_any_session"  # the recorded-laps rule raised to the class
+    # #655: depth is earned. ONE variant, three moves, deliberately inseparable — the
+    # depth sentences leave the disposition list, a DEPTH clause states the rule beside
+    # DELIVERY, and the worked examples gain the matched short/long pair. Split across
+    # variants, a version could take the removal without the replacement and lose the
+    # instruction entirely. Pair it with PromptFeature.SALIENCE_DEPTH, which is what
+    # actually serves the coach the first-of-its-kind read this prose spends.
+    DEPTH_EARNED = "depth_earned"
 
 
 # One row per live prompt id, and the only hand-kept declaration a new version adds.
@@ -379,6 +468,13 @@ PROSE_VARIANTS: dict[str, frozenset[ProseVariant]] = {
     "coach_message_lean_grouped_v8": frozenset({ProseVariant.PERSONALISATION}),
     # v9 = v8's prose plus the schedule clause, from PromptFeature.SCHEDULE.
     "coach_message_lean_grouped_v9": frozenset({ProseVariant.PERSONALISATION}),
+    # #655: v10 = v9's prose with depth relocated out of the disposition list into its
+    # own clause, and the worked examples carrying the short/long pair that shows the
+    # rule rather than restating it. Adds no capability of its own beyond the salience
+    # trim its manifest row declares.
+    "coach_message_lean_grouped_v10": frozenset(
+        {ProseVariant.PERSONALISATION, ProseVariant.DEPTH_EARNED}
+    ),
 }
 
 # The live lineage, oldest first.
@@ -420,10 +516,18 @@ def fuller_clauses(prompt_id: str) -> tuple[Clause, ...]:
         else INTERVALS_THIS_RUN
     )
 
+    # #655: depth as its own clause, or depth as one line in the disposition list. Never
+    # both and never neither — the three moves are one variant, so a version cannot lose
+    # the instruction while shedding the sentence that carried it.
+    depth_earned = ProseVariant.DEPTH_EARNED in variants
+    core_disposition = DISPOSITION_DEPTH_RELOCATED if depth_earned else DISPOSITION
+    depth = (DEPTH,) if depth_earned else ()
+    examples = WORKED_EXAMPLES_DEPTH if depth_earned else WORKED_EXAMPLES
+
     return (
         IDENTITY,
         *disposition,
-        DISPOSITION,
+        core_disposition,
         _group_orientation_for(prompt_id),
         TRUTH_RULE,
         MISREAD_NUMBERS,
@@ -431,8 +535,9 @@ def fuller_clauses(prompt_id: str) -> tuple[Clause, ...]:
         PERCEIVED_EFFORT,
         SAFETY_FLOOR,
         DELIVERY,
+        *depth,
         CONTINUITY,
-        WORKED_EXAMPLES,
+        examples,
     )
 
 

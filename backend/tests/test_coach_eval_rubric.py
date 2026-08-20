@@ -27,8 +27,10 @@ from app.services.coach.eval.rubric import (
     assert_discounted_inflated_hr,
     assert_led_with_headline,
     assert_load_not_framed_as_intensity,
+    assert_depth_matched_the_session,
     assert_no_medical_overreach,
     score_report,
+    UNREMARKABLE_REPORT_WORD_CEILING,
 )
 
 
@@ -97,6 +99,12 @@ _DEFAULT_PACK_DICT = {
     "believed_facts": {"facts": []},
     "calibration": {"hr_drift": {"calibrated": False, "observed_drift_pct": None, "basis": "n/a"}, "referral": None},
     "preference_profile": {"themes": []},
+    # #655: enough history for the novelty read to mean something, and nothing
+    # first-of-its-kind about this session — the depth assertion's applicable case.
+    "salience": {
+        "novelty": {"first_of_kind": [], "has_history": True},
+        "safety_override": {"force_fuller": False, "reasons": []},
+    },
     "safety_rules": {"never_diagnose": True, "pain_severe_threshold": 7, "no_invented_facts": True},
 }
 
@@ -776,3 +784,130 @@ class TestUserMaterialsPreservedSafetySurface:
         content, pack = _known_good()
         score = score_report(content, pack)
         assert any(a.name == "user_materials_preserved_safety_surface" for a in score.assertions)
+
+
+class TestDepthMatchedTheSession:
+    """The 15th rubric assertion (#655): an unremarkable session earns an honest read,
+    not a long one.
+
+    With several sessions a day, a uniformly long write-up for every one of them buries
+    the one that mattered. This is the only assertion about a report's SHAPE, and it is
+    deliberately one-sided — it never asks a report to be longer, only to stop when the
+    session has stopped giving. Everything that could legitimately buy length makes it
+    abstain, so the branch that matters most here is NOT_APPLICABLE.
+
+    All fixtures are synthetic (trust level 5), NOT production data.
+    """
+
+    _BRIEF = "Easy day, exactly as it should be. Nothing else to say about this one."
+
+    def _long(self) -> str:
+        # Comfortably over the ceiling, and deliberately made of unremarkable filler:
+        # the assertion is about length, not about the words being wrong.
+        return " ".join(["The effort sat in the easy band and everything held steady."] * 30)
+
+    def _message(self, prose):
+        from app.schemas.coach import CoachMessageReport
+        return CoachMessageReport(message=prose, headline="Easy run", next_steps=[],
+                                  risks=[], questions=[], tail_degraded=False)
+
+    def test_brief_report_on_an_unremarkable_session_passes(self):
+        result = assert_depth_matched_the_session(self._message(self._BRIEF), _make_pack())
+        assert result.status is AssertionStatus.PASS
+        assert result.evidence["words"] <= UNREMARKABLE_REPORT_WORD_CEILING
+
+    def test_long_report_on_an_unremarkable_session_fails(self):
+        result = assert_depth_matched_the_session(self._message(self._long()), _make_pack())
+        assert result.status is AssertionStatus.FAIL
+        assert result.evidence["words"] > UNREMARKABLE_REPORT_WORD_CEILING
+
+    def test_the_ceiling_is_what_decides_it(self):
+        """Sensitivity: the same pack, the same shape, only the length changes. If this
+        pair ever agreed, the assertion would be reading something other than length."""
+        pack = _make_pack()
+        at = self._message(" ".join(["word"] * UNREMARKABLE_REPORT_WORD_CEILING))
+        over = self._message(" ".join(["word"] * (UNREMARKABLE_REPORT_WORD_CEILING + 1)))
+        assert assert_depth_matched_the_session(at, pack).status is AssertionStatus.PASS
+        assert assert_depth_matched_the_session(over, pack).status is AssertionStatus.FAIL
+
+    def test_abstains_when_the_pack_carries_no_salience_section(self):
+        """COACH_SALIENCE_ENABLED=false drops the section outright. An unknown novelty
+        read is not evidence of an unremarkable run, so this must abstain rather than
+        call every report over-long."""
+        pack = _make_pack()
+        pack.salience = None
+        result = assert_depth_matched_the_session(self._message(self._long()), pack)
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_abstains_while_the_novelty_read_is_still_abstaining(self):
+        result = assert_depth_matched_the_session(
+            self._message(self._long()),
+            _make_pack(salience={"novelty": {"first_of_kind": [], "has_history": False}}),
+        )
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_abstains_on_a_first_of_its_kind(self):
+        result = assert_depth_matched_the_session(
+            self._message(self._long()),
+            _make_pack(salience={
+                "novelty": {"first_of_kind": ["first_interval_session"], "has_history": True},
+            }),
+        )
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+        assert result.evidence["first_of_kind"] == ["first_interval_session"]
+
+    def test_abstains_on_a_risk_flag(self):
+        result = assert_depth_matched_the_session(
+            self._message(self._long()), _make_pack(metrics={"flags": ["hr_drift_high"]})
+        )
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_abstains_when_a_referral_fired(self):
+        result = assert_depth_matched_the_session(
+            self._message(self._long()),
+            _make_pack(calibration={"referral": {
+                "nudge": "Consider a check-in with a healthcare professional.",
+                "basis": "illness_or_extreme_fatigue",
+            }}),
+        )
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_abstains_when_a_prior_commitment_is_awaiting_an_answer(self):
+        result = assert_depth_matched_the_session(
+            self._message(self._long()),
+            _make_pack(adherence={
+                "prior_report_date": "2026-02-08T10:00:00+00:00",
+                "outcomes": [{
+                    "prior_action": "Add a long run",
+                    "theme": "add_long_run",
+                    "label": "acted_on",
+                    "comparable_activity_date": "2026-02-12T10:00:00+00:00",
+                    "basis": "a comparable run since",
+                    "overridden": False,
+                }],
+            }),
+        )
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_scores_the_legacy_structured_shape_too(self):
+        """The rubric covers both output shapes; a structured report has no single prose
+        field, so its whole scoreable surface stands in for one."""
+        brief = _make_content(
+            thesis="Easy day.",
+            lead_argument=CoachTakeaway(text="Nothing to fix."),
+            key_takeaways=[CoachTakeaway(text="Done.")],
+            next_steps=[CoachNextStep(action="Rest", details="sleep", why="recovery")],
+        )
+        assert assert_depth_matched_the_session(
+            brief, _make_pack()
+        ).status is AssertionStatus.PASS
+        wordy = _make_content(thesis=self._long())
+        assert assert_depth_matched_the_session(
+            wordy, _make_pack()
+        ).status is AssertionStatus.FAIL
+
+    def test_registered_in_the_rubric(self):
+        names = [fn.__name__ for fn in ASSERTIONS]
+        assert "assert_depth_matched_the_session" in names
+        score = score_report(self._message(self._BRIEF), _make_pack())
+        assert any(a.name == "depth_matched_the_session" for a in score.assertions)

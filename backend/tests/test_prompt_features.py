@@ -115,6 +115,9 @@ def test_fullest_message_prompt_is_the_max_capability_id():
         F.READINESS, F.RECENT_WEEKS, F.TRAINING_HISTORY_2WK,
         F.INTENSITY_READ, F.INTENSITY_MIX, F.METRICS_COACH_FRAMED, F.SALIENCE_DROPPED,
         F.PACK_COACH_VIEW,
+        # #655 adds SALIENCE_DEPTH, the mirror of SALIENCE_DROPPED: it re-admits the same
+        # section to the view, trimmed. Also view-only, so also non-additive.
+        F.SALIENCE_DEPTH,
         # #800 relocated the grouped-serialization flag into the manifest; like the three
         # view flags above it is presentation-only (the same sections, re-nested), so it
         # is non-additive.

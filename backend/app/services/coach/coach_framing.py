@@ -35,6 +35,7 @@ from app.services.coach import coach_units as u
 from app.services.coach.prompts import (
     is_metrics_coach_framed_prompt,
     is_pack_coach_view_prompt,
+    is_salience_depth_prompt,
     is_salience_dropped_prompt,
 )
 
@@ -430,16 +431,45 @@ def _drop_empty_our_thread(pack: Dict[str, Any]) -> None:
         pack.pop("our_thread", None)
 
 
+def _salience_trimmed_to_novelty(view: Dict[str, Any]) -> Dict[str, Any]:
+    """#655: return `view` with `salience` narrowed to its `novelty` sub-field.
+
+    The nested-drop idiom (`profile.body`, `corpus.user_materials`): a section stays,
+    a sub-field it should not be handed goes, and an already-absent key is left absent
+    rather than written back as an empty shell. What goes is `safety_override`, whose
+    `force_fuller` is a routing bit about whether a SECOND turn fires — meaningless on
+    the turn that is already the fuller one, and read by a model as "this one is
+    serious". A salience section left holding nothing at all is dropped whole, so the
+    coach is never sent to an empty room (the `_drop_empty_our_thread` rule)."""
+    salience = view.get("salience")
+    if not isinstance(salience, dict):
+        return view
+    novelty = salience.get("novelty")
+    trimmed = {"novelty": novelty} if novelty is not None else None
+    out = {k: v for k, v in view.items() if k != "salience"}
+    if trimmed is not None:
+        out["salience"] = trimmed
+    return out
+
+
 def coach_llm_view(pack_dict: Dict[str, Any], prompt_id: Optional[str], *, mode: str = "fuller") -> Dict[str, Any]:
     """The single outgoing-LLM view of the pack, shared by the report and chat seams.
 
     Composes the gated one-way transforms in order: frame the leaves (Slice 4), apply the
-    completed coach view (Slice 5), then drop the fuller-only `salience` routing section.
+    completed coach view (Slice 5), then settle what the FULLER turn sees of `salience` —
+    dropped whole (Slice 5), or kept and trimmed to `novelty` (#655). The two flags are
+    mutually exclusive by declaration, and the branch is written `elif` so a version that
+    somehow carried both would still resolve to one answer rather than to branch order.
     Every step is a no-op for a prompt that does not carry its gate, so the flat/prior packs
-    are byte-identical. Never mutates `pack_dict`."""
+    are byte-identical. The opener view is untouched by either flag: the opener prose reads
+    `salience.novelty` and its scheduling decision reads `safety_override`, so it needs the
+    whole section. Never mutates `pack_dict`."""
     view = frame_pack(pack_dict) if is_metrics_coach_framed_prompt(prompt_id) else pack_dict
     if is_pack_coach_view_prompt(prompt_id):
         view = refine_coach_view(view)
-    if mode != "opener" and is_salience_dropped_prompt(prompt_id) and "salience" in view:
-        view = {k: v for k, v in view.items() if k != "salience"}
+    if mode != "opener" and "salience" in view:
+        if is_salience_depth_prompt(prompt_id):
+            view = _salience_trimmed_to_novelty(view)
+        elif is_salience_dropped_prompt(prompt_id):
+            view = {k: v for k, v in view.items() if k != "salience"}
     return view
