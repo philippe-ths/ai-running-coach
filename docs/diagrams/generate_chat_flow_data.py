@@ -52,11 +52,43 @@ TARGET = Path(__file__).parent / "coach-chat-nodes.js"
 # Verified against Railway 2026-08-12. A literal here goes stale silently, which
 # is the failure #841 fixed in the sibling generator — so when this diverges from
 # the live prompt, the capture is of a configuration production does not run.
-PROD_PROMPT_ID = os.environ.get("PROMPT_ID", "coach_message_lean_grouped_v9")
 CAPTURE_CONFIG = os.environ.get("CHAT_CAPTURE_CONFIG", "prod")
 
 
 _ENV_EXAMPLE = Path(__file__).resolve().parents[2] / "backend" / ".env.example"
+
+
+def _prod_prompt_id() -> str:
+    """The prod prompt id, read from .env.example -- never a literal.
+
+    This was a hardcoded default, and it rotted the moment prod moved: a run
+    with the correct id in the environment was silently forced BACK to the
+    stale literal, producing a capture of a prompt production had stopped
+    running, with the meta cheerfully reporting `prod-pinned`. The sibling
+    generator carries the same warning in prose for the same reason -- its id
+    "sat at grouped_v5 while prod ran grouped_v9".
+
+    Read from the same file `_prod_flag_contract` already reads and the drift
+    guard already checks, so pinning here and checking there cannot disagree.
+    `PROMPT_ID` still overrides, for capturing a version that is not yet live.
+    """
+    override = os.environ.get("PROMPT_ID")
+    if override:
+        return override
+    if _ENV_EXAMPLE.is_file():
+        found = re.search(
+            r"^COACH_PROMPT_ID=([A-Za-z0-9_]+)", _ENV_EXAMPLE.read_text(), re.M
+        )
+        if found:
+            return found.group(1)
+    raise RuntimeError(
+        "no prod COACH_PROMPT_ID: backend/.env.example is missing or does not "
+        "declare one, and capturing under a guessed prompt is how this file "
+        "went stale before. Set PROMPT_ID explicitly if that is intended."
+    )
+
+
+PROD_PROMPT_ID = _prod_prompt_id()
 
 
 def _prod_flag_contract() -> dict:
