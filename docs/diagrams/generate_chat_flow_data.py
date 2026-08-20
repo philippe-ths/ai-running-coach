@@ -630,6 +630,9 @@ def _capture_thread(db, user, thread, chat_mod_ref) -> dict:
             # plan. It was missing here while the turn-level capture had it, so a
             # selected conversation showed no schedule at all.
             "schedule": sections.get("schedule"),
+            # #859, as in _capture_assembled above: the running norm and the
+            # ceiling a settled block is judged against.
+            "running_norm": sections.get("running_norm"),
             "anchor_block": anchor_block,
             "voice_block": voice_block,
             "cross_thread_block": cross_block,
@@ -737,6 +740,11 @@ def _capture_assembled() -> dict:
                 # itself what the coach is told. Absent only when
                 # COACH_SCHEDULE_ENABLED is off.
                 "schedule": sections.get("schedule"),
+                # #859. The runner's own typical running week and the ceiling it
+                # implies — the number a block settled in this conversation will
+                # be measured against when it is written. Same key presence rule
+                # as the schedule above: absent only when the switch is off.
+                "running_norm": sections.get("running_norm"),
                 "anchor_block": anchor_block,
                 "voice_block": voice_block,
                 "cross_thread_block": cross_block,

@@ -147,17 +147,31 @@ def render_voice_character(voice: VoiceProfile) -> str:
     # hard one. Everything here is other runs and other runners: the register is
     # yours to match, the content never is.
     lines.append("")
-    lines.append("How you sound delivering GOOD news (match the register, never the content):")
+    lines.append(
+        "How you sound delivering GOOD news (match the register, never the content — "
+        "every figure below belongs to somebody else's run, and reusing one is the "
+        "single most common way a re-voicing gets thrown away):"
+    )
     lines += [_bullet(p.good) for p in active]
     lines.append("")
     lines.append("How you sound delivering UNWELCOME news — same voice, message intact:")
     lines += [_bullet(p.bad) for p in active]
 
-    if voice.preset is not None and voice.preset.example_messages:
+    # The preset pair is grouped by situation for the same reason the dial demos
+    # above are: a flat list leaves the model to guess which sample was the hard
+    # one, and the hard one is the whole point.
+    if voice.preset is not None:
         lines.append("")
-        lines.append(f"How {voice.preset.name} sounds over a whole report:")
-        for msg in voice.preset.example_messages:
-            lines.append(f'- "{msg}"')
+        lines.append(
+            f"How {voice.preset.name} sounds over a whole report when the news is GOOD:"
+        )
+        lines.append(_bullet(voice.preset.example_good))
+        lines.append("")
+        lines.append(
+            f"How {voice.preset.name} sounds over a whole report when the news is "
+            "UNWELCOME — same voice, verdict intact:"
+        )
+        lines.append(_bullet(voice.preset.example_bad))
 
     if voice.freetext:
         lines.append(_render_freetext(voice.freetext))
@@ -228,11 +242,20 @@ class RewriteOutcome:
     latency is felt, and it has only ever been asserted rather than measured.
     A log line could not answer it -- production drops the body of every log
     record that carries a logger name -- so it is stored, not logged.
+
+    `rejected_text` is the rewrite a mechanical check REFUSED, kept so a human
+    tuning the voices can read what actually tripped the gate (#826). Nothing
+    serves it and nothing stores it: a refused rewrite is not a report, and the
+    runner reads the baseline exactly as before. Without it a rejection is a
+    reason string with no body, and "is this check right, or is this character
+    over the line?" is unanswerable -- which matters because a rejected rewrite
+    silently costs the runner their voice.
     """
 
     text: Optional[str]
     reason: str
     duration_ms: Optional[int] = None
+    rejected_text: Optional[str] = None
 
 
 APPLIED = "applied"
@@ -300,7 +323,10 @@ async def revoice_report(
             invented,
         )
         return RewriteOutcome(
-            None, f"invented_numbers:{','.join(invented[:3])}", elapsed
+            None,
+            f"invented_numbers:{','.join(invented[:3])}",
+            elapsed,
+            rejected_text=voiced,
         )
 
     violations = validate(voiced)
@@ -309,6 +335,8 @@ async def revoice_report(
         logger.warning(
             "voice_rewrite violated policy %s; serving the baseline", rules
         )
-        return RewriteOutcome(None, f"policy:{','.join(rules[:3])}", elapsed)
+        return RewriteOutcome(
+            None, f"policy:{','.join(rules[:3])}", elapsed, rejected_text=voiced
+        )
 
     return RewriteOutcome(voiced, APPLIED, elapsed)

@@ -77,7 +77,7 @@ class TestVoiceResolution:
         assert v.is_default is False
         assert v.preset is PRESETS["roast"]
         assert v.dials == PRESETS["roast"].dials
-        assert len(v.preset.example_messages) >= 1
+        assert v.preset.example_good and v.preset.example_bad
 
     def test_nudge_overrides_one_dial_keeps_preset_dna(self):
         # Pick The Analyst then nudge warmth up; only warmth changes.
@@ -112,8 +112,40 @@ class TestVoiceResolution:
         for preset in PRESETS.values():
             for _axis, value in preset.dials.as_ordered():
                 assert 1 <= value <= 5
-            assert 1 <= len(preset.example_messages) <= 2
             assert preset.name and preset.flavour
+
+    def test_every_character_shows_itself_delivering_bad_news(self):
+        """#827: an affirming-only character cannot ship.
+
+        Measured across 11 generations under the pre-ADR-0030 architecture, the
+        two characters whose whole-report examples were all affirming were
+        exactly the two that soft-pedalled a detraining verdict. The rewrite
+        architecture means an example can no longer change a verdict, but the
+        register still pulls towards praise, so the pair is required by the type
+        -- the `DialPosition` precedent -- and this guards that the required
+        halves are real text rather than a placeholder satisfying the signature.
+        """
+        for key, preset in PRESETS.items():
+            assert preset.example_good.strip(), f"{key} has no welcome-news example"
+            assert preset.example_bad.strip(), f"{key} has no unwelcome-news example"
+            assert preset.example_good != preset.example_bad, key
+            # The pair is what the renderers read, in the order a reader meets them.
+            assert preset.example_messages == (preset.example_good, preset.example_bad)
+
+    def test_every_dial_position_shows_both_sides(self):
+        """The same guard one level down (#827).
+
+        `DialPosition` requires good/bad positionally, which is what stopped this
+        gap recurring at the position level -- but nothing checked the halves were
+        non-empty, so a placeholder would have satisfied the signature.
+        """
+        for axis in DIAL_AXES:
+            assert len(axis.positions) == 5, axis.key
+            for value, position in enumerate(axis.positions, start=1):
+                where = f"{axis.key} {value}"
+                assert position.disposition.strip(), where
+                assert position.good.strip(), where
+                assert position.bad.strip(), where
 
 
 # ---------------------------------------------------------------------------
@@ -169,8 +201,11 @@ class TestVoiceComposition:
         assert "## YOUR VOICE FOR THIS RUNNER" in block
         assert PRESETS["roast"].name in block
         # an example message substring is present (the load-bearing steering ingredient)
-        snippet = PRESETS["roast"].example_messages[0][:40]
-        assert snippet in block
+        assert PRESETS["roast"].example_good[:40] in block
+        # #827: the unwelcome-news half reaches the conversational turn too, and
+        # is labelled as such rather than sitting anonymously in a numbered list.
+        assert PRESETS["roast"].example_bad[:40] in block
+        assert "UNWELCOME NEWS:" in block
         # every dial axis is rendered with its pole labels
         for axis in DIAL_AXES:
             assert axis.low_pole in block and axis.high_pole in block

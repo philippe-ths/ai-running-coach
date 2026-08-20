@@ -297,6 +297,11 @@ class ProbeResult:
     voiced: Optional[str]
     duration_ms: Optional[int]
     checks: dict[str, tuple[str, str]] = field(default_factory=dict)
+    # The rewrite a mechanical check refused (#826). Never served, never stored on
+    # a report -- carried here only so the human reading this probe can see what
+    # tripped the gate. A rejection with no body cannot be judged, and judging it
+    # is the whole reason the probe exists.
+    rejected_text: Optional[str] = None
 
     @property
     def applied(self) -> bool:
@@ -416,6 +421,7 @@ async def probe(
                 outcome_reason=outcome.reason,
                 voiced=outcome.text,
                 duration_ms=outcome.duration_ms,
+                rejected_text=outcome.rejected_text,
             )
             if outcome.text:
                 result.checks = _run_checks(baseline, outcome.text)
@@ -446,6 +452,7 @@ def to_json(results: Sequence[ProbeResult], *, missing: Sequence[str] = ()) -> d
                 "baseline_inherited_violations": inherited_violations(r.baseline),
                 "baseline": r.baseline.text,
                 "voiced": r.voiced,
+                "rejected_text": r.rejected_text,
             }
             for r in results
         ],
@@ -487,6 +494,15 @@ def render_markdown(results: Sequence[ProbeResult], *, missing: Sequence[str] = 
             lines += [f"### {r.voice}", ""]
             if not r.applied:
                 lines += [f"**not applied** — `{r.outcome_reason}`", ""]
+                if r.rejected_text:
+                    lines += [
+                        "The runner read the baseline above. This is what the gate "
+                        "refused — printed so the register can be judged, never "
+                        "served:",
+                        "",
+                        "> " + r.rejected_text.replace("\n", "\n> "),
+                        "",
+                    ]
                 continue
             checks = " · ".join(
                 f"{name}: **{status}**" for name, (status, _) in sorted(r.checks.items())

@@ -298,6 +298,51 @@ def test_the_node_check_fails_when_a_baseline_section_has_no_builder_node():
     assert "['schedule']" in problems[0]
 
 
+def test_the_node_check_fails_when_a_drawn_section_has_no_downstream_edge():
+    """SENSITIVITY, against the REAL defect this check was written for (#859).
+
+    A drawn node is not a wired one. `d_running_norm` was drawn, its section was
+    declared, node coverage passed in both directions, the drift guard passed and the
+    suite passed — and the rendered page said "END OF CHAIN — nothing downstream
+    consumes this" about a section the coach reads on every turn. Nothing in CI looked
+    at whether an edge existed. This is that missing question.
+    """
+    nodes = _real_chat_nodes()
+    wired = [n for n in nodes if n["section"]]
+    assert wired, "no section-bound builder nodes; pick another fixture"
+    target = wired[0]["id"]
+    # the diagram as it was on arrival: the node present, nothing consuming it
+    orphaned = [
+        {**n, "from": [src for src in n["from"] if src != target]} for n in nodes
+    ]
+
+    problems = _chat_node_problems(
+        _declared_chat_surface(),
+        _declared_baseline_sections(),
+        _declared_screen_builders(),
+        orphaned,
+    )
+
+    assert problems, "the edge check did not notice a section drawn as a dead end"
+    assert any(target in p and "no other node consumes" in p for p in problems)
+
+
+def test_the_edge_check_fails_loudly_when_no_edge_can_be_parsed():
+    """The check reads `from:[...]` out of the topology by regex. A parser that stopped
+    matching would make every node look consumed by nothing — or, worse, make the
+    orphan set empty and the check unfailable. Fail loud instead."""
+    nodes = [{**n, "from": []} for n in _real_chat_nodes()]
+
+    problems = _chat_node_problems(
+        _declared_chat_surface(),
+        _declared_baseline_sections(),
+        _declared_screen_builders(),
+        nodes,
+    )
+
+    assert any("PARSER BROKE" in p and "from:[...]" in p for p in problems)
+
+
 def test_the_node_check_fails_when_a_prompt_slot_has_no_node():
     """SENSITIVITY: a slot added to THREAD_SYSTEM_TEMPLATE is a new block of prose the
     coach reads, and the diagram numbers its slot nodes off that template."""
@@ -325,7 +370,12 @@ def test_the_baseline_sections_are_read_off_the_builder_that_assembles_them():
     """There is no constant to import — the keys are string literals in
     thread_turn._build_baseline_sections — so this pins that the static read finds them,
     including #856's schedule."""
-    assert set(_declared_baseline_sections()) == {"memory", "readiness", "schedule"}
+    assert set(_declared_baseline_sections()) == {
+        "memory",
+        "readiness",
+        "schedule",
+        "running_norm",
+    }
 
 
 def test_the_chat_capture_was_taken_under_the_documented_prod_config():

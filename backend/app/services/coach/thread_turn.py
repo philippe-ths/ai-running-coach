@@ -167,6 +167,13 @@ def _build_baseline_sections(db: Session, user: User) -> dict:
     # applied at `turn.relationship_for_user` for both report and conversation.
     if settings.COACH_SCHEDULE_ENABLED:
         sections["schedule"] = _schedule_section(db, user)
+        # #859. The coach that SETTLES a block in conversation gets the same
+        # number the gate will measure that block against. It had the plan but
+        # not the runner's own running volume, so it could agree to a block the
+        # drafting gate then rejected outright — and the runner read one generic
+        # sentence about it. Same switch as the plan above: this is a
+        # schedule-shaped fact and goes dark with the rest of the schedule input.
+        sections["running_norm"] = _running_norm_section(db, user)
     return sections
 
 
@@ -179,6 +186,41 @@ def _schedule_section(db: Session, user: User) -> Optional[dict]:
     except Exception:  # noqa: BLE001 — a schedule hiccup never blocks a reply
         logger.exception("thread schedule section failed for user %s", user.id)
         return None
+
+
+def _running_norm_section(db: Session, user: User) -> Optional[dict]:
+    """The runner's own typical running week, and the ceiling it implies (#859).
+
+    The same `running_norm_weekly_m` the drafting context and the free-mode gauge
+    read, over the same projection the draft itself uses, so "typical" means one
+    thing whether the coach is talking about a week or writing one. The ceiling
+    comes from `volume_ceilings`, which the coherence gate also calls: the number
+    named in conversation IS the number a drafted block is judged against.
+
+    None when there is too little history for a norm — the gate abstains there
+    too, so there is no bound to state and inventing one would put a population
+    figure in front of the coach.
+    """
+    try:
+        from datetime import date
+
+        from app.services.schedule.draft import fetch_draft_facts
+        from app.services.schedule.norms import running_norm_weekly_m
+        from app.services.schedule.plan_validator import volume_ceilings
+
+        today = date.today()
+        norm = running_norm_weekly_m(fetch_draft_facts(db, user, today), today)
+        ceilings = volume_ceilings(norm)
+    except Exception:  # noqa: BLE001 — a norm hiccup never blocks a reply
+        logger.exception("thread running-norm section failed for user %s", user.id)
+        return None
+    if not norm or ceilings is None:
+        return None
+    return {
+        "typical_weekly_running_km": round(norm / 1000, 1),
+        "max_weekly_running_km": round(ceilings[0] / 1000),
+        "max_sketched_weekly_running_km": round(ceilings[1] / 1000),
+    }
 
 
 def _render_baseline_block(sections: dict) -> str:
@@ -195,6 +237,8 @@ def _render_baseline_block(sections: dict) -> str:
         )
     if "schedule" in sections:
         parts.append(_render_schedule_block(sections["schedule"]))
+    if sections.get("running_norm"):
+        parts.append(_render_running_norm_block(sections["running_norm"]))
     return "\n".join(parts) + ("\n" if parts else "")
 
 
@@ -215,6 +259,27 @@ def _render_schedule_block(schedule: Optional[dict]) -> str:
         "\nTHEIR SCHEDULE (this app's Schedule screen — yours to write; what was "
         "ASKED FOR, never a compliance score):\n"
         + json.dumps(schedule, default=str)
+    )
+
+
+def _render_running_norm_block(norm: dict) -> str:
+    """Their typical running week, and the outer bound on a block (#859).
+
+    Said as a rejection threshold rather than as a number, because that is what
+    it is: handed "38 km" beside a typical 19, a model reads the larger figure as
+    the one to aim at. The North Star's second question — whatever is ambiguous
+    will eventually be read wrong — applied to a limit.
+    """
+    return (
+        "\nTHEIR TYPICAL RUNNING WEEK (their own recent weeks, the figure a block "
+        "you agree with them is measured against):\n"
+        f"{norm['typical_weekly_running_km']} km of running in a typical week. A "
+        f"block you settle here is written into their schedule automatically, and "
+        f"a week above {norm['max_weekly_running_km']} km of running is rejected "
+        f"there as a jump their history cannot support — that is a limit, not a "
+        f"target, and most weeks should sit near their typical. A week further "
+        f"out that is only sketched may reach "
+        f"{norm['max_sketched_weekly_running_km']} km."
     )
 
 
