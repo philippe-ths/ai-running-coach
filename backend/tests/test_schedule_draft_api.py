@@ -71,7 +71,14 @@ def _seed_user(db) -> User:
     return user
 
 
-def _seed_plan(db, user: User, *, status: str, made_at: datetime) -> TrainingPlan:
+def _seed_plan(
+    db,
+    user: User,
+    *,
+    status: str,
+    made_at: datetime,
+    failure_kind: str | None = None,
+) -> TrainingPlan:
     """`created_at` is explicit because `latest_plan` orders on it alone and the
     column's default has one-second resolution on the test database."""
     plan = TrainingPlan(
@@ -80,6 +87,7 @@ def _seed_plan(db, user: User, *, status: str, made_at: datetime) -> TrainingPla
         rules=[],
         week_shapes=[],
         created_at=made_at,
+        failure_kind=failure_kind,
     )
     db.add(plan)
     db.commit()
@@ -227,14 +235,28 @@ def test_each_status_reports_its_own_runner_facing_message(db, client, status, e
     assert body["message"] == expected
 
 
+@pytest.mark.parametrize(
+    "failure_kind",
+    # Every category, plus the null a row written before the column existed
+    # carries. The property has to hold for all of them, not just the default:
+    # each new category is a new sentence, and a new sentence is a new chance to
+    # put the machinery in front of the runner.
+    sorted(store.FAILURE_KINDS) + [None],
+)
 def test_the_failure_the_runner_reads_carries_none_of_the_validators_machinery(
-    db, client
+    db, client, failure_kind
 ):
     """The reason a draft was rejected is internal ("week 2026-08-17 cannot satisfy
     its own rule ..."). What the runner is owed is a plain sentence, and the fact
     that nothing they had has changed."""
     user = _seed_user(db)
-    _seed_plan(db, user, status="failed", made_at=datetime(2026, 8, 9, 9, 0))
+    _seed_plan(
+        db,
+        user,
+        status="failed",
+        made_at=datetime(2026, 8, 9, 9, 0),
+        failure_kind=failure_kind,
+    )
     _act_as(user)
 
     message = client.get("/api/schedule/draft").json()["message"]
@@ -250,6 +272,68 @@ def test_the_failure_the_runner_reads_carries_none_of_the_validators_machinery(
     ):
         assert internal not in message
     assert "Nothing has changed" in message
+
+
+def test_a_plan_that_ramped_too_hard_says_so_and_names_the_next_move(db, client):
+    """#859. Every failure arrived as one sentence, so a runner whose coach had
+    ramped far past their history was told to "ask again" — which produces the
+    same block and the same rejection. They are owed the move that actually
+    changes the outcome."""
+    user = _seed_user(db)
+    _seed_plan(
+        db,
+        user,
+        status="failed",
+        made_at=datetime(2026, 8, 9, 9, 0),
+        failure_kind=store.FAILURE_TOO_BIG_A_JUMP,
+    )
+    _act_as(user)
+
+    message = client.get("/api/schedule/draft").json()["message"]
+
+    assert message != _generic_failure_message()
+    assert "gentler" in message
+    # In the runner's own terms: what happened, and what they can do about it.
+    assert "climbs much faster than your recent weeks" in message
+    assert "spread over more weeks" in message
+
+
+def _generic_failure_message() -> str:
+    from app.api.schedule import _DRAFT_FAILURE_MESSAGES
+
+    return _DRAFT_FAILURE_MESSAGES[store.FAILURE_UNKNOWN]
+
+
+def test_every_category_the_writer_can_store_has_a_sentence_of_its_own(db, client):
+    """A category with no message is a lookup miss, which would serve the generic
+    sentence and quietly undo the fix. The vocabulary is closed precisely so this
+    can be checked."""
+    from app.api.schedule import _DRAFT_FAILURE_MESSAGES
+
+    assert set(_DRAFT_FAILURE_MESSAGES) == set(store.FAILURE_KINDS)
+    # And no two categories share wording, or the distinction buys nothing.
+    assert len(set(_DRAFT_FAILURE_MESSAGES.values())) == len(store.FAILURE_KINDS)
+
+
+def test_the_runner_facing_read_gains_no_channel_for_the_reason(db, client):
+    """The message stays the WHOLE runner-facing surface. The category chooses
+    which sentence and never travels itself: a client handed a code would
+    eventually render it, and `DraftStatusRead` forbids extras so this is a
+    property of the schema rather than of this endpoint's care."""
+    user = _seed_user(db)
+    _seed_plan(
+        db,
+        user,
+        status="failed",
+        made_at=datetime(2026, 8, 9, 9, 0),
+        failure_kind=store.FAILURE_TOO_BIG_A_JUMP,
+    )
+    _act_as(user)
+
+    body = client.get("/api/schedule/draft").json()
+
+    assert set(body) == {"status", "plan_id", "generated_at", "message"}
+    assert store.FAILURE_TOO_BIG_A_JUMP not in str(body)
 
 
 def test_the_poll_reports_the_newest_plan_not_the_one_still_serving_the_week(

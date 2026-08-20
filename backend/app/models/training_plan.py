@@ -74,6 +74,18 @@ class TrainingPlan(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # Why a draft failed, as one of `store.FAILURE_KINDS`; null on every plan
+    # that did not fail (#859). A CATEGORY rather than the gate's own text: the
+    # failure prose is written to be fed back into a rewrite prompt, and putting
+    # it here would put it one `response_model` away from the runner. The
+    # category chooses which runner-facing sentence the API serves, and nothing
+    # internal travels with it.
+    #
+    # Nullable and unconstrained at the database level for the usual reason: the
+    # vocabulary is code-resident like `rules`' kinds, and an enum in the schema
+    # would make adding a category a migration rather than a line.
+    failure_kind: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
     # When this plan STOPPED being the runner's plan; null while it is active or
     # has never been active (#857). Written only by `store.activate_plan`, on the
     # rows it supersedes, and cleared on the row it activates.

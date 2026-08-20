@@ -873,6 +873,13 @@ async def test_the_prompt_states_the_constraints_the_validator_enforces():
     assert "must stay INSIDE one week" in _SYSTEM_PROMPT
     assert "A rest day is REST" in _SYSTEM_PROMPT
     assert "a distance, a duration, or rep structure" in _SYSTEM_PROMPT
+    # The volume ceiling (#859) was the one gate stated nowhere: a block the
+    # runner had already settled in conversation could be rejected against a
+    # number the coach was never shown, and the runner read one generic sentence
+    # about it. The prompt names the CLASS; the context carries the runner's own
+    # number, since a ceiling is meaningless without whose history it came from.
+    assert "ceiling" in _SYSTEM_PROMPT
+    assert "It is a limit, not a target." in _SYSTEM_PROMPT
 
 
 async def test_the_context_tells_the_coach_to_build_backwards_from_the_race(db):
@@ -935,3 +942,297 @@ async def test_the_coach_is_told_not_to_stop_dead_at_the_race():
 
     assert "do not stop dead at it" in _SYSTEM_PROMPT
     assert "recovery" in _SYSTEM_PROMPT
+
+
+# --- the volume ceiling is stated, not only enforced (#859) -----------------
+
+
+def _ceiling_km(db, user) -> tuple:
+    """The two ceilings this runner's own norm implies, from their OWNERS.
+
+    Imported rather than restated: a test that wrote `2.0` here would agree with
+    a prompt that had drifted from the gate, which is the whole defect.
+    """
+    from app.services.schedule.norms import running_norm_weekly_m
+    from app.services.schedule.plan_validator import volume_ceilings
+
+    facts = query_facts(
+        db, TODAY - timedelta(days=200), TODAY + timedelta(days=1), user_id=user.id
+    )
+    norm = running_norm_weekly_m(facts, TODAY)
+    concrete, sketched = volume_ceilings(norm)
+    return norm, concrete, sketched
+
+
+async def test_the_context_states_the_volume_ceiling_the_gate_will_enforce(db):
+    """#859. Every other gate is stated in the prompt — the rules, the sizing, the
+    rest day, the past. This one was enforced silently, so the coach could write
+    a week it had no way to know would be thrown away.
+
+    The stated number is derived from `volume_ceilings`, the function the gate
+    itself calls, so the ceiling said here IS the ceiling enforced there.
+    """
+    from app.services.schedule.draft import build_draft_context
+
+    user = _seed_user(db)
+    _seed_history(db, user)
+    _norm, concrete, sketched = _ceiling_km(db, user)
+
+    context = build_draft_context(db, user, today=TODAY, weeks=12)
+
+    assert f"above {concrete / 1000:.0f} km of committed running" in context
+    assert f"may reach {sketched / 1000:.0f} km" in context
+    # Framed as a rejection threshold, never as the number to aim at: handed a
+    # bare figure well above their typical week, a model reads it as the target.
+    assert "That is a limit, not a target" in context
+
+
+async def test_a_runner_with_no_norm_is_given_no_ceiling_at_all(db):
+    """The gate abstains without a norm, so there is nothing to state. Inventing
+    a bound would put a population figure in front of the coach on exactly the
+    runner it would serve worst."""
+    from app.services.schedule.draft import build_draft_context
+
+    user = _seed_user(db)  # no history at all
+
+    context = build_draft_context(db, user, today=TODAY, weeks=12)
+
+    assert "is rejected outright" not in context
+    assert "limit, not a target" not in context
+    assert "Not enough history" in context
+
+
+async def test_a_runner_who_trains_but_does_not_run_is_given_no_ceiling_either(db):
+    """The case the empty-history one cannot reach.
+
+    Someone who walks daily and never runs HAS a training baseline, so the
+    context's "what they actually do" section is written in full — and still has
+    no running norm, so the gate abstains. This is the runner a ceiling would be
+    invented for if the emission were keyed off having history rather than off
+    having the number the gate measures against.
+    """
+    from app.services.schedule.draft import build_draft_context
+    from app.services.schedule.norms import running_norm_weekly_m
+
+    user = _seed_user(db)
+    for offset in range(8, 92, 2):
+        _seed_activity(
+            db, user, day=TODAY - timedelta(days=offset), activity_type="Walk"
+        )
+    facts = query_facts(
+        db, TODAY - timedelta(days=200), TODAY + timedelta(days=1), user_id=user.id
+    )
+    assert running_norm_weekly_m(facts, TODAY) is None  # the gate abstains
+
+    context = build_draft_context(db, user, today=TODAY, weeks=12)
+
+    assert "Typical week, ALL activities" in context  # the section IS written
+    assert "RUNNING ONLY" not in context
+    assert "is rejected outright" not in context
+    assert "limit, not a target" not in context
+
+
+async def test_the_ceiling_the_coach_is_told_is_the_ceiling_that_rejects_it(db):
+    """The property the whole fix rests on, checked from the coach's side.
+
+    The number is READ OUT of the context the coach receives, then a week is
+    built either side of it and put through the gate. Nothing here knows the
+    multiple; if the prompt and the validator ever disagreed by a kilometre, the
+    week just under the stated ceiling would be rejected and this would fail.
+    """
+    import re
+
+    from app.services.schedule.draft import build_draft_context
+    from app.services.schedule.draft_contract import DraftedPlan, normalise
+    from app.services.schedule.norms import running_norm_weekly_m
+    from app.services.schedule.plan_validator import (
+        VOLUME_CEILING,
+        validate_drafted_plan,
+    )
+
+    user = _seed_user(db)
+    _seed_history(db, user)
+    context = build_draft_context(db, user, today=TODAY, weeks=12)
+    stated_km = float(
+        re.search(r"above ([\d.]+) km of committed running", context).group(1)
+    )
+    facts = query_facts(
+        db, TODAY - timedelta(days=200), TODAY + timedelta(days=1), user_id=user.id
+    )
+    norm = running_norm_weekly_m(facts, TODAY)
+
+    def _week_of(distance_m: float):
+        return DraftedPlan.model_validate(
+            normalise(
+                {
+                    "rules": [],
+                    "weeks": [
+                        {
+                            "week_start": TODAY.isoformat(),
+                            "sessions": [
+                                {
+                                    "window_start": TUE.isoformat(),
+                                    "window_end": TUE.isoformat(),
+                                    "intent": "long",
+                                    "discipline": "run",
+                                    "title": "Long",
+                                    "target_distance_m": distance_m,
+                                }
+                            ],
+                        }
+                    ],
+                    "sketch_weeks": [],
+                }
+            )
+        )
+
+    just_under = validate_drafted_plan(
+        _week_of(stated_km * 1000 - 1000),
+        today=TODAY,
+        norm_weekly_running_m=norm,
+        horizon_weeks=12,
+    )
+    just_over = validate_drafted_plan(
+        _week_of(stated_km * 1000 + 1000),
+        today=TODAY,
+        norm_weekly_running_m=norm,
+        horizon_weeks=12,
+    )
+
+    assert just_under.ok, just_under.failures
+    assert not just_over.ok
+    assert just_over.codes == [VOLUME_CEILING]
+
+
+# --- a failure the runner can act on knows WHICH failure it was (#859) -------
+
+
+def _over_ceiling_plan() -> dict:
+    """A week whose committed running is far past anything this runner does."""
+    return {
+        "rules": [],
+        "weeks": [
+            {
+                "week_start": TODAY.isoformat(),
+                "phase": "build",
+                "sessions": [
+                    {
+                        "window_start": TUE.isoformat(),
+                        "window_end": TUE.isoformat(),
+                        "intent": "long",
+                        "discipline": "run",
+                        "title": "Ninety kilometre Tuesday",
+                        "target_distance_m": 90000,
+                    }
+                ],
+            }
+        ],
+        "sketch_weeks": [],
+    }
+
+
+async def test_a_week_that_ramps_absurdly_is_classified_as_too_big_a_jump(
+    db, monkeypatch
+):
+    """The category is decided HERE, where the failure is known. The API cannot
+    work it out later without pattern-matching prose written for a rewrite
+    prompt — text that is deliberately free to change."""
+    user = _seed_user(db)
+    _seed_history(db, user)
+    plan = store.create_drafting_plan(db, user.id)
+    _inject(monkeypatch, _FakeClient([_over_ceiling_plan(), _over_ceiling_plan()]))
+
+    outcome = await draft_plan(db, user, plan, today=TODAY)
+
+    assert outcome.ok is False
+    assert outcome.failure_kind == store.FAILURE_TOO_BIG_A_JUMP
+
+
+async def test_a_rejection_that_is_not_about_volume_stays_unclassified(
+    db, monkeypatch
+):
+    """The code is narrow on purpose. A week whose rules cannot be arranged leaves
+    the runner with the same one move as any other failure, so it must not borrow
+    the advice written for a plan that ramped too hard."""
+    unsatisfiable = {
+        "rules": [
+            {
+                "kind": "rest_day_after",
+                "label": "A full rest day after the long run",
+                "intent": "long",
+            }
+        ],
+        "weeks": [
+            {
+                "week_start": TODAY.isoformat(),
+                "sessions": [
+                    {
+                        "window_start": TUE.isoformat(),
+                        "window_end": TUE.isoformat(),
+                        "intent": "long",
+                        "discipline": "run",
+                        "title": "Long",
+                        "target_distance_m": 10000,
+                    },
+                    {
+                        "window_start": WED.isoformat(),
+                        "window_end": WED.isoformat(),
+                        "intent": "easy",
+                        "discipline": "run",
+                        "title": "Easy",
+                        "target_distance_m": 5000,
+                    },
+                ],
+            }
+        ],
+        "sketch_weeks": [],
+    }
+    user = _seed_user(db)
+    _seed_history(db, user)
+    plan = store.create_drafting_plan(db, user.id)
+    _inject(monkeypatch, _FakeClient([unsatisfiable, unsatisfiable]))
+
+    outcome = await draft_plan(db, user, plan, today=TODAY)
+
+    assert outcome.ok is False
+    assert outcome.failure_kind == store.FAILURE_UNKNOWN
+
+
+async def test_a_coach_that_cannot_be_reached_is_its_own_category(db, monkeypatch):
+    user = _seed_user(db)
+    _seed_history(db, user)
+    plan = store.create_drafting_plan(db, user.id)
+    _inject(
+        monkeypatch,
+        _FakeClient([RuntimeError("connection reset"), RuntimeError("again")]),
+    )
+
+    outcome = await draft_plan(db, user, plan, today=TODAY)
+
+    assert outcome.ok is False
+    assert outcome.failure_kind == store.FAILURE_UNREACHABLE
+
+
+async def test_an_over_budget_runner_is_its_own_category(db, monkeypatch):
+    user = _seed_user(db)
+    plan = store.create_drafting_plan(db, user.id)
+    _inject(monkeypatch, _FakeClient([]), over_budget=True)
+
+    outcome = await draft_plan(db, user, plan, today=TODAY)
+
+    assert outcome.ok is False
+    assert outcome.failure_kind == store.FAILURE_OVER_BUDGET
+
+
+async def test_the_stored_category_is_from_the_closed_vocabulary(db):
+    """`fail_plan` records a category, never the gate's text, and never a value
+    that has no sentence behind it."""
+    user = _seed_user(db)
+    plan = store.create_drafting_plan(db, user.id)
+
+    store.fail_plan(db, plan, "week 2026-08-17 plans 90 km", kind="not_a_real_kind")
+
+    db.expire_all()
+    stored = db.query(TrainingPlan).filter(TrainingPlan.id == plan.id).one()
+    assert stored.failure_kind == store.FAILURE_UNKNOWN
+    assert "90 km" not in str(stored.__dict__)

@@ -158,21 +158,60 @@ def activate_plan(
     return plan
 
 
-def fail_plan(db: Session, plan: TrainingPlan, reason: str) -> TrainingPlan:
+# Why a draft failed, as a CLOSED vocabulary (#859). Deliberately a category and
+# never the gate's own text: the failures are written to be fed back into a
+# rewrite prompt ("week 2026-08-17 cannot satisfy its own rule ..."), and the
+# runner is owed a sentence in their own terms. The category chooses which
+# sentence; nothing internal travels with it.
+#
+# Only distinctions the runner could ACT on differently earn a member. A plan
+# that ramps too hard has a next step ("ask for a gentler build"); a coach that
+# could not be reached has another (try again shortly); an exhausted allowance
+# has a third (wait). Everything else — an off-contract answer, a week whose
+# rules cannot be arranged, a job that raised — leaves the runner with the same
+# one move, so they share `unknown` rather than multiplying near-identical prose.
+FAILURE_TOO_BIG_A_JUMP = "too_big_a_jump"
+FAILURE_UNREACHABLE = "unreachable"
+FAILURE_OVER_BUDGET = "over_budget"
+FAILURE_UNKNOWN = "unknown"
+
+FAILURE_KINDS = frozenset(
+    {
+        FAILURE_TOO_BIG_A_JUMP,
+        FAILURE_UNREACHABLE,
+        FAILURE_OVER_BUDGET,
+        FAILURE_UNKNOWN,
+    }
+)
+
+
+def fail_plan(
+    db: Session,
+    plan: TrainingPlan,
+    reason: str,
+    *,
+    kind: str = FAILURE_UNKNOWN,
+) -> TrainingPlan:
     """Mark a draft failed, visibly.
 
     A plan cannot degrade the way a report can — half a plan is worse than none,
     because the runner would act on it — so a rejected draft leaves a row saying
     so rather than a partial schedule.
 
-    The reason is LOGGED rather than stored. Validator failures are internal
-    ("week 2026-08-17 cannot satisfy its own rule ..."), and the runner is owed a
-    plain "your coach could not write a plan just now", not the machinery. If a
-    runner-facing reason is ever wanted it needs its own column and its own
-    wording, which is a deliberate change rather than a leak of this text.
+    The reason is LOGGED rather than stored, and that stays true (#859). What is
+    stored is `kind`, a category from the closed vocabulary above, and the
+    distinction is the whole point: a category is chosen deliberately and maps to
+    wording written for a runner, where the gate's text is internal and would leak
+    its machinery the moment it was displayed. Storing the category is what turns
+    one generic sentence into advice the runner can act on.
+
+    An unrecognised kind is recorded as `unknown` rather than stored: a category
+    with no sentence behind it would surface as a message-lookup miss, and the
+    fallback belongs here, next to the vocabulary, rather than at every read.
     """
-    logger.warning("schedule: draft %s failed: %s", plan.id, reason)
+    logger.warning("schedule: draft %s failed (%s): %s", plan.id, kind, reason)
     plan.status = FAILED
+    plan.failure_kind = kind if kind in FAILURE_KINDS else FAILURE_UNKNOWN
     db.commit()
     db.refresh(plan)
     return plan

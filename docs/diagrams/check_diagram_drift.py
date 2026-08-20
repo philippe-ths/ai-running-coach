@@ -1085,6 +1085,10 @@ def _chat_nodes(chat_src: str) -> list[dict[str, str]]:
         # binding the check could only run one way, and a section REMOVED from the builder
         # would leave its node drawing an input the coach no longer gets.
         section_m = re.search(r"\bsection:'([^']*)'", chunk)
+        # The node's UPSTREAM list. Edges are declared on the CONSUMER
+        # (`from:['d_schedule']` on the slot node), so the set of all `from`
+        # entries is the set of nodes something downstream actually reads.
+        from_m = re.search(r"\bfrom:\[([^\]]*)\]", chunk)
         # The same explicit binding, for the screen key whose view a resolver node draws
         # (`screen:'trends'`). Explicit for the same reason: `screen_*` prefixes the
         # resolver entry point itself as well as the per-screen builders, so an id
@@ -1096,6 +1100,7 @@ def _chat_nodes(chat_src: str) -> list[dict[str, str]]:
             "tag": tag_m.group(1) if tag_m else "",
             "section": section_m.group(1) if section_m else "",
             "screen": screen_m.group(1) if screen_m else "",
+            "from": re.findall(r"'(\w+)'", from_m.group(1)) if from_m else [],
         })
     return nodes
 
@@ -1161,6 +1166,26 @@ def _chat_node_problems(
             f"Builder nodes in {_CHAT_NODES.name} bound to baseline sections the thread turn "
             f"no longer assembles: {spurious}. The diagram draws an input the coach no "
             "longer receives. Remove the node.")
+
+    # A drawn node is not a wired one (#859). Node coverage runs both ways and still
+    # passed while `d_running_norm` sat as a dead end: it was drawn, its section was
+    # declared, and nothing asked whether anything downstream READ it — so the page
+    # said "END OF CHAIN — nothing downstream consumes this" about a section the coach
+    # reads on every turn. Every section builder feeds `{baseline_block}`, so every one
+    # of them must be named in some node's `from`.
+    consumed = {src for node in nodes for src in node["from"]}
+    if not consumed:
+        problems.append(
+            f"PARSER BROKE: no `from:[...]` edge was read out of {_CHAT_NODES.name}, so the "
+            "edge-reachability check cannot fail. Fix the parser.")
+    elif orphans := sorted(
+        node["id"] for node in nodes if node["section"] and node["id"] not in consumed
+    ):
+        problems.append(
+            f"Builder nodes in {_CHAT_NODES.name} that no other node consumes: {orphans}. "
+            "The section reaches the coach through {baseline_block}, but the diagram draws "
+            "it as a dead end. Add the node's id to the `from:[...]` of the slot node it "
+            "feeds.")
 
     # Screens that resolve a view: one resolver node each, bound by `screen:'<key>'` (#871).
     # The `screens` set is compared as names only, so a screen key moving from identity-only
