@@ -175,6 +175,34 @@ async def test_an_invented_number_serves_the_baseline():
     assert outcome.text is None
     # The reason names the offending figure, so a degrade is diagnosable later.
     assert outcome.reason.startswith("invented_numbers:") and "12" in outcome.reason
+    # #826: the refused rewrite is kept so a human tuning the voices can read what
+    # tripped the gate. A reason string with no body cannot answer "was the check
+    # right, or is this character over the line?" -- and that question is the whole
+    # point of a tuning pass, because a rejection silently costs the runner a voice
+    # they chose.
+    assert outcome.rejected_text is not None
+    assert "12 weeks" in outcome.rejected_text
+
+
+@pytest.mark.asyncio
+async def test_a_refused_rewrite_is_never_what_the_runner_reads():
+    """`rejected_text` is for the probe and for nobody else (#826).
+
+    The one thing that must stay true of a refused rewrite is that it does not
+    reach a runner. `service.py` builds the stored report from `.text` alone, so
+    this pins that the refused body is carried beside it, never in it.
+    """
+    outcome = await _revoice(
+        _voice(voice_preset="roast"),
+        "You are 12 weeks from the start line, so ramp back deliberately.",
+    )
+    assert outcome.text is None
+    assert outcome.rejected_text != outcome.text
+    # The stored trace is the reason plus the wall clock, and never the body.
+    stored = outcome.reason
+    if outcome.duration_ms is not None:
+        stored = f"{stored} in {outcome.duration_ms} ms"
+    assert outcome.rejected_text not in stored
 
 
 @pytest.mark.asyncio
@@ -186,6 +214,7 @@ async def test_a_policy_violation_serves_the_baseline():
     )
     assert outcome.text is None
     assert outcome.reason == "policy:medical_overreach"
+    assert outcome.rejected_text is not None and "ibuprofen" in outcome.rejected_text
 
 
 @pytest.mark.asyncio

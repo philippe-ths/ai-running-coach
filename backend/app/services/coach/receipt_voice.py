@@ -207,13 +207,23 @@ def validate_generated_templates(record: GeneratedReceiptTemplates) -> dict:
 def voice_fingerprint(voice: VoiceProfile) -> str:
     """A stable fingerprint of the voice INPUTS the templates were generated from, so
     a voice change is detectable and a no-op re-run is skipped. Default voice gets a
-    sentinel so we never burn a generation on the undeclared centre."""
+    sentinel so we never burn a generation on the undeclared centre.
+
+    The EXEMPLAR PROSE is part of the fingerprint, not just the dial values and the
+    preset key. A preset is a name over a body of text, and this generator reads that
+    text: the dials tell it the register and the examples show it. Hashing only the
+    key means rewriting every exemplar in the house leaves every runner on templates
+    generated from prose that no longer exists, with nothing to say so -- a runner's
+    voice changes underneath them and the staleness check reports fresh. Found by an
+    independent read of #827, which rewrote all twelve.
+    """
     if voice.is_default:
         return "default"
     payload = json.dumps(
         {
             "dials": {a.key: getattr(voice.dials, a.key) for a in DIAL_AXES},
             "preset": voice.preset.key if voice.preset else None,
+            "examples": list(voice.preset.example_messages) if voice.preset else None,
             "freetext": voice.freetext,
         },
         sort_keys=True,
