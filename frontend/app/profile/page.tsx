@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import ConnectStravaButton from '@/components/ConnectStravaButton';
 import LinkTelegramButton from '@/components/LinkTelegramButton';
 import ImportStravaHistory from '@/components/ImportStravaHistory';
@@ -11,305 +11,239 @@ import VoiceDialsPanel from '@/components/VoiceDialsPanel';
 import StanceDialsPanel from '@/components/StanceDialsPanel';
 import UserMaterialsPanel from '@/components/UserMaterialsPanel';
 import FeatureDisabledGate from '@/components/FeatureDisabledGate';
+import ProfileHub from '@/components/profile/ProfileHub';
+import SectionScreen from '@/components/profile/SectionScreen';
+import {
+  AppSection,
+  BodySection,
+  HealthSection,
+  TrainingSection,
+} from '@/components/profile/EditSections';
+import {
+  coerceField,
+  EMPTY_PROFILE_FORM,
+  ProfileForm,
+  profileFromApi,
+} from '@/components/profile/profileForm';
 import { useCoachFeatureFlags } from '@/lib/useCoachFeatureFlags';
 import { fetchFromAPI } from '@/lib/api';
 
+// #941: the profile is a hub of current values with focused screens behind each
+// row, not one long form. Which screen is showing is a `?s=` query param on this
+// same route, so the component never unmounts -- no refetch when you open a
+// screen, and hardware Back returns you to the hub instead of leaving the page.
+
 export default function ProfilePage() {
+  // The bottom padding clears the coach launcher. The layout's `main` reserves
+  // room for the tab bar only, and the launcher floats ~2.5rem above that, so
+  // without this it lands on top of the last row -- which on the hub is a link,
+  // so it was covering a tap target, not just some text.
+  //
+  // useSearchParams needs a Suspense boundary: /profile is statically
+  // prerendered, and without one the whole route deopts to client rendering.
+  return (
+    <div className="pb-14 md:pb-0">
+      <Suspense fallback={<div className="p-8">Loading profile...</div>}>
+        <ProfileScreens />
+      </Suspense>
+    </div>
+  );
+}
+
+function ProfileScreens() {
   const router = useRouter();
+  const section = useSearchParams().get('s');
   const coachFlags = useCoachFeatureFlags();
+
+  // `profile` is what is stored; `draft` is what the open screen is editing.
+  const [profile, setProfile] = useState<ProfileForm>(EMPTY_PROFILE_FORM);
+  const [draft, setDraft] = useState<ProfileForm>(EMPTY_PROFILE_FORM);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  
-  // Form State
-  const [formData, setFormData] = useState({
-    goal_type: 'general',
-    experience_level: 'intermediate',
-    weekly_days_available: 4,
-    current_weekly_km: 0,
-    injury_notes: '',
-    // upcoming_races handling skipped for simple MVP form, 
-    // but field exists in backend schema
-    upcoming_races: [],
-    max_hr: 0, // New field state
-    resting_hr: 0,
-    // #742: null, not 0. These post straight through to the coach pack, and the
-    // backend rejects a physiologically impossible figure rather than coaching on
-    // it — so the other fields' 0-means-empty sentinel would be a 422 here.
-    weight_kg: null as number | null,
-    height_cm: null as number | null,
-    week_starts_on: 0 // 0=Monday (default), 6=Sunday (#676)
-  });
+  const [error, setError] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
 
   useEffect(() => {
     fetchFromAPI('/api/profile')
-      .then(data => {
-        if (!data) {
-          setLoading(false);
-          return;
-        }
-        setFormData({
-            goal_type: data.goal_type || 'general',
-            experience_level: data.experience_level || 'intermediate',
-            weekly_days_available: data.weekly_days_available || 4,
-            current_weekly_km: data.current_weekly_km || 0,
-            injury_notes: data.injury_notes || '',
-            upcoming_races: data.upcoming_races || [],
-            max_hr: data.max_hr || 0,
-            resting_hr: data.resting_hr || 0,
-            weight_kg: data.weight_kg ?? null,
-            height_cm: data.height_cm ?? null,
-            week_starts_on: data.week_starts_on ?? 0
-        });
+      .then((data) => {
+        const loaded = profileFromApi(data);
+        setProfile(loaded);
+        setDraft(loaded);
         setLoading(false);
       })
-      .catch(err => {
+      .catch((err) => {
         console.error(err);
         setLoading(false);
       });
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Opening or leaving a screen starts from what is stored, so edits abandoned
+  // with Back are discarded rather than silently carried into the next save.
+  useEffect(() => {
+    setDraft(profile);
+    setError(null);
+  }, [section, profile]);
+
+  const set = useCallback((name: keyof ProfileForm, value: string) => {
+    setDraft((prev) => ({ ...prev, [name]: coerceField(name, value) }));
+  }, []);
+
+  const handleSave = useCallback(async () => {
     setSaving(true);
+    setError(null);
     try {
-      await fetchFromAPI('/api/profile', {
+      // The whole object, exactly as the flat form posted it: PUT /api/profile
+      // validates against UserProfileCreate, which requires goal_type,
+      // experience_level and weekly_days_available on every request.
+      const updated = await fetchFromAPI('/api/profile', {
         method: 'PUT',
-        body: JSON.stringify(formData),
+        body: JSON.stringify(draft),
       });
-      router.push('/');
+      setProfile(updated ? profileFromApi(updated) : draft);
+      setJustSaved(true);
+      router.replace('/profile', { scroll: false });
     } catch (err) {
       console.error(err);
-      alert('Error updating profile');
+      // Stay on the screen with the edits intact. The flat form raised a
+      // browser alert() and left the runner to work out what had happened.
+      setError('Could not save your profile. Check your connection and try again.');
+    } finally {
       setSaving(false);
     }
-  };
+  }, [draft, router]);
 
-  // #742: clearing a body field must send null ("not stated"), never 0 — the coach
-  // pack drops an unstated build rather than reading it as a real figure.
-  const NULLABLE_NUMERIC = ['weight_kg', 'height_cm'];
-  const NUMERIC = ['weekly_days_available', 'current_weekly_km', 'max_hr', 'resting_hr', 'week_starts_on'];
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({
-        ...prev,
-        [name]: NULLABLE_NUMERIC.includes(name)
-          ? (value === '' ? null : Number(value))
-          : NUMERIC.includes(name) ? Number(value) : value
-    }));
-  };
+  useEffect(() => {
+    if (!justSaved) return;
+    const timer = setTimeout(() => setJustSaved(false), 4000);
+    return () => clearTimeout(timer);
+  }, [justSaved]);
 
   if (loading) return <div className="p-8">Loading profile...</div>;
 
-  return (
-    <div className="max-w-2xl mx-auto p-4 md:p-8">
-      <header className="mb-6 flex flex-wrap justify-between items-center gap-4">
-        <h1 className="text-2xl font-bold whitespace-nowrap">Athlete Profile</h1>
-        <div className="flex items-center gap-4 flex-wrap">
-            <ThemeToggle />
-            <ConnectStravaButton />
-            <LinkTelegramButton />
-            <Link href="/" className="text-blue-600 dark:text-blue-400 hover:underline">Cancel</Link>
-        </div>
-      </header>
+  const saveProps = { onSave: handleSave, saving };
 
-      <div className="mb-6">
-        <ImportStravaHistory />
-      </div>
-
-      <form onSubmit={handleSubmit} className="space-y-6 bg-white dark:bg-gray-800 p-6 border dark:border-gray-700 rounded-xl shadow-sm">
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-                <label htmlFor="goal_type" className="block text-sm font-medium mb-1">Goal Type</label>
-                <select
-                    id="goal_type"
-                    name="goal_type"
-                    value={formData.goal_type}
-                    onChange={handleChange}
-                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
-                >
-                    <option value="general">General Fitness</option>
-                    <option value="5k">5k</option>
-                    <option value="10k">10k</option>
-                    <option value="half">Half Marathon</option>
-                    <option value="marathon">Marathon</option>
-                </select>
-            </div>
-
-            <div>
-                <label htmlFor="experience_level" className="block text-sm font-medium mb-1">Experience Level</label>
-                <select
-                    id="experience_level"
-                    name="experience_level"
-                    value={formData.experience_level}
-                    onChange={handleChange}
-                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
-                >
-                    <option value="new">Beginner</option>
-                    <option value="intermediate">Intermediate</option>
-                    <option value="advanced">Advanced</option>
-                </select>
-            </div>
-
-            <div>
-                <label htmlFor="weekly_days_available" className="block text-sm font-medium mb-1">Weekly Days Available</label>
-                <input
-                    type="number" min="1" max="7"
-                    id="weekly_days_available"
-                    name="weekly_days_available"
-                    value={formData.weekly_days_available}
-                    onChange={handleChange}
-                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
-                />
-            </div>
-
-            <div>
-                <label htmlFor="max_hr" className="block text-sm font-medium mb-1">Max Heart Rate (bpm)</label>
-                <input
-                    type="number" min="100" max="250"
-                    id="max_hr"
-                    name="max_hr"
-                    value={formData.max_hr || ''}
-                    onChange={handleChange}
-                    placeholder="e.g. 190"
-                    aria-describedby="max_hr-hint"
-                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
-                />
-                 <p id="max_hr-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Used to calculate zones. If unknown, estimate with 220 minus age.
-                </p>
-            </div>
-
-            <div>
-                <label htmlFor="resting_hr" className="block text-sm font-medium mb-1">Resting Heart Rate (bpm)</label>
-                <input
-                    type="number" min="30" max="120"
-                    id="resting_hr"
-                    name="resting_hr"
-                    value={formData.resting_hr || ''}
-                    onChange={handleChange}
-                    placeholder="e.g. 50"
-                    aria-describedby="resting_hr-hint"
-                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
-                />
-                 <p id="resting_hr-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Your typical morning resting HR. Helps the coach read fatigue trends.
-                </p>
-            </div>
-
-            <div>
-                <label htmlFor="weight_kg" className="block text-sm font-medium mb-1">Weight (kg)</label>
-                <input
-                    type="number" min="20" max="300" step="0.1"
-                    id="weight_kg"
-                    name="weight_kg"
-                    value={formData.weight_kg ?? ''}
-                    onChange={handleChange}
-                    placeholder="e.g. 72.5"
-                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
-                />
-            </div>
-
-            <div>
-                <label htmlFor="height_cm" className="block text-sm font-medium mb-1">Height (cm)</label>
-                <input
-                    type="number" min="100" max="250" step="0.5"
-                    id="height_cm"
-                    name="height_cm"
-                    value={formData.height_cm ?? ''}
-                    onChange={handleChange}
-                    placeholder="e.g. 178"
-                    aria-describedby="height_cm-hint"
-                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
-                />
-                 <p id="height_cm-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Optional. Your coach uses your build to judge how fast to ramp volume
-                    and how much strength work to prescribe &mdash; not to set a target
-                    weight. Leave blank and it simply won&apos;t be considered.
-                </p>
-            </div>
-
-            <div>
-                <label htmlFor="current_weekly_km" className="block text-sm font-medium mb-1">Current Weekly Volume (km)</label>
-                <input
-                    type="number" min="0"
-                    id="current_weekly_km"
-                    name="current_weekly_km"
-                    value={formData.current_weekly_km}
-                    onChange={handleChange}
-                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
-                />
-            </div>
-
-            <div>
-                <label htmlFor="week_starts_on" className="block text-sm font-medium mb-1">Week Starts On</label>
-                <select
-                    id="week_starts_on"
-                    name="week_starts_on"
-                    aria-describedby="week_starts_on-hint"
-                    value={formData.week_starts_on}
-                    onChange={handleChange}
-                    className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
-                >
-                    <option value={0}>Monday</option>
-                    <option value={6}>Sunday</option>
-                </select>
-                <p id="week_starts_on-hint" className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Sets which day your training week begins, for &ldquo;this week&rdquo; on the coach and Trends.
-                </p>
-            </div>
-        </div>
-
-        <div>
-            <label htmlFor="injury_notes" className="block text-sm font-medium mb-1">Injury / Health Notes</label>
-            <textarea
-                id="injury_notes"
-                name="injury_notes"
-                value={formData.injury_notes}
-                onChange={handleChange}
-                rows={3}
-                placeholder="Any nagging pains or past injuries?"
-                className="w-full border dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100 rounded p-2"
-            />
-        </div>
-
-        <button 
-            type="submit" 
-            disabled={saving}
-            className="w-full bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 disabled:opacity-50"
-        >
-            {saving ? 'Saving...' : 'Save Profile'}
-        </button>
-
-      </form>
-
-      <div className="mt-6">
-        <FeatureDisabledGate
-          disabled={!coachFlags.voice}
-          note="Voice is turned off in the coach configuration, so these settings have no effect right now."
-        >
-          <VoiceDialsPanel />
-        </FeatureDisabledGate>
-      </div>
-
-      <div className="mt-6">
-        <FeatureDisabledGate
-          disabled={!coachFlags.stance}
-          note="Stance is turned off in the coach configuration, so these settings have no effect right now."
-        >
-          <StanceDialsPanel />
-        </FeatureDisabledGate>
-      </div>
-
-      <div className="mt-6">
-        <FeatureDisabledGate
-          disabled={!coachFlags.user_materials}
-          note="Coaching materials are turned off in the coach configuration, so uploads have no effect right now."
-        >
-          <UserMaterialsPanel />
-        </FeatureDisabledGate>
-      </div>
+  const errorBanner = error ? (
+    <div
+      role="alert"
+      className="mb-4 flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200"
+    >
+      <AlertTriangle size={16} aria-hidden="true" className="mt-0.5 shrink-0" />
+      <span>{error}</span>
     </div>
-  );
+  ) : null;
+
+  switch (section) {
+    case 'training':
+      return (
+        <SectionScreen
+          title="Training goal"
+          description="Your goal shapes every session the coach prescribes."
+          {...saveProps}
+        >
+          {errorBanner}
+          <TrainingSection form={draft} onChange={set} />
+        </SectionScreen>
+      );
+
+    case 'body':
+      return (
+        <SectionScreen
+          title="Your body"
+          description="What the coach uses to set your zones and judge how fast to ramp."
+          {...saveProps}
+        >
+          {errorBanner}
+          <BodySection form={draft} onChange={set} />
+        </SectionScreen>
+      );
+
+    case 'health':
+      return (
+        <SectionScreen title="Injuries & health" {...saveProps}>
+          {errorBanner}
+          <HealthSection form={draft} onChange={set} />
+        </SectionScreen>
+      );
+
+    case 'app':
+      return (
+        <SectionScreen title="App preferences" {...saveProps}>
+          {errorBanner}
+          <AppSection form={draft} onChange={set} themeControl={<ThemeToggle />} />
+        </SectionScreen>
+      );
+
+    // The screens below own their own saving, so they get no Save in the
+    // header -- which is the point of splitting them out.
+    case 'connections':
+      return (
+        <SectionScreen
+          title="Connections"
+          description="Where your runs come from, and where your coach reaches you."
+        >
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-4 rounded-xl border bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+              <ConnectStravaButton />
+            </div>
+            <div className="flex flex-wrap items-center gap-4 rounded-xl border bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+              <LinkTelegramButton />
+            </div>
+            <ImportStravaHistory />
+          </div>
+        </SectionScreen>
+      );
+
+    case 'voice':
+      return (
+        <SectionScreen title="Coach voice">
+          <FeatureDisabledGate
+            disabled={!coachFlags.voice}
+            note="Voice is turned off in the coach configuration, so these settings have no effect right now."
+          >
+            <VoiceDialsPanel />
+          </FeatureDisabledGate>
+        </SectionScreen>
+      );
+
+    case 'stance':
+      return (
+        <SectionScreen title="Coach stance">
+          <FeatureDisabledGate
+            disabled={!coachFlags.stance}
+            note="Stance is turned off in the coach configuration, so these settings have no effect right now."
+          >
+            <StanceDialsPanel />
+          </FeatureDisabledGate>
+        </SectionScreen>
+      );
+
+    case 'materials':
+      return (
+        <SectionScreen title="Coaching materials">
+          <FeatureDisabledGate
+            disabled={!coachFlags.user_materials}
+            note="Coaching materials are turned off in the coach configuration, so uploads have no effect right now."
+          >
+            <UserMaterialsPanel />
+          </FeatureDisabledGate>
+        </SectionScreen>
+      );
+
+    // No section, or one this build does not know: the hub.
+    default:
+      return (
+        <>
+          {justSaved && (
+            <div
+              role="status"
+              className="mx-auto mb-4 flex max-w-2xl items-center gap-2 rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-900/30 dark:text-green-200"
+            >
+              <CheckCircle2 size={16} aria-hidden="true" className="shrink-0" />
+              Profile saved.
+            </div>
+          )}
+          <ProfileHub form={profile} />
+        </>
+      );
+  }
 }
