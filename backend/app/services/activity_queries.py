@@ -69,6 +69,31 @@ def get_activities(
     )
 
 
+def get_earliest_activity_local_date(db: Session, *, user_id: uuid.UUID) -> date | None:
+    """The local calendar day of the runner's oldest non-deleted activity, or
+    None with no history (#948).
+
+    Window-navigation arrows (Activities, Trends) must stop stepping backward
+    once the target window would fall entirely before the runner's history
+    rather than paging into an empty one; this is the floor they clamp against.
+    Fetched once per screen load and reused across steps rather than re-queried
+    per step. Uses the same ``coalesce(start_date_local, start_date)``
+    local-day precedence as ``get_activities``'s own filtering.
+    """
+    local_start = func.coalesce(Activity.start_date_local, Activity.start_date)
+    earliest = (
+        db.query(local_start)
+        .filter(Activity.is_deleted == False)  # noqa: E712
+        .filter(Activity.user_id == user_id)
+        .order_by(local_start.asc())
+        .limit(1)
+        .scalar()
+    )
+    if earliest is None:
+        return None
+    return earliest.date() if isinstance(earliest, datetime) else earliest
+
+
 def get_activity(
     db: Session,
     activity_id: str | uuid.UUID,

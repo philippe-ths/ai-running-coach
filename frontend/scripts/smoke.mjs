@@ -143,29 +143,186 @@ const mockProfile = {
   max_hr: 190,
 };
 
-const mockTrends = {
-  summary: {
-    total_distance_m: 25000,
-    total_moving_time_s: 7200,
-    activity_count: 3,
-    total_suffer_score: 120,
-  },
-  previous_summary: {
-    total_distance_m: 22000,
-    total_moving_time_s: 6900,
-    activity_count: 3,
-    total_suffer_score: 105,
-  },
-  daily_distance: [],
-  weekly_distance: [],
-  daily_time: [],
-  weekly_time: [],
-  daily_suffer_score: [],
-  weekly_suffer_score: [],
-  efficiency_trend: [],
-  daily_zone_load: [],
-  weekly_zone_load: [],
-};
+// #948: window-navigation support. A synthetic activity every other day over
+// ~400 days back from today, so every range/mode/as_of combination the
+// stepper can request has real (and DIFFERENT) content to show — the point
+// being to prove the arrows actually move the window, not just render it once.
+const RANGE_WINDOW_DAYS = { "7D": 7, "30D": 30, "3M": 90, "6M": 180, "1Y": 365 };
+
+function isoDate(d) {
+  return d.toISOString().slice(0, 10);
+}
+function addDaysISO(iso, days) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return isoDate(d);
+}
+function todayISO() {
+  return isoDate(new Date());
+}
+function mondayOfISO(iso) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  const day = d.getUTCDay(); // 0=Sun..6=Sat
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + diff);
+  return isoDate(d);
+}
+function calendarPeriodStart(rangeKey, asOf) {
+  const [y, m] = asOf.split("-").map(Number);
+  if (rangeKey === "7D") return mondayOfISO(asOf);
+  if (rangeKey === "30D") return `${y}-${String(m).padStart(2, "0")}-01`;
+  if (rangeKey === "3M") {
+    const qm = Math.floor((m - 1) / 3) * 3 + 1;
+    return `${y}-${String(qm).padStart(2, "0")}-01`;
+  }
+  if (rangeKey === "6M") return m <= 6 ? `${y}-01-01` : `${y}-07-01`;
+  return `${y}-01-01`; // 1Y
+}
+function computeFraming(rangeKey, mode, asOf) {
+  const n = RANGE_WINDOW_DAYS[rangeKey] ?? 7;
+  if (mode === "calendar") {
+    return { period_start: calendarPeriodStart(rangeKey, asOf), period_end: asOf };
+  }
+  return { period_start: addDaysISO(asOf, -(n - 1)), period_end: asOf };
+}
+
+function synthActivities() {
+  const today = todayISO();
+  const acts = [];
+  for (let i = 0; i < 400; i += 2) {
+    acts.push({
+      date: addDaysISO(today, -i),
+      distance_m: 5000 + (i % 5) * 1000,
+      moving_time_s: 1800 + (i % 5) * 300,
+      effort_score: 40 + (i % 5) * 10,
+    });
+  }
+  return acts; // newest first
+}
+const SYNTH_ACTIVITIES = synthActivities();
+const EARLIEST_ACTIVITY_DATE = SYNTH_ACTIVITIES[SYNTH_ACTIVITIES.length - 1].date;
+
+function activitiesInRange(start, end) {
+  return SYNTH_ACTIVITIES.filter((a) => (!start || a.date >= start) && a.date <= end);
+}
+
+function buildTrendsResponse(rangeKey, mode, asOf) {
+  const { period_start, period_end } = computeFraming(rangeKey, mode, asOf);
+  const inWindow = activitiesInRange(period_start, period_end);
+  const daily = [];
+  for (let d = period_start; d <= period_end; d = addDaysISO(d, 1)) {
+    const dayActs = inWindow.filter((a) => a.date === d);
+    daily.push({
+      date: d,
+      total_distance_m: dayActs.reduce((s, a) => s + a.distance_m, 0),
+      activity_count: dayActs.length,
+    });
+  }
+  return {
+    range: rangeKey,
+    summary: {
+      total_distance_m: inWindow.reduce((s, a) => s + a.distance_m, 0),
+      total_moving_time_s: inWindow.reduce((s, a) => s + a.moving_time_s, 0),
+      activity_count: inWindow.length,
+      total_suffer_score: inWindow.reduce((s, a) => s + a.effort_score, 0),
+    },
+    previous_summary: null,
+    daily_distance: daily,
+    weekly_distance: [],
+    daily_time: daily.map((p) => ({
+      date: p.date,
+      total_moving_time_s: p.activity_count * 1800,
+      activity_count: p.activity_count,
+    })),
+    weekly_time: [],
+    daily_suffer_score: daily.map((p) => ({ date: p.date, effort_score: p.activity_count * 40 })),
+    weekly_suffer_score: [],
+    efficiency_trend: [],
+    daily_zone_load: [],
+    weekly_zone_load: [],
+    biweekly_distance: [],
+    monthly_distance: [],
+    biweekly_time: [],
+    monthly_time: [],
+    biweekly_suffer_score: [],
+    monthly_suffer_score: [],
+    biweekly_zone_load: [],
+    monthly_zone_load: [],
+  };
+}
+
+function buildVolumeResponse(rangeKey, asOf) {
+  const days = RANGE_WINDOW_DAYS[rangeKey] ?? 7;
+  function framing(mode) {
+    const { period_start, period_end } = computeFraming(rangeKey, mode, asOf);
+    const inWindow = activitiesInRange(period_start, period_end);
+    const distance = inWindow.reduce((s, a) => s + a.distance_m, 0);
+    return {
+      framing: mode,
+      label: mode === "rolling" ? `${days}-day rolling` : "This period",
+      window_days: days,
+      days_elapsed: days,
+      complete: true,
+      period_start,
+      period_end,
+      baseline_start: addDaysISO(period_start, -84),
+      baseline_end: addDaysISO(period_start, -1),
+      metrics: [
+        {
+          metric: "sessions", current_all: inWindow.length, current_runs: inWindow.length,
+          norm: Math.round(days / 3), norm_recent: Math.round(days / 3), pct_vs_norm: 0,
+          direction: "in_line", direction_recent: "in_line",
+        },
+        {
+          metric: "distance_m", current_all: distance, current_runs: distance,
+          norm: Math.round(days * 800), norm_recent: Math.round(days * 800), pct_vs_norm: 0,
+          direction: "in_line", direction_recent: "in_line",
+        },
+        {
+          metric: "moving_time_s", current_all: 0, current_runs: 0,
+          norm: null, norm_recent: null, pct_vs_norm: null,
+          direction: "no_norm", direction_recent: "no_norm",
+        },
+        {
+          metric: "effort_score", current_all: 0, current_runs: 0,
+          norm: null, norm_recent: null, pct_vs_norm: null,
+          direction: "no_norm", direction_recent: "no_norm",
+        },
+      ],
+    };
+  }
+  return {
+    range: rangeKey,
+    rolling: framing("rolling"),
+    calendar: framing("calendar"),
+    has_baseline: true,
+    baseline_label: "the last 12 weeks",
+  };
+}
+
+function buildLoadResponse() {
+  const monday = mondayOfISO(todayISO());
+  const weeks = [];
+  for (let i = 9; i >= 0; i--) {
+    const week_start = addDaysISO(monday, -i * 7);
+    const score = 150 + ((9 - i) % 4) * 40;
+    const hasBaseline = i < 6; // the oldest few weeks abstain (no trailing 4wk yet)
+    const status = !hasBaseline ? "no_baseline" : i % 3 === 0 ? "high" : i % 3 === 1 ? "below" : "optimal";
+    weeks.push({
+      week_start,
+      score,
+      daily: [20, 30, 0, 40, 0, score - 90, 0].map((v) => Math.max(0, v)),
+      target_min: hasBaseline ? Math.round(score * 0.8) : null,
+      target_max: hasBaseline ? Math.round(score * 1.3) : null,
+      status,
+      activities:
+        i === 0
+          ? [{ id: "42", name: "Morning Tempo", date: week_start, effort_score: 48, headline: "Tempo run" }]
+          : [],
+    });
+  }
+  return { weeks, week_starts_on: 0 };
+}
 
 // #830: the schedule week. A planned week (so free mode is not the only shape
 // exercised) carrying a pinned done session, a floating one whose window has
@@ -679,6 +836,10 @@ const routesToCheck = [
   { path: "/", expectedText: "Weekly Summary" },
   { path: "/activities", expectedText: "All Activities" },
   { path: "/trends", expectedText: "Track your progress over time." },
+  // Client-fetched (loading gate), so the server-rendered shell shows the
+  // loading state rather than the fetched heading — this still proves the
+  // route boots and the mock's /api/trends/load shape is reachable.
+  { path: "/load", expectedText: "Loading…" },
   { path: "/profile", expectedText: "Loading profile..." },
   { path: "/activity/42", expectedText: "Morning Tempo" },
   { path: "/schedule", expectedText: "The week ahead" },
@@ -752,16 +913,37 @@ function createMockApiServer() {
       return;
     }
 
+    // #948: the window-navigation floor, fetched once by the Activities and
+    // Trends pages.
+    if (pathname === "/api/activities/earliest-date") {
+      return sendJson(res, 200, { earliest_activity_date: EARLIEST_ACTIVITY_DATE });
+    }
+
     if (pathname === "/api/profile") {
       return sendJson(res, 200, mockProfile);
     }
 
+    // #948: as_of (defaulting to today) drives the whole window, so the
+    // stepper's back/forward taps show materially different content.
     if (pathname === "/api/trends") {
-      return sendJson(res, 200, mockTrends);
+      const rangeKey = searchParams.get("range") ?? "30D";
+      const mode = searchParams.get("mode") ?? "rolling";
+      const asOf = searchParams.get("as_of") ?? todayISO();
+      return sendJson(res, 200, buildTrendsResponse(rangeKey, mode, asOf));
     }
 
     if (pathname === "/api/trends/types") {
       return sendJson(res, 200, ["Run"]);
+    }
+
+    if (pathname === "/api/trends/volume") {
+      const rangeKey = searchParams.get("range") ?? "7D";
+      const asOf = searchParams.get("as_of") ?? todayISO();
+      return sendJson(res, 200, buildVolumeResponse(rangeKey, asOf));
+    }
+
+    if (pathname === "/api/trends/load") {
+      return sendJson(res, 200, buildLoadResponse());
     }
 
     if (pathname === "/api/schedule/week") {

@@ -2,6 +2,7 @@
 API router for /api/trends — aggregated activity data for trend charts.
 """
 
+from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -41,10 +42,16 @@ def get_trends(
     range: str = Query("30D", description="Time range: 7D, 30D, 3M, 6M, 1Y, ALL"),
     types: Optional[List[str]] = Query(None, description="Activity types to include (multi-select)"),
     mode: str = Query("rolling", description="Window framing: rolling | calendar (#400)"),
+    as_of: Optional[date] = Query(
+        None,
+        description="Judge the (range, mode) window as of this date instead of "
+        "today (#948), so window-navigation arrows can step the whole report "
+        "back and forward. Defaults to today.",
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(require_current_user),
 ):
-    return get_trends_report(db, range, types, user_id=user.id, mode=mode)
+    return get_trends_report(db, range, types, user_id=user.id, mode=mode, as_of=as_of)
 
 
 @router.get("/trends/load", response_model=LoadResponse)
@@ -60,15 +67,21 @@ def get_training_load(
 def get_volume(
     range: str = Query("7D", description="7D | 30D | 3M | 6M | 1Y"),
     types: Optional[List[str]] = Query(None, description="Activity types to include (multi-select)"),
+    as_of: Optional[date] = Query(
+        None,
+        description="Judge the report as of this date instead of today (#948), "
+        "so window-navigation arrows can step the vs-norm read back and forward "
+        "in step with the Trends charts. Defaults to today.",
+    ),
     db: Session = Depends(get_db),
     user: User = Depends(require_current_user),
 ):
-    """Frequency-/volume-vs-norm report for the selected range, as of today:
-    per-metric current vs the runner's norm, in rolling and calendar-period
-    framings scaled to the range (#400). ``types`` scopes both the window and the
-    norm baseline so the comparison stays like-for-like with the filtered Trends
-    charts (#413)."""
-    return get_volume_report(db, user.id, range, types=types)
+    """Frequency-/volume-vs-norm report for the selected range, as of `as_of`
+    (defaults to today): per-metric current vs the runner's norm, in rolling and
+    calendar-period framings scaled to the range (#400). ``types`` scopes both
+    the window and the norm baseline so the comparison stays like-for-like with
+    the filtered Trends charts (#413)."""
+    return get_volume_report(db, user.id, range, as_of=as_of, types=types)
 
 
 @router.get("/stats/weekly", response_model=WeeklyStatsResponse)
