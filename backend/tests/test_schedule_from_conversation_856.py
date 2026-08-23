@@ -31,6 +31,7 @@ from app.models.thread import Thread
 from app.models.user import User
 from app.services.coach import proposed_actions
 from app.services.schedule import store
+from app.services.weeks import MONDAY, is_last_day_of_week, resolve_week_start, week_start
 
 TODAY = date(2026, 8, 12)
 
@@ -435,6 +436,22 @@ def test_the_conversation_is_told_the_runner_has_no_plan_rather_than_left_silent
     assert "this app's Schedule screen" in rendered
 
 
+def _in_current_week_and_not_past(today: date, starts_on: int) -> date:
+    """A day guaranteed both inside `today`'s week and not before `today` (#949).
+
+    The original fixture placed the session at `today + 1 day` — "tomorrow" — to
+    stand in for a session still to come. That coincidentally lands inside the
+    current Mon-Sun week on every day but Sunday, where "tomorrow" is Monday of
+    NEXT week: `committed_this_week` (scoped to `[week_start, week_start + 6]`)
+    then reads 0 instead of 1. The fix is by construction rather than luck: fall
+    back to `today` itself on the week's last day, since that is the only day
+    left that is both still-to-come and inside the current week.
+    """
+    if is_last_day_of_week(today, starts_on):
+        return today
+    return today + timedelta(days=1)
+
+
 def test_the_conversation_carries_the_week_the_runner_is_actually_training(db):
     """Not the twelve-week horizon — that is the runner's screen. What the plan
     still asks of this week, so the coach's advice does not contradict the plan
@@ -443,12 +460,17 @@ def test_the_conversation_carries_the_week_the_runner_is_actually_training(db):
 
     user = _user(db)
     plan = _active_plan(db, user)
+    today = date.today()
+    # The test user has no profile, so the week starts on Monday (#949; see
+    # test_resolve_week_start_with_no_profile_is_monday below for the pin).
+    starts_on = resolve_week_start(None)
+    session_day = _in_current_week_and_not_past(today, starts_on)
     db.add(
         PlannedSession(
             plan_id=plan.id,
             user_id=user.id,
-            window_start=date.today() + timedelta(days=1),
-            window_end=date.today() + timedelta(days=1),
+            window_start=session_day,
+            window_end=session_day,
             intent="quality",
             discipline="run",
             commitment="committed",
@@ -468,6 +490,81 @@ def test_the_conversation_carries_the_week_the_runner_is_actually_training(db):
     # Intent, never a scorecard: handed a plan and a result, a model reaches for
     # a compliance verdict, which is the nagging ADR 0025 removed.
     assert all("done" not in s for s in schedule["still_to_come_this_week"])
+
+
+def test_resolve_week_start_with_no_profile_is_monday():
+    """Pins the assumption the fixture above relies on: a user with no profile
+    (the `_user` helper here never sets one) resolves to a Monday-start week."""
+    assert resolve_week_start(None) == MONDAY
+
+
+@pytest.mark.parametrize(
+    "today",
+    [date(2026, 8, 10) + timedelta(days=offset) for offset in range(7)],
+    ids=["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+)
+def test_the_conversation_carries_the_week_the_runner_is_actually_training_on_every_weekday(
+    db, monkeypatch, today
+):
+    """Day-independence proof for #949: the fixture-construction fix above must
+    hold no matter which real-world weekday the suite happens to run on.
+
+    `build_thread_schedule` reads `date.today()` (via `app.services.schedule
+    .coach_view`'s module-level `date` import) when no `today` is passed, and
+    `_build_baseline_sections`/`_schedule_section` never pass one through — so
+    the only injection seam available without adding a dependency (e.g.
+    freezegun, which is not in this project) is patching that module's `date`
+    name to a subclass whose `today()` returns the fixed value under test. This
+    exercises the REAL call chain the app uses (`thread_turn
+    ._build_baseline_sections` -> `_schedule_section` -> `build_thread_schedule`
+    -> `_week_view`), not a reimplementation of it.
+
+    2026-08-10 is a Monday, so the seven parametrized dates cover one full week
+    including Sunday — the day the original bug only reproduced on.
+    """
+    from app.services.coach import thread_turn
+    from app.services.schedule import coach_view
+
+    class _PinnedDate(date):
+        @classmethod
+        def today(cls):
+            return today
+
+    monkeypatch.setattr(coach_view, "date", _PinnedDate)
+
+    user = _user(db)
+    plan = _active_plan(db, user)
+    starts_on = resolve_week_start(None)
+    session_day = _in_current_week_and_not_past(today, starts_on)
+
+    # Sanity-check the construction itself before trusting the app's read of it.
+    ws = week_start(today, starts_on)
+    we = ws + timedelta(days=6)
+    assert ws <= session_day <= we
+    assert session_day >= today
+
+    db.add(
+        PlannedSession(
+            plan_id=plan.id,
+            user_id=user.id,
+            window_start=session_day,
+            window_end=session_day,
+            intent="quality",
+            discipline="run",
+            commitment="committed",
+            title="Thursday tempo",
+            target_distance_m=8000,
+        )
+    )
+    db.commit()
+
+    sections = thread_turn._build_baseline_sections(db, user)
+    schedule = sections["schedule"]
+
+    assert schedule["has_plan"] is True
+    assert schedule["committed_this_week"] == 1
+    titles = [s["title"] for s in schedule["still_to_come_this_week"]]
+    assert "Thursday tempo" in titles
 
 
 def test_the_conversation_reads_the_rule_that_is_enforced_not_the_coach_s_label(db):
