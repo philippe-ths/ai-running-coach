@@ -1004,6 +1004,31 @@ class TestForwardDistanceMatchesPlan:
         )
         assert result.status is AssertionStatus.PASS
 
+    def test_a_whole_km_rounding_of_the_one_decimal_pack_figure_passes(self):
+        """`_target()` renders a half marathon (21097.5 m) as "21.1 km"; a
+        runner — and the coach — naturally speak of it as "21km". That rounding
+        is not an invented number and must not fail the assertion."""
+        pack = _make_pack(schedule={"next_week_committed": [
+            {"session_id": None, "when": "next Sun", "title": "Half marathon",
+             "intent": "long", "discipline": "run", "target": "21.1 km"},
+        ]})
+        result = assert_forward_distance_matches_plan(
+            self._message("For next week's 21km race, hold back through the first 5."),
+            pack,
+        )
+        assert result.status is AssertionStatus.PASS
+
+    def test_the_tolerance_still_catches_the_defect_that_motivated_this(self):
+        """The exact #943 defect: "16.5km" against a planned 18.0 km long run is
+        1.5 km out — comfortably past the whole-km-rounding tolerance above — and
+        must still fail. Pinned as its own test so a future widening of the
+        tolerance cannot silently swallow the case the assertion exists for."""
+        result = assert_forward_distance_matches_plan(
+            self._message("For next week's 16.5km long run, ease into the pace."),
+            self._pack_with_next_week(),
+        )
+        assert result.status is AssertionStatus.FAIL
+
     def test_scores_the_legacy_structured_shape_too(self):
         good = _make_content(thesis="For next week's 18km long run, keep it easy.")
         bad = _make_content(thesis="For next week's 16.5km long run, ease into it.")

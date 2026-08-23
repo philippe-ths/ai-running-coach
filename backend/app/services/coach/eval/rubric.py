@@ -1098,7 +1098,18 @@ _DISTANCE_KM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*km\b", re.IGNORECASE)
 # generous enough for a short clause ("next week's 18km long run") without
 # reaching into an unrelated sentence.
 _FORWARD_DISTANCE_WINDOW = 60
-_DISTANCE_TOLERANCE_KM = 0.05
+# `_target()` renders a plain distance to ONE decimal place (a half marathon,
+# 21097.5 m, becomes "21.1 km"), but a runner — and the coach — naturally speak
+# in whole kilometres ("next week's 21km long run"). That is not an invented
+# number, so the tolerance has to absorb it. Derived, not chosen: the pack's
+# one-decimal figure P is within 0.05 km of the true distance D (the rendering's
+# own worst-case rounding error), and a whole-km utterance R is within 0.5 km of
+# D (the worst case for rounding to the nearest whole kilometre, at the x.5
+# boundary). By the triangle inequality |R - P| <= |R - D| + |D - P| <= 0.55, so
+# 0.55 km is the tight bound that accepts every correct whole-km rounding of a
+# one-decimal-rendered distance. The #943 defect that motivated this assertion —
+# "16.5km" against a planned 18.0 km — is 1.5 km out, comfortably past this.
+_DISTANCE_TOLERANCE_KM = 0.55
 
 
 def _pack_upcoming_distances_km(pack: CoachContextPack) -> List[float]:

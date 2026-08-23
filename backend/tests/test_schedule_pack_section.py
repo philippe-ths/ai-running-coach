@@ -43,7 +43,7 @@ SCHEDULE_PROMPT = "coach_message_lean_grouped_v9"
 PRIOR_PROMPT = "coach_message_lean_grouped_v8"
 
 
-def _seed_user(db) -> User:
+def _seed_user(db, *, week_starts_on: int | None = None) -> User:
     user = User(email=f"sched-pack-{uuid4()}@example.com")
     db.add(user)
     db.commit()
@@ -54,6 +54,7 @@ def _seed_user(db) -> User:
             experience_level="intermediate",
             weekly_days_available=5,
             max_hr=190,
+            week_starts_on=week_starts_on,
         )
     )
     db.commit()
@@ -432,6 +433,70 @@ def test_a_session_this_week_still_says_only_its_bare_weekday(db):
     section = build_schedule_context(db, activity)
 
     assert section.still_to_come_this_week[0].when == "Sat"
+
+
+def test_a_completed_next_week_session_is_not_shown_as_still_ahead(db):
+    """`completion.complete_planned_session` has no window restriction — a
+    runner who runs next week's long run early and ticks it off must not still
+    read to the coach as something ahead of them. This section is INTENT only,
+    and a completed session is no longer intent (the #943 follow-up defect)."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan, title="Easy", intent="easy", target_distance_m=5000)
+    _seed_session(
+        db, plan, window_start=NEXT_SAT, window_end=NEXT_SAT, intent="long",
+        title="Long run", target_distance_m=18000, structure=None,
+        completed_at=datetime(2026, 8, 10, 7, 0, tzinfo=timezone.utc),
+    )
+    activity = _seed_activity(db, user, day=MON)
+
+    section = build_schedule_context(db, activity)
+
+    assert section.next_week_committed == []
+
+
+def test_a_dismissed_next_week_session_is_not_shown_either(db):
+    """Same gate, the other terminal state: a session already declined is not
+    still "to come"."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    _seed_session(db, plan, title="Easy", intent="easy", target_distance_m=5000)
+    _seed_session(
+        db, plan, window_start=NEXT_SAT, window_end=NEXT_SAT, intent="long",
+        title="Long run", target_distance_m=18000, structure=None,
+        dismissed_at=datetime(2026, 8, 10, 7, 0, tzinfo=timezone.utc),
+    )
+    activity = _seed_activity(db, user, day=MON)
+
+    section = build_schedule_context(db, activity)
+
+    assert section.next_week_committed == []
+
+
+def test_next_week_still_works_when_the_runners_week_starts_on_sunday(db):
+    """#949 was a Sunday-boundary bug in this exact area this exact week — the
+    week-boundary arithmetic for `next_week_committed` gets its own coverage
+    under a non-Monday `week_starts_on` rather than trusting Monday to stand in
+    for every runner."""
+    from app.services.weeks import SUNDAY
+
+    sun_start = MON - timedelta(days=1)  # 2026-08-09, a Sunday
+    next_sun_start = sun_start + timedelta(days=7)  # 2026-08-16
+    next_week_wed = next_sun_start + timedelta(days=3)  # 2026-08-19
+
+    user = _seed_user(db, week_starts_on=SUNDAY)
+    plan = _seed_plan(db, user)
+    _seed_session(
+        db, plan, window_start=next_week_wed, window_end=next_week_wed,
+        intent="long", title="Long run", target_distance_m=18000, structure=None,
+    )
+    activity = _seed_activity(db, user, day=MON)
+
+    section = build_schedule_context(db, activity)
+
+    assert [s.title for s in section.next_week_committed] == ["Long run"]
+    # And it must not ALSO leak into this week's list under the Sunday boundary.
+    assert section.still_to_come_this_week == []
 
 
 # --- the framing: intent, never a scorecard ---------------------------------

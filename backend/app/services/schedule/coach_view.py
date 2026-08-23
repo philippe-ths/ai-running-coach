@@ -264,6 +264,13 @@ def _next_week_committed(
     suggestion the runner may still dismiss is not something to hand the coach a
     number for. Exists because the coach reached past this week on its own
     anyway and, with no real figure in front of it there, invented one.
+
+    Routed through the same `session_status` gate `_week_view` uses — not a
+    second definition of "still to come". `completion.complete_planned_session`
+    has no window restriction, so a runner who runs next week's long run early
+    and ticks it off must not still read to the coach as something ahead of
+    them: this section is INTENT only, and a completed (or dismissed, or
+    somehow already missed) session is no longer intent.
     """
     start = week_start(today, starts_on) + timedelta(days=WEEK_LENGTH_DAYS)
     end = start + timedelta(days=WEEK_LENGTH_DAYS - 1)
@@ -272,6 +279,8 @@ def _next_week_committed(
     upcoming: List[UpcomingSessionContext] = []
     for row in rows:
         if row.commitment != "committed" or row.intent == "rest":
+            continue
+        if session_status(row, today) != "upcoming":
             continue
         if len(upcoming) >= MAX_UPCOMING:
             break
