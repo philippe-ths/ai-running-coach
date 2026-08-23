@@ -92,11 +92,17 @@ class TestBoundaries:
         # supersedes symmetrically, so going back is itself something you can go
         # back from. Recoverable in the `adjust_session` sense: not one tap on the
         # card itself, but a real route back that destroys nothing.
+        #
+        # `revise_max_hr` (#945) overwrites one profile field and does not undo
+        # with a tap, but destroys nothing either: the runner's ordinary profile
+        # edit screen can set max HR back to any value at any time, the same
+        # pre-existing surface every other stated fact already goes through.
         assert allowed == {
             "check_in",
             "intent",
             "split_block",
             "merge_blocks",
+            "revise_max_hr",
             "complete_session",
             "adjust_session",
             "draft_plan",

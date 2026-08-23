@@ -42,6 +42,7 @@ class ProposedActionFrame(BaseModel):
         "complete_session",
         "draft_plan",
         "adjust_session",
+        "revise_max_hr",
     ]
     token: str
     description: str
@@ -63,6 +64,7 @@ class ProposedActionRequest(BaseModel):
         "complete_session",
         "draft_plan",
         "adjust_session",
+        "revise_max_hr",
     ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = Field(default=None, ge=1, le=10)
@@ -125,6 +127,12 @@ class ProposedActionRequest(BaseModel):
             self.target_distance_m is not None or self.target_duration_s is not None
         ):
             raise ValueError("only adjust_session takes a corrected target")
+        # `revise_max_hr` (#945) deliberately takes NO arguments, the
+        # `draft_plan` precedent: the evidence and the proposed number are
+        # deterministic facts already in front of the coach in THE RUNNER
+        # section, re-derived fresh from the runner's own data at offer time
+        # rather than trusted from the model. There is no field here for the
+        # model to invent a number into.
         return self
 
 
@@ -138,6 +146,7 @@ class StoredProposedAction(BaseModel):
         "complete_session",
         "draft_plan",
         "adjust_session",
+        "revise_max_hr",
     ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = None
@@ -149,6 +158,10 @@ class StoredProposedAction(BaseModel):
     planned_session_id: Optional[UUID] = None
     target_distance_m: Optional[float] = None
     target_duration_s: Optional[int] = None
+    # #945: the revised max HR, in bpm. Always server-computed at offer time
+    # from `max_hr_calibration.gather_max_hr_revision` — never model-supplied,
+    # since there is no field on `ProposedActionRequest` for `revise_max_hr`.
+    proposed_max_hr: Optional[int] = None
     # #856: the conversation the plan was settled in. Server-supplied at mint
     # time, never model-supplied. Carried by EVERY action since #778, because a
     # confirmed change leaves its trace in the conversation that reached it.
@@ -174,7 +187,12 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
         "block of training you have settled together into their schedule "
         "(draft_plan — takes no arguments; this conversation IS the plan, so use "
         "it once the shape of the block is agreed rather than asking them to copy "
-        "it out). "
+        "it out), or updating their stated max heart rate when their own recent "
+        "training has clearly overtaken it (revise_max_hr — takes no arguments; "
+        "the evidence and the proposed number are already in front of you in "
+        "THE RUNNER section when this applies, so offer it there rather than "
+        "asking them to state a new number, and never claim you have already "
+        "changed it). "
         "Offering is not doing — this puts a card in front of the "
         "runner and nothing is written unless they tap it, so speak of it as "
         "something you can do, never as done. Use only activity_id and block_id "
@@ -194,6 +212,7 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
                     "complete_session",
                     "draft_plan",
                     "adjust_session",
+                    "revise_max_hr",
                 ],
             },
             "activity_id": {"type": "string"},
@@ -444,6 +463,40 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
             "planned_session_id": str(session.id),
         }
 
+    if stored.action_type == "revise_max_hr":
+        from app.models.user_profile import UserProfile
+        from app.services.coach.max_hr_calibration import gather_max_hr_revision
+
+        # Ownership re-resolved from the authenticated owner, like every other
+        # action here — there is no id in the payload to mistrust because a
+        # profile is a 1:1 owner resource, so the query is scoped by
+        # `owner_user_id` alone.
+        profile = (
+            db.query(UserProfile).filter(UserProfile.user_id == owner_user_id).first()
+        )
+        if profile is None:
+            raise LookupError("Proposed action not found")
+        # Re-checked fresh at execute time, the `adjust_session` precedent: the
+        # token can be up to 30 minutes old, and the evidence it was minted
+        # from can have changed (a manual profile edit, a deleted activity) in
+        # that window. Still writes the EXACT number the runner confirmed on
+        # the card, not a freshly recomputed one — the card is what they
+        # agreed to, and silently substituting a different number would be
+        # exactly the silent write this whole mechanism exists to prevent.
+        if gather_max_hr_revision(db, owner_user_id, respect_cooldown=False) is None:
+            raise ValueError(
+                "the evidence for this revision no longer holds; nothing was changed"
+            )
+        profile.max_hr = stored.proposed_max_hr
+        profile.max_hr_source = "runner_confirmed"
+        # The anti-nag stamp is moot once the fact itself has moved; clearing
+        # it keeps a stale "last surfaced" value from outliving the number it
+        # was about.
+        profile.max_hr_revision_last_surfaced_value = None
+        profile.max_hr_revision_last_surfaced_at = None
+        db.commit()
+        return {"action_type": "revise_max_hr", "max_hr": profile.max_hr}
+
     raise LookupError("Proposed action not found")
 
 
@@ -563,6 +616,44 @@ def _build_offer(
             target_distance_m=request.target_distance_m,
             target_duration_s=request.target_duration_s,
         )
+        return frame, stored
+
+    if request.action_type == "revise_max_hr":
+        from app.services.coach.max_hr_calibration import gather_max_hr_revision
+
+        # Re-derived fresh from the runner's own data, never trusted from the
+        # model or from what the coach saw earlier in the conversation (#945
+        # decision 2): the evidence can have changed, been resolved by a
+        # manual profile edit, or already been offered and be sitting inside
+        # its cooldown, in the time between the pack being built and this
+        # tool call landing.
+        finding = gather_max_hr_revision(db, owner_user_id)
+        if finding is None:
+            raise ValueError(
+                "no max HR revision is currently supported by this runner's data"
+            )
+        frame = ProposedActionFrame(
+            action_type="revise_max_hr",
+            token="",
+            description=(
+                f"Update your max heart rate from {finding.stated_max} to "
+                f"{finding.suggested_max} bpm — {finding.basis}"
+            ),
+            confirm_label="Update it",
+        )
+        stored = StoredProposedAction(
+            owner_user_id=owner_user_id,
+            action_type="revise_max_hr",
+            proposed_max_hr=finding.suggested_max,
+        )
+        # Stamped here, at OFFER time, not from any read path (#945 AC5): this
+        # is the one place a `revise_max_hr` card is actually about to reach
+        # the runner, so this is the one place the anti-nag cooldown starts.
+        # A read that merely shows the fact in context -- including the
+        # read-only diagram capture -- never writes.
+        from app.services.coach.max_hr_calibration import record_surfaced
+
+        record_surfaced(db, owner_user_id, finding.suggested_max)
         return frame, stored
 
     if request.action_type == "complete_session":
