@@ -40,11 +40,13 @@ from app.services.coach.output_contract import (
 
 V9 = "coach_message_lean_grouped_v9"
 
-# The Monday of the week every fixture sits in, so the planned session and the
-# activity land in one week and the schedule section actually populates.
-MON = date(2026, 6, 1)
-TUE = MON + timedelta(days=1)
-THU = MON + timedelta(days=3)
+# Every fixture is pinned to TODAY, and that is load-bearing rather than lazy.
+# `adjust_session` — the only kind a report may offer — refuses a session that
+# has already passed, so a fixed calendar date would make this file pass until
+# that date went by and then fail forever. A session pinned to today is never in
+# the past on any day of the week, which is #949's lesson applied here: a
+# week-scoped fixture derives its day from the week, not from a literal.
+TODAY = date.today()
 
 
 class _FakeRedis:
@@ -84,7 +86,8 @@ def _user(db) -> User:
     return user
 
 
-def _activity(db, user: User, *, day: date = TUE) -> Activity:
+def _activity(db, user: User, *, day: date = None) -> Activity:
+    day = day or TODAY
     activity = Activity(
         id=uuid.uuid4(),
         user_id=user.id,
@@ -124,21 +127,27 @@ def _activity(db, user: User, *, day: date = TUE) -> Activity:
 
 
 def _plan_with_sessions(db, user: User):
-    """An active plan with the run's own session (Tue) and one still to come (Thu)."""
+    """An active plan with the run's own session and one still to come.
+
+    Both sit on TODAY: the first is what the activity matched (so the pack's
+    `planned_for_this_activity` names it) and the second is still ahead of the
+    runner (so it lands in `still_to_come_this_week`). Both are correctable,
+    which a session on a past day would not be.
+    """
     plan = TrainingPlan(
         user_id=user.id,
         status="active",
         rules=[],
         week_shapes=[],
-        horizon_end=MON + timedelta(days=60),
+        horizon_end=TODAY + timedelta(days=60),
     )
     db.add(plan)
     db.flush()
-    today = PlannedSession(
+    matched = PlannedSession(
         plan_id=plan.id,
         user_id=user.id,
-        window_start=TUE,
-        window_end=TUE,
+        window_start=TODAY,
+        window_end=TODAY,
         intent="easy",
         discipline="run",
         commitment="committed",
@@ -148,17 +157,70 @@ def _plan_with_sessions(db, user: User):
     upcoming = PlannedSession(
         plan_id=plan.id,
         user_id=user.id,
-        window_start=THU,
-        window_end=THU,
+        window_start=TODAY,
+        window_end=TODAY,
         intent="quality",
         discipline="run",
         commitment="committed",
-        title="Thursday intervals",
+        title="Threshold session",
         target_distance_m=12000,
     )
-    db.add_all([today, upcoming])
+    db.add_all([matched, upcoming])
     db.flush()
-    return plan, today, upcoming
+    return plan, matched, upcoming
+
+
+def _block_member(db, user: User, primary: Activity) -> Activity:
+    """A second activity in the SAME block, with `primary` as the block primary.
+
+    The #482 shape: two close-in-time activities grouped into one session, the
+    report keyed to the primary, this one owning no `coach_reports` row.
+    """
+    from app.models import Block
+
+    member = Activity(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        strava_activity_id=primary.strava_activity_id + 1,
+        name="Cooldown walk",
+        type="Walk",
+        start_date=primary.start_date + timedelta(minutes=40),
+        distance_m=800,
+        moving_time_s=600,
+        elapsed_time_s=600,
+        elev_gain_m=2.0,
+        avg_hr=110.0,
+        raw_summary={},
+    )
+    db.add(member)
+    db.flush()
+    db.add(
+        DerivedMetric(
+            id=uuid.uuid4(),
+            activity_id=member.id,
+            effort="easy",
+            duration_class="standard",
+            structure="continuous",
+            is_hilly=False,
+            is_race=False,
+            effort_score=5.0,
+            confidence="medium",
+            confidence_reasons=[],
+            flags=[],
+        )
+    )
+    block = Block(
+        user_id=user.id,
+        start_date=primary.start_date,
+        end_date=member.start_date,
+        primary_activity_id=primary.id,
+    )
+    db.add(block)
+    db.flush()
+    primary.block_id = block.id
+    member.block_id = block.id
+    db.flush()
+    return member
 
 
 def _pack(db, activity):
@@ -177,13 +239,13 @@ def _report_with_offer(**offer_fields) -> CoachMessageReport:
 
 
 class TestWhitelist:
-    def test_only_the_two_single_session_corrections_are_offerable(self):
-        assert ro.REPORT_OFFER_KINDS == {"adjust_session", "complete_session"}
+    def test_correcting_one_session_is_the_only_offerable_change(self):
+        assert ro.REPORT_OFFER_KINDS == {"adjust_session"}
         # The tool's enum is derived from the set, so the model is never even
         # shown a kind the gate would refuse.
         assert RECORD_COACH_TAIL_TOOL["input_schema"]["properties"]["offer"][
             "properties"
-        ]["action_type"]["enum"] == ["adjust_session", "complete_session"]
+        ]["action_type"]["enum"] == ["adjust_session"]
 
     @pytest.mark.parametrize(
         "kind", ["check_in", "intent", "split_block", "merge_blocks"]
@@ -333,7 +395,9 @@ class TestGrounding:
         pack = _pack(db, activity)
 
         report = _report_with_offer(
-            action_type="complete_session", planned_session_id=str(uuid.uuid4())
+            action_type="adjust_session",
+            planned_session_id=str(uuid.uuid4()),
+            target_distance_m=8000,
         )
         assert ro.ground_offer(report, pack).offer is None
 
@@ -348,7 +412,9 @@ class TestGrounding:
         pack = _pack(db, activity)
 
         report = _report_with_offer(
-            action_type="complete_session", planned_session_id=str(their_upcoming.id)
+            action_type="adjust_session",
+            planned_session_id=str(their_upcoming.id),
+            target_distance_m=8000,
         )
         assert ro.ground_offer(report, pack).offer is None
 
@@ -361,7 +427,9 @@ class TestGrounding:
         assert pack.schedule is None
 
         report = _report_with_offer(
-            action_type="complete_session", planned_session_id=str(uuid.uuid4())
+            action_type="adjust_session",
+            planned_session_id=str(uuid.uuid4()),
+            target_distance_m=8000,
         )
         assert ro.ground_offer(report, pack).offer is None
 
@@ -386,39 +454,54 @@ class TestGrounding:
         ].annotation.__args__
 
     @pytest.mark.parametrize(
-        "fields",
+        "fields,needs_session_id",
         [
-            # adjust_session with both targets: two prescriptions for one session.
-            {"action_type": "adjust_session", "target_distance_m": 8000,
-             "target_duration_s": 2400},
-            # adjust_session with neither: "change this session" is not something
-            # a runner can agree to.
-            {"action_type": "adjust_session"},
-            # complete_session with nothing to complete.
-            {"action_type": "complete_session"},
-            # A correction riding on an action that does not take one. Uses a
-            # WHITELISTED kind deliberately: with `draft_plan` here the whitelist
-            # would refuse it first and this case would prove nothing about the
-            # cross-field rule it is written for.
-            {"action_type": "complete_session", "target_distance_m": 8000},
+            # Both targets: two prescriptions for one session.
+            ({"target_distance_m": 8000, "target_duration_s": 2400}, True),
+            # Neither: "change this session" is not something a runner can agree
+            # to, so it is not a card.
+            ({}, True),
+            # A target with no session to put it on.
+            ({"target_distance_m": 8000}, False),
         ],
     )
-    def test_an_off_contract_offer_is_dropped(self, db, fields):
+    def test_an_off_contract_offer_is_dropped(self, db, fields, needs_session_id):
+        """Every case is isolated to the ONE rule it is written for.
+
+        All of them are `adjust_session`, which is now the only whitelisted kind:
+        a case built on an excluded kind would be refused by the whitelist first
+        and would prove nothing about the contract rule it was written for. That
+        is the trap this parametrisation walked into once already.
+        """
         user = _user(db)
         activity = _activity(db, user)
-        _plan, _today, upcoming = _plan_with_sessions(db, user)
+        _plan, _matched, upcoming = _plan_with_sessions(db, user)
         pack = _pack(db, activity)
-        fields = dict(fields)
-        # Every case is isolated to the ONE rule it is written for. The cases
-        # about a TARGET get a real, shown session id so nothing else can be what
-        # fails them; the case about the MISSING id is the only one left bare.
-        bare = fields["action_type"] == "complete_session" and not fields.get(
-            "target_distance_m"
-        )
-        if not bare:
+        fields = dict(fields, action_type="adjust_session")
+        if needs_session_id:
             fields["planned_session_id"] = str(upcoming.id)
         report = _report_with_offer(**fields)
         assert ro.ground_offer(report, pack).offer is None
+
+    def test_the_cross_kind_target_rule_is_now_unreachable_from_a_report(self):
+        """A guard kept although this surface can no longer exercise it.
+
+        `ProposedActionRequest` refuses a corrected target riding on an action
+        that does not take one. With `adjust_session` the only offerable kind,
+        no offer from a report can reach that rule, so there is no honest test
+        for it here — asserting it through `ground_offer` would pass because the
+        whitelist refused first, which is a green bar proving nothing. The rule
+        still matters for the thread, which offers all seven kinds, so it stays
+        and this records why it is untested HERE rather than untested.
+        """
+        with pytest.raises(Exception):
+            proposed_actions.ProposedActionRequest.model_validate(
+                {
+                    "action_type": "complete_session",
+                    "planned_session_id": str(uuid.uuid4()),
+                    "target_distance_m": 8000,
+                }
+            )
 
     @pytest.mark.parametrize(
         "session_id",
@@ -441,7 +524,9 @@ class TestGrounding:
         _plan_with_sessions(db, user)
         pack = _pack(db, activity)
         report = _report_with_offer(
-            action_type="complete_session", planned_session_id=session_id
+            action_type="adjust_session",
+            planned_session_id=session_id,
+            target_distance_m=8000,
         )
         assert ro.ground_offer(report, pack).offer is None
 
@@ -449,7 +534,7 @@ class TestGrounding:
         # The bound is on the stored shape itself, so an unbounded string cannot
         # be written into the report row even before anything tries to parse it.
         assert ro.coerce_offer(
-            {"action_type": "complete_session", "planned_session_id": "x" * 5000}
+            {"action_type": "adjust_session", "planned_session_id": "x" * 5000}
         ) is None
 
     def test_the_report_survives_every_drop(self, db):
@@ -458,7 +543,9 @@ class TestGrounding:
         activity = _activity(db, user)
         pack = _pack(db, activity)
         report = _report_with_offer(
-            action_type="complete_session", planned_session_id=str(uuid.uuid4())
+            action_type="adjust_session",
+            planned_session_id=str(uuid.uuid4()),
+            target_distance_m=8000,
         )
         grounded = ro.ground_offer(report, pack)
         assert grounded.offer is None
@@ -473,7 +560,9 @@ class TestGrounding:
         _plan, _today, upcoming = _plan_with_sessions(db, user)
         pack = _pack(db, activity)
         report = _report_with_offer(
-            action_type="complete_session", planned_session_id=str(upcoming.id)
+            action_type="adjust_session",
+            planned_session_id=str(upcoming.id),
+            target_distance_m=8000,
         )
         assert ro.ground_offer(report, pack, is_opener=True).offer is None
 
@@ -495,13 +584,14 @@ class TestTailMerge:
                     "risks": [],
                     "questions": [],
                     "offer": {
-                        "action_type": "complete_session",
+                        "action_type": "adjust_session",
                         "planned_session_id": sid,
+                        "target_distance_m": 8000,
                     },
                 }
             )
         )
-        assert report.offer.action_type == "complete_session"
+        assert report.offer.action_type == "adjust_session"
         assert report.offer.planned_session_id == sid
         assert report.tail_degraded is False
 
@@ -542,13 +632,35 @@ class TestTailMerge:
         assert report.offer is None
         assert report.tail_degraded is False
 
+    @pytest.mark.parametrize(
+        "tail", [[1, 2, 3], 42, "just change thursday", [["only-one"]], ()]
+    )
+    def test_a_tail_that_is_not_a_mapping_degrades_rather_than_escaping(self, tail):
+        """The guarantee #944 briefly broke and this pins.
+
+        Before the offer was lifted out, a non-mapping tail reached
+        `**parsed.tail` INSIDE the try and degraded. Copying it out with
+        `dict(parsed.tail)` moved that failure outside the try and changed its
+        type — `dict()` raises ValueError on a sequence of non-pairs, not
+        TypeError — so it escaped `merge_report`, escaped `_generate_message`'s
+        except clause, and would have cost the runner the whole report over a
+        malformed tail. Latent, because `parse_blocks` normalises the tail to a
+        mapping or None, and pinned anyway: the comment on that copy claims it
+        makes degradation safer, and for this input it did the opposite.
+        """
+        report = merge_report(ParsedBlocks(message="Good steady run.", tail=tail))
+
+        assert report.tail_degraded is True
+        assert report.message == "Good steady run."
+        assert report.offer is None
+
     def test_the_opener_merge_carries_no_offer(self):
         report = merge_opener(
             self._blocks(
                 {
                     "headline": "h",
                     "questions": [],
-                    "offer": {"action_type": "complete_session"},
+                    "offer": {"action_type": "adjust_session"},
                 }
             )
         )
@@ -628,7 +740,11 @@ class TestReadTimeMint:
         _store_report(
             db,
             activity,
-            {"action_type": "complete_session", "planned_session_id": str(upcoming.id)},
+            {
+                "action_type": "adjust_session",
+                "planned_session_id": str(upcoming.id),
+                "target_distance_m": 8000,
+            },
         )
         fake = _FakeRedis()
         with patch.object(proposed_actions, "redis_conn", fake):
@@ -636,9 +752,12 @@ class TestReadTimeMint:
 
         assert res.status_code == 200
         card = res.json()["offer"]
-        assert card["action_type"] == "complete_session"
+        assert card["action_type"] == "adjust_session"
         assert card["token"]
-        assert "Thursday intervals" in card["description"]
+        # The card names BOTH prescriptions, since this action does not undo with
+        # a tap and the card is where the old value is written down.
+        assert "Threshold session" in card["description"]
+        assert "12.00 km" in card["description"] and "8.00 km" in card["description"]
         assert card["confirm_label"] and card["dismiss_label"]
         # The token is written under the READER's own key, never a shared one.
         assert list(fake._store) == [f"coach-action:{user.id}:{card['token']}"]
@@ -653,7 +772,11 @@ class TestReadTimeMint:
         row = _store_report(
             db,
             activity,
-            {"action_type": "complete_session", "planned_session_id": str(upcoming.id)},
+            {
+                "action_type": "adjust_session",
+                "planned_session_id": str(upcoming.id),
+                "target_distance_m": 8000,
+            },
         )
         assert "token" not in row.report["offer"]
         with patch.object(proposed_actions, "redis_conn", _FakeRedis()):
@@ -675,12 +798,126 @@ class TestReadTimeMint:
         _store_report(
             db,
             activity,
-            {"action_type": "complete_session", "planned_session_id": str(upcoming.id)},
+            {
+                "action_type": "adjust_session",
+                "planned_session_id": str(upcoming.id),
+                "target_distance_m": 8000,
+            },
         )
         with patch.object(proposed_actions, "redis_conn", _FakeRedis()):
             first = client.get(f"/api/activities/{activity.id}/coach-report").json()
             second = client.get(f"/api/activities/{activity.id}/coach-report").json()
         assert first["offer"]["token"] != second["offer"]["token"]
+
+    def test_the_block_primary_borrow_path_mints_too(self, client, db):
+        """Mint path 2 of 3, which had no coverage at all.
+
+        A non-primary member of a multi-activity block owns no report — the
+        session report is keyed to the primary — so the endpoint serves the
+        primary's report read-only. The runner owns that report too, and a card
+        that appeared on one member of a session and not the other would read as
+        a bug. Deleting `_with_offer` from this branch left the suite green.
+        """
+        user = _user(db)
+        db.commit()
+        _act_as(user)
+        primary = _activity(db, user)
+        _plan, _matched, upcoming = _plan_with_sessions(db, user)
+        member = _block_member(db, user, primary)
+        db.commit()
+        _store_report(
+            db,
+            primary,
+            {
+                "action_type": "adjust_session",
+                "planned_session_id": str(upcoming.id),
+                "target_distance_m": 8000,
+            },
+        )
+
+        fake = _FakeRedis()
+        with patch.object(proposed_actions, "redis_conn", fake):
+            res = client.get(f"/api/activities/{member.id}/coach-report")
+
+        assert res.status_code == 200
+        body = res.json()
+        assert body["offer"]["action_type"] == "adjust_session"
+        assert body["offer"]["token"]
+        assert list(fake._store) == [f"coach-action:{user.id}:{body['offer']['token']}"]
+        # And the durable half is stripped on THIS path too, not only on path 1.
+        assert body["report"]["offer"] is None
+
+    @pytest.mark.asyncio
+    async def test_the_generate_path_mints_too(self, db, monkeypatch):
+        """Mint path 3 of 3, which also had no coverage.
+
+        With no cached report at all the endpoint falls through to generation,
+        and the freshly generated report is returned directly. Deleting
+        `_with_offer` from that return left the suite green as well.
+        """
+        from unittest.mock import AsyncMock
+
+        import httpx
+        from httpx import ASGITransport
+
+        from app.db.session import get_db
+        from app.services.coach.llm import MessageResult
+
+        user = _user(db)
+        db.commit()
+        _act_as(user)
+        activity = _activity(db, user)
+        _plan, _matched, upcoming = _plan_with_sessions(db, user)
+        db.commit()
+        monkeypatch.setattr(settings, "COACH_PROMPT_ID", V9)
+
+        blocks = [
+            {"type": "text", "text": "Good run. That session is too long."},
+            {
+                "type": "tool_use",
+                "name": "record_coach_tail",
+                "input": {
+                    "headline": "Solid",
+                    "next_steps": [],
+                    "risks": [],
+                    "questions": [],
+                    "offer": {
+                        "action_type": "adjust_session",
+                        "planned_session_id": str(upcoming.id),
+                        "target_distance_m": 8000,
+                    },
+                },
+            },
+        ]
+        fake_llm = AsyncMock()
+        fake_llm.generate_coach_message = AsyncMock(
+            return_value=MessageResult(content_blocks=blocks, stop_reason="end_turn")
+        )
+
+        app.dependency_overrides[get_db] = lambda: db
+        fake = _FakeRedis()
+        try:
+            with patch("app.services.coach.turn.AnthropicClient", return_value=fake_llm), \
+                    patch.object(proposed_actions, "redis_conn", fake):
+                transport = ASGITransport(app=app)
+                async with httpx.AsyncClient(
+                    transport=transport, base_url="http://testserver"
+                ) as ac:
+                    res = await ac.get(
+                        f"/api/activities/{activity.id}/coach-report",
+                        params={"generate": "true"},
+                    )
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+
+        assert res.status_code == 200
+        body = res.json()
+        # This report did not exist a moment ago; it was generated by this call.
+        assert body["report"]["message"].startswith("Good run")
+        assert body["offer"]["action_type"] == "adjust_session"
+        assert body["offer"]["token"]
+        assert list(fake._store) == [f"coach-action:{user.id}:{body['offer']['token']}"]
+        assert body["report"]["offer"] is None
 
     def test_a_report_with_no_offer_gets_no_card(self, client, db):
         user = _user(db)
@@ -705,7 +942,11 @@ class TestReadTimeMint:
         _store_report(
             db,
             activity,
-            {"action_type": "complete_session", "planned_session_id": str(upcoming.id)},
+            {
+                "action_type": "adjust_session",
+                "planned_session_id": str(upcoming.id),
+                "target_distance_m": 8000,
+            },
         )
         _act_as(stranger)
         fake = _FakeRedis()
@@ -729,8 +970,9 @@ class TestReadTimeMint:
             db,
             activity,
             {
-                "action_type": "complete_session",
+                "action_type": "adjust_session",
                 "planned_session_id": str(their_session.id),
+                "target_distance_m": 8000,
             },
         )
         _act_as(owner)
@@ -753,7 +995,11 @@ class TestReadTimeMint:
         _store_report(
             db,
             activity,
-            {"action_type": "complete_session", "planned_session_id": str(upcoming.id)},
+            {
+                "action_type": "adjust_session",
+                "planned_session_id": str(upcoming.id),
+                "target_distance_m": 8000,
+            },
         )
         monkeypatch.setattr(settings, "COACH_THREADS_ENABLED", False)
         with patch.object(proposed_actions, "redis_conn", _FakeRedis()):
@@ -778,7 +1024,11 @@ class TestConfirm:
         _store_report(
             db,
             activity,
-            {"action_type": "complete_session", "planned_session_id": str(upcoming.id)},
+            {
+                "action_type": "adjust_session",
+                "planned_session_id": str(upcoming.id),
+                "target_distance_m": 8000,
+            },
         )
         return user, activity, upcoming
 
@@ -788,7 +1038,7 @@ class TestConfirm:
             res = client.get(f"/api/activities/{activity.id}/coach-report")
         assert res.json()["offer"]["token"]
         db.refresh(upcoming)
-        assert upcoming.completed_at is None
+        assert upcoming.target_distance_m == 12000
 
     def test_a_confirmed_offer_writes_once_and_the_token_cannot_be_replayed(
         self, client, db
@@ -803,10 +1053,9 @@ class TestConfirm:
                 "/api/coach/threads/actions/confirm", json={"token": token}
             )
             assert ok.status_code == 200
-            assert ok.json()["action_type"] == "complete_session"
+            assert ok.json()["action_type"] == "adjust_session"
             db.refresh(upcoming)
-            assert upcoming.completed_at is not None
-            completed_at = upcoming.completed_at
+            assert upcoming.target_distance_m == 8000
 
             # Single-use: the same token again changes nothing.
             replay = client.post(
@@ -814,7 +1063,7 @@ class TestConfirm:
             )
         assert replay.status_code == 404
         db.refresh(upcoming)
-        assert upcoming.completed_at == completed_at
+        assert upcoming.target_distance_m == 8000
 
     def test_a_stranger_cannot_spend_the_owners_token(self, client, db):
         user, activity, upcoming = self._setup(client, db)
@@ -831,7 +1080,7 @@ class TestConfirm:
             )
         assert res.status_code == 404
         db.refresh(upcoming)
-        assert upcoming.completed_at is None
+        assert upcoming.target_distance_m == 12000
         # And the owner's token is not burnt by the attempt.
         assert list(fake._store) == [f"coach-action:{user.id}:{token}"]
 
@@ -849,7 +1098,7 @@ class TestConfirm:
             )
         assert res.status_code == 404
         db.refresh(upcoming)
-        assert upcoming.completed_at is None
+        assert upcoming.target_distance_m == 12000
 
     @pytest.mark.parametrize(
         "token",
@@ -863,7 +1112,7 @@ class TestConfirm:
             )
         assert res.status_code in (404, 422)
         db.refresh(upcoming)
-        assert upcoming.completed_at is None
+        assert upcoming.target_distance_m == 12000
 
 
 # --- the generation path (the wiring) -----------------------------------------
@@ -952,8 +1201,9 @@ class TestGenerationPath:
             db,
             activity,
             {
-                "action_type": "complete_session",
+                "action_type": "adjust_session",
                 "planned_session_id": str(uuid.uuid4()),
+                "target_distance_m": 8000,
             },
             monkeypatch,
         )
@@ -993,7 +1243,9 @@ class TestOfferSurvivesTheVoiceRewrite:
         pack = _pack(db, activity)
 
         report = _report_with_offer(
-            action_type="complete_session", planned_session_id=str(upcoming.id)
+            action_type="adjust_session",
+            planned_session_id=str(upcoming.id),
+            target_distance_m=8000,
         )
         attempt = coach_service._MsgAttempt(
             report=report, raw_response="", truncated=False, violations=[]

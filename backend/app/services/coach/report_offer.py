@@ -45,21 +45,36 @@ logger = logging.getLogger(__name__)
 # The whitelist, held here rather than only in the tool schema: a model is asked
 # nicely by an enum and held to it by this set.
 #
-# `draft_plan` is EXCLUDED DELIBERATELY, not forgotten. Two reasons, and the
-# second is the one that would still hold if the first were fixed:
+# ONE kind. Both exclusions below are about what this SURFACE can support, not
+# about the actions being bad.
 #
-#   1. A report's offer is minted afresh on every read and nothing records that
-#      one was acted on, so an offer stays tappable after it has been taken. For
-#      the two kinds here that is cosmetic — re-confirming re-completes a
-#      completed session or re-applies the same target, and both land on the same
-#      value. `draft_plan` is not idempotent: a second confirm drafts AGAIN and
-#      supersedes the plan the first one wrote, which is #883 arriving from an
-#      evergreen button on a months-old report.
-#   2. It is the wrong SIZE of action for this surface. A report is about one
-#      run; redrafting the whole block is a conversation, with the runner saying
-#      what the next weeks need to look like. The thread still offers it, which
-#      is where that discussion already happens.
-REPORT_OFFER_KINDS: Set[str] = {"adjust_session", "complete_session"}
+# `complete_session` is excluded because the report's own pack cannot tell the
+# model whether a session is already done, and refuses to on purpose.
+# `PlannedForContext` carries a session's id, title, intent, discipline and
+# target and NO completion state — handing a model a plan and a result is how it
+# reaches for a compliance verdict, which ADR 0025 exists to have removed. Under
+# the receipt cadence that is not a corner case but the ordinary path: the ingest
+# pipeline auto-ticks the session ~30 minutes before the report is written, and
+# `find_matching_session` deliberately PREFERS an already-credited session, so
+# the id the pack shows is usually a session that is already complete. An action
+# whose correctness depends on a fact the surface structurally withholds does not
+# belong on that surface. A guard would make it safe and noisy — the model would
+# keep offering and the guard would keep dropping — and the damage if one ever
+# slipped through is not cosmetic: confirming calls the writer with no activity,
+# which NULLs `completed_activity_id` and so destroys the credit link that
+# `completion.find_matching_session` documents as the thing keeping a run scored
+# against its plan across re-analysis. The thread still offers completion, where
+# the coach can simply ask.
+#
+# `draft_plan` is excluded because it is the wrong SIZE of action here. A report
+# is about one run; redrafting the whole block is a conversation. It is also the
+# one kind that is not idempotent, so an offer that stays tappable after it has
+# been taken could re-draft and supersede the plan the first tap wrote.
+#
+# What is left is exactly what "the report can offer the change it just argued
+# for" means: correcting one session's prescription. It is also the action that
+# validates every one of its refusals twice, at mint AND at execute.
+REPORT_OFFER_KINDS: Set[str] = {"adjust_session"}
 
 
 # The tail tool's `offer` property. Hand-frozen alongside the rest of the tail
@@ -89,12 +104,10 @@ OFFER_TOOL_PROPERTY: Dict[str, Any] = {
             "enum": sorted(REPORT_OFFER_KINDS),
             "description": (
                 "adjust_session: correct how far or how long ONE planned session "
-                "should be. complete_session: mark a planned session done when "
-                "this run WAS that session and it was not matched automatically. "
-                "Both are corrections to a single session. Redrafting the block "
-                "is not offered here — that is a conversation, and you can offer "
-                "it there; a report about one run is the wrong place to replace "
-                "the plan the runner is training to."
+                "should be. It is the only change offerable from a report. "
+                "Marking a session done and redrafting the block are offered in "
+                "the conversation instead, where you can ask the runner first — "
+                "a report about one run is the wrong place for either."
             ),
         },
         "planned_session_id": {

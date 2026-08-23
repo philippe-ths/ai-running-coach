@@ -24,6 +24,7 @@ refusal→fallback) lives in the llm method and service, not here.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -238,6 +239,22 @@ def merge_report(parsed: ParsedBlocks) -> CoachMessageReport:
     # its own. Left in the spread, a mistyped optional affordance would raise and
     # degrade the whole tail — costing the runner their next_steps over a card.
     # The offer is dropped on its own instead; the tail is unaffected either way.
+    #
+    # The copy is GUARDED. Before #944 a non-mapping tail reached `**parsed.tail`
+    # and raised TypeError inside the try below, which degraded. Copying it out
+    # here without this guard moved that failure OUTSIDE the try and changed its
+    # type — `dict()` raises ValueError on a sequence of non-pairs — so it escaped
+    # `merge_report`, escaped `_generate_message`'s except clause, and cost the
+    # runner the whole report. Latent, because `parse_blocks` normalises the tail
+    # to a mapping or None; kept honest anyway, since the comment above claims
+    # this change makes degradation safer and for that input it did the reverse.
+    if not isinstance(parsed.tail, Mapping):
+        # Exactly what `**parsed.tail` used to demand, asked explicitly. A
+        # try/except around `dict()` is NOT the same restoration: `dict()`
+        # happily converts an empty tuple or a sequence of pairs, both of which
+        # `**` rejected, so the degrade would silently stop firing for them.
+        logger.warning("coach tail was not a mapping; degrading")
+        return CoachMessageReport(message=message, tail_degraded=True)
     tail = dict(parsed.tail)
     offer = coerce_offer(tail.pop("offer", None))
     try:
