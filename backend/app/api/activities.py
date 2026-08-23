@@ -210,6 +210,12 @@ def read_activities(
             response.headline = compose_headline(
                 activity, Classification.from_metrics(activity.metrics)
             )
+            # #947: the day-grouped list's load total. `activity.metrics` rides
+            # the `joinedload(Activity.metrics)` already applied in
+            # `get_activities` — reading it here is free, not a second query
+            # per row. Stays None (not yet analysed) when there is no metrics
+            # row at all.
+            response.effort_score = activity.metrics.effort_score
         response.coach_lead = coach_leads.get(activity.id)
         responses.append(response)
     # #684: the models above are already validated once (model_validate). Returning

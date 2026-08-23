@@ -21,6 +21,9 @@ interface ActivityListItem {
   distance_m: number;
   moving_time_s: number;
   headline?: string | null;
+  // #947: DerivedMetric.effort_score, null until analysed — the day-grouped
+  // list's LOAD total.
+  effort_score?: number | null;
 }
 
 interface Filters {
@@ -139,7 +142,10 @@ export default function AllActivitiesPage() {
       )}
 
       {status !== 'loading' && activities.length > 0 && (
-        <ActivityList activities={activities} />
+        // #947: hasMore tells the list which day (only ever the oldest, since
+        // the list is date-descending) cannot yet claim a final total — the
+        // next "Load more" tap might still add to it.
+        <ActivityList activities={activities} hasMore={hasMore} />
       )}
 
       {status === 'loaded' && activities.length === 0 && (

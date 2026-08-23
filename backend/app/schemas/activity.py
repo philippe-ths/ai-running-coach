@@ -45,6 +45,13 @@ class ActivityRead(ActivityBase):
     # channel that announces a report, so this is how a runner who has not linked
     # one discovers their runs were coached at all.
     coach_lead: Optional[str] = None
+    # DerivedMetric.effort_score, projected at read time (#947). Null until the
+    # activity has been analysed — distinct from a real zero. Distance cannot
+    # total a mixed day (a bike or a strength session logs no distance at all),
+    # but effort_score is one comparable, summable scale across every activity
+    # type with or without HR (#186), so it is the one figure a day-of-training
+    # grouping can total as "load".
+    effort_score: Optional[float] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 

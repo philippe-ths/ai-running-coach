@@ -51,6 +51,69 @@ const mockActivity = {
   splits: [],
 };
 
+// #947: the day-grouped activity list. Built so the "All Activities" page's
+// real PAGE_SIZE (20) boundary lands mid-day: the first page (skip=0) returns
+// exactly 20 rows ending partway through the OLDEST day below, and the second
+// page (skip=20) returns that day's remaining rows plus the pagination
+// terminator — so the smoke exercises both the boundary-day "Partial" mark
+// (while only page 1 is loaded) and the cross-page merge (once page 2 lands).
+// One day is deliberately mixed-discipline (a run, a ride, and a strength
+// session with no `effort_score` yet) to exercise the discipline dot and the
+// "one activity not yet analysed" partial-load reading.
+function listActivity(id, name, type, dateIso, timeLocal, {
+  movingTimeS = 2400,
+  distanceM = 6000,
+  effortScore = 40,
+} = {}) {
+  return {
+    id,
+    name,
+    type,
+    start_date: `${dateIso}T${timeLocal}:00Z`,
+    start_date_local: `${dateIso}T${timeLocal}:00`,
+    distance_m: distanceM,
+    moving_time_s: movingTimeS,
+    elapsed_time_s: movingTimeS + 60,
+    elev_gain_m: 20,
+    avg_hr: 148,
+    avg_cadence: 172,
+    headline: null,
+    coach_lead: null,
+    effort_score: effortScore,
+  };
+}
+
+const mockActivityListPage = [
+  listActivity("l01", "Morning Tempo", "Run", "2026-03-28", "07:00", { effortScore: 45 }),
+  // The mixed day: a run, a ride, and a strength session with NO effort_score
+  // yet (still awaiting analysis) — the day's LOAD total must read as partial.
+  listActivity("l02", "Easy Shakeout", "Run", "2026-03-27", "06:45", { effortScore: 30, distanceM: 5000 }),
+  listActivity("l03", "Recovery Spin", "Ride", "2026-03-27", "12:30", { effortScore: 18, distanceM: 15000, movingTimeS: 2700 }),
+  { ...listActivity("l04", "Lower Body", "WeightTraining", "2026-03-27", "18:15", { distanceM: 0, movingTimeS: 2400 }), effort_score: null },
+  listActivity("l05", "Steady Run", "Run", "2026-03-26", "07:00", { effortScore: 35 }),
+  listActivity("l06", "Morning Miles", "Run", "2026-03-25", "07:00", { effortScore: 28 }),
+  listActivity("l07", "Threshold Run", "Run", "2026-03-24", "07:00", { effortScore: 40 }),
+  listActivity("l08", "Morning Miles", "Run", "2026-03-23", "07:00", { effortScore: 33 }),
+  listActivity("l09", "Weekend Long Run", "Run", "2026-03-22", "08:00", { effortScore: 38, distanceM: 16000, movingTimeS: 5400 }),
+  listActivity("l10", "Morning Miles", "Run", "2026-03-21", "07:00", { effortScore: 42 }),
+  listActivity("l11", "Morning Miles", "Run", "2026-03-20", "07:00", { effortScore: 25 }),
+  listActivity("l12", "Morning Miles", "Run", "2026-03-19", "07:00", { effortScore: 31 }),
+  listActivity("l13", "Morning Miles", "Run", "2026-03-18", "07:00", { effortScore: 29 }),
+  listActivity("l14", "Morning Miles", "Run", "2026-03-17", "07:00", { effortScore: 36 }),
+  listActivity("l15", "Tempo Run", "Run", "2026-03-16", "07:00", { effortScore: 44 }),
+  listActivity("l16", "Morning Miles", "Run", "2026-03-15", "07:00", { effortScore: 27 }),
+  listActivity("l17", "Morning Miles", "Run", "2026-03-14", "07:00", { effortScore: 32 }),
+  listActivity("l18", "Morning Miles", "Run", "2026-03-13", "07:00", { effortScore: 39 }),
+  listActivity("l19", "Morning Miles", "Run", "2026-03-12", "07:00", { effortScore: 41 }),
+  // The boundary day: three activities, only the first of which fits in page 1
+  // (bringing it to exactly 20 rows). The other two arrive on page 2.
+  listActivity("l20", "Morning Run", "Run", "2026-03-11", "06:30", { effortScore: 22 }),
+];
+const mockActivityListPage2 = [
+  listActivity("l21", "Midday Ride", "Ride", "2026-03-11", "12:00", { effortScore: 16, distanceM: 12000, movingTimeS: 2400 }),
+  listActivity("l22", "Evening Walk", "Walk", "2026-03-11", "19:00", { effortScore: 8, distanceM: 3000, movingTimeS: 1800 }),
+];
+
 const mockProfile = {
   goal_type: "general",
   experience_level: "intermediate",
@@ -578,11 +641,14 @@ function createMockApiServer() {
       return sendJson(res, 200, [mockActivity]);
     }
 
-    // The All Activities view (#240) pages with skip/limit. Return one page, then
-    // empty, so the "Load more" terminator is exercised.
+    // The All Activities view (#240) pages with skip/limit. #947: page 1 is a
+    // full 20-row page ending mid-day, page 2 completes that day and then the
+    // "Load more" terminator (empty) is exercised on a third fetch.
     if (pathname === "/api/activities" && searchParams.has("skip")) {
       const skip = Number(searchParams.get("skip") ?? "0");
-      return sendJson(res, 200, skip === 0 ? [mockActivity] : []);
+      if (skip === 0) return sendJson(res, 200, mockActivityListPage);
+      if (skip === mockActivityListPage.length) return sendJson(res, 200, mockActivityListPage2);
+      return sendJson(res, 200, []);
     }
 
     if (pathname === "/api/activities/42") {
