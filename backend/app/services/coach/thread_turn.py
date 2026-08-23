@@ -216,7 +216,7 @@ def _max_hr_revision_section(db: Session, user: User) -> Optional[dict]:
         "stated_max_hr": finding.stated_max,
         "suggested_max_hr": finding.suggested_max,
         "margin_bpm": finding.margin_bpm,
-        "exceeding_activity_count": finding.exceeding_count,
+        "exceeding_block_count": finding.exceeding_block_count,
         "sample_activity_count": finding.sample_count,
         "basis": finding.basis,
     }

@@ -162,6 +162,15 @@ class StoredProposedAction(BaseModel):
     # from `max_hr_calibration.gather_max_hr_revision` — never model-supplied,
     # since there is no field on `ProposedActionRequest` for `revise_max_hr`.
     proposed_max_hr: Optional[int] = None
+    # #945: the stated max HR this offer was minted AGAINST. A review
+    # demonstrated that re-deriving "does some revision still hold" at
+    # confirm time is the wrong check — it is satisfied even after the
+    # runner has since corrected their own profile to a different number by
+    # hand, and the code would silently overwrite that deliberate edit with
+    # the stale offered value. The only question that protects the write is
+    # whether the profile is STILL the exact number this offer was built
+    # against; that requires remembering what it was.
+    stated_max_hr_at_offer: Optional[int] = None
     # #856: the conversation the plan was settled in. Server-supplied at mint
     # time, never model-supplied. Carried by EVERY action since #778, because a
     # confirmed change leaves its trace in the conversation that reached it.
@@ -465,7 +474,6 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
 
     if stored.action_type == "revise_max_hr":
         from app.models.user_profile import UserProfile
-        from app.services.coach.max_hr_calibration import gather_max_hr_revision
 
         # Ownership re-resolved from the authenticated owner, like every other
         # action here — there is no id in the payload to mistrust because a
@@ -476,16 +484,23 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
         )
         if profile is None:
             raise LookupError("Proposed action not found")
-        # Re-checked fresh at execute time, the `adjust_session` precedent: the
-        # token can be up to 30 minutes old, and the evidence it was minted
-        # from can have changed (a manual profile edit, a deleted activity) in
-        # that window. Still writes the EXACT number the runner confirmed on
-        # the card, not a freshly recomputed one — the card is what they
-        # agreed to, and silently substituting a different number would be
-        # exactly the silent write this whole mechanism exists to prevent.
-        if gather_max_hr_revision(db, owner_user_id, respect_cooldown=False) is None:
+        # Re-checked fresh at execute time, the `adjust_session` precedent —
+        # but the check that matters is an EXACT match, not "does some
+        # revision still hold". A review demonstrated the difference: stated
+        # 180 -> offer minted at 193 -> the runner edits their own profile to
+        # 150 through the ordinary profile screen -> "does some revision
+        # still hold against 150" is TRUE (150 is even further below the
+        # observed peaks), so that question silently overwrote the runner's
+        # own deliberate correction with the stale 193. The only question
+        # that actually protects the write is whether the profile is STILL
+        # the exact number this offer was built against; if it has moved at
+        # all, the offer no longer describes a real transition and is
+        # refused rather than reasoned about further — the coach can always
+        # re-offer from current evidence.
+        if profile.max_hr != stored.stated_max_hr_at_offer:
             raise ValueError(
-                "the evidence for this revision no longer holds; nothing was changed"
+                "the runner's stated max HR has changed since this offer was "
+                "made; nothing was changed"
             )
         profile.max_hr = stored.proposed_max_hr
         profile.max_hr_source = "runner_confirmed"
@@ -645,6 +660,7 @@ def _build_offer(
             owner_user_id=owner_user_id,
             action_type="revise_max_hr",
             proposed_max_hr=finding.suggested_max,
+            stated_max_hr_at_offer=finding.stated_max,
         )
         # Stamped here, at OFFER time, not from any read path (#945 AC5): this
         # is the one place a `revise_max_hr` card is actually about to reach

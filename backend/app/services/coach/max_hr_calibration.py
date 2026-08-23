@@ -20,34 +20,58 @@ Never diagnoses, never recomputes `hr_zones`, and never writes anything -- it
 only reports what the runner's own data shows. The write happens only if the
 runner confirms the `revise_max_hr` proposed action (proposed_actions.py).
 
+Known gap, deliberately not fixed here (its own issue): nothing recomputes
+`hr_zones` or re-runs historical `DerivedMetric` rows after a max-HR write.
+This feature makes that staleness MORE likely to matter -- it is the first
+thing that changes `UserProfile.max_hr` other than the runner typing a new
+number in by hand, and it can now happen mid-relationship rather than only at
+onboarding, so a runner who confirms a revision keeps analysing every future
+run against a zone table computed from the OLD ceiling until they separately
+trigger a resync/reanalysis. Flagged here so the next reader finds it; not
+this issue's job to close.
+
 Mirrors calibration.py's shape: pure comparison logic, no DB, no I/O. The
-DB-reading adapter (recent activities' recorded max HR, the profile's stated
-max HR and its own "have we raised this before" bookkeeping) lives in
-thread_turn.py, the same split calibration.py and context.py use.
+DB-reading adapter (recent activities' recorded max HR, block membership so
+independence means independent TRAINING EVENTS rather than independent
+Strava rows, the profile's stated max HR and its own "have we raised this
+before" bookkeeping) lives in thread_turn.py, the same split calibration.py
+and context.py use.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, Hashable, List, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-# More than one independent activity must show the exceedance before anything
-# is raised. A single spike is a sensor artefact -- the #657 lesson the issue
+# More than one independent BLOCK must show the exceedance before anything is
+# raised. A single spike is a sensor artefact -- the #657 lesson the issue
 # itself cites: a durable record written from soft evidence is hard to notice
 # and harder to undo, so the bar for RAISING it (not the bar for believing a
-# single number) has to be higher than one sample.
-MIN_QUALIFYING_ACTIVITIES = 2
+# single number) has to be higher than one sample. BLOCK, not activity: a
+# Strava-split multi-part session (a gym block that lands as several rows, an
+# interval run Strava breaks into laps-as-activities) is one physiological
+# event, and counting its rows as separate "independent" evidence is exactly
+# the kind of correlated-not-independent sample this bar exists to exclude. A
+# `Block` (services/blocks.py) is this codebase's own notion of one training
+# event -- deterministic time-gap clustering, already computed at ingestion
+# for every activity -- so this reuses it rather than inventing a second,
+# weaker one.
+MIN_QUALIFYING_BLOCKS = 2
 
-# At least this many of the runner's own recent activities need a recorded max
-# HR before the detector reasons about them at all. Two qualifying hits out of
-# a total sample of two is not "this runner's recent training" -- it is the
-# runner's *whole* thin record, which is exactly the kind of soft foundation
-# the AC exists to prevent. Mirrors the MIN_HISTORY_FOR_NOVELTY floor used
-# elsewhere in the coach layer for the same reason (novelty.py).
+# At least this many of the runner's own recent RUN activities need a
+# recorded max HR before the detector reasons about them at all. Two
+# qualifying hits out of a total sample of two is not "this runner's recent
+# training" -- it is the runner's *whole* thin record, which is exactly the
+# kind of soft foundation the AC exists to prevent. Mirrors the
+# MIN_HISTORY_FOR_NOVELTY floor used elsewhere in the coach layer for the
+# same reason (novelty.py). Counted per ACTIVITY rather than per block like
+# the exceedance bar above: this is a "is there enough to reason about at
+# all" floor, not the independence claim, and a false-too-thin abstain here
+# is a far smaller harm than a false-positive raise.
 MIN_HISTORY_ACTIVITIES = 3
 
 # A recorded peak must clear the stated max by more than this to count as a
@@ -65,14 +89,23 @@ LOOKBACK_DAYS = 90
 # Anti-nag (#945 AC5): once a revision has been surfaced/offered, the SAME
 # evidence must not be raised again for this many days. A materially higher
 # peak arriving later is new evidence and re-raises regardless of the cooldown
-# (see `find_max_hr_revision`'s comparison against `last_surfaced_value`).
+# (see `find_max_hr_revision`'s comparison against `last_surfaced_value`) --
+# but "materially" is load-bearing: bypassing the cooldown requires clearing
+# the SAME `EXCEEDANCE_MARGIN_BPM` bar the original claim needed to clear,
+# not merely being numerically greater. Without that bar a 1 bpm-higher
+# "new" suggestion (193 -> 194) would re-raise a fact declined or ignored
+# the day before, which is precisely the AC5 behaviour ("repeatedly
+# re-raising a fact the runner has declined to change is not acceptable")
+# applied to noise rather than a real second signal. Reusing
+# EXCEEDANCE_MARGIN_BPM rather than inventing a second threshold keeps
+# "meaningfully higher" meaning one thing throughout this detector.
 RESURFACE_COOLDOWN_DAYS = 14
 
 # A recorded max HR outside this band is device/sensor error, not a runner's
 # heart rate -- nobody's true max HR sits below a typical resting rate or above
 # what is physiologically survivable. Without this floor a couple of glitched
 # GPS-watch readings (the kind that occasionally spike into the hundreds of
-# extra bpm) could clear MIN_QUALIFYING_ACTIVITIES and this detector would
+# extra bpm) could clear MIN_QUALIFYING_BLOCKS and this detector would
 # offer to write garbage into the runner's record. Readings outside the band
 # are dropped before anything else runs, not merely excluded from "exceeding":
 # a corrupted sample should not count as evidence of anything, including
@@ -88,14 +121,22 @@ class MaxHrRevisionFinding:
     stated_max: int
     suggested_max: int
     margin_bpm: int
-    exceeding_count: int
+    exceeding_block_count: int
     sample_count: int
     basis: str
 
 
+# One (block_id, recorded max HR) pair per RUN activity. `block_id` may be
+# `None` for an activity with no block assignment; each `None` is treated as
+# its own independent block by the caller, never merged with another `None`
+# (see `find_max_hr_revision`'s grouping below), so an unassigned activity is
+# neither excluded nor silently pooled with an unrelated one.
+RunObservation = Tuple[Optional[Hashable], Optional[float]]
+
+
 def find_max_hr_revision(
     stated_max: Optional[int],
-    observed_maxes: List[Optional[float]],
+    observed: List[RunObservation],
     *,
     last_surfaced_value: Optional[float] = None,
     last_surfaced_at: Optional[datetime] = None,
@@ -103,42 +144,64 @@ def find_max_hr_revision(
 ) -> Optional[MaxHrRevisionFinding]:
     """Compare the runner's stated max HR to their own recent recorded peaks.
 
+    `observed` must already be restricted to RUNNING activities by the
+    caller (`gather_max_hr_revision` does this via `activity_facts.is_run` --
+    this function has no notion of activity type and cannot verify it, which
+    is why `basis` below says "recorded runs": that wording is true only
+    because there is exactly one producer of `observed` and it filters to
+    runs before this function ever sees a value. A second caller that skips
+    that filter would make the wording a lie silently, so keep it that way.
+
     Abstains (returns None) whenever the evidence is not strong enough to
     raise, which is the default:
 
     - no stated max to compare against;
-    - fewer than `MIN_HISTORY_ACTIVITIES` recent activities carry a recorded
-      max HR at all (too little history to reason about);
-    - fewer than `MIN_QUALIFYING_ACTIVITIES` of those exceed the stated max by
-      more than `EXCEEDANCE_MARGIN_BPM` (a single spike is noise, not
-      evidence);
+    - fewer than `MIN_HISTORY_ACTIVITIES` recent run activities carry a
+      plausible recorded max HR at all (too little history to reason about);
+    - fewer than `MIN_QUALIFYING_BLOCKS` distinct BLOCKS (not activities --
+      see `MIN_QUALIFYING_BLOCKS`) have a run exceeding the stated max by
+      more than `EXCEEDANCE_MARGIN_BPM` (a single spike, or several rows from
+      one training event, is not independent evidence);
     - this same evidence was already surfaced within `RESURFACE_COOLDOWN_DAYS`
-      and nothing new has come in since (the anti-nag property -- see AC5).
+      and nothing MATERIALLY new has come in since (the anti-nag property --
+      see AC5 and `RESURFACE_COOLDOWN_DAYS`'s materiality bar).
 
-    `suggested_max` is the highest of the qualifying recorded peaks: once two
-    or more independent activities clear the bar, the highest one actually
-    recorded is real evidence the runner's ceiling is at least that high, not
-    a guess.
+    `suggested_max` is the highest plausible peak recorded in any of the
+    qualifying blocks: once two or more independent training events clear
+    the bar, the highest one actually recorded is real evidence the
+    runner's ceiling is at least that high, not a guess.
     """
     if not stated_max or stated_max <= 0:
         return None
 
-    samples = [
-        m
-        for m in observed_maxes
+    plausible = [
+        (block_id, m)
+        for block_id, m in observed
         if m is not None and _PLAUSIBLE_HR_FLOOR_BPM <= m <= _PLAUSIBLE_HR_CEILING_BPM
     ]
-    if len(samples) < MIN_HISTORY_ACTIVITIES:
+    if len(plausible) < MIN_HISTORY_ACTIVITIES:
         return None
 
-    exceeding = [m for m in samples if m >= stated_max + EXCEEDANCE_MARGIN_BPM]
-    if len(exceeding) < MIN_QUALIFYING_ACTIVITIES:
+    # Group by training event, not by row: a block-of-many (a Strava-split
+    # gym session, an interval run logged as several laps-as-activities) is
+    # ONE physiological event and must contribute at most one vote. Each
+    # unassigned (`None`-block) activity gets its OWN fresh key so it is
+    # counted as independent of every other unassigned activity rather than
+    # silently pooled with them.
+    peak_by_block: dict = {}
+    for block_id, m in plausible:
+        if m < stated_max + EXCEEDANCE_MARGIN_BPM:
+            continue
+        key: Any = block_id if block_id is not None else object()
+        peak_by_block[key] = max(peak_by_block.get(key, m), m)
+
+    if len(peak_by_block) < MIN_QUALIFYING_BLOCKS:
         return None
 
-    suggested = int(round(max(exceeding)))
+    suggested = int(round(max(peak_by_block.values())))
     margin = suggested - stated_max
 
-    if last_surfaced_value is not None and suggested <= last_surfaced_value:
+    if last_surfaced_value is not None and suggested < last_surfaced_value + EXCEEDANCE_MARGIN_BPM:
         if last_surfaced_at is not None:
             now = as_of or datetime.now(timezone.utc)
             surfaced = last_surfaced_at
@@ -157,21 +220,19 @@ def find_max_hr_revision(
         stated_max=int(stated_max),
         suggested_max=suggested,
         margin_bpm=margin,
-        exceeding_count=len(exceeding),
-        sample_count=len(samples),
+        exceeding_block_count=len(peak_by_block),
+        sample_count=len(plausible),
         basis=(
-            f"{len(exceeding)} of the last {len(samples)} recorded runs show a "
+            f"{len(peak_by_block)} of the last {len(plausible)} recorded runs show a "
             f"peak heart rate at or above {suggested} bpm, {margin} bpm over the "
             f"stated max of {int(stated_max)} bpm."
         ),
     )
 
 
-def gather_max_hr_revision(
-    db: Session, user_id: UUID, *, respect_cooldown: bool = True
-) -> Optional[MaxHrRevisionFinding]:
+def gather_max_hr_revision(db: Session, user_id: UUID) -> Optional[MaxHrRevisionFinding]:
     """The DB-reading half: this runner's stated max HR and their own recent
-    recorded peaks, fed through `find_max_hr_revision`.
+    recorded RUN peaks (block_id, max_hr), fed through `find_max_hr_revision`.
 
     Mirrors `services/readiness.py`'s split (a pure core plus one DB-reading
     function in the same module, rather than scattering the query into every
@@ -181,16 +242,15 @@ def gather_max_hr_revision(
     and a query duplicated in both places is a query that can drift between
     them. Read-only: never writes the anti-nag bookkeeping it reads.
 
-    `respect_cooldown=False` skips the anti-nag suppression and answers only
-    "does the raw evidence still support a revision at all" -- for the ONE
-    caller that must ask that question about the SAME evidence it just
-    stamped: `_execute`'s re-check right before writing the confirmed
-    revision. Every other caller (surfacing the fact, building a new offer)
-    leaves it at the default, because THOSE are exactly the places the
-    cooldown exists to govern.
+    Restricted to running activities via `activity_facts.is_run` -- the
+    codebase's one definition of what a run is, reused rather than
+    reimplemented -- because non-running HR (a WeightTraining session's
+    wrist-optical motion artefacts especially) is not evidence about a
+    RUNNING max HR ceiling.
     """
     from app.models.activity import Activity
     from app.models.user_profile import UserProfile
+    from app.services.activity_facts import is_run
 
     profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
     if profile is None or not profile.max_hr:
@@ -198,7 +258,7 @@ def gather_max_hr_revision(
 
     since = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
     rows = (
-        db.query(Activity.max_hr)
+        db.query(Activity.type, Activity.block_id, Activity.max_hr)
         .filter(
             Activity.user_id == user_id,
             Activity.is_deleted.is_(False),
@@ -207,18 +267,27 @@ def gather_max_hr_revision(
         .order_by(Activity.start_date.desc())
         .all()
     )
-    observed = [row[0] for row in rows]
-    last_surfaced_value = (
-        profile.max_hr_revision_last_surfaced_value if respect_cooldown else None
-    )
-    last_surfaced_at = (
-        profile.max_hr_revision_last_surfaced_at if respect_cooldown else None
-    )
+
+    class _TypeOnly:
+        """The minimal shape `activity_facts.is_run` reads (`.activity_type`),
+        so this reuses that single predicate rather than re-testing
+        `type.lower() == "run"` a second time in this module."""
+
+        __slots__ = ("activity_type",)
+
+        def __init__(self, activity_type):
+            self.activity_type = activity_type
+
+    observed: List[RunObservation] = [
+        (block_id, max_hr)
+        for activity_type, block_id, max_hr in rows
+        if is_run(_TypeOnly(activity_type))
+    ]
     return find_max_hr_revision(
         profile.max_hr,
         observed,
-        last_surfaced_value=last_surfaced_value,
-        last_surfaced_at=last_surfaced_at,
+        last_surfaced_value=profile.max_hr_revision_last_surfaced_value,
+        last_surfaced_at=profile.max_hr_revision_last_surfaced_at,
     )
 
 

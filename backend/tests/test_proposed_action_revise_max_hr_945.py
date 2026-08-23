@@ -204,6 +204,64 @@ def test_offer_is_single_use(db):
 
 
 # --------------------------------------------------------------------------- #
+# Confirm-time staleness (#945 review fix 1, CRITICAL)
+# --------------------------------------------------------------------------- #
+
+
+def test_confirm_refuses_when_the_runner_edited_their_profile_since_the_offer(db):
+    """Demonstrated by a review: stated 180 -> offer minted at 193 -> the
+    runner edits their own profile to 150 (the ordinary PUT /api/profile
+    path, simulated here by writing the column directly) -> confirming the
+    stale offer must NOT silently overwrite that deliberate correction with
+    193. "does some revision still hold against the CURRENT profile" is the
+    wrong question -- it is satisfied even here, since 150 is even further
+    below the observed peaks. The only safe question is an exact match
+    against what the offer was minted against."""
+    user = _user(db)
+    _seed_qualifying_evidence(db, user)
+    fake = _FakeRedis()
+    with patch.object(proposed_actions, "redis_conn", fake):
+        _result, frame = proposed_actions.mint_proposed_action(
+            db, user.id, {"action_type": "revise_max_hr"}
+        )
+        token = frame["token"]
+
+        # The runner's own deliberate edit lands before they confirm the card.
+        profile = db.query(UserProfile).filter(UserProfile.user_id == user.id).one()
+        profile.max_hr = 150
+        db.commit()
+
+        try:
+            proposed_actions.consume_and_execute(db, user.id, token)
+            assert False, "a stale offer must be refused, not silently written"
+        except ValueError:
+            pass
+
+    profile = db.query(UserProfile).filter(UserProfile.user_id == user.id).one()
+    assert profile.max_hr == 150, "the runner's own newer edit must survive untouched"
+    assert profile.max_hr_source != "runner_confirmed"
+
+
+def test_confirm_succeeds_when_the_profile_is_unchanged_since_the_offer(db):
+    """The positive control for the fix above: when nothing has moved, the
+    exact-match check does not itself become a new way to refuse a valid
+    confirm."""
+    user = _user(db)
+    _seed_qualifying_evidence(db, user)
+    fake = _FakeRedis()
+    with patch.object(proposed_actions, "redis_conn", fake):
+        _result, frame = proposed_actions.mint_proposed_action(
+            db, user.id, {"action_type": "revise_max_hr"}
+        )
+        token = frame["token"]
+        result = proposed_actions.consume_and_execute(db, user.id, token)
+    assert result["max_hr"] == 193
+    profile = db.query(UserProfile).filter(UserProfile.user_id == user.id).one()
+    assert profile.max_hr == 193
+    assert profile.max_hr_source == "runner_confirmed"
+
+
+# --------------------------------------------------------------------------- #
 # Anti-nag (#945 AC5)
 # --------------------------------------------------------------------------- #
 
