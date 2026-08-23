@@ -1301,12 +1301,17 @@ class UpcomingSessionContext(BaseModel):
 
 
 class ScheduleContext(BaseModel):
-    """The runner's plan for THIS week (#830).
+    """The runner's plan for THIS week (#830), plus one bounded look past it (#943).
 
     Scoped to the week on purpose. A twelve-week horizon is the runner's screen,
     not something a report about one run needs: what a coach needs here is what
     this session was for and what it sets up, and the rest is tokens spent on
-    weeks nobody is asking about yet.
+    weeks nobody is asking about yet. `next_week_committed` is not an exception to
+    that boundary so much as its one deliberate extension: the coach already
+    reaches past this week on its own ("next week's long run"), and reaching
+    forward is good coaching — the section's job is to make sure it has the real
+    number when it does, capped exactly like this week's list and committed
+    sessions only. It is still one week, never the horizon.
 
     Everything in here is INTENT. Not one field states that something happened —
     `done_this_week` is a count of sessions the runner ticked off, and the
@@ -1326,6 +1331,15 @@ class ScheduleContext(BaseModel):
     # exists not to hand over. None when no session states a distance.
     planned_running_this_week: Optional[str] = None
     still_to_come_this_week: List[UpcomingSessionContext] = Field(default_factory=list)
+    # #943: the one bounded exception to the week boundary above. NOT the
+    # twelve-week horizon — a fixed one-week-further look, capped the same way
+    # `still_to_come_this_week` is, and COMMITTED sessions only (a suggestion the
+    # runner may still dismiss earns no number here). A runner's schedule showed
+    # an 18.00 km long run next week; asked about it, the coach reached past this
+    # section's old boundary anyway and, finding no real figure in front of it,
+    # said "16.5km". The fix is not to stop it reaching forward — that is good
+    # coaching — but to make sure it has the truth to reach for.
+    next_week_committed: List[UpcomingSessionContext] = Field(default_factory=list)
     # The spacing rules in play, as the runner reads them. Carried so advice does
     # not contradict the plan the coach itself wrote ("do a session tomorrow"
     # when tomorrow is the rest day after the long run).

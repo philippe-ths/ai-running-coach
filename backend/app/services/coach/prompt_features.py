@@ -481,6 +481,35 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.SCHEDULE,
         }
     ),
+    # #943: grouped_v11 carries EXACTLY grouped_v10's capability set — no new pack
+    # signal. The fix's data half (next week's committed sessions in
+    # `right_now.schedule`) rides the existing SCHEDULE feature for every
+    # schedule-aware prompt, this one included; only the PROSE differs (the
+    # schedule clause's forward-numbers discipline, declared in
+    # prompt_clauses.PROSE_VARIANTS). Ships INERT (flip target: grouped_v10 ->
+    # grouped_v11).
+    "coach_message_lean_grouped_v11": frozenset(
+        {
+            _F.GROUPED_PACK,
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.READINESS,
+            _F.USER_MATERIALS,
+            _F.RECENT_WEEKS,
+            _F.STREAM_VIEW,
+            _F.TRAINING_HISTORY_2WK,
+            _F.MEMORY,
+            _F.INTENSITY_READ,
+            _F.INTENSITY_MIX,
+            _F.METRICS_COACH_FRAMED,
+            _F.SALIENCE_DEPTH,
+            _F.PACK_COACH_VIEW,
+            _F.BODY,
+            _F.SCHEDULE,
+        }
+    ),
 }
 
 
