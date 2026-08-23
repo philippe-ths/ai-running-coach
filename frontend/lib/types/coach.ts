@@ -141,6 +141,22 @@ export interface CoachReportDebug {
   raw_llm_response: string | null;
 }
 
+/** #944: the schedule change this report offered, as the runner is shown it.
+ *  The same five fields the chat sheet's `proposed_action` frame carries, so the
+ *  report card and the chat card are one object across two surfaces and both
+ *  confirm through `/api/coach/threads/actions/confirm`.
+ *
+ *  Minted fresh on every read, for the reader. A report is written by a worker
+ *  and read hours later, and the token lives thirty minutes, so it cannot be
+ *  stored with the report. Nothing is written until the runner confirms. */
+export interface CoachReportOffer {
+  action_type: string;
+  token: string;
+  description: string;
+  confirm_label: string;
+  dismiss_label: string;
+}
+
 export interface CoachReport {
   id: string;
   activity_id: string;
@@ -148,4 +164,5 @@ export interface CoachReport {
   meta: CoachReportMeta;
   debug: CoachReportDebug;
   created_at: string;
+  offer?: CoachReportOffer | null;
 }
