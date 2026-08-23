@@ -47,6 +47,17 @@ def generate_period_report_job(user_id: str, report_id: str) -> None:
         outcome = asyncio.run(generate_period_report(db, user, report))
         if outcome.ok:
             logger.info("period report: report %s is ready", report.id)
+        elif outcome.discarded:
+            # The generation itself finished (or failed) normally, but by then
+            # another writer had already settled this row (the stale-retry
+            # race, #946 review) — `store.mark_ready`/`mark_failed`'s
+            # compare-and-set refused to resurrect or overwrite it. The result
+            # is discarded on purpose; this is not a job failure.
+            logger.info(
+                "period report: report %s was already settled by another "
+                "writer; this generation's result was discarded",
+                report.id,
+            )
         else:
             logger.info(
                 "period report: report %s failed (%s)", report.id, outcome.failure_kind

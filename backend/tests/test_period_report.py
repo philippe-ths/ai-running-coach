@@ -268,6 +268,63 @@ async def test_uncalibrated_zone_reference_is_policed(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ungated_interval_execution_claim_is_policed(db, monkeypatch):
+    """#946 review: `PeriodReportPack.sessions` carries no per-rep interval
+    detail at all (no stream data — see period_report_pack.py), so EVERY
+    specific interval-execution claim in a period report is ungrounded by
+    construction. Before the fix `sessions_in_play=[]` made rule 4 a silent
+    no-op for this whole surface; this pins that a claim like "you hit all
+    8x400m" is now caught exactly the way a single low-confidence session's
+    would be."""
+    user = _seed_user(db)
+    _seed_activity(db, user, day=TODAY)
+    report = _seed_report(db, user)
+    client = _FakeClient([
+        {
+            "message": "You hit all 8x400m at target pace this block.",
+            "headline": "Sharp intervals",
+            "next_steps": [],
+        },
+        {
+            "message": "You handled the harder efforts well this block.",
+            "headline": "Sharp intervals",
+            "next_steps": [],
+        },
+    ])
+    _inject(monkeypatch, client)
+
+    outcome = await generate_period_report(db, user, report)
+
+    assert outcome.ok
+    assert len(client.calls) == 2
+    assert "was not the shape" not in client.calls[1]["user"]  # rejected on POLICY, not shape
+    db.refresh(report)
+    assert "8x400m" not in report.report["message"]
+
+
+@pytest.mark.asyncio
+async def test_an_interval_claim_that_never_self_corrects_fails_rather_than_shipping(db, monkeypatch):
+    user = _seed_user(db)
+    _seed_activity(db, user, day=TODAY)
+    report = _seed_report(db, user)
+    overreach = {
+        "message": "You executed 8 reps exactly as planned this block.",
+        "headline": "Perfect execution",
+        "next_steps": [],
+    }
+    client = _FakeClient([overreach, overreach])
+    _inject(monkeypatch, client)
+
+    outcome = await generate_period_report(db, user, report)
+
+    assert not outcome.ok
+    assert outcome.failure_kind == store.FAILURE_POLICY
+    db.refresh(report)
+    assert report.status == store.FAILED
+    assert report.report is None
+
+
+@pytest.mark.asyncio
 async def test_model_lane_resolves_from_turn_kind(db, monkeypatch):
     """#946 requirement 4: generation goes through `turn.build_client` with
     `TurnKind.PERIOD`, so spend is metered and the model lane is the ONE this

@@ -8,6 +8,7 @@ runner).
 """
 
 from datetime import date, datetime, timedelta, timezone
+from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -36,6 +37,19 @@ def _no_real_enqueue(monkeypatch):
     monkeypatch.setattr(
         "app.api.period_reports.enqueue_period_report", lambda user_id, report_id: None
     )
+
+
+@pytest.fixture(autouse=True)
+def _claim_always_succeeds(monkeypatch):
+    """`create_period_report` calls `store.claim_identity`, which is a real
+    atomic Redis `SET NX EX` (#946 review). Every test in this file gets a
+    fake Redis that always grants the claim, so the suite stays off the
+    network per this file's own rule; the concurrency-specific tests below
+    override this with a more specific double.
+    """
+    fake_redis = MagicMock()
+    fake_redis.set.return_value = True
+    monkeypatch.setattr("app.core.queue.redis_conn", fake_redis)
 
 
 def _seed_user(db) -> User:
@@ -261,6 +275,85 @@ def test_a_stale_generating_row_does_not_block_a_retry(db, client, monkeypatch):
     assert len(enqueued) == 1
     db.refresh(stale)
     assert stale.status == store.FAILED
+
+
+# --- the claim (#946 review: two concurrent identical POSTs) -----------------
+#
+# The atomicity itself — that a real Redis `SET NX EX` genuinely admits only
+# one caller — is Redis's own guarantee and is proven live, against real
+# Postgres and real Redis, by scripts/probe_period_report_concurrency.py (see
+# the PR description for its output). What belongs in the deterministic suite
+# is THIS module's own logic in response to a lost claim: it must never create
+# a second row, and it must resolve to whatever the winner produced.
+
+
+def test_a_lost_claim_never_calls_create_generating_report(db, client, monkeypatch):
+    """The end-to-end guarantee that matters to a runner: a request that loses
+    the claim while a winner's row already exists returns that row and creates
+    nothing new. Mutation-checked note, in the interest of not overclaiming
+    what this test isolates: with the winner's row already visible, this
+    specific case is ALSO covered by the unconditional `_find_existing` check
+    that runs whether or not the claim was won, so this test alone does not
+    distinguish "the claim stopped a duplicate" from "the idempotency check
+    found the winner first" — deleting the claim gate entirely still passes
+    it. The claim's own, independent contribution — the tight-race case where
+    NOTHING is visible yet — is what
+    `test_a_lost_claim_with_nothing_visible_yet_refuses_rather_than_racing`
+    proves (confirmed red under that exact mutation); the true concurrency
+    claim is proven live against real Postgres + real Redis by
+    `scripts/probe_period_report_concurrency.py`, which a single-threaded
+    mocked test cannot reproduce at all (both callers would always run in one
+    sequence, never see partial state)."""
+    user = _seed_user(db)
+    _act_as(user)
+    # The winner's row is already visible — the ordinary case: it was created
+    # a moment ago by the request that WON the claim. Seeded with the REAL
+    # function, before the spy below replaces it.
+    winner = store.create_generating_report(
+        db, user.id, period_start=TODAY, period_end=TODAY + timedelta(days=6),
+        disciplines=[], prompt_id=PROMPT_ID, schema_version=SCHEMA_VERSION,
+    )
+
+    fake_redis = MagicMock()
+    fake_redis.set.return_value = False  # the claim is already held
+    monkeypatch.setattr("app.core.queue.redis_conn", fake_redis)
+    calls = []
+
+    def _spy(*a, **kw):
+        calls.append((a, kw))
+        raise AssertionError("create_generating_report must not be called when the claim is lost")
+
+    monkeypatch.setattr("app.api.period_reports.store.create_generating_report", _spy)
+
+    resp = client.post("/api/coach/period-reports", json=_body())
+
+    assert resp.status_code == 202
+    assert resp.json()["id"] == str(winner.id)
+    assert calls == []
+    assert db.query(PeriodReport).filter(PeriodReport.user_id == user.id).count() == 1
+
+
+def test_a_lost_claim_with_nothing_visible_yet_refuses_rather_than_racing(db, client, monkeypatch):
+    """The genuinely-tight-race / Redis-outage edge: the claim was lost but the
+    winner's row is not visible yet (or `claim_identity` degraded closed on a
+    Redis outage, in which case EVERY caller loses the claim). Either way this
+    must never fall through to creating a row of its own."""
+    user = _seed_user(db)
+    _act_as(user)
+    enqueued = []
+    monkeypatch.setattr(
+        "app.api.period_reports.enqueue_period_report",
+        lambda user_id, report_id: enqueued.append((user_id, report_id)),
+    )
+    fake_redis = MagicMock()
+    fake_redis.set.return_value = False
+    monkeypatch.setattr("app.core.queue.redis_conn", fake_redis)
+
+    resp = client.post("/api/coach/period-reports", json=_body())
+
+    assert resp.status_code == 503
+    assert enqueued == []
+    assert db.query(PeriodReport).filter(PeriodReport.user_id == user.id).count() == 0
 
 
 # --- ownership -----------------------------------------------------------------

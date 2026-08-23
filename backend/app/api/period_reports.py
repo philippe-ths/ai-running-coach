@@ -111,6 +111,29 @@ def _read(report) -> PeriodReportRead:
     )
 
 
+def _find_existing(db, user, *, period_start, period_end, disciplines_key):
+    in_flight = store.report_in_flight(
+        db,
+        user.id,
+        period_start=period_start,
+        period_end=period_end,
+        disciplines_key=disciplines_key,
+        prompt_id=PROMPT_ID,
+        schema_version=SCHEMA_VERSION,
+    )
+    if in_flight is not None:
+        return in_flight
+    return store.find_ready(
+        db,
+        user.id,
+        period_start=period_start,
+        period_end=period_end,
+        disciplines_key=disciplines_key,
+        prompt_id=PROMPT_ID,
+        schema_version=SCHEMA_VERSION,
+    )
+
+
 @router.post("", response_model=PeriodReportRead, status_code=202)
 def create_period_report(
     body: PeriodReportCreate, db: DbSession, user: CurrentUser
@@ -121,11 +144,19 @@ def create_period_report(
     Idempotent for an identical in-flight or already-generated request (the
     `POST /api/schedule/draft` precedent): a second identical POST returns the
     existing row rather than starting a second generation.
+
+    That idempotency check is itself racy on its own — `report_in_flight` ->
+    `find_ready` -> `create_generating_report` are three separate statements —
+    so two concurrent identical POSTs (a double-tap, a client retry-on-timeout,
+    two open tabs) could both read "nothing exists yet" and both write a row,
+    double-spending the most expensive generation this product runs (#946
+    review). `store.claim_identity` closes that window: only the caller that
+    wins the claim may create a row for this identity; a caller that loses it
+    never creates one — it looks for what the winner produced instead.
     """
     key = store.disciplines_key(body.disciplines)
 
-    in_flight = store.report_in_flight(
-        db,
+    claimed = store.claim_identity(
         user.id,
         period_start=body.period_start,
         period_end=body.period_end,
@@ -133,20 +164,31 @@ def create_period_report(
         prompt_id=PROMPT_ID,
         schema_version=SCHEMA_VERSION,
     )
-    if in_flight is not None:
-        return _read(in_flight)
+    if not claimed:
+        # Someone else holds the claim for this exact identity right now —
+        # another request a moment ago, or (degrade_open=False) a Redis outage.
+        # Never create a second row here; the winner's row is either already
+        # visible or will be within the claim's short TTL.
+        existing = _find_existing(
+            db, user, period_start=body.period_start, period_end=body.period_end,
+            disciplines_key=key,
+        )
+        if existing is not None:
+            return _read(existing)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Your coach is already working on this exact review. Give it a "
+                "moment and try again."
+            ),
+        )
 
-    ready = store.find_ready(
-        db,
-        user.id,
-        period_start=body.period_start,
-        period_end=body.period_end,
+    existing = _find_existing(
+        db, user, period_start=body.period_start, period_end=body.period_end,
         disciplines_key=key,
-        prompt_id=PROMPT_ID,
-        schema_version=SCHEMA_VERSION,
     )
-    if ready is not None:
-        return _read(ready)
+    if existing is not None:
+        return _read(existing)
 
     report = store.create_generating_report(
         db,

@@ -18,6 +18,21 @@ report about nothing") never reaches the model at all: `PeriodReportPack.is_empt
 is checked first and answered with a deterministic message, so a runner who
 picks a week they didn't train in costs nothing and cannot trip the safety
 floor over nothing to say.
+
+Rule 4 (`check_ungated_interval_claim`) and the pack's own shape (#946 review):
+`PeriodReportPack.sessions` carries no per-rep interval detail at all — no
+`interval_structure`, no `detection_confidence`, no `match_score` (see
+`period_report_pack.py`: no stream data, no per-activity focus payload). That is
+not an oversight to route around with an empty `sessions_in_play` list — an
+empty list makes rule 4 a silent no-op, since `check_ungated_interval_claim`
+returns immediately when handed nothing. It means the opposite: EVERY specific
+interval-execution claim ("you hit all 8 x 400m") in a period report is
+ungrounded by construction, so `_NO_INTERVAL_DETAIL_SENTINEL` below hands the
+rule one forced-low-confidence marker rather than nothing, and any such claim in
+the generated text is caught exactly the way it would be for a single low-
+confidence session. The system prompt also tells the model not to make these
+claims; this is the enforcement the North Star's second question exists for —
+an instruction is not a guarantee.
 """
 
 from __future__ import annotations
@@ -50,6 +65,12 @@ SCHEMA_VERSION = "1.0"
 
 MAX_MESSAGE_CHARS = 6000
 MAX_NEXT_STEPS = 6
+
+# See the module docstring's "Rule 4" note. Not a real session's data — a
+# constant, forced-low-confidence marker fed to `validate_conversational_policy`
+# so rule 4 binds against the pack's own shape (no per-session interval detail
+# exists here at all) instead of being silently skipped by an empty list.
+_NO_INTERVAL_DETAIL_SENTINEL = [{"detection_confidence": "low", "match_score": 0.0}]
 
 _SYSTEM_PROMPT = """You are a running coach writing a review of this runner's own chosen stretch of training — not a single session, a BLOCK. They picked the period and, optionally, which disciplines to look at; you are answering the question they actually asked: "how is this going".
 
@@ -125,6 +146,12 @@ class PeriodReportOutcome:
     ok: bool
     failures: Optional[List[str]] = None
     failure_kind: str = store.FAILURE_UNKNOWN
+    # True when a real generation finished but `store.mark_ready`/`mark_failed`
+    # found the row already settled by another writer (the stale-retry race,
+    # #946 review) and discarded the result rather than storing it. `ok` stays
+    # False here too: this generation attempt's own result was never saved,
+    # whatever the row it was racing against ended up as.
+    discarded: bool = False
 
 
 def _empty_period_content(pack: PeriodReportPack) -> PeriodReportContent:
@@ -220,6 +247,23 @@ def build_prompt_context(pack: PeriodReportPack) -> str:
     return "\n".join(parts)
 
 
+def _mark_ready_outcome(db, report, **kwargs) -> PeriodReportOutcome:
+    """`store.mark_ready` wrapped to translate a discarded (compare-and-set
+    lost) result into the outcome the job layer logs distinctly from an actual
+    generation failure — see `PeriodReportOutcome.discarded`."""
+    settled = store.mark_ready(db, report, **kwargs)
+    if settled is None:
+        return PeriodReportOutcome(ok=False, discarded=True)
+    return PeriodReportOutcome(ok=True)
+
+
+def _mark_failed_outcome(db, report, reason: str, *, kind: str) -> PeriodReportOutcome:
+    settled = store.mark_failed(db, report, reason, kind=kind)
+    if settled is None:
+        return PeriodReportOutcome(ok=False, failure_kind=kind, discarded=True)
+    return PeriodReportOutcome(ok=False, failure_kind=kind)
+
+
 async def generate_period_report(
     db: Session, user: User, report: PeriodReport
 ) -> PeriodReportOutcome:
@@ -236,7 +280,7 @@ async def generate_period_report(
 
     if pack.is_empty:
         content = _empty_period_content(pack)
-        store.mark_ready(
+        return _mark_ready_outcome(
             db,
             report,
             content=content.model_dump(mode="json"),
@@ -244,13 +288,11 @@ async def generate_period_report(
             model_id=None,
             meta={"empty_period": True},
         )
-        return PeriodReportOutcome(ok=True)
 
     if turn.over_budget(user.id):
-        store.mark_failed(
+        return _mark_failed_outcome(
             db, report, "over the spend cap for this period", kind=store.FAILURE_OVER_BUDGET
         )
-        return PeriodReportOutcome(ok=False, failure_kind=store.FAILURE_OVER_BUDGET)
 
     client = turn.build_client(turn.TurnKind.PERIOD, user.id)
     context = build_prompt_context(pack)
@@ -281,10 +323,9 @@ async def generate_period_report(
             if transport_retries_left > 0:
                 transport_retries_left -= 1
                 continue
-            store.mark_failed(
+            return _mark_failed_outcome(
                 db, report, "the coach could not be reached", kind=store.FAILURE_UNREACHABLE
             )
-            return PeriodReportOutcome(ok=False, failure_kind=store.FAILURE_UNREACHABLE)
 
         rewrites_left -= 1
 
@@ -299,8 +340,14 @@ async def generate_period_report(
         full_text = "\n".join(
             [content.message, content.headline or "", *content.next_steps]
         )
+        # `_NO_INTERVAL_DETAIL_SENTINEL`, not `[]` — see module docstring's
+        # "Rule 4" note (#946 review). An empty list would silently skip rule 4
+        # for every period report; this forces it to bind against the pack's
+        # own shape instead.
         violations = validate_conversational_policy(
-            full_text, zones_calibrated=pack.zones_calibrated, sessions_in_play=[]
+            full_text,
+            zones_calibrated=pack.zones_calibrated,
+            sessions_in_play=_NO_INTERVAL_DETAIL_SENTINEL,
         )
         if violations:
             logger.info(
@@ -311,7 +358,7 @@ async def generate_period_report(
             failure_kind = store.FAILURE_POLICY
             continue
 
-        store.mark_ready(
+        return _mark_ready_outcome(
             db,
             report,
             content=content.model_dump(mode="json"),
@@ -319,10 +366,13 @@ async def generate_period_report(
             model_id=client.model,
             meta={"empty_period": False},
         )
-        return PeriodReportOutcome(ok=True)
 
     # Exhausted rewrites. A policy violation is never shipped, however close the
     # rest of the answer was — the same "half-safe is not a real option" rule
     # ADR 0009 states for the per-activity report's forced fallback.
-    store.mark_failed(db, report, "; ".join(failures) or "unknown failure", kind=failure_kind)
-    return PeriodReportOutcome(ok=False, failures=failures, failure_kind=failure_kind)
+    outcome = _mark_failed_outcome(
+        db, report, "; ".join(failures) or "unknown failure", kind=failure_kind
+    )
+    return PeriodReportOutcome(
+        ok=False, failures=failures, failure_kind=failure_kind, discarded=outcome.discarded
+    )
