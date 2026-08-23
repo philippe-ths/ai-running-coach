@@ -99,3 +99,11 @@ export type {
   DraftStatus,
   GoalRace,
 } from "./types/schedule";
+
+export type {
+  PeriodReportStatus,
+  PeriodReportContent,
+  PeriodReport,
+  PeriodReportListItem,
+  PeriodReportCreate,
+} from "./types/periodReport";

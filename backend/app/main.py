@@ -2,7 +2,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import health, auth, activities, blocks, webhooks, profile, trends, coach, debug, strava_import, materials, account, threads, schedule
+from app.api import health, auth, activities, blocks, webhooks, profile, trends, coach, debug, strava_import, materials, account, threads, schedule, period_reports
 from app.core.auth import BasicAuthMiddleware
 from app.core.body_size_limit import BodySizeLimitMiddleware
 from app.services.strava_ingestion.port import StravaRateLimited
@@ -108,6 +108,7 @@ app.include_router(coach.router, prefix="/api", tags=["Coach"], dependencies=_re
 app.include_router(threads.router, prefix="/api", tags=["Coach"], dependencies=_require_session)
 app.include_router(materials.router, prefix="/api", tags=["Coach"], dependencies=_require_session)
 app.include_router(schedule.router, prefix="/api", tags=["Schedule"], dependencies=_require_session)
+app.include_router(period_reports.router, prefix="/api", tags=["Coach"], dependencies=_require_session)
 app.include_router(debug.router, prefix="/api", tags=["Debug"], dependencies=_require_session)
 
 if __name__ == "__main__":

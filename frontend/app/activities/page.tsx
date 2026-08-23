@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, X } from 'lucide-react';
+import Link from 'next/link';
+import { Loader2, NotebookPen, X } from 'lucide-react';
 import { fetchFromAPI } from '@/lib/api';
 import ActivityList from '@/components/ActivityList';
 import ActivityTypeFilter from '@/components/trends/ActivityTypeFilter';
@@ -104,9 +105,20 @@ export default function AllActivitiesPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">All Activities</h1>
-        <p className="text-gray-600 dark:text-gray-400 mt-1">Your full run history, newest first.</p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">All Activities</h1>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">Your full run history, newest first.</p>
+        </div>
+        {/* #946: the entry point to a coach review over a chosen stretch, rather
+            than one activity at a time. */}
+        <Link
+          href="/period-reports"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+        >
+          <NotebookPen className="w-4 h-4" aria-hidden="true" />
+          Ask for a period review
+        </Link>
       </header>
 
       <div className="flex flex-wrap items-center gap-3">

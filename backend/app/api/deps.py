@@ -47,6 +47,7 @@ from app.db.session import get_db
 from app.models import Activity, Block, CoachingRelationship, GoalRace, StravaAccount, User, UserMaterial
 from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
+from app.models.period_report import PeriodReport
 from app.models.thread import Thread
 from app.services import activity_queries
 
@@ -250,6 +251,30 @@ def get_owned_training_plan(
 
 
 OwnedTrainingPlan = Annotated[TrainingPlan, Depends(get_owned_training_plan)]
+
+
+# --- period reports ----------------------------------------------------------
+
+
+def require_owned_period_report(
+    db: Session, report_id: UUID, user: User
+) -> PeriodReport:
+    """The period report by id IF it belongs to ``user``; 404 otherwise (#946)."""
+    from app.services.coach import period_report_store as store
+
+    report = store.get_owned_report(db, report_id, user.id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Period report not found")
+    return report
+
+
+def get_owned_period_report(
+    report_id: UUID, db: DbSession, user: CurrentUser
+) -> PeriodReport:
+    return require_owned_period_report(db, report_id, user)
+
+
+OwnedPeriodReport = Annotated[PeriodReport, Depends(get_owned_period_report)]
 
 
 # --- user materials --------------------------------------------------------
