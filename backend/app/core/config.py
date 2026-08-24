@@ -327,6 +327,25 @@ class Settings(BaseSettings):
     SCHEDULE_HORIZON_WEEKS: int = 12
     SCHEDULE_CONCRETE_WEEKS: int = 3
 
+    # #946: the period-report SURFACE's kill switch, the `SCHEDULE_ENABLED`
+    # precedent applied to a screen rather than an input. Off => every
+    # /api/coach/period-reports route refuses with 503 (a router-level
+    # dependency, so a route added later cannot forget it) and the frontend
+    # renders no entry point. Off hides the feature without deleting anything:
+    # stored period reports are untouched.
+    COACH_PERIOD_REPORT_ENABLED: bool = True
+    # #946: the model lane for a period report, the `COACH_VOICE_MODEL_ID`
+    # precedent — unset falls back to COACH_MODEL_ID, so day-one behaviour is
+    # byte-identical. Its own lever because a period report is runner-requested,
+    # reaches over far more data than one activity, and is read far less often
+    # than a per-run report, which makes a stronger model both affordable and
+    # the more defensible default once this is set.
+    COACH_PERIOD_MODEL_ID: str = ""
+
+    @property
+    def period_model_id(self) -> str:
+        return self.COACH_PERIOD_MODEL_ID or self.COACH_MODEL_ID
+
     # Runner memory (ADR 0025), the rewrite-from-source replacement for the retired
     # belief + narrative loop. The conventional #522 default-True kill switch on top
     # of the prompt gate: the background memory update pass is enqueued, and the

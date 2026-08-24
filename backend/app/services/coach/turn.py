@@ -80,15 +80,19 @@ class TurnKind(str, Enum):
     THREAD = "thread"    # a conversational turn in a Thread (ADR 0027)
     VOICE = "voice"      # the voice rewrite over a finished report (#822)
     SCHEDULE = "schedule"  # drafting the runner's training plan (#830)
+    PERIOD = "period"    # a runner-requested review over a chosen stretch (#946)
 
 
 # Each lane that is not the report's own. `COACH_CHAT_MODEL_ID` exists so a chat
 # turn can run on a cheaper/faster model than the report; `COACH_VOICE_MODEL_ID`
-# so the rewrite can be steered independently. Both fall back to COACH_MODEL_ID
-# when unset, so day-one behaviour is byte-identical.
+# so the rewrite can be steered independently; `COACH_PERIOD_MODEL_ID` so a
+# runner-requested, far-less-frequent period report can run on a stronger model
+# than the per-run report (#946). All fall back to COACH_MODEL_ID when unset, so
+# day-one behaviour is byte-identical.
 _MODEL_LANES = {
     TurnKind.THREAD: lambda: settings.chat_model_id,
     TurnKind.VOICE: lambda: settings.voice_model_id,
+    TurnKind.PERIOD: lambda: settings.period_model_id,
 }
 
 
