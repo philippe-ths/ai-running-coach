@@ -302,6 +302,19 @@ SCHEDULE = Clause(
 """,
 )
 
+# #943: SCHEDULE plus one forward-numbers discipline. A runner's schedule showed
+# an 18 km long run next week; asked about it, the coach reached forward on its
+# own and, with no real figure in front of it, said "16.5km" — reaching ahead was
+# right, the number was invented. The pack now carries next week's committed
+# sessions, so this closes the other half: never fill a forward gap with a guess.
+# A separate clause rather than an edit to SCHEDULE, so v9/v10 keep the exact
+# prose they were built and tested against.
+SCHEDULE_V2 = Clause(
+    "schedule_v2",
+    """- Their plan tells me what a session was FOR — the difference between "you ran with some fast bits" and "you hit the 800s" — and what it sets up next, so I can say where the week goes from here. A plan is intent, not a record: what actually happened is in the numbers in front of me, and where the two differ I coach the gap rather than score it. A session that did not happen is information about the week, never a charge for them to answer. When I name a session that has not happened yet, the numbers I give it are the ones in front of me — if the plan does not show me a distance for that session, I talk about it without inventing one.
+""",
+)
+
 
 # ----------------------------------------------------------------------------
 # The intervals clause. Exactly one variant sits between MISREAD_NUMBERS and
@@ -450,6 +463,10 @@ class ProseVariant(Enum):
     # instruction entirely. Pair it with PromptFeature.SALIENCE_DEPTH, which is what
     # actually serves the coach the first-of-its-kind read this prose spends.
     DEPTH_EARNED = "depth_earned"
+    # #943: the forward-numbers discipline — swap SCHEDULE for SCHEDULE_V2. Kept as
+    # its own variant (rather than folded into the always-current SCHEDULE clause)
+    # so the swap costs no edit to any version already composing SCHEDULE.
+    SCHEDULE_NO_INVENTED_NUMBERS = "schedule_no_invented_numbers"
 
 
 # One row per live prompt id, and the only hand-kept declaration a new version adds.
@@ -474,6 +491,18 @@ PROSE_VARIANTS: dict[str, frozenset[ProseVariant]] = {
     # trim its manifest row declares.
     "coach_message_lean_grouped_v10": frozenset(
         {ProseVariant.PERSONALISATION, ProseVariant.DEPTH_EARNED}
+    ),
+    # #943: v11 = v10's prose with the schedule clause's forward-numbers discipline
+    # swapped in. No new capability of its own — the pack already carries the plan
+    # under PromptFeature.SCHEDULE, and #943's other half (next week's committed
+    # sessions) rides that same section for every schedule-aware prompt including
+    # this one. Ships INERT.
+    "coach_message_lean_grouped_v11": frozenset(
+        {
+            ProseVariant.PERSONALISATION,
+            ProseVariant.DEPTH_EARNED,
+            ProseVariant.SCHEDULE_NO_INVENTED_NUMBERS,
+        }
     ),
 }
 
@@ -508,7 +537,11 @@ def fuller_clauses(prompt_id: str) -> tuple[Clause, ...]:
     if PromptFeature.BODY in features:
         disposition.append(BODY)
     if PromptFeature.SCHEDULE in features:
-        disposition.append(SCHEDULE)
+        disposition.append(
+            SCHEDULE_V2
+            if ProseVariant.SCHEDULE_NO_INVENTED_NUMBERS in variants
+            else SCHEDULE
+        )
 
     intervals = (
         INTERVALS_ANY_SESSION

@@ -24,12 +24,14 @@ refusal→fallback) lives in the llm method and service, not here.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 
 from app.schemas.coach import CoachMessageReport
+from app.services.coach.report_offer import OFFER_TOOL_PROPERTY, coerce_offer
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +153,13 @@ RECORD_COACH_TAIL_TOOL: Dict[str, Any] = {
                     },
                 },
             },
+            # #944: the optional schedule-change OFFER. Optional (not in
+            # `required`) like schedule_fuller_turn below: most reports do not
+            # conclude the plan should change, and a required field would invite
+            # one every time. Its whitelist, its grounding against the pack and
+            # its read-time token all live in services/coach/report_offer.py —
+            # this is only where the model is told the field exists.
+            "offer": OFFER_TOOL_PROPERTY,
             # A4 two-stage Exchange (opener mode only). Optional, like evidence/
             # payload above (not in `required`): the opener LLM sets it to its depth
             # judgment; the fuller turn omits it. The deterministic safety override
@@ -226,12 +235,35 @@ def merge_report(parsed: ParsedBlocks) -> CoachMessageReport:
     if parsed.tail is None:
         return CoachMessageReport(message=message, tail_degraded=True)
 
+    # #944: the offer is lifted out BEFORE the tail is constructed and coerced on
+    # its own. Left in the spread, a mistyped optional affordance would raise and
+    # degrade the whole tail — costing the runner their next_steps over a card.
+    # The offer is dropped on its own instead; the tail is unaffected either way.
+    #
+    # The copy is GUARDED. Before #944 a non-mapping tail reached `**parsed.tail`
+    # and raised TypeError inside the try below, which degraded. Copying it out
+    # here without this guard moved that failure OUTSIDE the try and changed its
+    # type — `dict()` raises ValueError on a sequence of non-pairs — so it escaped
+    # `merge_report`, escaped `_generate_message`'s except clause, and cost the
+    # runner the whole report. Latent, because `parse_blocks` normalises the tail
+    # to a mapping or None; kept honest anyway, since the comment above claims
+    # this change makes degradation safer and for that input it did the reverse.
+    if not isinstance(parsed.tail, Mapping):
+        # Exactly what `**parsed.tail` used to demand, asked explicitly. A
+        # try/except around `dict()` is NOT the same restoration: `dict()`
+        # happily converts an empty tuple or a sequence of pairs, both of which
+        # `**` rejected, so the degrade would silently stop firing for them.
+        logger.warning("coach tail was not a mapping; degrading")
+        return CoachMessageReport(message=message, tail_degraded=True)
+    tail = dict(parsed.tail)
+    offer = coerce_offer(tail.pop("offer", None))
     try:
-        return CoachMessageReport(message=message, tail_degraded=False, **parsed.tail)
+        report = CoachMessageReport(message=message, tail_degraded=False, **tail)
     except (ValidationError, TypeError) as exc:
         # A malformed tail must not discard good coaching — degrade instead.
         logger.warning("coach tail failed validation; degrading: %s", exc)
-        return CoachMessageReport(message=message, tail_degraded=True)
+        return CoachMessageReport(message=message, tail_degraded=True, offer=offer)
+    return report.model_copy(update={"offer": offer}) if offer else report
 
 
 def merge_opener(parsed: ParsedBlocks) -> CoachMessageReport:

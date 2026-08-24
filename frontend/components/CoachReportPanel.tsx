@@ -109,6 +109,15 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
   const [chosenOption, setChosenOption] = useState<Record<number, string>>({});
   const [copied, setCopied] = useState(false);
 
+  // #944: the report's offer. The card is the affordance for the change the
+  // message just argued for, and it confirms through the SAME endpoint and the
+  // same single-use token the chat sheet's card uses — one mechanism, two
+  // surfaces. `idle` -> `working` -> `done`, or `dismissed` (client-side only:
+  // only a confirm writes, so declining an offer has nothing to tell the server).
+  const [offerState, setOfferState] = useState<'idle' | 'working' | 'done' | 'dismissed'>('idle');
+  const [offerError, setOfferError] = useState('');
+  const [offerNote, setOfferNote] = useState('');
+
   const handleCopy = useCallback(async () => {
     if (!report) return;
     try {
@@ -119,6 +128,46 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
       // clipboard unavailable (e.g. insecure context); silently ignore
     }
   }, [report]);
+
+  // A new report is a new offer. Keyed on the report's id rather than the token,
+  // because every read mints a fresh token for the SAME offer — resetting on the
+  // token would un-confirm the card on the next poll and let it be tapped twice.
+  const offerReportId = report?.id ?? null;
+  useEffect(() => {
+    setOfferState('idle');
+    setOfferError('');
+    setOfferNote('');
+  }, [offerReportId]);
+
+  const confirmOffer = useCallback(async () => {
+    const token = report?.offer?.token;
+    if (!token || offerState !== 'idle') return;
+    setOfferState('working');
+    setOfferError('');
+    try {
+      const res = await fetch('/api/coach/threads/actions/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      // The server says something back only when the write lands somewhere the
+      // runner is not looking — a plan is drafted on the worker over a minute,
+      // and the card going quiet would otherwise be the only sign of it.
+      const result = (await res.json().catch(() => null)) as { message?: string | null } | null;
+      setOfferNote(result?.message ?? '');
+      setOfferState('done');
+    } catch (err) {
+      // A tap that changed nothing must say so. An offer is single-use and
+      // short-lived, so a 404 means it is spent or stale, not that it failed.
+      setOfferError(
+        String((err as Error)?.message) === '404'
+          ? 'That offer has expired. Ask your coach and they can set it up again.'
+          : 'That did not go through. Try again in a moment.',
+      );
+      setOfferState('idle');
+    }
+  }, [report, offerState]);
 
   const handleOptionTap = useCallback(
     async (qIndex: number, opt: { id: string; kind: string; payload?: unknown }) => {
@@ -347,6 +396,62 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
     (rule) => rule !== MEDICAL_OVERREACH_RULE,
   );
 
+  // #944: the offer card. It sits directly under the analysis — the report is
+  // where the argument for the change was made, and the runner is still holding
+  // it there; below the risks and questions it would be something to scroll past.
+  //
+  // It reads as the chat sheet's card on purpose (blue-600 edge, the "Your call"
+  // eyebrow, the server's own description and button words): one mechanism should
+  // not wear two faces. The proportions are the report's, not the sheet's, so it
+  // sits in this column's stack rather than looking pasted in from another screen.
+  const offer = report.offer ?? null;
+  const offerCard =
+    !offer || offerState === 'dismissed' ? null : (
+      <div className="rounded-lg border border-blue-600 dark:border-blue-500 bg-white dark:bg-gray-800 p-4">
+        <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-blue-600 dark:text-blue-400">
+          Your call
+        </div>
+        <p className="mt-1.5 text-sm leading-relaxed text-gray-800 dark:text-gray-100">
+          {offer.description}
+        </p>
+
+        {offerState === 'done' ? (
+          <div className="mt-3 flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400">
+            <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" aria-hidden="true" />
+            <span>{offerNote || 'Done. It is on your schedule.'}</span>
+          </div>
+        ) : (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void confirmOffer()}
+              disabled={offerState === 'working'}
+              className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-50"
+            >
+              {offerState === 'working' ? 'Working...' : offer.confirm_label}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOfferState('dismissed');
+                setOfferError('');
+              }}
+              disabled={offerState === 'working'}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-50 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700/40"
+            >
+              {offer.dismiss_label}
+            </button>
+          </div>
+        )}
+
+        {offerError && (
+          <p role="status" className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            {offerError}
+          </p>
+        )}
+      </div>
+    );
+
   // A3 (ADR 0009): the prose-message shape (schema 2.0) renders the message as
   // markdown with tappable-option chips; the legacy structured shape renders the
   // verdict/takeaway panel below, untouched.
@@ -456,6 +561,8 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
               </div>
             );
           })()}
+
+          {offerCard}
 
           {/* Next steps (tail affordances) — fuller turn only */}
           {(body.message ?? '').trim().length > 0 && body.next_steps.length > 0 && (
@@ -609,6 +716,8 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
               })}
             </ul>
           </div>
+
+          {offerCard}
 
           {/* Next Steps */}
           <div className="space-y-2">

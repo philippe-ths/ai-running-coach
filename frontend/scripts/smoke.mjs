@@ -46,7 +46,26 @@ const mockActivity = {
   },
   check_in: null,
   user_intent: null,
-  metrics: null,
+  // #944: the activity is ANALYSED. A coach report only exists for an activity
+  // that has metrics, and the report panel renders nothing without them — so the
+  // smoke's activity had never once exercised the panel. Minimal but real: the
+  // classification axes the headline reads, and the two fields the panel's own
+  // caption depends on.
+  metrics: {
+    headline: "Tempo run",
+    effort: "hard",
+    duration_class: "standard",
+    structure: "continuous",
+    is_hilly: false,
+    is_race: false,
+    effort_score: 62,
+    flags: [],
+    confidence: "high",
+    confidence_reasons: [],
+    pace_variability: 0.06,
+    hr_drift: 2.4,
+    hr_zones_source: "strava",
+  },
   streams: [],
   splits: [],
 };
@@ -609,6 +628,53 @@ function previousPlanPayload() {
   };
 }
 
+// #944: a coach report that OFFERS a schedule change. The card's token is minted
+// per read on the real server, so the mock mints one too — and burns it on
+// confirm, which is what lets the smoke prove the single-use property rather
+// than only that a button exists.
+const OFFER_TOKEN = "smoke-offer-token-do-not-use-in-prod";
+const mockOfferTokens = new Set();
+
+function mockCoachReport() {
+  mockOfferTokens.add(OFFER_TOKEN);
+  return {
+    id: "33333333-3333-3333-3333-333333333333",
+    activity_id: "42",
+    report: {
+      message:
+        "Strong tempo. You held the effort right through, and the drift stayed flat.\n\nThursday is where this catches up with you: 12 km of intervals on top of this week is more than the block needs. Take it down to 8 km and keep the shape.",
+      headline: "Tempo held, Thursday is too long",
+      next_steps: [],
+      risks: [],
+      questions: [],
+      tail_degraded: false,
+      // The DURABLE half is deliberately absent from the wire: the server keeps
+      // it and sends only the minted card below (#944).
+      offer: null,
+    },
+    meta: {
+      confidence: "high",
+      model_id: "smoke-model",
+      prompt_id: "coach_message_lean_grouped_v9",
+      schema_version: "2.0",
+      input_hash: "smoke",
+      generated_at: "2026-03-28T08:30:00Z",
+      policy_violations: [],
+      tail_degraded: false,
+      voice_stale: false,
+    },
+    debug: { context_pack: {}, system_prompt: "smoke", raw_llm_response: null },
+    created_at: "2026-03-28T08:30:00Z",
+    offer: {
+      action_type: "adjust_session",
+      token: OFFER_TOKEN,
+      description: "Change \u201cThursday intervals\u201d (Thu 2 Apr) to 8 km",
+      confirm_label: "Change it",
+      dismiss_label: "Leave it",
+    },
+  };
+}
+
 const routesToCheck = [
   { path: "/", expectedText: "Weekly Summary" },
   { path: "/activities", expectedText: "All Activities" },
@@ -653,6 +719,37 @@ function createMockApiServer() {
 
     if (pathname === "/api/activities/42") {
       return sendJson(res, 200, mockActivity);
+    }
+
+    // #944: the report, carrying an offer. Its confirm goes to the same endpoint
+    // the chat card confirms through, so the mock answers that one too.
+    if (pathname === "/api/activities/42/coach-report") {
+      return sendJson(res, 200, mockCoachReport());
+    }
+
+    if (
+      pathname === "/api/coach/threads/actions/confirm" &&
+      req.method === "POST"
+    ) {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(body || "{}");
+        } catch {
+          return sendJson(res, 422, { detail: "Body was not JSON" });
+        }
+        // Single-use, the way the real token store is single-use: the token is
+        // spent on the first confirm and a replay is a 404.
+        if (!mockOfferTokens.delete(parsed.token)) {
+          return sendJson(res, 404, { detail: "Proposed action not found" });
+        }
+        return sendJson(res, 200, { action_type: "adjust_session" });
+      });
+      return;
     }
 
     if (pathname === "/api/profile") {
@@ -1037,7 +1134,68 @@ async function main() {
     );
   }
 
+  // #944: the report's offer round trip, through the app's own proxy — the same
+  // path the card's confirm button takes. The report is fetched client-side, so
+  // no server-rendered route sees the card; this proves the endpoint behind it,
+  // and the browser pass proves the card itself.
+  const reportResponse = await fetch(
+    `${FRONTEND_BASE_URL}/api/activities/42/coach-report`,
+  );
+  if (!reportResponse.ok) {
+    throw new Error(
+      `Expected 200 for /api/activities/42/coach-report, received ${reportResponse.status}`,
+    );
+  }
+  const reportBody = await reportResponse.json();
+  if (!reportBody.offer?.token || !reportBody.offer?.confirm_label) {
+    throw new Error("the coach report carried no tappable offer");
+  }
+  if (reportBody.report?.offer) {
+    throw new Error(
+      "the stored offer rode the response; only the minted card should",
+    );
+  }
+
+  const confirmResponse = await fetch(
+    `${FRONTEND_BASE_URL}/api/coach/threads/actions/confirm`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: reportBody.offer.token }),
+    },
+  );
+  if (confirmResponse.status !== 200) {
+    throw new Error(
+      `Expected 200 from the offer confirm, received ${confirmResponse.status}`,
+    );
+  }
+
+  // Single-use: the same token again is spent.
+  const replayResponse = await fetch(
+    `${FRONTEND_BASE_URL}/api/coach/threads/actions/confirm`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: reportBody.offer.token }),
+    },
+  );
+  if (replayResponse.status !== 404) {
+    throw new Error(
+      `A spent offer token was accepted again (${replayResponse.status}); it must be single-use`,
+    );
+  }
+
   console.log("Frontend smoke checks passed.");
+
+  // SMOKE_HOLD=1 keeps the mock backend and the Next server up instead of tearing
+  // them down, and prints where they are. The checks above are all server-side or
+  // proxy-driven; anything that only exists once React has rendered (the offer
+  // card is one) has to be looked at in a real browser, and this is how you get
+  // a running app to point one at.
+  if (process.env.SMOKE_HOLD) {
+    console.log(`SMOKE_HOLD: frontend at ${FRONTEND_BASE_URL} (mock API ${MOCK_API_BASE_URL})`);
+    await new Promise(() => {});
+  }
 }
 
 main()
