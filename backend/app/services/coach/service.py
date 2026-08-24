@@ -42,6 +42,7 @@ from app.services.coach.memory_update import enqueue_memory_update
 from app.services.coach.context import build_context_pack
 from app.services.coach.coach_framing import coach_llm_view
 from app.services.coach.digest import build_report_digest
+from app.services.coach.report_offer import ground_offer
 from app.services.coach.output_contract import (
     RECORD_COACH_TAIL_TOOL,
     EmptyMessageError,
@@ -1399,6 +1400,16 @@ async def _generate_message(
             "Message policy violations persisted: %s",
             [v.rule for v in chosen.violations],
         )
+
+    # #944: the offer is settled here, once, on the attempt that will actually be
+    # stored — after the policy retry has chosen between attempts, so a retry that
+    # named a different session is judged on its own offer, and before the voice
+    # rewrite, which re-words prose and must never be handed an offer that was
+    # about to be dropped. Grounding never raises and never withholds the report:
+    # an ungrounded, off-contract or non-whitelisted offer is simply not stored.
+    chosen = replace(
+        chosen, report=ground_offer(chosen.report, pack, is_opener=is_opener)
+    )
 
     # #822: the prose above was written with no voice input at all. It is the
     # baseline, and it stays where every downstream reader looks for it. The

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import (
     CoachRelationship,
+    CurrentUser,
     DbSession,
     OwnedActivity,
     OwnedActivityWithMetrics,
@@ -17,7 +18,11 @@ from app.db.session import get_db
 from app.models import CoachingRelationship, User
 from app.models.coach_report import CoachReport
 from app.schemas.chat import ChatHistoryResponse, ChatMessageSend
-from app.schemas.coach import CoachReportRead
+from app.schemas.coach import (
+    CoachMessageReport,
+    CoachReportOfferCard,
+    CoachReportRead,
+)
 from app.schemas.voice import VoiceConfigRead, VoiceDials, build_catalog
 from app.services.coach.voice import DIAL_AXES
 from app.schemas.stance import (
@@ -26,6 +31,7 @@ from app.schemas.stance import (
     build_catalog as build_stance_catalog,
 )
 from app.services.coach.chat import get_chat_history
+from app.services.coach.report_offer import mint_report_offer
 from app.services.coach.service import (
     get_block_primary_report_row,
     get_displayable_report_row,
@@ -198,6 +204,32 @@ def update_stance(
     return _read_stance(relationship)
 
 
+def _with_offer(db: Session, user: User, read: CoachReportRead) -> CoachReportRead:
+    """Mint this reader's card for a report that offered a schedule change (#944).
+
+    Applied to EVERY way this endpoint answers, so an offer is not silently
+    invisible on one path (the block-primary borrow in particular: the runner
+    owns that report too, and a card that appears on one member of a session and
+    not another would read as a bug).
+
+    The authority is `user.id` — the AUTHENTICATED reader, never a value from the
+    request or the stored row. The route's owned-activity dependency has already
+    404'd a cross-tenant activity id, and the mint re-resolves ownership of every
+    row the offer names on top of that, so a report that somehow named another
+    runner's session yields no card rather than a tappable one.
+    """
+    card = mint_report_offer(db, user.id, read.report)
+    if card:
+        read.offer = CoachReportOfferCard.model_validate(card)
+    # The stored half never goes on the wire. It is server-side bookkeeping —
+    # a kind and the ids it names — and the client reads only the minted card
+    # above. Sending it too would put a resource id in a response for no reader,
+    # including in the cases where the mint deliberately refused to make one.
+    if isinstance(read.report, CoachMessageReport):
+        read.report = read.report.model_copy(update={"offer": None})
+    return read
+
+
 @router.get(
     "/activities/{activity_id}/coach-report",
     response_model=CoachReportRead,
@@ -205,6 +237,7 @@ def update_stance(
 async def get_coach_report(
     activity: OwnedActivity,
     db: DbSession,
+    user: CurrentUser,
     generate: bool = Query(True, description="If false, only return cached report (404 if none)"),
     force: bool = Query(False, description="If true, regenerate the active-version report (prior versions retained)"),
 ):
@@ -222,7 +255,7 @@ async def get_coach_report(
             # frontend regenerates it onto the runner's current voice (async, on
             # next view). A read-time flag only — the stored report is untouched.
             read.meta.voice_stale = report_voice_stale(db, existing)
-            return read
+            return _with_offer(db, user, read)
         # #482: block-aware display fallback. A non-primary member of a multi-
         # activity block owns no report (the session report is keyed to the block
         # primary), so show the session's report read-only instead of 404-ing and
@@ -231,7 +264,7 @@ async def get_coach_report(
         # per-member regeneration here (read-only, no generation).
         borrowed = get_block_primary_report_row(db, str(activity_id))
         if borrowed:
-            return _to_read(borrowed)
+            return _with_offer(db, user, _to_read(borrowed))
         if not generate:
             raise HTTPException(status_code=404, detail="No cached report.")
 
@@ -241,7 +274,7 @@ async def get_coach_report(
             status_code=404,
             detail="Activity not found or metrics not yet computed.",
         )
-    return report
+    return _with_offer(db, user, report)
 
 
 @router.post(

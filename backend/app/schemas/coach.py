@@ -54,6 +54,71 @@ class CoachMessageQuestion(BaseModel):
     options: List[TappableOption] = Field(default_factory=list)
 
 
+class CoachReportOffer(BaseModel):
+    """#944: the schedule change a report OFFERED, as stored on the report row.
+
+    The report's judgment is the sharpest the coach ever has — it has the run
+    that just happened, the week around it and the plan ahead all in view — and
+    until now it was the one surface where the runner could do nothing with it
+    but go and find the screen themselves. This is the offer half of the
+    offer-and-confirm mechanism the thread already had.
+
+    STORED, never executed. It carries the request only — a kind and the ids and
+    numbers it names — and no token: a token minted when a background worker
+    writes the report would be half an hour dead by the time the runner opens the
+    Telegram message. The token is minted when the OWNER READS the report, and
+    the write happens only when they confirm it (see services/coach/report_offer).
+
+    The three kinds are the SCHEDULE changes only. `check_in`, `intent`,
+    `split_block` and `merge_blocks` are the runner's own account of what they
+    did, and a report proposing one of those would be the report telling the
+    runner what happened to them. The whitelist is enforced server-side, in
+    report_offer.REPORT_OFFER_KINDS, not by asking the model nicely.
+    """
+
+    # DELIBERATELY TOLERANT ON READ, and strict at the two gates instead. This is
+    # a durable JSON shape: rows written by one build are read by the next, and by
+    # the previous one after a rollback. A strict `Literal` plus `extra="forbid"`
+    # here made an unrecognised `action_type` — or a field a later build added —
+    # raise inside `service._to_read`, which answers the report GET with a 500 and
+    # leaves the whole report permanently unreadable. Losing the card is the
+    # intended degrade; losing the coaching is not, and this module's entire
+    # discipline is that a bad offer costs the offer and nothing else.
+    #
+    # Nothing is lost by the tolerance, because neither gate trusts this model:
+    # `report_offer._reject_reason` refuses an action_type off REPORT_OFFER_KINDS
+    # before a row is ever stored, `report_offer.mint_report_offer` refuses it
+    # again before a card is ever minted, and `ProposedActionRequest` (which IS
+    # extra-forbidding) re-coerces every argument at both points. An unknown extra
+    # key is ignored on the way in and dropped by that coercion on the way out.
+    action_type: str = Field(max_length=32)
+    # A STRING, not a UUID, because this model is dumped straight into the
+    # report's JSON column — a UUID object is not JSON-serialisable there, and
+    # the pack hands the coach `session_id` as a string in the first place. It is
+    # parsed as a UUID where it is used as one: the thread's own
+    # `ProposedActionRequest` coerces it at both the store-time gate and the mint,
+    # so a value that is not a real id is dropped rather than stored.
+    planned_session_id: Optional[str] = Field(default=None, max_length=64)
+    target_distance_m: Optional[float] = None
+    target_duration_s: Optional[int] = None
+
+
+class CoachReportOfferCard(BaseModel):
+    """#944: the offer as the runner is SHOWN it — minted fresh on every read.
+
+    The same five fields the thread's SSE `proposed_action` frame carries, so the
+    report panel renders the identical card the chat sheet does and both confirm
+    through the one endpoint. Read-time only: never stored, never present on a
+    report read by anyone but its owner.
+    """
+
+    action_type: str
+    token: str
+    description: str
+    confirm_label: str
+    dismiss_label: str = "Leave it"
+
+
 class CoachMessageReport(BaseModel):
     """The A3 output shape (schema 2.0): a human prose `message` (the product)
     plus a thin structured tail carrying affordances and memory hooks only. The
@@ -95,6 +160,43 @@ class CoachMessageReport(BaseModel):
     # the fuller's words.
     voiced_message: Optional[str] = None
     voiced_opener_message: Optional[str] = None
+    # #944: the schedule change this report offered, or None. Rides the tail
+    # because the tail is already "the affordances the message was shaped to
+    # hold" (ADR 0009) and is already forced and strictly schema'd — the report
+    # path has no agentic tool loop, and giving it one to carry an offer would
+    # change the shape of every report generation. Optional and defaulted, so
+    # every report stored before #944 validates unchanged.
+    offer: Optional[CoachReportOffer] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _tolerate_an_unreadable_offer(cls, data: Any) -> Any:
+        """Never let the offer make a STORED report unreadable (#944).
+
+        `CoachMessageReport` is parsed straight off the `coach_reports.report`
+        JSON column by `service._to_read`, which has no tolerance of its own: a
+        raise here answers the report GET with a 500 and leaves that report
+        permanently unopenable. The offer is a card. The report is the coaching.
+        An offer this build cannot make sense of — a kind or a field a later
+        build wrote, a value of the wrong type, junk — is dropped to None and the
+        report renders exactly as it did before it carried one.
+
+        Only the offer is softened, and only when reading a raw mapping: a real
+        `CoachReportOffer` (the generation path, which builds one directly) is
+        passed through untouched, so nothing about what may be STORED is relaxed.
+        The two gates that decide what may be stored and what may be minted are
+        in `services/coach/report_offer.py` and are unaffected.
+        """
+        if not isinstance(data, dict) or "offer" not in data:
+            return data
+        raw = data["offer"]
+        if raw is None or isinstance(raw, CoachReportOffer):
+            return data
+        try:
+            CoachReportOffer.model_validate(raw)
+        except Exception:  # noqa: BLE001 -- an offer is never worth a 500
+            data = {**data, "offer": None}
+        return data
 
 
 class CoachReportMeta(BaseModel):
@@ -194,6 +296,11 @@ class CoachReportRead(BaseModel):
     meta: CoachReportMeta
     debug: CoachReportDebug
     created_at: datetime
+    # #944: the offer, minted for THIS reader on THIS read. Absent unless the
+    # stored report carries one, the reader owns every resource it names, and the
+    # proposed-action surface is switched on. Never stored — `report.offer` is the
+    # durable half and carries no token.
+    offer: Optional[CoachReportOfferCard] = None
 
     model_config = ConfigDict(from_attributes=True)
 
