@@ -120,9 +120,14 @@ def test_the_worked_examples_show_the_contrast_rather_than_describing_it():
 
 
 def test_the_depth_prose_reaches_v10_and_no_earlier_version():
-    """Every live version except v10 keeps its prose byte-for-byte, so a rollback is a
-    pure config flip and this experiment has exactly one subject."""
-    for prompt_id in clauses.COMPOSED_PROMPT_IDS:
+    """No version OLDER than v10 carries this prose, so a rollback to any of them is a
+    pure config flip. Scoped to versions up to and including v10 (#943 added a later
+    version, coach_message_lean_grouped_v11, that legitimately inherits this prose —
+    a later version building on v10 is expected to carry it forward, which is a fact
+    about v11, not a regression in this one) rather than every version ever
+    registered, which is what "no earlier version" always meant here."""
+    ids_up_to_v10 = clauses.COMPOSED_PROMPT_IDS[: clauses.COMPOSED_PROMPT_IDS.index(V10) + 1]
+    for prompt_id in ids_up_to_v10:
         text = prompts.build_system_prompt(prompt_id, mode="fuller")
         expected = prompt_id == V10
         assert (clauses.DEPTH.text in text) is expected, prompt_id

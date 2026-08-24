@@ -103,13 +103,32 @@ _LOW_CONF_MATCH = {"detection_confidence": "low", "match_score": 0.4}
 def _pack(**section_overrides) -> CoachContextPack:
     pack = {k: dict(v) if isinstance(v, dict) else v for k, v in _BASE_PACK.items()}
     for section, override in section_overrides.items():
-        pack[section] = {**pack[section], **override}
+        # `.get(section) or {}` rather than `pack[section]`: a section absent from
+        # `_BASE_PACK` entirely (e.g. `schedule`, gated off by default like every
+        # optional pack section) starts from nothing rather than raising, so a
+        # fixture can opt one in without every other fixture having to carry it.
+        pack[section] = {**(pack.get(section) or {}), **override}
     return CoachContextPack.load(pack)
+
+
+# A committed upcoming session with a stated distance, next week (#943) — the real
+# figure a report reaching forward has to work from. Shared by the good/bad pair
+# below so both are checked against the SAME plan.
+_NEXT_WEEK_LONG_RUN = {
+    "next_week_committed": [
+        {
+            "session_id": None, "when": "next Sat", "title": "Long run",
+            "intent": "long", "discipline": "run", "target": "18.0 km",
+        }
+    ],
+}
 
 
 def known_good_report() -> Tuple[CoachReportContent, CoachContextPack]:
     """A grounded report: leads with a headline, discounts a heat-inflated drift,
-    no medical overreach, advances the prior narrative, makes no thin-trend claim."""
+    no medical overreach, advances the prior narrative, makes no thin-trend claim,
+    and a forward reference to next week's long run uses the plan's own number
+    (#943)."""
     content = CoachReportContent(
         headline="Easy run, run easy",
         thesis="Your HR drift looks high but it was 29C, so discount it as heat, not fatigue.",
@@ -117,6 +136,8 @@ def known_good_report() -> Tuple[CoachReportContent, CoachContextPack]:
         key_takeaways=[
             CoachTakeaway(text="Comfortable aerobic effort throughout."),
             CoachTakeaway(text="The drift is a heat artefact, not accumulating fatigue."),
+            # (16) a forward claim that matches the plan's own next-week number.
+            CoachTakeaway(text="For next week's 18km long run, keep the effort conversational throughout."),
         ],
         next_steps=[CoachNextStep(action="Add a tempo segment", details="20 minutes at threshold pace", why="A quality stimulus you respond to")],
         risks=[],
@@ -129,6 +150,9 @@ def known_good_report() -> Tuple[CoachReportContent, CoachContextPack]:
         preference_profile={"themes": [
             {"theme": "add_quality", "tendency": "acts_on", "acted": 4, "total": 5},
         ]},
+        # #943: a committed next-week session with a real distance, so the forward
+        # claim above has a plan to be checked against.
+        schedule=_NEXT_WEEK_LONG_RUN,
     )
     return content, pack
 
@@ -138,8 +162,9 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
     confound, medical overreach, parrots the prior report, claims an ungrounded
     trend, frames advice away from what the runner acts on, narrates the cumulative
     load number as an intensity verdict (#168), leads with a low detection-
-    confidence caveat instead of coaching the present per-rep data (#171), and
-    advises on the runner's body rather than on training it (#742)."""
+    confidence caveat instead of coaching the present per-rep data (#171), advises
+    on the runner's body rather than on training it (#742), and invents a distance
+    for next week's long run that the plan does not show (#943)."""
     content = CoachReportContent(
         headline=None,  # (1) no lead verdict
         # (5) ungrounded trend AND (8) leads with a low-confidence detection caveat
@@ -157,6 +182,9 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
             CoachTakeaway(text="And you keep ignoring my easy-day guidance, as I keep telling you."),
             # (14) advises on the BODY rather than on how to train it (#742).
             CoachTakeaway(text="At your BMI you would run faster if you lost 10kg."),
+            # (16) an invented distance for next week's long run — the plan shows
+            # 18km, not 16.5 (#943).
+            CoachTakeaway(text="For next week's 16.5km long run, ease into the pace."),
         ],
         next_steps=[CoachNextStep(
             action="Add a long run",
@@ -188,6 +216,9 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
         # (14) a build was surfaced and the report advises on the BODY rather than on
         # how to train it — the #742 failure the BODY clause exists to prevent.
         profile={"body": {"weight_kg": 109.0, "height_cm": 193.0}},
+        # (16) the plan's real next-week number, which the report above invents a
+        # different figure against (#943).
+        schedule=_NEXT_WEEK_LONG_RUN,
     )
     return content, pack
 
@@ -201,13 +232,15 @@ def deliberately_bad_report() -> Tuple[CoachReportContent, CoachContextPack]:
 def known_good_message_report() -> Tuple[CoachMessageReport, CoachContextPack]:
     """A grounded prose message: leads with a verdict, discounts a heat-inflated
     drift, no medical overreach, advances rather than parrots, no thin-trend claim,
-    and frames toward the quality work this runner acts on."""
+    frames toward the quality work this runner acts on, and a forward reference to
+    next week's long run uses the plan's own number (#943)."""
     content = CoachMessageReport(
         message=(
             "Easy run, run easy. Your HR drift looks high at 9% but it was 29C out "
             "there, so discount it as a heat artefact, not accumulating fatigue. The "
             "effort stayed in the easy band the whole way, which is exactly what this "
-            "session was for."
+            "session was for. For next week's 18km long run, keep the effort "
+            "conversational throughout."
         ),
         headline="Easy run, run easy",
         next_steps=[CoachNextStep(
@@ -224,6 +257,9 @@ def known_good_message_report() -> Tuple[CoachMessageReport, CoachContextPack]:
         preference_profile={"themes": [
             {"theme": "add_quality", "tendency": "acts_on", "acted": 4, "total": 5},
         ]},
+        # #943: a committed next-week session with a real distance, so the forward
+        # claim above has a plan to be checked against.
+        schedule=_NEXT_WEEK_LONG_RUN,
     )
     return content, pack
 
@@ -234,7 +270,8 @@ def deliberately_bad_message_report() -> Tuple[CoachMessageReport, CoachContextP
     claims an ungrounded trend, frames advice away from what the runner acts on,
     narrates the cumulative load number as an intensity verdict (#168), leads
     with a low detection-confidence caveat instead of coaching the rep data (#171),
-    and advises on the runner's body rather than on training it (#742)."""
+    advises on the runner's body rather than on training it (#742), and invents a
+    distance for next week's long run that the plan does not show (#943)."""
     content = CoachMessageReport(
         # The opening sentence both (4) parrots the prior lead AND (8) leads with a
         # detection caveat though per-rep data is present.
@@ -245,7 +282,8 @@ def deliberately_bad_message_report() -> Tuple[CoachMessageReport, CoachContextP
             "would diagnose this as chronic fatigue. An effort score of 265.6 "
             "confirms this stayed in true recovery territory, well below moderate "
             "intensity thresholds. And you keep ignoring my easy-day guidance, as "
-            "I keep telling you. At your BMI you would run faster if you lost 10kg."
+            "I keep telling you. At your BMI you would run faster if you lost 10kg. "
+            "For next week's 16.5km long run, ease into the pace."
         ),
         headline=None,  # (1) no lead verdict label, tail not degraded
         next_steps=[CoachNextStep(
@@ -275,6 +313,9 @@ def deliberately_bad_message_report() -> Tuple[CoachMessageReport, CoachContextP
         # (14) a build was surfaced and the report advises on the BODY rather than on
         # how to train it — the #742 failure the BODY clause exists to prevent.
         profile={"body": {"weight_kg": 109.0, "height_cm": 193.0}},
+        # (16) the plan's real next-week number, which the message above invents a
+        # different figure against (#943).
+        schedule=_NEXT_WEEK_LONG_RUN,
     )
     return content, pack
 
