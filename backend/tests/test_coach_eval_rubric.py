@@ -28,6 +28,7 @@ from app.services.coach.eval.rubric import (
     assert_led_with_headline,
     assert_load_not_framed_as_intensity,
     assert_depth_matched_the_session,
+    assert_forward_distance_matches_plan,
     assert_no_medical_overreach,
     score_report,
     UNREMARKABLE_REPORT_WORD_CEILING,
@@ -112,7 +113,10 @@ _DEFAULT_PACK_DICT = {
 def _make_pack(**section_overrides) -> CoachContextPack:
     pack = {key: dict(value) if isinstance(value, dict) else value for key, value in _DEFAULT_PACK_DICT.items()}
     for section, override in section_overrides.items():
-        pack[section].update(override)
+        # `.get(section, {})` rather than `pack[section]`: a section absent from
+        # `_DEFAULT_PACK_DICT` (e.g. `schedule`, an Optional section with no
+        # default row here) starts from nothing rather than raising.
+        pack[section] = {**pack.get(section, {}), **override}
     return CoachContextPack.model_validate(pack)
 
 
@@ -911,3 +915,134 @@ class TestDepthMatchedTheSession:
         assert "assert_depth_matched_the_session" in names
         score = score_report(self._message(self._BRIEF), _make_pack())
         assert any(a.name == "depth_matched_the_session" for a in score.assertions)
+
+
+# --- assertion 16: forward distance matches the plan (#943) -----------------
+
+class TestForwardDistanceMatchesPlan:
+    """The 16th rubric assertion (#943): a distance named for a session that has
+    not happened yet must be the plan's own number, not an invented one.
+
+    A runner's schedule showed an 18 km long run next week; the report said
+    "next week's 16.5km" — a figure the pack never carried, because the section
+    only ever showed the current week. #943 gives the coach the real number
+    (`right_now.schedule.next_week_committed`); this assertion checks the report
+    used it rather than inventing one anyway.
+
+    All fixtures are synthetic (trust level 5), NOT production data.
+    """
+
+    _PLAN_SESSION = {
+        "session_id": None, "when": "next Sat", "title": "Long run",
+        "intent": "long", "discipline": "run", "target": "18.0 km",
+    }
+
+    def _pack_with_next_week(self) -> CoachContextPack:
+        return _make_pack(schedule={"next_week_committed": [self._PLAN_SESSION]})
+
+    def _message(self, prose):
+        from app.schemas.coach import CoachMessageReport
+        return CoachMessageReport(
+            message=prose, headline="Easy run", next_steps=[], risks=[], questions=[],
+            tail_degraded=False,
+        )
+
+    def test_abstains_when_the_pack_carries_no_schedule_section(self):
+        result = assert_forward_distance_matches_plan(
+            self._message("For next week's 16.5km long run, ease into it."), _make_pack()
+        )
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_abstains_when_no_upcoming_session_states_a_distance(self):
+        pack = _make_pack(schedule={"still_to_come_this_week": [
+            {"session_id": None, "when": "any day", "title": "Strength",
+             "intent": "strength", "discipline": "strength", "target": "40 min"},
+        ]})
+        result = assert_forward_distance_matches_plan(
+            self._message("For next week's 16.5km long run, ease into it."), pack
+        )
+        assert result.status is AssertionStatus.NOT_APPLICABLE
+
+    def test_a_matching_forward_distance_passes(self):
+        result = assert_forward_distance_matches_plan(
+            self._message("For next week's 18km long run, keep it conversational."),
+            self._pack_with_next_week(),
+        )
+        assert result.status is AssertionStatus.PASS
+
+    def test_an_invented_forward_distance_fails(self):
+        result = assert_forward_distance_matches_plan(
+            self._message("For next week's 16.5km long run, ease into the pace."),
+            self._pack_with_next_week(),
+        )
+        assert result.status is AssertionStatus.FAIL
+        assert result.evidence["claimed_km"] == [16.5]
+
+    def test_a_report_that_makes_no_forward_claim_passes(self):
+        """The section applying does not mean a report has to reference it — only
+        that if it does, it has to be right."""
+        result = assert_forward_distance_matches_plan(
+            self._message("Comfortable easy run, exactly as planned."),
+            self._pack_with_next_week(),
+        )
+        assert result.status is AssertionStatus.PASS
+
+    def test_a_distance_about_todays_run_is_not_read_as_a_forward_claim(self):
+        """No forward marker, so a distance about the run being reported on is
+        never checked against the plan — that would be a false positive on
+        every ordinary report."""
+        result = assert_forward_distance_matches_plan(
+            self._message("You covered 16.5km today at a steady pace."),
+            self._pack_with_next_week(),
+        )
+        assert result.status is AssertionStatus.PASS
+
+    def test_matches_within_a_small_tolerance(self):
+        result = assert_forward_distance_matches_plan(
+            self._message("For next week's 18.02km long run, hold steady."),
+            self._pack_with_next_week(),
+        )
+        assert result.status is AssertionStatus.PASS
+
+    def test_a_whole_km_rounding_of_the_one_decimal_pack_figure_passes(self):
+        """`_target()` renders a half marathon (21097.5 m) as "21.1 km"; a
+        runner — and the coach — naturally speak of it as "21km". That rounding
+        is not an invented number and must not fail the assertion."""
+        pack = _make_pack(schedule={"next_week_committed": [
+            {"session_id": None, "when": "next Sun", "title": "Half marathon",
+             "intent": "long", "discipline": "run", "target": "21.1 km"},
+        ]})
+        result = assert_forward_distance_matches_plan(
+            self._message("For next week's 21km race, hold back through the first 5."),
+            pack,
+        )
+        assert result.status is AssertionStatus.PASS
+
+    def test_the_tolerance_still_catches_the_defect_that_motivated_this(self):
+        """The exact #943 defect: "16.5km" against a planned 18.0 km long run is
+        1.5 km out — comfortably past the whole-km-rounding tolerance above — and
+        must still fail. Pinned as its own test so a future widening of the
+        tolerance cannot silently swallow the case the assertion exists for."""
+        result = assert_forward_distance_matches_plan(
+            self._message("For next week's 16.5km long run, ease into the pace."),
+            self._pack_with_next_week(),
+        )
+        assert result.status is AssertionStatus.FAIL
+
+    def test_scores_the_legacy_structured_shape_too(self):
+        good = _make_content(thesis="For next week's 18km long run, keep it easy.")
+        bad = _make_content(thesis="For next week's 16.5km long run, ease into it.")
+        assert assert_forward_distance_matches_plan(
+            good, self._pack_with_next_week()
+        ).status is AssertionStatus.PASS
+        assert assert_forward_distance_matches_plan(
+            bad, self._pack_with_next_week()
+        ).status is AssertionStatus.FAIL
+
+    def test_registered_in_the_rubric(self):
+        names = [fn.__name__ for fn in ASSERTIONS]
+        assert "assert_forward_distance_matches_plan" in names
+        score = score_report(
+            self._message("Comfortable easy run."), self._pack_with_next_week()
+        )
+        assert any(a.name == "forward_distance_matches_plan" for a in score.assertions)

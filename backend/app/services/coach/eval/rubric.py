@@ -1,11 +1,11 @@
 """The coach-report eval rubric (M5) — the oracle for coach reports.
 
-Fifteen deterministic assertions (five M5 + one M10 adherence-framing + one #168
+Sixteen deterministic assertions (five M5 + one M10 adherence-framing + one #168
 load-vs-intensity framing + one #171 coach-the-data framing + four
 preserved-safety-floor regression sensors, one each for the P1.1 voice, the P1.2
 coaching corpus, the P4 user materials and the ADR 0025 runner memory + one
 ADR 0025 non-nag sensor + one #742 body-as-subject sensor + one #655 depth
-sensor), each returning
+sensor + one #943 forward-distance sensor), each returning
 PASS / FAIL / NOT_APPLICABLE plus a human-readable reason and small
 JSON-serialisable evidence. A report is scored from its own ``CoachReportContent``
 plus its ``CoachContextPack`` only, so scoring is self-contained and repeatable.
@@ -61,8 +61,14 @@ The assertions:
                                stays under a word ceiling instead of running to a
                                full write-up. The only assertion about a report's
                                SHAPE, and one-sided: it never asks for more words.
+ 16. forward_distance_matches_plan — (#943) a distance named for a session that
+                               has not happened yet (a "next week's ..." claim)
+                               matches a distance the plan actually shows, rather
+                               than one invented because the pack never carried
+                               it. NOT_APPLICABLE when the plan shows no upcoming
+                               committed session with a stated distance.
 
-Assertions 2, 4, 5, 7 and 8 inspect free text with documented keyword / overlap
+Assertions 2, 4, 5, 7, 8 and 16 inspect free text with documented keyword / overlap
 heuristics; they are the deterministic floor, not a semantic judge. The
 NOT_APPLICABLE branch matters: a report is never failed for a dimension that
 does not apply to it (no confound fired, no prior report to advance).
@@ -1075,6 +1081,102 @@ def assert_depth_matched_the_session(content: ReportLike, pack: CoachContextPack
     )
 
 
+# #943: a distance named for a session that has not happened yet must be a
+# distance the plan actually shows.
+#
+# Deliberately an EVAL sensor, not a validator rule: a regex that mismatches a
+# forward reference must never cost the runner their whole report, only a scored
+# assertion (the same reasoning rules 7 and 8 give for staying narrow). High
+# precision over recall, like the medical-scope floor — it only reads a distance
+# as a FORWARD claim when it sits near an explicit forward marker, so a distance
+# stated about the run actually being reported on is never in scope.
+_FORWARD_MARKER_RE = re.compile(
+    r"\b(next week|next\s+\w+day|tomorrow|coming up|still to come)\b", re.IGNORECASE
+)
+_DISTANCE_KM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*km\b", re.IGNORECASE)
+# How far past a forward marker a distance still reads as "about that session" —
+# generous enough for a short clause ("next week's 18km long run") without
+# reaching into an unrelated sentence.
+_FORWARD_DISTANCE_WINDOW = 60
+# `_target()` renders a plain distance to ONE decimal place (a half marathon,
+# 21097.5 m, becomes "21.1 km"), but a runner — and the coach — naturally speak
+# in whole kilometres ("next week's 21km long run"). That is not an invented
+# number, so the tolerance has to absorb it. Derived, not chosen: the pack's
+# one-decimal figure P is within 0.05 km of the true distance D (the rendering's
+# own worst-case rounding error), and a whole-km utterance R is within 0.5 km of
+# D (the worst case for rounding to the nearest whole kilometre, at the x.5
+# boundary). By the triangle inequality |R - P| <= |R - D| + |D - P| <= 0.55, so
+# 0.55 km is the tight bound that accepts every correct whole-km rounding of a
+# one-decimal-rendered distance. The #943 defect that motivated this assertion —
+# "16.5km" against a planned 18.0 km — is 1.5 km out, comfortably past this.
+_DISTANCE_TOLERANCE_KM = 0.55
+
+
+def _pack_upcoming_distances_km(pack: CoachContextPack) -> List[float]:
+    """Every distance (km) the pack itself states for a COMMITTED upcoming
+    session, this week's or next's — the real numbers a report reaching forward
+    has to work from (#943)."""
+    schedule = pack.schedule
+    if schedule is None:
+        return []
+    sessions = list(schedule.still_to_come_this_week) + list(
+        getattr(schedule, "next_week_committed", None) or []
+    )
+    distances: List[float] = []
+    for session in sessions:
+        match = _DISTANCE_KM_RE.search(session.target or "")
+        if match:
+            distances.append(float(match.group(1)))
+    return distances
+
+
+def assert_forward_distance_matches_plan(content: ReportLike, pack: CoachContextPack) -> AssertionResult:
+    """#943: a runner's schedule showed an 18.00 km long run next week; the report
+    told them "next week's 16.5km" — a figure the coach had never been shown,
+    because the pack only ever carried the current week. #943's other half gives
+    the coach the real number (`right_now.schedule.next_week_committed`); this is
+    the report-shape check that it used it rather than inventing one anyway.
+
+    NOT_APPLICABLE when the pack shows no committed upcoming session with a
+    stated distance — there is then nothing a forward claim could be checked
+    against. PASS when the report makes no forward-marked distance claim, or
+    when every one it makes matches a distance the pack actually shows. FAIL
+    when a forward-marked distance appears that matches none of them."""
+    plan_distances = _pack_upcoming_distances_km(pack)
+    if not plan_distances:
+        return AssertionResult(
+            "forward_distance_matches_plan", AssertionStatus.NOT_APPLICABLE,
+            "The pack shows no committed upcoming session with a stated distance, "
+            "so there is nothing a forward distance claim could be checked against.",
+        )
+
+    text = _report_text(content)
+    claimed: List[float] = []
+    for marker in _FORWARD_MARKER_RE.finditer(text):
+        window = text[marker.end(): marker.end() + _FORWARD_DISTANCE_WINDOW]
+        match = _DISTANCE_KM_RE.search(window)
+        if match:
+            claimed.append(float(match.group(1)))
+
+    mismatched = [
+        value for value in claimed
+        if not any(abs(value - plan) <= _DISTANCE_TOLERANCE_KM for plan in plan_distances)
+    ]
+    if not mismatched:
+        return AssertionResult(
+            "forward_distance_matches_plan", AssertionStatus.PASS,
+            "Every forward-marked distance the report states matches a distance the "
+            "plan actually shows (or the report states none).",
+            {"plan_distances_km": plan_distances},
+        )
+    return AssertionResult(
+        "forward_distance_matches_plan", AssertionStatus.FAIL,
+        "The report names a distance for a session that has not happened yet that "
+        "matches none of the distances the plan shows — an invented forward number.",
+        {"claimed_km": mismatched, "plan_distances_km": plan_distances},
+    )
+
+
 # --- the rubric ---------------------------------------------------------------
 
 ASSERTIONS: List[Callable[[ReportLike, CoachContextPack], AssertionResult]] = [
@@ -1093,6 +1195,7 @@ ASSERTIONS: List[Callable[[ReportLike, CoachContextPack], AssertionResult]] = [
     assert_coached_direction_not_nagged,
     assert_body_not_made_the_subject,
     assert_depth_matched_the_session,
+    assert_forward_distance_matches_plan,
 ]
 
 

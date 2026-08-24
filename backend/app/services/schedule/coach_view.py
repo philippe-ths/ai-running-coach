@@ -13,6 +13,12 @@ its advice does not contradict the plan it wrote itself. Not the twelve-week
 horizon — that is the runner's screen, and a report about Tuesday does not need
 October. Not the sketched weeks, not the load numbers: the coach is given the
 prescription, and the measured record of what happened is already in front of it.
+The one deliberate exception is `next_week_committed` (#943): a fixed, capped,
+one-week-further reach for COMMITTED sessions only, added because the coach
+already reaches that far on its own — "next week's long run" — and reaching
+forward is good coaching. Withholding the fact does not stop the reach; it only
+makes the reach invent one. This is still not the horizon: it is one more week,
+never twelve.
 
 **Could an LLM misread it?** Yes, in one specific and predictable way: handed a
 plan and a result, a model reaches for a COMPLIANCE VERDICT. "You missed two
@@ -153,21 +159,30 @@ def _target(session: Any) -> Optional[str]:
     return None
 
 
-def _when(session: Any, today: date, starts_on: int) -> str:
-    """When it may happen, in the runner's own terms."""
+def _when(session: Any, today: date, starts_on: int, *, next_week: bool = False) -> str:
+    """When it may happen, in the runner's own terms.
+
+    `next_week` disambiguates a session drawn from the week AFTER the one `today`
+    sits in (#943): its own weekday abbreviation ("Sat") reads identically to a
+    session from the current week, and a coach naming a distance against the
+    wrong Saturday is exactly how #943 shipped.
+    """
     placement = derive_placement(session.window_start, session.window_end, starts_on)
-    if placement == "pinned":
-        return session.window_start.strftime("%a")
     if placement == "week":
-        return "any day"
+        return "next week, any day" if next_week else "any day"
+    if placement == "pinned":
+        day = session.window_start.strftime("%a")
+        return f"next {day}" if next_week else day
     window = effective_window(session.window_start, session.window_end, today) or (
         session.window_start,
         session.window_end,
     )
     start, end = window
     if start == end:
-        return start.strftime("%a")
-    return f"{start.strftime('%a')}-{end.strftime('%a')}"
+        day = start.strftime("%a")
+        return f"next {day}" if next_week else day
+    span = f"{start.strftime('%a')}-{end.strftime('%a')}"
+    return f"next {span}" if next_week else span
 
 
 def _week_view(
@@ -235,6 +250,53 @@ def _week_view(
     return upcoming, committed, done, _km(planned_running_m, unmeasured_runs)
 
 
+def _next_week_committed(
+    db: Session,
+    user_id: Any,
+    plan: Any,
+    today: date,
+    starts_on: int,
+) -> List[UpcomingSessionContext]:
+    """The bounded look one week past `_week_view` (#943).
+
+    Not the horizon this module exists to withhold — a fixed one-week-further
+    reach, capped exactly like this week's list. COMMITTED sessions only: a
+    suggestion the runner may still dismiss is not something to hand the coach a
+    number for. Exists because the coach reached past this week on its own
+    anyway and, with no real figure in front of it there, invented one.
+
+    Routed through the same `session_status` gate `_week_view` uses — not a
+    second definition of "still to come". `completion.complete_planned_session`
+    has no window restriction, so a runner who runs next week's long run early
+    and ticks it off must not still read to the coach as something ahead of
+    them: this section is INTENT only, and a completed (or dismissed, or
+    somehow already missed) session is no longer intent.
+    """
+    start = week_start(today, starts_on) + timedelta(days=WEEK_LENGTH_DAYS)
+    end = start + timedelta(days=WEEK_LENGTH_DAYS - 1)
+    rows = store.sessions_in_range(db, user_id, start, end, plan_id=plan.id)
+
+    upcoming: List[UpcomingSessionContext] = []
+    for row in rows:
+        if row.commitment != "committed" or row.intent == "rest":
+            continue
+        if session_status(row, today) != "upcoming":
+            continue
+        if len(upcoming) >= MAX_UPCOMING:
+            break
+        upcoming.append(
+            UpcomingSessionContext(
+                session_id=str(row.id),
+                when=_when(row, today, starts_on, next_week=True),
+                title=row.title,
+                intent=row.intent,
+                discipline=row.discipline,
+                target=_target(row),
+            )
+        )
+    return upcoming
+
+
 def build_schedule_context(
     db: Session, activity: Any, as_of: Any = None
 ) -> Optional[ScheduleContext]:
@@ -274,6 +336,7 @@ def build_schedule_context(
         starts_on,
         exclude_session_id=matched.id if matched is not None else None,
     )
+    next_week = _next_week_committed(db, user_id, plan, today, starts_on)
 
     # The DERIVED statement, not the coach's own `label` (#844) — the same text
     # the runner's schedule screen shows them. A label is written by the coach
@@ -284,13 +347,14 @@ def build_schedule_context(
     # worse than the two being wrong together.
     rules = [describe_rule(rule) for rule in store.plan_rules(plan)][:MAX_RULES]
 
-    if not (planned_for or upcoming or rules):
+    if not (planned_for or upcoming or next_week or rules):
         # Nothing to say. An empty section is tokens spent on silence.
         return None
 
     return ScheduleContext(
         planned_for_this_activity=planned_for,
         still_to_come_this_week=upcoming,
+        next_week_committed=next_week,
         rules_in_play=rules,
         committed_this_week=committed,
         done_this_week=done,

@@ -1,5 +1,8 @@
 "use client";
 
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { formatDateLabel } from "@/lib/format";
+
 export interface DateRange {
   startDate: string | null; // YYYY-MM-DD, inclusive
   endDate: string | null; // YYYY-MM-DD, inclusive
@@ -9,6 +12,10 @@ interface Props {
   startDate: string | null;
   endDate: string | null;
   onChange: (range: DateRange) => void;
+  // The local calendar day of the runner's oldest activity, or null when
+  // unknown/no history (#948). Stepping back stops here rather than paging
+  // into an empty window.
+  earliestActivityDate?: string | null;
 }
 
 // Preset windows expressed as days back from today; null = all time.
@@ -34,7 +41,33 @@ function daysAgoISO(days: number): string {
   return toISO(d);
 }
 
-export default function DateRangeFilter({ startDate, endDate, onChange }: Props) {
+function todayISO(): string {
+  return toISO(new Date());
+}
+
+// Parse "YYYY-MM-DD" as a local date (avoids the UTC-midnight shift `new
+// Date(iso)` would introduce), add `days` (may be negative), and format back.
+function addDaysISO(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + days);
+  return toISO(dt);
+}
+
+function daysBetweenInclusiveISO(startIso: string, endIso: string): number {
+  const [sy, sm, sd] = startIso.split("-").map(Number);
+  const [ey, em, ed] = endIso.split("-").map(Number);
+  const start = Date.UTC(sy, sm - 1, sd);
+  const end = Date.UTC(ey, em - 1, ed);
+  return Math.round((end - start) / 86_400_000) + 1;
+}
+
+export default function DateRangeFilter({
+  startDate,
+  endDate,
+  onChange,
+  earliestActivityDate,
+}: Props) {
   // A preset is "active" when the current range matches the window it would set:
   // a start `days` back and an open end. Editing a date input therefore clears the
   // highlight automatically, since the range no longer matches any preset.
@@ -47,6 +80,46 @@ export default function DateRangeFilter({ startDate, endDate, onChange }: Props)
     if (days === null) return !startDate && !endDate;
     return startDate === daysAgoISO(days) && !endDate;
   }
+
+  // Stepping (#948): the selected window's own length, moved back/forward by
+  // exactly that many days so the arrows always move by "the period already
+  // selected" — a preset's window or a manually-picked custom range alike. No
+  // meaning for "All" (open on both ends), so the arrows are not offered then.
+  const today = todayISO();
+  const effectiveEnd = endDate ?? today;
+  const windowDays = startDate ? daysBetweenInclusiveISO(startDate, effectiveEnd) : null;
+
+  const canStepBack =
+    !!startDate &&
+    !!earliestActivityDate &&
+    earliestActivityDate < startDate;
+  const canStepForward = endDate !== null; // open end already means "through today"
+
+  function stepBack() {
+    if (!startDate || windowDays === null) return;
+    const newEnd = addDaysISO(startDate, -1);
+    const newStart = addDaysISO(newEnd, -(windowDays - 1));
+    onChange({ startDate: newStart, endDate: newEnd });
+  }
+
+  function stepForward() {
+    if (!startDate || windowDays === null) return;
+    const newStart = addDaysISO(effectiveEnd, 1);
+    const newEnd = addDaysISO(newStart, windowDays - 1);
+    // Landing back on (or past) today re-opens the end, matching the preset's
+    // own "through today" shape rather than freezing on a stale explicit date.
+    if (newEnd >= today) {
+      onChange({ startDate: addDaysISO(today, -(windowDays - 1)), endDate: null });
+    } else {
+      onChange({ startDate: newStart, endDate: newEnd });
+    }
+  }
+
+  const showStepper = startDate !== null;
+  const windowLabel =
+    showStepper && startDate
+      ? `${formatDateLabel(startDate)} – ${formatDateLabel(effectiveEnd)}`
+      : null;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -65,6 +138,33 @@ export default function DateRangeFilter({ startDate, endDate, onChange }: Props)
           </button>
         ))}
       </div>
+
+      {showStepper && (
+        <div className="inline-flex items-center gap-1">
+          <button
+            type="button"
+            aria-label="Previous period"
+            onClick={stepBack}
+            disabled={!canStepBack}
+            className="p-2 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 disabled:opacity-30"
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <span className="text-sm font-medium text-gray-600 dark:text-gray-400 min-w-[9.5rem] text-center">
+            {windowLabel}
+          </span>
+          <button
+            type="button"
+            aria-label="Next period"
+            onClick={stepForward}
+            disabled={!canStepForward}
+            className="p-2 rounded-md text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 disabled:opacity-30"
+          >
+            <ChevronRight size={18} />
+          </button>
+        </div>
+      )}
+
       <div className="inline-flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
         <input
           type="date"

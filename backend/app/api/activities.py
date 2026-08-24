@@ -210,6 +210,12 @@ def read_activities(
             response.headline = compose_headline(
                 activity, Classification.from_metrics(activity.metrics)
             )
+            # #947: the day-grouped list's load total. `activity.metrics` rides
+            # the `joinedload(Activity.metrics)` already applied in
+            # `get_activities` — reading it here is free, not a second query
+            # per row. Stays None (not yet analysed) when there is no metrics
+            # row at all.
+            response.effort_score = activity.metrics.effort_score
         response.coach_lead = coach_leads.get(activity.id)
         responses.append(response)
     # #684: the models above are already validated once (model_validate). Returning
@@ -218,6 +224,21 @@ def read_activities(
     # doubling — a second time, so avg_cadence would be doubled twice. Serialize the
     # already-normalized instances directly to keep normalization at exactly one pass.
     return JSONResponse(content=jsonable_encoder(responses))
+
+
+@router.get("/activities/earliest-date")
+def read_earliest_activity_date(db: DbSession, user: CurrentUser):
+    """The local calendar day of the runner's oldest non-deleted activity, or
+    null with no history (#948).
+
+    The window-navigation floor for the Activities and Trends screens: fetched
+    once per screen load so a Previous-arrow tap can clamp against it without a
+    round trip per step. Registered ahead of ``/activities/{activity_id}`` so
+    "earliest-date" is never captured as an activity id.
+    """
+    earliest = activity_queries.get_earliest_activity_local_date(db, user_id=user.id)
+    return {"earliest_activity_date": earliest.isoformat() if earliest else None}
+
 
 @router.get("/activities/{activity_id}", response_model=ActivityDetailRead)
 def read_activity(
