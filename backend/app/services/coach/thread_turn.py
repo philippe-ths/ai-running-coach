@@ -38,6 +38,7 @@ from app.services.coach.chat import (
     _validate_conversational_text,
     sessions_in_play_from_tool_results,
 )
+from app.services.coach import max_hr_calibration
 from app.services.coach.screen_context import (
     ScreenView,
     resolve_screen_view,
@@ -174,7 +175,51 @@ def _build_baseline_sections(db: Session, user: User) -> dict:
         # sentence about it. Same switch as the plan above: this is a
         # schedule-shaped fact and goes dark with the rest of the schedule input.
         sections["running_norm"] = _running_norm_section(db, user)
+    # #945: only set when the deterministic detector actually finds something —
+    # abstaining is the default, so this key is absent far more often than not
+    # (the schedule/readiness idiom of setting the key only on a real value,
+    # not the always-present `schedule` idiom, since there is no "no revision
+    # pending" fact worth stating in words the way "no active plan" is).
+    max_hr_revision = _max_hr_revision_section(db, user)
+    if max_hr_revision is not None:
+        sections["max_hr_revision"] = max_hr_revision
     return sections
+
+
+def _max_hr_revision_section(db: Session, user: User) -> Optional[dict]:
+    """#945: deterministic evidence that the runner's stated max HR has been
+    overtaken by their own recent training, surfaced as a FACT for the coach to
+    discuss and possibly OFFER (`revise_max_hr`) to revise — never a silent
+    write, and this detector never nags on its own (see
+    max_hr_calibration.find_max_hr_revision's cooldown/re-derive rule).
+
+    Thread-baseline only, not the report pack (#945 decisions 3/4): the offer
+    this fact can lead to is a two-way exchange the runner confirms or not,
+    which is what a thread turn is for; a report pronounces to an audience of
+    one with no reply channel, so it never learns this exists.
+
+    Read-only by design — including the anti-nag check, which reads the
+    profile's own "last surfaced" bookkeeping but never writes it. The write
+    happens once, in proposed_actions.py, only when the coach actually offers
+    the revision to the runner (never on every turn the fact is merely
+    computed), so this function stays safe to call from anywhere that reads a
+    thread baseline, including the read-only diagram capture script.
+    """
+    try:
+        finding = max_hr_calibration.gather_max_hr_revision(db, user.id)
+    except Exception:  # noqa: BLE001 — a detector hiccup never blocks a reply
+        logger.exception("max HR revision section failed for user %s", user.id)
+        return None
+    if finding is None:
+        return None
+    return {
+        "stated_max_hr": finding.stated_max,
+        "suggested_max_hr": finding.suggested_max,
+        "margin_bpm": finding.margin_bpm,
+        "exceeding_block_count": finding.exceeding_block_count,
+        "sample_activity_count": finding.sample_count,
+        "basis": finding.basis,
+    }
 
 
 def _schedule_section(db: Session, user: User) -> Optional[dict]:
@@ -239,7 +284,23 @@ def _render_baseline_block(sections: dict) -> str:
         parts.append(_render_schedule_block(sections["schedule"]))
     if sections.get("running_norm"):
         parts.append(_render_running_norm_block(sections["running_norm"]))
+    if sections.get("max_hr_revision"):
+        parts.append(_render_max_hr_revision_block(sections["max_hr_revision"]))
     return "\n".join(parts) + ("\n" if parts else "")
+
+
+def _render_max_hr_revision_block(section: dict) -> str:
+    """#945: told as a fact with an explicit instruction to OFFER, never to
+    silently claim it has been changed — the runner confirms every write to
+    their record, and this one is no different."""
+    return (
+        "\nMAX HEART RATE — their own recent training against their stated "
+        "ceiling (a deterministic read of their recorded data, not a guess; "
+        "you may cite it and OFFER revise_max_hr, never claim you have already "
+        "updated it):\n"
+        + json.dumps(section, default=str)
+        + "\n"
+    )
 
 
 def _render_schedule_block(schedule: Optional[dict]) -> str:

@@ -369,12 +369,13 @@ def test_the_node_check_fails_loudly_when_the_node_parser_returns_almost_nothing
 def test_the_baseline_sections_are_read_off_the_builder_that_assembles_them():
     """There is no constant to import — the keys are string literals in
     thread_turn._build_baseline_sections — so this pins that the static read finds them,
-    including #856's schedule."""
+    including #856's schedule and #945's max_hr_revision."""
     assert set(_declared_baseline_sections()) == {
         "memory",
         "readiness",
         "schedule",
         "running_norm",
+        "max_hr_revision",
     }
 
 

@@ -20,7 +20,21 @@ class UserProfile(Base):
     weekly_days_available: Mapped[int] = mapped_column(Integer)
     current_weekly_km: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_hr: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    max_hr_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # "user_entered", "race_estimate", "lab_test"
+    # "user_entered", "race_estimate", "lab_test", or "runner_confirmed" (#945:
+    # the runner confirmed a coach-offered revision backed by their own
+    # observed evidence -- see app/services/coach/max_hr_calibration.py).
+    max_hr_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # #945: bookkeeping for the max-HR revision detector's anti-nag rule only --
+    # never read as a fact about the runner. The value/timestamp of the last
+    # `revise_max_hr` offer actually put in front of the runner, so the
+    # detector does not re-raise the same evidence on every turn. Cleared once
+    # the runner confirms a revision. Null means "never offered".
+    max_hr_revision_last_surfaced_value: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
+    max_hr_revision_last_surfaced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Manual resting HR (bpm), the interim source ahead of a device integration
     # (#555). Null until the runner enters it; the referral layer abstains while
     # absent, and #166's sustained-rise red flag activates once a trend source lands.
