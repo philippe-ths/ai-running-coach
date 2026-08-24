@@ -6,6 +6,7 @@ import { TrendsData, TrendsRange, TrendsGranularity } from "@/lib/types";
 import { formatDistanceKm, formatDuration } from "@/lib/format";
 import { fetchFromAPI } from "@/lib/api";
 import RangeSelector from "@/components/trends/RangeSelector";
+import WindowStepper from "@/components/trends/WindowStepper";
 import GranularitySelector from "@/components/trends/GranularitySelector";
 import { resolveGranularity, DAYS_PER_BUCKET, ROLLING_BIN_DAYS } from "@/components/trends/granularity";
 import ActivityTypeFilter from "@/components/trends/ActivityTypeFilter";
@@ -23,6 +24,18 @@ import type {
 } from "@/lib/types/volume";
 
 type WindowMode = "rolling" | "calendar";
+
+// Parse "YYYY-MM-DD" as a local date (avoids the UTC-midnight shift `new
+// Date(iso)` would introduce), add `days` (may be negative), and format back.
+function addDaysISO(iso: string, days: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + days);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
 
 // #746: the efficiency headline compares CLEAN-conditions activities (not hilly,
 // stop-heavy or hot) when both windows hold enough of them, because an
@@ -103,8 +116,18 @@ export default function TrendsPage() {
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [data, setData] = useState<TrendsData | null>(null);
   const [volume, setVolume] = useState<VolumeReport | null>(null);
+  const [volumeLoading, setVolumeLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Window navigation (#948): `asOf` judges the (range, mode) window as of this
+  // date instead of today; undefined means "today" (the live window). Stepping
+  // "previous" pushes the window we're leaving onto `asOfHistory` so "next" can
+  // simply pop back to it — a browser-history idiom that sidesteps re-deriving
+  // calendar-period math (month/quarter/year lengths vary) on the client.
+  const [asOf, setAsOf] = useState<string | undefined>(undefined);
+  const [asOfHistory, setAsOfHistory] = useState<(string | undefined)[]>([]);
+  const [earliestActivityDate, setEarliestActivityDate] = useState<string | null>(null);
 
   // The user-chosen bar granularity (#432), clamped to what the range offers.
   // Keeping the raw choice means it's remembered when the runner returns to a
@@ -145,8 +168,25 @@ export default function TrendsPage() {
       .catch(() => {});
   }, []);
 
+  // The window-navigation floor (#948): fetched once, not per step.
+  useEffect(() => {
+    fetchFromAPI("/api/activities/earliest-date")
+      .then((r: { earliest_activity_date: string | null } | null) =>
+        setEarliestActivityDate(r?.earliest_activity_date ?? null),
+      )
+      .catch(() => {});
+  }, []);
+
   // Calendar mode has no meaning for the unbounded "All" range.
   const effectiveMode: WindowMode = range === "ALL" ? "rolling" : mode;
+
+  // A window carries no meaning across a range or framing change (a "previous
+  // month" step means nothing once the range becomes 7D), so reset to "today"
+  // whenever either changes.
+  useEffect(() => {
+    setAsOf(undefined);
+    setAsOfHistory([]);
+  }, [range, effectiveMode]);
 
   // #767: publish this page's view selections for the coach sheet's screen
   // pointer + ribbon (selections only — the server recomputes the numbers).
@@ -156,7 +196,7 @@ export default function TrendsPage() {
   });
 
   const fetchTrends = useCallback(
-    async (r: TrendsRange, types: string[], m: WindowMode) => {
+    async (r: TrendsRange, types: string[], m: WindowMode, asOfParam?: string) => {
       setLoading(true);
       setError(null);
       try {
@@ -165,6 +205,7 @@ export default function TrendsPage() {
         if (types.length > 0) {
           types.forEach((t) => params.append("types", t));
         }
+        if (asOfParam) params.set("as_of", asOfParam);
         const json: TrendsData = await fetchFromAPI(`/api/trends?${params}`);
         setData(json);
       } catch (e: any) {
@@ -177,33 +218,67 @@ export default function TrendsPage() {
   );
 
   useEffect(() => {
-    fetchTrends(range, selectedTypes, effectiveMode);
-  }, [range, selectedTypes, effectiveMode, fetchTrends]);
+    fetchTrends(range, selectedTypes, effectiveMode, asOf);
+  }, [range, selectedTypes, effectiveMode, asOf, fetchTrends]);
 
   // The vs-norm comparison shown on the quick-view cards (no norm for "All").
   // Pass the same activity-type filter as the charts (#413) so "typical" is
   // scoped to the selected types and never compares a filtered window against an
-  // all-activity norm.
+  // all-activity norm. Also the source of the window-navigation bounds (#948):
+  // both framings' `period_start`/`period_end` ride this same response, so the
+  // stepper needs no extra fetch of its own.
   useEffect(() => {
     if (range === "ALL") {
       setVolume(null);
       return;
     }
     let active = true;
+    setVolumeLoading(true);
     const params = new URLSearchParams({ range });
     selectedTypes.forEach((t) => params.append("types", t));
+    if (asOf) params.set("as_of", asOf);
     fetchFromAPI(`/api/trends/volume?${params}`)
       .then((v: VolumeReport) => active && setVolume(v))
-      .catch(() => active && setVolume(null));
+      .catch(() => active && setVolume(null))
+      .finally(() => active && setVolumeLoading(false));
     return () => {
       active = false;
     };
-  }, [range, selectedTypes]);
+  }, [range, selectedTypes, asOf]);
 
   // Map each metric to its vs-norm comparison for the framing in view.
   const normByMetric: Partial<Record<string, VolumeMetricVsNorm>> = {};
   if (volume && volume.has_baseline) {
     for (const m of volume[effectiveMode].metrics) normByMetric[m.metric] = m;
+  }
+
+  // Window navigation (#948): the currently-shown window's bounds, off the same
+  // volume fetch every framing already carries `period_start`/`period_end` on
+  // regardless of whether a baseline was found.
+  const currentFraming = volume ? volume[effectiveMode] : null;
+  // Gated on !volumeLoading too: `stepWindowBack`/`stepWindowForward` below
+  // close over `currentFraming` from the render at click time, so a second tap
+  // landing before the in-flight fetch resolves would otherwise recompute the
+  // same target window off the same stale bounds instead of advancing further.
+  const canStepBack =
+    !volumeLoading &&
+    !!currentFraming &&
+    !!earliestActivityDate &&
+    earliestActivityDate < currentFraming.period_start;
+  const canStepForward = !volumeLoading && asOfHistory.length > 0;
+
+  function stepWindowBack() {
+    if (!currentFraming) return;
+    const newAsOf = addDaysISO(currentFraming.period_start, -1);
+    setAsOfHistory((h) => [...h, asOf]);
+    setAsOf(newAsOf);
+  }
+
+  function stepWindowForward() {
+    if (asOfHistory.length === 0) return;
+    const prev = asOfHistory[asOfHistory.length - 1];
+    setAsOfHistory((h) => h.slice(0, -1));
+    setAsOf(prev);
   }
 
   // "vs prev" labeling (#413): calendar mode names the period it compares to
@@ -299,6 +374,16 @@ export default function TrendsPage() {
                 </button>
               ))}
             </div>
+          )}
+          {range !== "ALL" && currentFraming && (
+            <WindowStepper
+              periodStart={currentFraming.period_start}
+              periodEnd={currentFraming.period_end}
+              canStepBack={canStepBack}
+              canStepForward={canStepForward}
+              onStepBack={stepWindowBack}
+              onStepForward={stepWindowForward}
+            />
           )}
         </div>
       </header>

@@ -225,6 +225,21 @@ def read_activities(
     # already-normalized instances directly to keep normalization at exactly one pass.
     return JSONResponse(content=jsonable_encoder(responses))
 
+
+@router.get("/activities/earliest-date")
+def read_earliest_activity_date(db: DbSession, user: CurrentUser):
+    """The local calendar day of the runner's oldest non-deleted activity, or
+    null with no history (#948).
+
+    The window-navigation floor for the Activities and Trends screens: fetched
+    once per screen load so a Previous-arrow tap can clamp against it without a
+    round trip per step. Registered ahead of ``/activities/{activity_id}`` so
+    "earliest-date" is never captured as an activity id.
+    """
+    earliest = activity_queries.get_earliest_activity_local_date(db, user_id=user.id)
+    return {"earliest_activity_date": earliest.isoformat() if earliest else None}
+
+
 @router.get("/activities/{activity_id}", response_model=ActivityDetailRead)
 def read_activity(
     activity: OwnedActivityDetail,

@@ -525,6 +525,7 @@ def get_trends_report(
     *,
     user_id=None,
     mode: str = "rolling",
+    as_of: Optional[date] = None,
 ) -> TrendsResponse:
     """
     Main entry point for generating the complete trends report.
@@ -533,17 +534,22 @@ def get_trends_report(
     global window framing: ``rolling`` (trailing N days, the default) or
     ``calendar`` (the current calendar period — week/month/quarter/half/year — for
     the range), which shifts the window start and the previous-period comparison
-    for the whole report (summary, deltas, and every chart).
+    for the whole report (summary, deltas, and every chart). ``as_of`` (#948) is
+    the date the window is judged as of, defaulting to today; passing an earlier
+    date shows the same (range, mode) window as it stood on that date instead of
+    the one ending today, so window-navigation arrows can step the whole report
+    back and forward a period at a time.
     """
     range_upper = range_key.upper()
     if range_upper not in ALLOWED_RANGES:
         range_upper = "30D"
     if mode not in ("rolling", "calendar"):
         mode = "rolling"
+    resolved_as_of = as_of or date.today()
 
     # The (range, mode) window: `since` starts the current window; the previous
     # comparison spans [prev_start, prev_end). Calendar mode shifts both.
-    since, prev_start, prev_end = resolve_window(range_upper, mode)
+    since, prev_start, prev_end = resolve_window(range_upper, mode, today=resolved_as_of)
 
     # The runner's chosen week start (0=Monday default, 6=Sunday), which the
     # calendar-mode weekly/biweekly bars align to (#676). Rolling mode buckets by
@@ -554,17 +560,19 @@ def get_trends_report(
         else None
     )
 
-    # Rolling mode buckets the bars in fixed-width blocks rolling back from today
-    # rather than snapping to the calendar grid (#630). None keeps the calendar
-    # keying (ISO-Monday weeks / calendar months / the fortnight grid).
-    rolling_anchor: Optional[date] = date.today() if mode == "rolling" else None
+    # Rolling mode buckets the bars in fixed-width blocks rolling back from
+    # `as_of` rather than snapping to the calendar grid (#630). None keeps the
+    # calendar keying (ISO-Monday weeks / calendar months / the fortnight grid).
+    rolling_anchor: Optional[date] = resolved_as_of if mode == "rolling" else None
 
-    # Chart x-axis frame end (#413): rolling stops at today (until=None); calendar
-    # spans the whole current period (e.g. Mon–Sun for 7D), so the period's last
-    # day frames the chart and days after today render as empty bars.
-    until: Optional[date] = None
+    # Chart x-axis frame end (#413): rolling stops at `as_of` (today by default);
+    # calendar spans the whole current period (e.g. Mon–Sun for 7D), so the
+    # period's last day frames the chart and days after `as_of` render as empty
+    # bars. Set explicitly (rather than left None) so a stepped-back `as_of`
+    # cannot fall through to a builder's own real-today default (#948).
+    until: Optional[date] = resolved_as_of
     if mode == "calendar" and range_upper in RANGE_DAYS and RANGE_DAYS[range_upper]:
-        _, until, _, _ = calendar_period(range_upper, date.today(), week_starts_on)
+        _, until, _, _ = calendar_period(range_upper, resolved_as_of, week_starts_on)
 
     # 1. Activity-level facts (filtered by types if provided)
     activity_facts = build_activity_facts(

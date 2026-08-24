@@ -54,12 +54,23 @@ export default function AllActivitiesPage() {
   const [hasMore, setHasMore] = useState(true);
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  // The floor the date-range stepper (#948) clamps "previous" against, fetched
+  // once rather than per step; null until loaded or with no history.
+  const [earliestActivityDate, setEarliestActivityDate] = useState<string | null>(null);
 
   // The distinct activity types present in the history, for the type filter.
   // Reuses the Trends endpoint (#404), which returns non-deleted types sorted.
   useEffect(() => {
     fetchFromAPI('/api/trends/types')
       .then((types: string[] | null) => setAvailableTypes(types ?? []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetchFromAPI('/api/activities/earliest-date')
+      .then((r: { earliest_activity_date: string | null } | null) =>
+        setEarliestActivityDate(r?.earliest_activity_date ?? null),
+      )
       .catch(() => {});
   }, []);
 
@@ -110,6 +121,7 @@ export default function AllActivitiesPage() {
           onChange={(r: DateRange) =>
             setFilters((f) => ({ ...f, startDate: r.startDate, endDate: r.endDate }))
           }
+          earliestActivityDate={earliestActivityDate}
         />
         {isFiltered && (
           <button

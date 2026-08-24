@@ -22,7 +22,7 @@ interface Props {
 
 type TrendView = "all" | "4w";
 
-export default function LoadTrendChart({ weeks }: Props) {
+export default function LoadTrendChart({ weeks, selectedWeekStart }: Props) {
   const [view, setView] = useState<TrendView>("all");
 
   // Per-week optimal range; null for early weeks that lack a trailing baseline.
@@ -46,19 +46,30 @@ export default function LoadTrendChart({ weeks }: Props) {
     band: filledBands[i],
   }));
 
-  // The 4-week view shows the 4 weeks PRECEDING the current week plus the
-  // current week itself (#565) — i.e. the trailing window the current week's
+  // #948: everything below follows the SELECTED week (the week-navigation
+  // arrows on the page above), not always the last entry — a runner stepping
+  // back through history must see that week's own range/status, not today's.
+  const selectedIndex = selectedWeekStart
+    ? weeks.findIndex((w) => w.week_start === selectedWeekStart)
+    : -1;
+  const effectiveIndex = selectedIndex >= 0 ? selectedIndex : weeks.length - 1;
+
+  // The 4-week view shows the 4 weeks PRECEDING the selected week plus the
+  // selected week itself (#565) — i.e. the trailing window the selected week's
   // optimal range is computed from (backend training_load.py: the band is
   // 0.8-1.3x the mean of the 4 weeks before each week). Slice after the band
   // fill so the carried-forward optimal range stays correct.
-  const WEEKS_IN_4W_VIEW = 5; // 4 trailing + current
-  const visibleData = view === "4w" ? chartData.slice(-WEEKS_IN_4W_VIEW) : chartData;
+  const WEEKS_IN_4W_VIEW = 5; // 4 trailing + selected
+  const visibleData =
+    view === "4w"
+      ? chartData.slice(Math.max(0, effectiveIndex + 1 - WEEKS_IN_4W_VIEW), effectiveIndex + 1)
+      : chartData;
 
-  // Derivation of the current week's optimal range, for the 4-week view visual:
-  // the trailing 4-week average (the chronic baseline) and the band around it
-  // that the current week is judged against. The current week is the last entry.
-  const currentWeek = weeks[weeks.length - 1];
-  const trailingWeeks = weeks.slice(Math.max(0, weeks.length - 1 - 4), weeks.length - 1);
+  // Derivation of the selected week's optimal range, for the 4-week view
+  // visual: the trailing 4-week average (the chronic baseline) and the band
+  // around it that the selected week is judged against.
+  const currentWeek = weeks[effectiveIndex];
+  const trailingWeeks = weeks.slice(Math.max(0, effectiveIndex - 4), effectiveIndex);
   const trailingAvg =
     trailingWeeks.length > 0
       ? trailingWeeks.reduce((sum, w) => sum + w.score, 0) / trailingWeeks.length
