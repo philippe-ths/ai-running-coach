@@ -102,3 +102,20 @@ def chat_tool_loop_stub(rounds, *, capture: Optional[dict] = None):
 
     _stub.state = state
     return _stub
+
+
+def chat_no_final_stub(*, before: str = ""):
+    """A `stream_chat_turn` replacement whose stream ENDS without a final message.
+
+    #966: the second way a turn fails, and the one that raised no exception and
+    wrote no log line, so from the outside it was indistinguishable from an
+    upstream error. The real shape is a stream that yields deltas (or nothing) and
+    then simply stops, leaving `final_msg` None in the tool loop.
+    """
+    from app.services.coach.llm import ChatTurnDelta
+
+    async def _stub(self, *, system, messages, tools=None, max_tokens=1024):
+        if before:
+            yield ChatTurnDelta(text=before)
+
+    return _stub
