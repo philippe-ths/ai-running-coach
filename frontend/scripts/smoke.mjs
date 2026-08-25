@@ -851,6 +851,15 @@ const routesToCheck = [
   // above the tabs in both views. Its races arrive client-side; the heading is
   // what proves the surface is there at all.
   { path: "/schedule", expectedText: "Goal race" },
+  // #964: the legal pages. These prove the routes BOOT and render their content.
+  // They do NOT prove the pages are publicly reachable, which is the property
+  // that actually matters for them: the smoke harness runs with no Clerk
+  // publishable key, so `clerkEnabled` is false and middleware.ts is a
+  // pass-through here. Whether `isPublicRoute` still covers them can only be
+  // shown with Clerk ON -- see the #964 PR for that check, and re-run it by hand
+  // if the matcher or the public-route list is ever touched.
+  { path: "/privacy", expectedText: "Health data, stated plainly" },
+  { path: "/terms", expectedText: "This is not medical advice" },
 ];
 
 function createMockApiServer() {

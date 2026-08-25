@@ -116,7 +116,7 @@ class RetryLadder:
         import anthropic
 
         if not retriable:
-            return False
+            return self._give_up(exc, "mid_stream_cannot_reissue")
         if isinstance(
             exc,
             (
@@ -134,7 +134,7 @@ class RetryLadder:
             return await self._transient(exc)
         if isinstance(exc, anthropic.RateLimitError):
             if self._rate_limit_retries >= _MAX_RATE_LIMIT_RETRIES:
-                return False
+                return self._give_up(exc, "rate_limit_budget_exhausted")
             delay = _rate_limit_backoff_seconds(exc, self._rate_limit_retries)
             self._rate_limit_retries += 1
             logger.warning(
@@ -148,12 +148,33 @@ class RetryLadder:
             # bug and won't get better on retry.
             if exc.status_code >= 500:
                 return await self._transient(exc, event="5xx_retry")
-            return False
+            return self._give_up(exc, "non_retriable_status")
+        return self._give_up(exc, "not_a_retriable_error")
+
+    def _give_up(self, exc: BaseException, reason: str) -> bool:
+        """Record WHY the ladder stopped retrying, then tell the caller to re-raise.
+
+        #966: every one of these exits used to return False silently, so an error
+        the ladder declined to retry reached the caller's fail-soft handler with
+        nothing upstream explaining the decision. The 4xx exit is the one the
+        issue names, but the decision is shared, so the record is made in one
+        place rather than five. Not `logger.exception`: the caller re-raises and
+        logs the traceback, and this line is about the RETRY decision, not the
+        error. `False` is returned so each call site stays a single expression.
+        """
+        detail = {
+            "reason": reason,
+            "kind": type(exc).__name__,
+            "status": getattr(exc, "status_code", None),
+            "transient_retries": self._transient_retries,
+            "rate_limit_retries": self._rate_limit_retries,
+        }
+        logger.warning(f"{self._prefix}_not_retried", extra=detail)
         return False
 
     async def _transient(self, exc: BaseException, event: str = "transient_failure") -> bool:
         if self._transient_retries >= _MAX_TRANSIENT_RETRIES:
-            return False
+            return self._give_up(exc, "transient_budget_exhausted")
         self._transient_retries += 1
         detail = (
             {"attempt": self._transient_retries, "status": getattr(exc, "status_code", None)}

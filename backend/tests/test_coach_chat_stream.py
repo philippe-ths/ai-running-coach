@@ -8,7 +8,7 @@ survive them.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -25,7 +25,14 @@ def _seed_activity_with_report(db) -> Activity:
     db.add(StravaAccount(user_id=user.id, strava_athlete_id=1, access_token="t", refresh_token="r", expires_at=9999999999, scope="read"))
     activity = Activity(
         user_id=user.id, strava_activity_id=42,
-        start_date=datetime(2026, 5, 27, 10, 0, 0), type="Run", name="Test run",
+        # #966: relative, not the repo's usual absolute `datetime(2026, 5, 27)`.
+        # `test_chat_tool_loop.test_multi_window_fetch_shows_one_record_per_call`
+        # counts this activity inside a `last_90_days` tool window, so an absolute
+        # date is a time bomb: it passed for 90 days and then started failing on
+        # its own with no code change. The subject run has to stay ~55 days old
+        # for that window assertion to mean anything, which is exactly what that
+        # test's own comment already claims it is.
+        start_date=datetime.now() - timedelta(days=55), type="Run", name="Test run",
         distance_m=5000, moving_time_s=1500, elapsed_time_s=1500, elev_gain_m=10.0,
         avg_hr=140, raw_summary={},
     )

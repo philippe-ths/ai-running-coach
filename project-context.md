@@ -131,7 +131,7 @@ Data flow: Strava API → strava_ingestion → Activity/ActivityStream rows → 
 `httpx`: outbound HTTP client used for Strava and Anthropic calls.
 `redis`, `rq`: job queue for sync and processing background work.
 `numpy`: numerical computation in the processing pipeline (smoothing, metrics, intervals).
-`anthropic`: Claude API client used by the coach service.
+`anthropic`: Claude API client used by the coach service; BOUNDED DELIBERATELY (`>=0.125.0,<0.126.0`, the `fastapi` precedent) because 1.0.0 removed `temperature`/`top_p`/`top_k` from `messages.create()`/`.stream()` and neither takes `**kwargs`, so the three `llm.py` call sites that pass one raise TypeError -- unbounded, the 24 Aug 2026 image build resolved 1.0.0 and every conversational turn, period report, schedule draft, voice rewrite, memory update, distillation and receipt-voice pass failed in production while CI stayed green, since the suite mocks the client end to end; 1.0.0 also moves the HTTP layer to `httpx2`, whose `RemoteProtocolError` is unrelated to `httpx`'s and so silently voids the mid-stream rung of `RetryLadder`. Adopting 1.x means both call-site changes together; `tests/test_anthropic_pin_966.py` asserts the installed version satisfies the declared line and that the line still excludes 1.0.0.
 `python-multipart`: form parsing required by FastAPI for non-JSON request bodies.
 `sentry-sdk[fastapi]` (optional `observability` extra): error tracking, installed only when Sentry capture is enabled.
 `pytest`, `pytest-asyncio` (test extra): test runner and async test support.
