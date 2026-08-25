@@ -384,6 +384,20 @@ async def _buffered_tool_loop(
                         yield _heartbeat()
 
             if final_msg is None:
+                # #966: the OTHER way a turn fails, and until now the silent one.
+                # No exception is raised here, so the except below never runs and
+                # nothing was recorded at all -- yet the runner saw the identical
+                # message as an upstream error. From the outside the two were
+                # indistinguishable, which is why the recurring Schedule-screen
+                # failure could not be told apart from an empty stream. Logged as
+                # its own event so it can be.
+                logger.error(
+                    "coach_turn_failed: stream ended with no final message "
+                    "(round %s of %s, tools=%s)",
+                    round_idx + 1,
+                    _MAX_TOOL_ROUNDS,
+                    "on" if tools_arg else "off",
+                )
                 stream_failed = True
                 break
 
@@ -486,7 +500,19 @@ async def _buffered_tool_loop(
         # error — consistent with how the report path degrades on rate limits. Any
         # other transport error keeps the generic message.
         rate_limited = isinstance(e, anthropic.RateLimitError)
-        logger.error("Chat streaming error (rate_limited=%s): %s", rate_limited, e)
+        # #966: type + traceback, matching every neighbouring fail-soft handler.
+        # This one is the only failure the runner can SEE, and it was the only one
+        # logging the message alone -- so when the cause was a bug in our own code
+        # rather than an API error, the recorded line was a bare string with
+        # nothing locating it. The live example: "AsyncMessages.stream() got an
+        # unexpected keyword argument 'temperature'", which named neither the
+        # call site nor the fact that it was a TypeError from our own arguments.
+        logger.exception(
+            "coach_turn_failed: %s from the upstream call (rate_limited=%s): %s",
+            type(e).__name__,
+            rate_limited,
+            e,
+        )
         stream_failed = True
         stream_fail_message = (
             "I'm getting a lot of requests right now, so I couldn't finish that "

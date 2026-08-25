@@ -28,7 +28,23 @@ dependencies = [
     "rq>=1.16.0",
     "python-multipart>=0.0.9",
     "numpy>=1.24.0",
-    "anthropic>=0.40.0",
+    # BOUNDED DELIBERATELY (#966), the `fastapi` precedent above applied to the
+    # other dependency whose surface we call directly. `anthropic` 1.0.0 (20 Aug
+    # 2026) removed `temperature` / `top_p` / `top_k` from `messages.create()`
+    # and `messages.stream()`; neither takes `**kwargs`, so the three call sites
+    # in `services/coach/llm.py` that pass one raise TypeError. Under the old
+    # unbounded `>=0.40.0` the 24 Aug image build resolved 1.0.0 and every
+    # conversational turn, period report, schedule draft, voice rewrite, memory
+    # update, distillation and receipt-voice pass failed in production while CI
+    # stayed green -- the suite mocks the client, so nothing bound our call
+    # sites to the SDK's real signature. 1.0.0 also moves the HTTP layer to
+    # `httpx2`, whose `RemoteProtocolError` is unrelated to `httpx`'s, which
+    # silently voids the mid-stream retry rung in `RetryLadder` (#302).
+    # The ceiling means 1.x is adopted on purpose, with those two call-site
+    # changes made together; see the issue for the migration surface.
+    # `test_anthropic_pin_966.py` asserts the INSTALLED version satisfies this
+    # line, so a stale venv is a failure rather than a surprise.
+    "anthropic>=0.125.0,<0.126.0",
     "pyjwt[crypto]>=2.8.0"
 ]
 
