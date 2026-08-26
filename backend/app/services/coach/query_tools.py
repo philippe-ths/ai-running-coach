@@ -500,9 +500,13 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
             "written": week.coverage == "planned",
             "phase": week.phase,
         }
-        if week.running_distance_m:
+        # `is not None`, not truthiness. A WRITTEN week holding no running is a
+        # real answer (a cross-training week), and dropping the key entirely
+        # would read as "unknown" rather than "none" to the one reader that
+        # cannot ask a follow-up question.
+        if week.running_distance_m is not None:
             entry["running_km"] = round(week.running_distance_m / 1000, 1)
-        if week.long_run_distance_m:
+        if week.long_run_distance_m is not None:
             entry["long_run_km"] = round(week.long_run_distance_m / 1000, 1)
         if week.quality_focus:
             entry["quality_focus"] = week.quality_focus
@@ -533,8 +537,13 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
         # Two different facts, and the coach was previously given only the first
         # (#981). A plan can run to October while telling the runner what to do
         # only until the end of this month.
-        "plan_runs_through": weeks[-1]["week_start"] if weeks else None,
-        "sessions_written_through_week": (
+        #
+        # Both are WEEK STARTS and say so in their names. The baseline states the
+        # same two facts as DAYS (`runs_through`, `sessions_written_through`), and
+        # a coach holding "2026-10-05" and "2026-10-11" for what sounds like one
+        # question will eventually pick the wrong one to say out loud.
+        "plan_covers_through_week_starting": weeks[-1]["week_start"] if weeks else None,
+        "sessions_written_through_week_starting": (
             written[-1]["week_start"] if written else None
         ),
         "how_to_read": (
@@ -662,7 +671,7 @@ def summarize_tool_call(
         # "sessions", so the number goes in the detail where it can carry its
         # own noun. A chip reading "7 sessions" for a seven-WEEK block is the
         # kind of small false number this trace exists to prevent.
-        through = result.get("plan_runs_through")
+        through = result.get("plan_covers_through_week_starting")
         weeks = _int(result.get("week_count"))
         parts = []
         if weeks:

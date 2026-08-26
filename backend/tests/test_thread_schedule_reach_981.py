@@ -262,37 +262,35 @@ def test_a_suggestion_is_not_how_far_the_plan_is_written(db):
 # --- the race, and whether the plan was built for it -------------------------
 
 
-def test_a_plan_that_is_not_anchored_to_the_runners_race_says_so(db):
-    """#939, live on production: an active plan with a null `goal_race_id` and a
-    27 Sep A race. Its phases were never built backwards from that date, and the
-    runner cannot see that from anything on their screen."""
+def test_the_race_is_reported_without_a_verdict_on_whether_the_plan_suits_it(db):
+    """The coach is told WHAT the runner is training for, and deliberately not
+    whether the block is built for it.
+
+    `goal_race_id` looks like the answer to the second question and is only a
+    proxy. The live production plan this was built against carries a null
+    pointer and nonetheless ends with the race, a taper and a race-week
+    sharpener, because the sessions were written for the race whatever the
+    column says. Reporting the proxy handed the coach "this plan is not built
+    for your race" beside a plan whose last session IS the race, and invited it
+    to offer to fix something that was not broken.
+
+    Reading the block rather than the column is the real answer and belongs to
+    #939. Until then this says nothing rather than something false.
+    """
     user = _user(db)
     race = _race(db, user, when=WEEK_4 + timedelta(days=5))
     _running_out_plan(db, user)
 
     schedule = build_thread_schedule(db, user, today=TODAY)
 
-    assert schedule.get("plan_built_for_this_race") is False
     assert schedule["race"] == {
         "name": "Autumn Half",
         "date": race.race_date.isoformat(),
         "distance_km": 21.1,
         "weeks_away": 4.4,
     }
-
-
-def test_a_plan_built_for_the_race_adds_no_warning_at_all(db):
-    """Stated only when it is a fact about the plan. A `True` here would be one
-    more thing for the coach to relay about a plan that is simply normal."""
-    user = _user(db)
-    race = _race(db, user, when=WEEK_4 + timedelta(days=5))
-    plan = _plan(db, user, goal_race_id=race.id)
-    _session(db, plan, start=TODAY + timedelta(days=1), intent="easy")
-
-    schedule = build_thread_schedule(db, user, today=TODAY)
-
     assert "plan_built_for_this_race" not in schedule
-    assert schedule["race"]["name"] == "Autumn Half"
+
 
 
 def test_the_race_the_coach_is_told_about_is_the_runners_own_a_race(db):

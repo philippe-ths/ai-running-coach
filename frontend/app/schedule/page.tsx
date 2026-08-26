@@ -156,17 +156,22 @@ export default function SchedulePage() {
   );
 
   // #981: an active plan that has run out of written sessions for this week.
-  // A plan only holds concrete sessions for its near weeks and a shape beyond
-  // them, and nothing converts a shape into sessions, so a runner can reach a
-  // week where `has_plan` is true and there is nothing committed to do. Free
-  // mode (`headline.planned_sessions === 0`) covers this same week too, but a
-  // plan running dry is a different situation from never having asked for one,
-  // and it gets a different message and a different action below.
-  // A plan that holds no sessions for this week (#981). Never for a week that has
-  // already gone: a past week the plan said nothing about is history, and telling
-  // the runner their plan "has not been written this far ahead" about last March
-  // offers them a fix for something that is not a problem. `week_start` compares
-  // as an ISO date string, which sorts chronologically.
+  // A plan holds concrete sessions for its near weeks and a shape beyond them,
+  // so a runner can reach a week where `has_plan` is true and there is nothing
+  // committed to do. That is the same week free mode covers, but a plan running
+  // dry is a different situation from never having asked for one, and it earns
+  // a different message and a different action.
+  //
+  // Gated on the committed sessions actually on screen rather than on
+  // `headline.planned_sessions`, because those two can disagree: the headline
+  // excludes a prescribed rest, so a week holding nothing but a rest day counts
+  // zero there while the runner plainly has something written.
+  //
+  // Never for a week that has already gone. A past week the plan said nothing
+  // about is history, and telling the runner their plan "has not been written
+  // this far ahead" about last March offers a fix for something that is not a
+  // problem. `week_end` compares as an ISO date string, which sorts
+  // chronologically.
   const planRunsOut =
     !!week &&
     week.has_plan &&

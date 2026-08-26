@@ -391,21 +391,29 @@ def _draft_state(db: Session, user_id) -> Optional[dict]:
 
 
 def _race_section(db: Session, user_id: Any, plan: Any, today: date) -> dict:
-    """The race this plan is aimed at, and whether it is aimed at it (#973).
+    """The race this runner is training for (#973).
 
-    Read from the runner's own `goal_races` rather than from `plan.goal_race_id`,
+    Read from their own `goal_races` rather than from `plan.goal_race_id`,
     because the question the coach is answering is "what is this runner training
-    for", and that is a fact about the runner. The plan's pointer answers a
-    different question, "was this block built for it", which is worth knowing
-    separately and is exactly what a plan restored from before the race was
-    stated gets wrong (#939).
+    for", and that is a fact about the runner rather than about a row.
+
+    Whether the BLOCK is built for that race is a different question, and this
+    deliberately does not answer it. `goal_race_id` looks like the answer and is
+    only a proxy: the live plan on the account this was built against carries a
+    null pointer and nonetheless ends with the race, a taper and a race-week
+    sharpener, because the sessions were written for the race whatever the
+    column says. Reporting the proxy would have handed the coach
+    "this plan is not built for your race" beside a plan whose last session IS
+    the race, and invited it to offer to fix something that is not broken. The
+    real question needs reading the block, not the column, and it belongs to
+    #939 rather than to a field that guesses.
     """
     races = store.list_goal_races(db, user_id, on_or_after=today)
     if not races:
         return {}
     race = next((r for r in races if r.priority == "A"), races[0])
     weeks_away = max(0, (race.race_date - today).days) / 7
-    section = {
+    return {
         "race": {
             "name": race.name,
             "date": race.race_date.isoformat(),
@@ -413,13 +421,6 @@ def _race_section(db: Session, user_id: Any, plan: Any, today: date) -> dict:
             "weeks_away": round(weeks_away, 1),
         }
     }
-    if plan is not None and plan.goal_race_id != race.id:
-        # Stated as a fact about the plan, not a warning to relay. A coach that
-        # knows this can say the block is not phased for the date and offer to
-        # fix it; a coach that does not know it describes a taper the plan never
-        # had.
-        section["plan_built_for_this_race"] = False
-    return section
 
 
 def _written_through(

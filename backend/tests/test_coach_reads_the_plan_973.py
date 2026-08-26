@@ -254,9 +254,15 @@ def test_the_two_reaches_of_a_plan_are_reported_separately(db):
 
     result = qt.get_training_plan(db, user.id, today=TODAY)
 
-    assert result["plan_runs_through"] == WEEK_4.isoformat()
-    assert result["sessions_written_through_week"] == WEEK_1.isoformat()
-    assert result["plan_runs_through"] != result["sessions_written_through_week"]
+    # Both keys say WEEK STARTING in their names. The baseline states the same
+    # two facts as days, and a coach holding a week start and a day for what
+    # sounds like one question eventually says the wrong one out loud.
+    assert result["plan_covers_through_week_starting"] == WEEK_4.isoformat()
+    assert result["sessions_written_through_week_starting"] == WEEK_1.isoformat()
+    assert (
+        result["plan_covers_through_week_starting"]
+        != result["sessions_written_through_week_starting"]
+    )
 
 
 def test_weeks_past_the_plans_own_reach_are_left_out_entirely(db):
