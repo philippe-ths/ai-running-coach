@@ -48,9 +48,11 @@ frontend/tsconfig.tsbuildinfo
 .idea/
 
 # AI workflow and skills (tooling config, not product code)
-# The installer only ignores the last-installed tool's paths in its managed
-# block below, and strips those paths from anywhere else in this file; after
-# every `scripts/update.sh` run, re-add the other tools' paths here.
+# These overlap the installer's managed block below and are kept deliberately.
+# They are broader than what the installer manages (.agents/ rather than only
+# .agents/skills/, and .github/* with a workflows exception), and since
+# workflow 3.25.1 the installer builds its block as a union and leaves a
+# matching line outside it alone, so these survive an update untouched.
 .agents/
 .gemini/
 .github/*
@@ -77,4 +79,12 @@ ai-workflow.md
 .githooks/
 CLAUDE.md
 .claude/
+AGENTS.md
+.codex/
+.agents/skills/
+GEMINI.md
+.gemini/
+.github/copilot-instructions.md
+.github/hooks/
+.vscode/
 # <<< ai-workflow <<<
