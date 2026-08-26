@@ -34,8 +34,16 @@ def amend_schedule_job(
     weeks_from: int,
     weeks_through: int,
     instruction: str,
+    thread_id: str | None = None,
+    description: str | None = None,
 ) -> None:
-    """Amend one window of one plan. Never raises out of the worker."""
+    """Amend one window of one plan. Never raises out of the worker.
+
+    `thread_id` and `description` are the conversation this was confirmed in and
+    the card's own wording, carried so the ledger entry can be written HERE, once
+    the sessions actually exist (#778's contract). Optional and trailing, so a
+    job already sitting in Redis when this deploys still binds and runs.
+    """
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == uuid.UUID(str(user_id))).first()
@@ -87,6 +95,7 @@ def amend_schedule_job(
                 outcome.weeks_touched,
                 outcome.sessions_written,
             )
+            _record_in_thread(db, thread_id, description)
         else:
             logger.warning(
                 "schedule amend: plan %s unchanged (%s): %s",
@@ -100,8 +109,33 @@ def amend_schedule_job(
         db.close()
 
 
+def _record_in_thread(db, thread_id, description: str | None) -> None:
+    """Leave the ledger entry for a change that has now actually been made.
+
+    Fail-soft, the `_record_confirmed` posture it replaces: the sessions are
+    written and the runner can see them, so losing the trace is a smaller harm
+    than a job that raises. A job enqueued before this shipped carries neither
+    argument and simply records nothing.
+    """
+    if not thread_id or not description:
+        return
+    try:
+        from app.services.coach import threads as thread_service
+
+        thread_service.record_action_event(db, uuid.UUID(str(thread_id)), None, description)
+    except Exception:  # noqa: BLE001 - the change is made; the trace is not worth a raise
+        logger.exception("schedule amend: trace write failed for thread %s", thread_id)
+
+
 def enqueue_amendment(
-    user_id, plan_id, *, weeks_from: int, weeks_through: int, instruction: str
+    user_id,
+    plan_id,
+    *,
+    weeks_from: int,
+    weeks_through: int,
+    instruction: str,
+    thread_id=None,
+    description: str | None = None,
 ) -> None:
     """Enqueue the amendment, decoupled from the confirm request.
 
@@ -119,6 +153,8 @@ def enqueue_amendment(
             int(weeks_from),
             int(weeks_through),
             instruction or "",
+            str(thread_id) if thread_id else None,
+            description or None,
         )
     except Exception:  # noqa: BLE001 - enqueue is fire-and-forget
         logger.exception("failed to enqueue schedule amendment for plan %s", plan_id)

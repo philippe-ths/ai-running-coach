@@ -34,6 +34,20 @@ _TOKEN_PREFIX = "coach-action:"
 _TOKEN_TTL_SECONDS = 1800
 _TOKEN_MAX_LENGTH = 64
 
+# The two actions whose confirm does not WRITE anything. Both hand a generation
+# to the worker and return, so the change is asked for here and made a minute
+# later somewhere else, if it is made at all.
+#
+# They are named because #778's ledger records writes rather than taps: "written
+# only after the change has actually been made". Recording these at confirm time
+# recorded an intention as an outcome, and the coach reads that list back under
+# "ALREADY IN THEIR RECORD - what this conversation has written". Observed live:
+# a runner confirmed a hill session into next week, the transcript showed it
+# done, the job sat unprocessed, and the week held no hill session. Their trace
+# is written by the job instead, on success, so the ledger stays true rather
+# than needing a caveat that says when to disbelieve it.
+DEFERRED_ACTION_TYPES = frozenset({"draft_plan", "amend_plan"})
+
 class ProposedActionFrame(BaseModel):
     action_type: Literal[
         "check_in",
@@ -439,7 +453,8 @@ def consume_and_execute(db: Session, owner_user_id: UUID, token: str) -> dict:
         raise LookupError("Proposed action not found")
 
     result = _execute(db, owner_user_id, stored)
-    _record_confirmed(db, stored)
+    if stored.action_type not in DEFERRED_ACTION_TYPES:
+        _record_confirmed(db, stored)
     return result
 
 
@@ -508,7 +523,9 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
         existing = schedule_store.draft_in_flight(db, owner_user_id)
         if existing is None:
             existing = schedule_store.create_drafting_plan(db, owner_user_id)
-            enqueue_draft(owner_user_id, existing.id, stored.thread_id)
+            enqueue_draft(
+                owner_user_id, existing.id, stored.thread_id, stored.description
+            )
         # The one action whose write does not land where the runner is looking:
         # drafting runs on the worker, so without a word back the card simply
         # disappears and nothing visibly happens for a minute.
@@ -552,6 +569,10 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
             weeks_from=stored.weeks_from or 0,
             weeks_through=stored.weeks_through or 0,
             instruction=stored.amend_reason or "",
+            # Carried to the worker so the ledger entry is written where the
+            # sessions are, not where they were asked for.
+            thread_id=stored.thread_id,
+            description=stored.description,
         )
         return {
             "action_type": "amend_plan",

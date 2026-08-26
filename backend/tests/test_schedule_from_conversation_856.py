@@ -110,7 +110,7 @@ def test_confirming_starts_a_draft_seeded_with_that_conversation(db):
 
     with patch.object(proposed_actions, "redis_conn", _FakeRedis()), patch(
         "app.services.schedule.draft.enqueue_draft",
-        side_effect=lambda u, p, t=None: enqueued.update(user=u, plan=p, thread=t),
+        side_effect=lambda u, p, t=None, description=None: enqueued.update(user=u, plan=p, thread=t),
     ):
         _result, frame = proposed_actions.mint_proposed_action(
             db, user.id, {"action_type": "draft_plan"}, thread_id=thread.id
@@ -135,7 +135,7 @@ def test_a_second_confirm_joins_the_draft_already_running(db):
 
     with patch.object(proposed_actions, "redis_conn", _FakeRedis()), patch(
         "app.services.schedule.draft.enqueue_draft",
-        side_effect=lambda u, p, t=None: enqueues.append(p),
+        side_effect=lambda u, p, t=None, description=None: enqueues.append(p),
     ):
         tokens = []
         for _ in range(2):

@@ -957,10 +957,18 @@ def test_a_confirm_lands_on_the_plan_it_was_offered_against(db):
     assert result["plan_id"] == str(plan.id)
     assert "Everything else in your plan stays as it is." in result["message"]
     assert enqueued and enqueued[0][0][1] == plan.id
+    # The trace travels WITH the work (#778). The ledger entry is written by the
+    # job once the sessions exist, not here where they have only been asked for,
+    # so the worker needs the conversation and the card's own wording.
     assert enqueued[0][1] == {
         "weeks_from": 0,
         "weeks_through": 1,
         "instruction": "write the next block from the agreed shape",
+        # No thread was named when this card was minted, so there is nowhere to
+        # write a trace; the card's own wording still travels, because that is
+        # what the entry would say.
+        "thread_id": None,
+        "description": frame["description"],
     }
 
 

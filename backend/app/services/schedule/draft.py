@@ -819,7 +819,7 @@ def _shape_for(sketch, load_model) -> Optional[dict]:
     }
 
 
-def enqueue_draft(user_id, plan_id, thread_id=None) -> None:
+def enqueue_draft(user_id, plan_id, thread_id=None, description=None) -> None:
     """Enqueue the drafting job, decoupled from the request.
 
     Imported lazily and swallowing enqueue errors, the `enqueue_distillation`
@@ -839,6 +839,7 @@ def enqueue_draft(user_id, plan_id, thread_id=None) -> None:
             str(user_id),
             str(plan_id),
             str(thread_id) if thread_id else None,
+            description or None,
         )
     except Exception:  # noqa: BLE001 — enqueue is fire-and-forget
         logger.exception("failed to enqueue schedule draft for plan %s", plan_id)
