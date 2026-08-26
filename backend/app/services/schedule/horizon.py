@@ -51,6 +51,12 @@ def _week_from_sessions(sessions: List[Any]) -> Dict[str, Any]:
     by_intent: Dict[str, float] = {}
     running_distance = 0.0
     load = 0.0
+    # The week's long run, derived rather than stated (#980). A planned week
+    # already holds the answer in its own sessions, so reading it off them keeps
+    # the concrete and sketched halves of the horizon saying one thing without a
+    # second field that could disagree with the sessions beneath it. The longest
+    # `long` run rather than the first, because a week may legitimately hold two.
+    long_run = 0.0
     for session in sessions:
         if session.commitment != "committed":
             continue
@@ -64,10 +70,18 @@ def _week_from_sessions(sessions: List[Any]) -> Dict[str, Any]:
             # Rep-structured runs count their work here too (#876), so the
             # three-month view does not repeat the week headline's gap across
             # every week of the block.
-            running_distance += planned_distance_m(session)
+            distance = planned_distance_m(session)
+            running_distance += distance
+            if session.intent == "long":
+                long_run = max(long_run, distance)
     return {
         "running_distance_m": running_distance,
         "effort_score": load,
+        "long_run_distance_m": long_run or None,
+        # A written week states its quality work in the sessions themselves, so
+        # there is no summary to add on top: the horizon's job here is to carry
+        # the sketch's stated focus forward, not to re-describe real sessions.
+        "quality_focus": None,
         "discipline_mix": _mix(by_discipline),
         "intent_mix": _mix(by_intent),
     }
@@ -180,6 +194,8 @@ def build_horizon(
                     is_current=current == first_week,
                     running_distance_m=shape.target_running_distance_m,
                     effort_score=shape.target_effort_score,
+                    long_run_distance_m=shape.long_run_distance_m,
+                    quality_focus=shape.quality_focus,
                     discipline_mix=shape.discipline_mix,
                     intent_mix=shape.intent_mix,
                 )

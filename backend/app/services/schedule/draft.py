@@ -45,6 +45,7 @@ from app.services.coach.volume import build_training_volume
 from app.services.readiness import build_readiness
 from app.services.schedule import store
 from app.services.schedule.draft_contract import (
+    MAX_CONCRETE_WEEKS,
     RECORD_TRAINING_PLAN_TOOL,
     DraftedPlan,
     normalise,
@@ -81,7 +82,16 @@ a beginner's week to someone who has been training for years.
 
 Give CONCRETE sessions for the near weeks and SHAPE ONLY for the weeks beyond. \
 Nobody knows what week nine looks like yet, and pretending to is how a plan stops \
-being believable.
+being believable. The context below says how many weeks get real sessions; when a \
+race falls inside the horizon that is every week up to it, because those are the \
+weeks that decide the race and the runner will train every one of them.
+
+A shape is what those later weeks get WRITTEN FROM when the runner reaches them, \
+so say enough that the build you intend survives being read back: the phase, the \
+running distance, how far the long run goes, and what the week's hard session is \
+for. A weekly total on its own cannot tell anyone whether the week was built \
+around a 20 km long run or four 9 km ones, and the long run is usually the thing \
+the runner agreed to.
 
 If they have a goal race, the block is built BACKWARDS from its date. Work out \
 where each week sits relative to the race and let that decide the week's job: the \
@@ -110,6 +120,14 @@ towards.
 Prefer a window to a pin. A pinned week is rigid and a rigid week is the one that \
 gets abandoned after one bad Tuesday. Pin what genuinely needs pinning and let the \
 rest float.
+
+A window says WHICH DAYS a session may fall on. It cannot say "the day after \
+whatever day that one lands on", because that is not a set of days, it is a \
+relationship. Express a relationship as a RULE instead: `rest_day_after` already \
+holds the day after a floating long run clear, on whichever day the long run \
+actually happens, and it keeps holding it when the runner moves things. Writing \
+the same thing again as a rest session forces you to guess the day, and the guess \
+that spans Sunday into Monday spans two different weeks and is rejected.
 
 # COMMITMENT
 
@@ -251,6 +269,41 @@ def _profile_lines(user: User, profile: Any) -> List[str]:
     return lines or ["Nothing stated yet."]
 
 
+def concrete_weeks_for(
+    today: date, weeks: int, races: List[Any], *, starts_on: int
+) -> int:
+    """How many weeks of this plan get real sessions rather than a shape.
+
+    Normally the configured few (`SCHEDULE_CONCRETE_WEEKS`): nobody knows what
+    week nine looks like, and pretending to is how a plan stops being believable.
+
+    A race inside the horizon is the exception, and it is not a loosening of that
+    rule but the same rule read honestly. The weeks between here and a stated
+    race are not weeks nobody can foresee; they are the weeks that decide the
+    race, they are already being planned backwards from a fixed date, and the
+    runner is going to train every one of them. Leaving them as shape means the
+    part of the block the runner cares about most is the part that was never
+    written down, which is exactly how a settled 20 km peak long run reached the
+    schedule as a weekly total and nothing else (#980).
+
+    Bounded by the contract's own cap either way, so a race five months out does
+    not ask for twenty weeks of sessions the coach would be inventing.
+    """
+    if not races:
+        return settings.SCHEDULE_CONCRETE_WEEKS
+    horizon_end = week_start(today, starts_on) + timedelta(days=7 * weeks - 1)
+    inside = [race for race in races if race.race_date <= horizon_end]
+    if not inside:
+        return settings.SCHEDULE_CONCRETE_WEEKS
+    furthest = max(race.race_date for race in inside)
+    # Inclusive of the race's own week: the runner trains in it and races at the
+    # end of it, so it needs sessions like any other.
+    span_weeks = (
+        (week_start(furthest, starts_on) - week_start(today, starts_on)).days // 7
+    ) + 1
+    return max(settings.SCHEDULE_CONCRETE_WEEKS, min(span_weeks, MAX_CONCRETE_WEEKS))
+
+
 def build_draft_context(
     db: Session,
     user: User,
@@ -258,6 +311,7 @@ def build_draft_context(
     today: date,
     weeks: int,
     facts: Optional[List[Any]] = None,
+    state_horizon: bool = True,
 ) -> str:
     """What a coach needs to write this plan — and nothing it does not.
 
@@ -285,15 +339,28 @@ def build_draft_context(
         f"days that remain in it, then whole weeks after that. The runner's week "
         f"starts on {'Sunday' if starts_on == 6 else 'Monday'}."
     )
-    parts.append(
-        f"HORIZON: {weeks} weeks. Give concrete sessions for the first "
-        f"{settings.SCHEDULE_CONCRETE_WEEKS} weeks and shape only beyond that."
-    )
+    races = store.list_goal_races(db, user.id, on_or_after=today)
+    # An AMENDMENT states its own window and gets no horizon instruction (#981).
+    # It reuses this builder for the runner, their training and their ceiling,
+    # which are the same facts either way, but "give concrete sessions for the
+    # first N weeks" is an instruction about writing a whole plan and would sit
+    # beside the window contradicting it.
+    if state_horizon:
+        concrete = concrete_weeks_for(today, weeks, races, starts_on=starts_on)
+        if concrete >= weeks:
+            parts.append(
+                f"HORIZON: {weeks} weeks, and the runner's race falls inside it. "
+                f"Give concrete sessions for ALL {weeks} weeks."
+            )
+        else:
+            parts.append(
+                f"HORIZON: {weeks} weeks. Give concrete sessions for the first "
+                f"{concrete} weeks and shape only beyond that."
+            )
 
     parts.append("\n## THE RUNNER")
     parts.extend(_profile_lines(user, getattr(user, "profile", None)))
 
-    races = store.list_goal_races(db, user.id, on_or_after=today)
     if races:
         parts.append("\n## THEIR RACE")
         for race in races[:3]:
@@ -726,6 +793,12 @@ def _shape_for(sketch, load_model) -> Optional[dict]:
         "phase": sketch.phase,
         "target_running_distance_m": sketch.target_running_distance_m,
         "target_effort_score": round(total, 1) if total > 0 else None,
+        # Stored as the coach stated them (#980). Unlike the mixes above these
+        # are not arithmetic the app can derive: a week's long run and the job
+        # of its hard session are coaching decisions, and the whole reason they
+        # are here is that nothing else in a shape records them.
+        "long_run_distance_m": sketch.long_run_distance_m,
+        "quality_focus": sketch.quality_focus,
         "discipline_mix": discipline_mix,
         "intent_mix": intent_mix,
     }

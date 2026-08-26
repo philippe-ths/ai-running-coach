@@ -22,6 +22,7 @@ import SessionCard from "@/components/schedule/SessionCard";
 import RulesPanel from "@/components/schedule/RulesPanel";
 import LoggedList from "@/components/schedule/LoggedList";
 import EmptyWeek from "@/components/schedule/EmptyWeek";
+import PlanRunsOutBanner from "@/components/schedule/PlanRunsOutBanner";
 import DraftBanner from "@/components/schedule/DraftBanner";
 import PreviousPlanBanner from "@/components/schedule/PreviousPlanBanner";
 import HorizonView from "@/components/schedule/HorizonView";
@@ -154,6 +155,24 @@ export default function SchedulePage() {
     [live],
   );
 
+  // #981: an active plan that has run out of written sessions for this week.
+  // A plan only holds concrete sessions for its near weeks and a shape beyond
+  // them, and nothing converts a shape into sessions, so a runner can reach a
+  // week where `has_plan` is true and there is nothing committed to do. Free
+  // mode (`headline.planned_sessions === 0`) covers this same week too, but a
+  // plan running dry is a different situation from never having asked for one,
+  // and it gets a different message and a different action below.
+  // A plan that holds no sessions for this week (#981). Never for a week that has
+  // already gone: a past week the plan said nothing about is history, and telling
+  // the runner their plan "has not been written this far ahead" about last March
+  // offers them a fix for something that is not a problem. `week_start` compares
+  // as an ISO date string, which sorts chronologically.
+  const planRunsOut =
+    !!week &&
+    week.has_plan &&
+    committed.length === 0 &&
+    week.week_end >= todayIso();
+
   // A done session's actual measures come from the week's own logged rows, so
   // the card reports the same numbers the headline was summed from.
   const actualById = useMemo(() => {
@@ -179,6 +198,16 @@ export default function SchedulePage() {
       week
         ? `Talk me through my week of ${formatDateLabel(week.week_start)} — what matters most, and what can move?`
         : "Talk me through my week — what matters most, and what can move?",
+    );
+
+  // #981: the plan-runs-dry prompt asks for sessions, not a rewrite, and names
+  // the block already agreed on so the coach extends it rather than starting
+  // over.
+  const askForNextWeeks = () =>
+    coach.openWith(
+      week
+        ? `My plan has no sessions written yet for the week of ${formatDateLabel(week.week_start)}. Could you write the next few weeks of sessions from the block we already agreed on?`
+        : "My plan has no sessions written yet for this week. Could you write the next few weeks of sessions from the block we already agreed on?",
     );
 
   return (
@@ -275,6 +304,12 @@ export default function SchedulePage() {
             freeMode={freeMode}
             onAskCoach={coach.enabled ? askCoach : undefined}
           />
+
+          {/* #981: this stands in for the missing "Planned" section below,
+              right where the runner would otherwise look for it. */}
+          {planRunsOut && (
+            <PlanRunsOutBanner onAskCoach={coach.enabled ? askForNextWeeks : undefined} />
+          )}
 
           <DayStrip
             weekStart={week.week_start}

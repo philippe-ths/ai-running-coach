@@ -200,6 +200,127 @@ def validate_drafted_plan(
     return check
 
 
+def validate_amendment(
+    weeks,
+    *,
+    rules,
+    surviving_by_week,
+    today: date,
+    starts_on: int = MONDAY,
+    norm_weekly_running_m: Optional[float] = None,
+    expected_weeks: Optional[Sequence[date]] = None,
+) -> PlanCheck:
+    """The same coherence gate, applied to a plan being amended in part (#981).
+
+    An amendment rewrites the sessions inside a window and leaves the rest of the
+    plan exactly as it was, so what has to hold is that each TOUCHED WEEK still
+    works as a week. That is not the same question as "do the new sessions work
+    among themselves": a week amended from Wednesday still contains Monday's
+    completed run, and a rest-day-after rule spans the join. Judging only the new
+    half would let an amendment write precisely the collision the rule set
+    exists to forbid, and it would look green doing it.
+
+    So `surviving_by_week` carries what each week keeps, and the rules are
+    checked against the union. The plan's own rules are used unchanged: an
+    amendment is a change to the sessions, never to the constraints they are
+    held to, because rules are the plan's identity and rewriting them silently
+    is a redraft wearing an amendment's clothes.
+    """
+    check = PlanCheck()
+    ceilings_norm = norm_weekly_running_m
+
+    if not weeks:
+        check.fail("the amendment contains no weeks at all")
+        return check
+
+    current_week = week_start(today, starts_on)
+    # Every week the window covers has to be answered for. `_apply` clears the
+    # whole window and writes back what the amendment holds, so a week the
+    # amendment simply omits is not left alone: it is emptied. That turns a
+    # coach that ran short into a runner with a blank week they would train,
+    # which is the half-applied amendment this module exists to refuse. The
+    # prompt does ask for every week, but an instruction to a model is not a
+    # check, and this is the one failure mode where being unchecked costs the
+    # runner a week rather than a retry.
+    if expected_weeks is not None:
+        answered = {week.week_start for week in weeks}
+        for expected in sorted(set(expected_weeks) - answered):
+            check.fail(
+                f"week {expected} is inside the window but the amendment says "
+                f"nothing about it, which would leave it empty"
+            )
+
+    seen = set()
+    for week in weeks:
+        if week.week_start != week_start(week.week_start, starts_on):
+            check.fail(
+                f"week {week.week_start} does not start on the runner's week boundary"
+            )
+        if week.week_start < current_week:
+            check.fail(f"week {week.week_start} is in the past")
+        if week.week_start in seen:
+            check.fail(f"week {week.week_start} appears twice")
+        seen.add(week.week_start)
+
+        _validate_sessions(check, week, today, starts_on)
+
+        surviving = list(surviving_by_week.get(week.week_start, ()))
+        placeable = [
+            _Placeable(
+                id=f"kept-{index}",
+                intent=row.intent,
+                window_start=row.window_start,
+                window_end=row.window_end,
+            )
+            for index, row in enumerate(surviving)
+            if row.commitment == "committed"
+        ] + [
+            _Placeable(
+                id=f"{week.week_start}-{index}",
+                intent=session.intent,
+                window_start=session.window_start,
+                window_end=session.window_end,
+            )
+            for index, session in enumerate(week.sessions)
+            if session.commitment == "committed"
+        ]
+        if placeable:
+            satisfiable, violations = check_rules(
+                placeable, list(rules) + [_ImplicitRule()], None
+            )
+            if not satisfiable:
+                for violation in violations:
+                    check.fail(
+                        f"week {week.week_start} cannot satisfy the plan's rule "
+                        f"{violation['label']!r} ({violation['statement']}): "
+                        f"{violation['detail']}"
+                    )
+
+        # The ceiling counts the whole week, kept sessions included. An amendment
+        # that added a 20 km run beside two surviving ones would otherwise be
+        # measured on its own contribution and pass a week that is absurd.
+        ceilings = volume_ceilings(ceilings_norm)
+        if ceilings is not None:
+            planned = sum(
+                planned_distance_m(session)
+                for session in week.sessions
+                if session.discipline == "run" and session.commitment == "committed"
+            ) + sum(
+                planned_distance_m(row)
+                for row in surviving
+                if row.discipline == "run" and row.commitment == "committed"
+            )
+            if planned > ceilings[0]:
+                check.fail(
+                    f"week {week.week_start} would hold {planned / 1000:.0f} km of "
+                    f"running against a typical "
+                    f"{ceilings_norm / 1000:.0f} km",
+                    code=VOLUME_CEILING,
+                )
+
+    return check
+
+
 def _validate_sessions(check: PlanCheck, week, today: date, starts_on: int) -> None:
     for session in week.sessions:
         try:

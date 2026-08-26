@@ -172,6 +172,14 @@ class PlannedWeekShape(BaseModel):
     phase: Optional[str] = Field(default=None, max_length=60)
     target_running_distance_m: Optional[float] = Field(default=None, ge=0)
     target_effort_score: Optional[float] = Field(default=None, ge=0)
+    # How far the long run goes, and what the hard session is for (#980). A shape
+    # is what a later pass writes real sessions from (#981), so it has to carry
+    # the two things a coach and a runner actually settle about a distant week.
+    # Both optional, and a shape stored before they existed simply reads None:
+    # `week_shapes` is a JSON column, so an older row needs no migration and is
+    # never rewritten.
+    long_run_distance_m: Optional[float] = Field(default=None, ge=0)
+    quality_focus: Optional[str] = Field(default=None, max_length=80)
     # discipline -> share of the week's load, 0..1. Shares, not absolutes, so a
     # mix cannot contradict the total it is a mix of.
     discipline_mix: Dict[str, float] = Field(default_factory=dict)
@@ -397,6 +405,13 @@ class HorizonWeek(BaseModel):
     is_current: bool
     running_distance_m: Optional[float] = None
     effort_score: Optional[float] = None
+    # The week's long run and what its hard session is for (#980). Carried for a
+    # PLANNED week (summed from its own sessions) and for a SKETCHED one (as the
+    # coach stated it), so the horizon reads continuously across the boundary
+    # between them instead of the progression disappearing at week four. `null`
+    # for a week that holds no long run, which is a real answer and not a zero.
+    long_run_distance_m: Optional[float] = None
+    quality_focus: Optional[str] = None
     discipline_mix: Dict[str, float] = Field(default_factory=dict)
     intent_mix: Dict[str, float] = Field(default_factory=dict)
 

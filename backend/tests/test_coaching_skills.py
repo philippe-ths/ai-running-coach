@@ -97,6 +97,25 @@ class TestBoundaries:
         # with a tap, but destroys nothing either: the runner's ordinary profile
         # edit screen can set max HR back to any value at any time, the same
         # pre-existing surface every other stated fact already goes through.
+        #
+        # `amend_plan` (#981) rewrites the sessions inside a bounded window and,
+        # like `adjust_session`, does not undo with a tap. What it has instead is
+        # the same recoverability in kind: the card names the window and the
+        # reason, so what was agreed is written down in the runner's own
+        # transcript, and an amendment is itself amendable — "put next week back
+        # the way it was" is another one. What it CANNOT do is the reason it
+        # earns its place beside `draft_plan` rather than replacing it in this
+        # list: it never touches a completed session, never touches a session
+        # outside its window, and never touches the plan's rules or its race, so
+        # the blast radius is stated on the card before the runner agrees to it.
+        # That is the property `draft_plan` lacked and #857 had to build a whole
+        # restore path to recover.
+        #
+        # The honest gap, tracked separately: the sessions an amendment replaces
+        # are not retained, so putting a window back relies on the coach writing
+        # it again rather than on a stored previous version. That is weaker than
+        # `draft_plan`'s restore and is a deliberate scope decision, not an
+        # oversight.
         assert allowed == {
             "check_in",
             "intent",
@@ -106,6 +125,7 @@ class TestBoundaries:
             "complete_session",
             "adjust_session",
             "draft_plan",
+            "amend_plan",
         }
 
     @pytest.mark.parametrize("skill", SKILLS, ids=[s.name for s in SKILLS])

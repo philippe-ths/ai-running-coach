@@ -20,7 +20,7 @@ model DOES give and the same load model. One number, one owner.
 """
 
 from datetime import date
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -105,8 +105,23 @@ class DraftedSession(BaseModel):
         has_edges = (
             self.warmup_distance_m is not None or self.cooldown_distance_m is not None
         )
-        if (has_reps or has_rep_args or has_edges) and self.intent != "quality":
+        if (has_reps or has_rep_args) and self.intent != "quality":
             raise ValueError("rep structure belongs to a quality session")
+        # The edges are not rep structure, and #878 already said why: they
+        # "describe the SESSION, which exists whether or not it is built around
+        # an interval block". The guard nonetheless kept them tied to `quality`,
+        # which made a LONG run impossible to write with a warm-up. Race week is
+        # where that bites: a goal race is a long session, the coach gives it a
+        # warm-up, and the whole block is rejected over one field.
+        #
+        # So `long` joins `quality`, and nothing else does. An easy run's warm-up
+        # is its own first kilometre, and stating it separately is noise dressed
+        # as structure; strength has no distance to warm up over; and a rest day
+        # with a distance on it is not a rest day, whichever field carries it.
+        if has_edges and self.intent not in ("quality", "long"):
+            raise ValueError(
+                "a warm-up or cool-down belongs to a quality session or a long run"
+            )
         if has_rep_args and not has_reps:
             raise ValueError("rep_distance_m and rest_s need reps_planned")
         return self
@@ -153,6 +168,18 @@ class SketchedWeek(BaseModel):
     Counts, not shares: "four runs and two gym sessions" is something a coach
     decides, whereas "run is 71% of the week's load" is an arithmetic consequence
     the app works out.
+
+    A shape has to say enough to be BUILT FROM later, not merely drawn (#981).
+    The runner arrives at these weeks, and when they do the sketch is what the
+    concrete sessions are written from; a week that recorded only a total and a
+    phase name gives that later pass nothing to honour, so it plans afresh and
+    the block the runner agreed quietly becomes a different one.
+
+    Two fields carry that, and only two, because two are what a runner and a
+    coach actually settle about a week that is still weeks away (#980). A live
+    block agreed "13.5 -> 15.5 -> 18 -> 20 km, peak on 6 Sep" stored as four
+    weekly totals, and the 20 km, the whole point of the build, was not
+    recoverable from what was written down.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -160,6 +187,17 @@ class SketchedWeek(BaseModel):
     week_start: date
     phase: Optional[str] = Field(default=None, max_length=60)
     target_running_distance_m: Optional[float] = Field(default=None, ge=0, le=500_000)
+    # The backbone of a distance build. Stated separately from the week's total
+    # because the two say different things: 37 km built around a 20 km long run
+    # and 37 km built around four 9 km runs are the same total and different
+    # weeks, and for a runner building towards a race distance that difference is
+    # the one that matters most.
+    long_run_distance_m: Optional[float] = Field(default=None, ge=0, le=200_000)
+    # What the week's hard session is FOR, in a coach's words ("race-pace tempo",
+    # "cruise intervals"), never a prescription. A sketch that named reps and
+    # paces would be a concrete session wearing a sketch's clothes, and the
+    # runner would read a promise into a week nobody has written yet.
+    quality_focus: Optional[str] = Field(default=None, max_length=80)
     sessions_by_discipline: Dict[str, int] = Field(default_factory=dict)
     intent_counts: Dict[str, int] = Field(default_factory=dict)
 
@@ -193,6 +231,98 @@ class DraftedPlan(BaseModel):
     # ran past 600 characters — the substance was fine and the prose was long.
     # Structural fields stay strict; a cosmetic one must never cost a plan.
     summary: Optional[str] = Field(default=None, max_length=SUMMARY_MAX_CHARS)
+
+
+# One declaration of what a SESSION may state, shared by the drafting tool and
+# the amendment tool (#981). A session written by an amendment is held to
+# exactly the contract a drafted one is; two copies of this schema would drift,
+# and the drift would be a coach allowed to write something through one door
+# that the other rejects.
+SESSION_PROPERTIES: Dict[str, Any] = {
+    "window_start": {
+        "type": "string",
+        "description": (
+            "First day this session may fall on. Same "
+            "as window_end pins it to that day."
+        ),
+    },
+    "window_end": {
+        "type": "string",
+        "description": (
+            "Last day it may fall on. Widen the window "
+            "when the day genuinely does not matter; "
+            "the whole week means any day. The window "
+            "must stay inside ONE week — Saturday to "
+            "Sunday is fine, Sunday to Monday is not."
+        ),
+    },
+    "intent": {
+        "type": "string",
+        "enum": [
+            "rest",
+            "easy",
+            "long",
+            "quality",
+            "strength",
+        ],
+    },
+    "discipline": {
+        "type": "string",
+        "enum": [
+            "run",
+            "walk",
+            "bike",
+            "strength",
+            "row",
+            "other",
+        ],
+    },
+    "commitment": {
+        "type": "string",
+        "enum": ["committed", "suggested"],
+        "description": (
+            "`committed` is the plan — it counts "
+            "towards the week and missing it "
+            "matters. `suggested` is an optional "
+            "extra the runner can decline with no "
+            "trace. Default to committed; a week "
+            "of suggestions is not a plan."
+        ),
+    },
+    "title": {"type": "string"},
+    "detail": {"type": "string"},
+    "target_distance_m": {
+        "type": "number",
+        "description": (
+            "The WHOLE session in metres, door "
+            "to door, warm-up and cool-down "
+            "included. Leave it out only when "
+            "the reps below already add up to "
+            "the session."
+        ),
+    },
+    "target_duration_s": {"type": "integer"},
+    "reps_planned": {"type": "integer"},
+    "rep_distance_m": {"type": "number"},
+    "rest_s": {"type": "number"},
+    "warmup_distance_m": {
+        "type": "number",
+        "description": (
+            "The warm-up in METRES, not "
+            "minutes, so the session adds up "
+            "instead of being inferred from a "
+            "pace nobody stated."
+        ),
+    },
+    "cooldown_distance_m": {
+        "type": "number",
+        "description": (
+            "The cool-down in METRES, not "
+            "minutes, for the same reason."
+        ),
+    },
+}
+
 
 
 RECORD_TRAINING_PLAN_TOOL = {
@@ -292,90 +422,7 @@ RECORD_TRAINING_PLAN_TOOL = {
                                     "discipline",
                                     "title",
                                 ],
-                                "properties": {
-                                    "window_start": {
-                                        "type": "string",
-                                        "description": (
-                                            "First day this session may fall on. Same "
-                                            "as window_end pins it to that day."
-                                        ),
-                                    },
-                                    "window_end": {
-                                        "type": "string",
-                                        "description": (
-                                            "Last day it may fall on. Widen the window "
-                                            "when the day genuinely does not matter; "
-                                            "the whole week means any day. The window "
-                                            "must stay inside ONE week — Saturday to "
-                                            "Sunday is fine, Sunday to Monday is not."
-                                        ),
-                                    },
-                                    "intent": {
-                                        "type": "string",
-                                        "enum": [
-                                            "rest",
-                                            "easy",
-                                            "long",
-                                            "quality",
-                                            "strength",
-                                        ],
-                                    },
-                                    "discipline": {
-                                        "type": "string",
-                                        "enum": [
-                                            "run",
-                                            "walk",
-                                            "bike",
-                                            "strength",
-                                            "row",
-                                            "other",
-                                        ],
-                                    },
-                                    "commitment": {
-                                        "type": "string",
-                                        "enum": ["committed", "suggested"],
-                                        "description": (
-                                            "`committed` is the plan — it counts "
-                                            "towards the week and missing it "
-                                            "matters. `suggested` is an optional "
-                                            "extra the runner can decline with no "
-                                            "trace. Default to committed; a week "
-                                            "of suggestions is not a plan."
-                                        ),
-                                    },
-                                    "title": {"type": "string"},
-                                    "detail": {"type": "string"},
-                                    "target_distance_m": {
-                                        "type": "number",
-                                        "description": (
-                                            "The WHOLE session in metres, door "
-                                            "to door, warm-up and cool-down "
-                                            "included. Leave it out only when "
-                                            "the reps below already add up to "
-                                            "the session."
-                                        ),
-                                    },
-                                    "target_duration_s": {"type": "integer"},
-                                    "reps_planned": {"type": "integer"},
-                                    "rep_distance_m": {"type": "number"},
-                                    "rest_s": {"type": "number"},
-                                    "warmup_distance_m": {
-                                        "type": "number",
-                                        "description": (
-                                            "The warm-up in METRES, not "
-                                            "minutes, so the session adds up "
-                                            "instead of being inferred from a "
-                                            "pace nobody stated."
-                                        ),
-                                    },
-                                    "cooldown_distance_m": {
-                                        "type": "number",
-                                        "description": (
-                                            "The cool-down in METRES, not "
-                                            "minutes, for the same reason."
-                                        ),
-                                    },
-                                },
+                                "properties": SESSION_PROPERTIES,
                             },
                         },
                     },
@@ -385,7 +432,13 @@ RECORD_TRAINING_PLAN_TOOL = {
                 "type": "array",
                 "description": (
                     "The weeks beyond, as shape only: the phase, the running "
-                    "distance you are aiming at, and how many sessions of each kind."
+                    "distance you are aiming at, how far the long run goes, what "
+                    "the week's hard session is for, and how many sessions of "
+                    "each kind. The runner reaches these weeks and they are then "
+                    "written into real sessions from what you say here, so say "
+                    "enough that the build you intend survives: a weekly total "
+                    "alone cannot tell anyone whether the week was built around a "
+                    "20 km long run or four 9 km ones."
                 ),
                 "items": {
                     "type": "object",
@@ -406,6 +459,27 @@ RECORD_TRAINING_PLAN_TOOL = {
                             ),
                         },
                         "target_running_distance_m": {"type": "number"},
+                        "long_run_distance_m": {
+                            "type": "number",
+                            "description": (
+                                "How far the long run goes in this week, in "
+                                "metres. The backbone of a distance build, and "
+                                "the one number a runner remembers about a week "
+                                "that is still weeks away. Leave it out only for "
+                                "a week that genuinely holds no long run."
+                            ),
+                        },
+                        "quality_focus": {
+                            "type": "string",
+                            "description": (
+                                "What the week's hard session is FOR, in a few "
+                                "words: 'race-pace tempo', 'cruise intervals', "
+                                "'hill strength'. Not a prescription. Reps, "
+                                "paces and rest belong to a concrete session, and "
+                                "stating them here would promise a week nobody "
+                                "has written yet."
+                            ),
+                        },
                         "sessions_by_discipline": {
                             "type": "object",
                             "additionalProperties": {"type": "integer"},

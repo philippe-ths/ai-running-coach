@@ -223,13 +223,35 @@ def test_a_tempo_measured_in_minutes_may_still_state_its_warmup():
 def test_the_warmup_and_cooldown_are_still_guarded_on_the_intent_and_the_value():
     """What #876's containment rule keeps: on an easy run the edges are noise,
     and a non-positive distance is not a distance."""
-    with pytest.raises(ValidationError, match="quality session"):
+    with pytest.raises(ValidationError, match="quality session or a long run"):
         DraftedSession(**_session(warmup_distance_m=1000))
 
     with pytest.raises(ValidationError):
         DraftedSession(
             **_session(intent="quality", reps_planned=6, warmup_distance_m=0)
         )
+
+
+def test_a_long_run_may_carry_a_warm_up_and_a_cool_down():
+    """A goal race is a long session and the coach gives it a warm-up. Held to
+    `quality` alone, race week could not be written at all: a live twelve-week
+    draft was rejected outright over one warm-up on one session, twice.
+
+    The edges describe the SESSION (#878), so the sessions that genuinely open
+    with easy running before the work carry them. An easy run still does not:
+    its warm-up is its own first kilometre.
+    """
+    session = DraftedSession(
+        **_session(intent="long", warmup_distance_m=2000, cooldown_distance_m=1000)
+    )
+    assert session.structure() == {
+        "warmup_distance_m": 2000,
+        "cooldown_distance_m": 1000,
+    }
+
+    for refused in ("easy", "strength", "rest"):
+        with pytest.raises(ValidationError, match="quality session or a long run"):
+            DraftedSession(**_session(intent=refused, warmup_distance_m=1000))
 
 
 def test_a_session_with_neither_reps_nor_edges_carries_no_structure_at_all():
