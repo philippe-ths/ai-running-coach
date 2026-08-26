@@ -658,9 +658,18 @@ def summarize_tool_call(
     elif name == "get_training_plan":
         # The block, not a window: what the runner can check is how far ahead the
         # coach actually read, and how many of those weeks hold real sessions.
+        # The unit here is WEEKS, and the client renders a bare `count` as
+        # "sessions", so the number goes in the detail where it can carry its
+        # own noun. A chip reading "7 sessions" for a seven-WEEK block is the
+        # kind of small false number this trace exists to prevent.
         through = result.get("plan_runs_through")
-        entry["detail"] = f"to {through}" if isinstance(through, str) else None
-        entry["count"] = _int(result.get("week_count"))
+        weeks = _int(result.get("week_count"))
+        parts = []
+        if weeks:
+            parts.append(f"{weeks} week{'s' if weeks != 1 else ''}")
+        if isinstance(through, str):
+            parts.append(f"to {through}")
+        entry["detail"] = ", ".join(parts) or None
     return entry
 
 

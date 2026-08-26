@@ -404,5 +404,10 @@ def test_the_trace_says_how_far_ahead_the_coach_actually_read(db):
     entry = qt.summarize_tool_call("get_training_plan", {}, result)
 
     assert entry["label"] == "Read your training plan"
-    assert entry["detail"] == f"to {WEEK_4.isoformat()}"
-    assert entry["count"] == result["week_count"]
+    # The number carries its own noun. The client renders a bare `count` as
+    # "sessions", so putting a WEEK count there rendered "7 sessions" for a
+    # seven-week block: a small false number on the one affordance that exists
+    # so the runner can check what the coach actually read.
+    weeks = result["week_count"]
+    assert entry["detail"] == f"{weeks} weeks, to {WEEK_4.isoformat()}"
+    assert entry["count"] is None

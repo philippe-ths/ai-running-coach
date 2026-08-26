@@ -153,6 +153,13 @@ day before what, how far apart the hard days must be, which days a session needs
 Write rules you actually intend. Every one is enforced — a week that cannot satisfy \
 its own rules is rejected and you will be asked to write it again.
 
+One rule set covers the WHOLE block, so it has to hold in the block's unusual \
+weeks too, not only its ordinary ones. Race week is where this bites: a race is a \
+long session on a fixed day, and a rule set that also demands a weekly long run at \
+the weekend and a clear day after every long one leaves that week with no legal \
+arrangement. Check the awkward weeks against your own rules before you write them \
+down, and let the race week hold the race.
+
 Each rule kind takes specific arguments and is rejected without them. \
 `rest_day_after` needs `intent`. `no_intent_day_before` needs BOTH `before_intent` \
 and `target_intent`. `min_days_between` needs `intent_a`, `intent_b` and `days`. \
@@ -605,6 +612,13 @@ async def draft_plan(
 
     load_model = build_load_model(facts, today)
     norm_running = running_norm_weekly_m(facts, today)
+    # The goal race, for the volume ceiling only. A race is the runner's own
+    # fixed commitment, not a training decision the gate has a view on.
+    races = store.list_goal_races(db, user.id, on_or_after=today)
+    target_race = next((r for r in races if r.priority == "A"), races[0] if races else None)
+    race_arg = (
+        (target_race.race_date, target_race.distance_m) if target_race else None
+    )
 
     # Two budgets, deliberately separate. A transport blip is not the coach's
     # fault, so it must not consume the one chance to REWRITE a rejected plan —
@@ -660,6 +674,7 @@ async def draft_plan(
             starts_on=starts_on,
             norm_weekly_running_m=norm_running,
             horizon_weeks=weeks,
+            race=race_arg,
         )
         if not check.ok:
             logger.info("schedule draft: rejected: %s", check.failures)

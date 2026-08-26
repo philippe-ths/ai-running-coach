@@ -360,6 +360,11 @@ async def amend_plan(
     load_model = build_load_model(facts, today)
     norm_running = running_norm_weekly_m(facts, today)
     rules = store.plan_rules(plan)
+    races = store.list_goal_races(db, user.id, on_or_after=today)
+    target_race = next(
+        (r for r in races if r.priority == "A"), races[0] if races else None
+    )
+    race_arg = (target_race.race_date, target_race.distance_m) if target_race else None
 
     failures: List[str] = []
     failure_kind = store.FAILURE_UNKNOWN
@@ -431,6 +436,7 @@ async def amend_plan(
             starts_on=starts_on,
             norm_weekly_running_m=norm_running,
             expected_weeks=_weeks_in(start, end, starts_on),
+            race=race_arg,
         )
         if not check.ok:
             logger.info("schedule amend: rejected: %s", check.failures)
