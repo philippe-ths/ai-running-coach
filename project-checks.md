@@ -235,6 +235,18 @@ Railway CLI is not logged in; commands below read a project token from
 - Matters: `project-context.md` is loaded into every session, so drift there
   misinforms every task rather than one.
 
+### Project context budget
+- Check: `python -m pytest backend/tests/test_context_budget_907.py` (also runs in
+  `make backend-test`, so CI enforces it).
+- Normal: 3 passed. The file sits at 299 lines / ~46.9k chars against budgets of
+  300 lines / 55,000 chars / 600 chars per line.
+- Matters: `project-context.md` loads into every session, and the failure it guards
+  is invisible in a diff. A first trim cut it 202k -> 172k; seven days of feature
+  work put it back to 188k, gaining 16k chars while gaining only 7 lines, because
+  each edit appended a clause to a line that already existed. The per-line ceiling
+  is the half with teeth. When a budget is hit, drop low-value detail rather than
+  raising the number.
+
 ### Coach flow diagram
 - Check: `make diagram-check`
 - Normal: `ai-flow-graph diagram is in sync with the code`.
