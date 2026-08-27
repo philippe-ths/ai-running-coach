@@ -39,6 +39,7 @@ from typing import Any, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.models.planned_session import PlannedSession
 from app.schemas.coach_context import (
     PlannedForContext,
     ScheduleContext,
@@ -245,6 +246,7 @@ def _week_view(
                     intent=row.intent,
                     discipline=row.discipline,
                     target=_target(row),
+                    detail=row.detail,
                 )
             )
     return upcoming, committed, done, _km(planned_running_m, unmeasured_runs)
@@ -292,6 +294,7 @@ def _next_week_committed(
                 intent=row.intent,
                 discipline=row.discipline,
                 target=_target(row),
+                detail=row.detail,
             )
         )
     return upcoming
@@ -387,6 +390,83 @@ def _draft_state(db: Session, user_id) -> Optional[dict]:
     return None
 
 
+def _race_section(db: Session, user_id: Any, plan: Any, today: date) -> dict:
+    """The race this runner is training for (#973).
+
+    Read from their own `goal_races` rather than from `plan.goal_race_id`,
+    because the question the coach is answering is "what is this runner training
+    for", and that is a fact about the runner rather than about a row.
+
+    Whether the BLOCK is built for that race is a different question, and this
+    deliberately does not answer it. `goal_race_id` looks like the answer and is
+    only a proxy: the live plan on the account this was built against carries a
+    null pointer and nonetheless ends with the race, a taper and a race-week
+    sharpener, because the sessions were written for the race whatever the
+    column says. Reporting the proxy would have handed the coach
+    "this plan is not built for your race" beside a plan whose last session IS
+    the race, and invited it to offer to fix something that is not broken. The
+    real question needs reading the block, not the column, and it belongs to
+    #939 rather than to a field that guesses.
+    """
+    races = store.list_goal_races(db, user_id, on_or_after=today)
+    if not races:
+        return {}
+    race = next((r for r in races if r.priority == "A"), races[0])
+    weeks_away = max(0, (race.race_date - today).days) / 7
+    return {
+        "race": {
+            "name": race.name,
+            "date": race.race_date.isoformat(),
+            "distance_km": round(race.distance_m / 1000, 1),
+            "weeks_away": round(weeks_away, 1),
+        }
+    }
+
+
+def _written_through(
+    db: Session, user_id: Any, plan: Any, today: date, starts_on: int
+) -> dict:
+    """The last date this plan actually tells the runner what to do (#981).
+
+    A plan whose written sessions have run out is still `active` and still has a
+    horizon, so nothing the coach previously received distinguished it from one
+    that covers the next two months. The runner reaches an empty week and the
+    coach reads the horizon date and talks about a Peak block that holds nothing.
+
+    Also says whether shape remains beyond that point, because the two cases lead
+    the coach somewhere different: shape left is a block to write out with the
+    progression already agreed, and nothing left is a plan that has genuinely run
+    its course.
+    """
+    if plan is None:
+        return {}
+    last = (
+        db.query(PlannedSession.window_end)
+        .filter(
+            PlannedSession.user_id == user_id,
+            PlannedSession.plan_id == plan.id,
+            PlannedSession.commitment == "committed",
+        )
+        .order_by(PlannedSession.window_end.desc())
+        .first()
+    )
+    if last is None or last[0] is None:
+        return {"sessions_written_through": None, "weeks_still_only_shape": 0}
+    written_through = last[0]
+    remaining_shapes = [
+        shape
+        for shape in store.plan_week_shapes(plan)
+        if shape.week_start > week_start(written_through, starts_on)
+    ]
+    out: dict = {
+        "sessions_written_through": written_through.isoformat(),
+        "weeks_still_only_shape": len(remaining_shapes),
+    }
+    if written_through < today:
+        out["plan_has_run_out"] = True
+    return out
+
+
 def build_thread_schedule(
     db: Session, user: Any, *, today: Optional[date] = None
 ) -> Optional[dict]:
@@ -429,6 +509,21 @@ def build_thread_schedule(
     return {
         "has_plan": True,
         **({"draft": draft} if draft else {}),
+        # The race, and whether this plan is actually built for it (#973/#939).
+        # "Talk me through my schedule up to my half marathon" cannot be answered
+        # by a coach that does not know which race is meant or how far away it
+        # is, and the anchoring is a real distinction the runner cannot see: a
+        # plan restored from before they stated their race carries no pointer to
+        # it, so its phases were never built backwards from that date. Saying so
+        # is what stops the coach describing a race build the plan does not
+        # contain.
+        **_race_section(db, user.id, plan, today),
+        # Where the WRITTEN sessions stop (#981). A plan holds real sessions for
+        # its near weeks and shape beyond, so "the plan runs to 11 Oct" and "the
+        # plan tells you what to do until 30 Aug" are different facts and the
+        # coach was only ever given the first. It read the horizon date as
+        # coverage and talked about weeks that hold nothing.
+        **_written_through(db, user.id, plan, today, starts_on),
         # So "Is it added?" can be answered from the record (#883). Without it the
         # coach could see a plan but not that it was the one written ninety
         # seconds ago, so it offered to write another and the runner confirmed.

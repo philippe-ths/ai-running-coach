@@ -442,10 +442,125 @@ def _vs_typical(report) -> dict:
 # The status label shown in chat while each tool runs (the ephemeral "fetching"
 # affordance, #648). Coach-framed, so it reads as a competent coach checking the
 # record rather than a spinner.
+def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = None) -> dict:
+    """The runner's whole training block, week by week (#973).
+
+    The coach receives this week of the plan in its baseline and nothing beyond,
+    which is right for most turns and wrong for the one question a runner with a
+    race asks most: what happens between here and the race. Asked that, the coach
+    reached for training history, because no tool it held could return a plan, and
+    then answered from the only thing in front of it. A live conversation produced
+    "when you step up to the 16.5 km run on Aug 31" about a week the plan had
+    written no sessions for at all.
+
+    Built from `build_horizon`, the SAME builder behind the runner's own Schedule
+    screen, so what the runner reads and what the coach reads are one answer
+    rather than two that agree until they do not. It is a tool rather than more
+    baseline because the block is irrelevant to most turns and the baseline is
+    paid for on every one.
+
+    Every week says which of two things it is. A `planned` week holds real
+    sessions the runner has agreed to; a `sketched` week is shape, and shape is
+    not a promise. Handing both over unlabelled is the same failure one level up:
+    the coach would name a distance and a day for a week nobody has written, and
+    it would sound exactly as confident as the truth.
+    """
+    from app.models.user import User
+    from app.services.schedule.horizon import build_horizon
+
+    today = today or date.today()
+    user = db.query(User).filter(User.id == owner_user_id).first()
+    if user is None:
+        return {"error": "not_found"}
+
+    horizon = build_horizon(db, user, today=today)
+    if not horizon.has_plan:
+        # A real answer, not an error: free mode is a destination. Saying it
+        # plainly is what stops the coach reading an empty result as a fetch
+        # failure and telling the runner to check another app.
+        return {
+            "has_plan": False,
+            "week_count": 0,
+            "note": (
+                "This runner has no active training plan. They train without one, "
+                "which is a supported way to use the app, and you can offer to "
+                "write them one if the conversation reaches it."
+            ),
+        }
+
+    weeks = []
+    for week in horizon.weeks:
+        if week.coverage == "beyond_plan":
+            # Past the plan's own reach. Listing it would invite the coach to
+            # describe a week the plan never claimed.
+            continue
+        entry: Dict[str, Any] = {
+            "week_start": week.week_start.isoformat(),
+            "is_this_week": week.is_current,
+            "written": week.coverage == "planned",
+            "phase": week.phase,
+        }
+        # `is not None`, not truthiness. A WRITTEN week holding no running is a
+        # real answer (a cross-training week), and dropping the key entirely
+        # would read as "unknown" rather than "none" to the one reader that
+        # cannot ask a follow-up question.
+        if week.running_distance_m is not None:
+            entry["running_km"] = round(week.running_distance_m / 1000, 1)
+        if week.long_run_distance_m is not None:
+            entry["long_run_km"] = round(week.long_run_distance_m / 1000, 1)
+        if week.quality_focus:
+            entry["quality_focus"] = week.quality_focus
+        if week.coverage == "empty":
+            entry["note"] = "the plan says nothing about this week"
+        elif week.coverage == "sketched":
+            entry["note"] = (
+                "shape only: agreed in outline, no sessions written yet"
+            )
+        weeks.append(entry)
+
+    races = [
+        {
+            "name": race.name,
+            "date": race.race_date.isoformat(),
+            "distance_km": round(race.distance_m / 1000, 1),
+            "priority": race.priority,
+        }
+        for race in horizon.races
+    ]
+    written = [w for w in weeks if w["written"]]
+    return {
+        "has_plan": True,
+        "today": today.isoformat(),
+        "week_count": len(weeks),
+        "weeks": weeks,
+        "races": races,
+        # Two different facts, and the coach was previously given only the first
+        # (#981). A plan can run to October while telling the runner what to do
+        # only until the end of this month.
+        #
+        # Both are WEEK STARTS and say so in their names. The baseline states the
+        # same two facts as DAYS (`runs_through`, `sessions_written_through`), and
+        # a coach holding "2026-10-05" and "2026-10-11" for what sounds like one
+        # question will eventually pick the wrong one to say out loud.
+        "plan_covers_through_week_starting": weeks[-1]["week_start"] if weeks else None,
+        "sessions_written_through_week_starting": (
+            written[-1]["week_start"] if written else None
+        ),
+        "how_to_read": (
+            "A week marked written holds real sessions this runner has agreed to. "
+            "A week marked shape only is a direction you both settled, not a "
+            "prescription: say what it is FOR, and never name a session, a day or "
+            "a distance in it as though it were written. If the runner needs one "
+            "of those weeks written out, offer amend_plan."
+        ),
+    }
+
+
 TOOL_STATUS_LABELS = {
     "list_activities_in_range": "Checking your training history…",
     "get_session_detail": "Pulling up that session…",
     "get_training_summary": "Tallying your recent training…",
+    "get_training_plan": "Reading your training plan…",
 }
 
 
@@ -458,6 +573,7 @@ TOOL_TRACE_LABELS = {
     "list_activities_in_range": "Looked up your training history",
     "get_session_detail": "Pulled up a past session",
     "get_training_summary": "Tallied your recent training",
+    "get_training_plan": "Read your training plan",
 }
 _DEFAULT_TRACE_LABEL = "Looked up your training data"
 
@@ -548,10 +664,44 @@ def summarize_tool_call(
         # A single named session: its local date is the useful "what", no count.
         d = result.get("date")
         entry["detail"] = d if isinstance(d, str) else None
+    elif name == "get_training_plan":
+        # The block, not a window: what the runner can check is how far ahead the
+        # coach actually read, and how many of those weeks hold real sessions.
+        # The unit here is WEEKS, and the client renders a bare `count` as
+        # "sessions", so the number goes in the detail where it can carry its
+        # own noun. A chip reading "7 sessions" for a seven-WEEK block is the
+        # kind of small false number this trace exists to prevent.
+        through = result.get("plan_covers_through_week_starting")
+        weeks = _int(result.get("week_count"))
+        parts = []
+        if weeks:
+            parts.append(f"{weeks} week{'s' if weeks != 1 else ''}")
+        if isinstance(through, str):
+            parts.append(f"to {through}")
+        entry["detail"] = ", ".join(parts) or None
     return entry
 
 
 CHAT_TOOLS: List[Dict[str, Any]] = [
+    {
+        "name": "get_training_plan",
+        "description": (
+            "Read this runner's training plan: every week from now to the end of "
+            "the block, with its phase, its running distance, how far its long "
+            "run goes, and whether it holds real sessions or is shape only. Use "
+            "this for any question about what is COMING — the block ahead, the "
+            "weeks between now and their race, what a future week is for, "
+            "whether the plan still covers them. Your other tools read what they "
+            "have already DONE and cannot answer those. Each week says whether it "
+            "is written or shape only: never name a session, a day or a distance "
+            "in a shape-only week as though it were written."
+        ),
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+        },
+    },
     {
         "name": "list_activities_in_range",
         "description": (
@@ -662,6 +812,8 @@ def execute_chat_tool(
                 type_filter=tool_input.get("type_filter"),
                 today=today,
             )
+        if name == "get_training_plan":
+            return get_training_plan(db, owner_user_id, today=today)
         return {"error": "unknown_tool", "tool": name}
     except Exception as exc:  # graceful degrade — the coach answers from what it has
         logger.warning("chat tool %s failed: %s", name, exc)

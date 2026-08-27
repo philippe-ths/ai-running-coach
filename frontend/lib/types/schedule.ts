@@ -238,6 +238,16 @@ export interface HorizonWeek {
   is_current: boolean;
   running_distance_m: number | null;
   effort_score: number | null;
+  // The week's long run and what its hard session is for (#980). Carried for a
+  // PLANNED week (summed from its own sessions) and for a SKETCHED one (as the
+  // coach stated it), so the horizon reads continuously across the boundary
+  // between them instead of the build progression disappearing at week four.
+  // `null` for a week that holds no long run, which is a real answer and not a
+  // zero: never render it as "0.0 km". `quality_focus` is only ever populated
+  // on a sketched week; a written week states its quality work in the sessions
+  // themselves, so it stays null there.
+  long_run_distance_m: number | null;
+  quality_focus: string | null;
   // discipline/intent -> share of the week's load, 0..1. Shares, not absolutes,
   // so a mix can never contradict the total it is a mix of. An all-zero week
   // yields an empty map rather than a fake even split.

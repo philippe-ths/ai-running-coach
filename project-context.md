@@ -48,6 +48,7 @@ It stores the untrusted `raw_text` (never placed into a prompt, never echoed ove
 A `GoalRace` is the runner's own stated race: `name`, `race_date`, `distance_m`, and an `A`/`B`/`C` `priority` that is the runner's ranking and never a claim about ability.
 A `TrainingPlan` is the plan container: a nullable `goal_race_id`, a `horizon_end`, and two strict-coerced JSON columns `rules` (`List[SpacingRule]`) and `week_shapes` (`List[PlannedWeekShape]`).
 Its `status` is `drafting`, `active`, `superseded`, or `failed`, with at most one active plan per user held by the writer rather than a DB constraint.
+A `PlannedWeekShape` also carries `long_run_distance_m` and `quality_focus`, so a sketched week states the progression it was agreed on rather than only a weekly total.
 `superseded_at` records when a plan stopped being current, written only by `activate_plan` and cleared on the row it activates, so a superseded plan stays reachable and restorable.
 A `PlannedSession` is the schedule's concrete unit, described along three independent axes: PLACEMENT, COMMITMENT (`committed` or `suggested`), and DISCIPLINE (`run`, `walk`, `bike`, `strength`, `row`, `other`).
 Placement has no column: a session stores an inclusive `[window_start, window_end]`, and `derive_placement` reads `pinned`, `week`, or `window` from its span.
@@ -77,6 +78,7 @@ The schedule exposes `GET /api/schedule/week`, `GET /api/schedule/horizon`, `GET
 `GET /api/schedule/plans/previous` reports the plan the runner trained to before this one, and `POST /api/schedule/plans/{plan_id}/restore` brings it back.
 `POST`/`DELETE /api/schedule/sessions/{session_id}/complete` tick and untick a session by hand, and `POST /api/schedule/sessions/{session_id}/dismiss` declines a suggestion only.
 There is no session-create endpoint: every `PlannedSession` is written by the coach's draft, not a form.
+`amend_plan` is the coach's bounded-window rewrite: the runner confirms it, and the sessions inside the named weeks are replaced while the plan's identity, rules, race, completions and every session outside the window stay as they are.
 The whole schedule router sits behind the `SCHEDULE_ENABLED` router kill switch.
 Strava ingestion supports manual sync (`POST /api/sync`) and incoming webhooks (`/api/webhooks/strava`).
 Webhook `create` events enqueue `process_new_activity_job`, `update` events enqueue `sync_activity_job`, and `delete` events soft-delete the activity and detach it from its Block.
@@ -127,6 +129,7 @@ A switch that block does not declare runs at its CODE default, which is False fo
 `SCHEDULE_ENABLED` (default True) gates the schedule screen: off, every `/api/schedule` route refuses with 503 and the frontend renders no Schedule tab, while stored plans, sessions, and races are untouched.
 The orthogonal coach-input switch `COACH_SCHEDULE_ENABLED` (default True) drops the `right_now.schedule` pack section while the schedule screen keeps working.
 `SCHEDULE_HORIZON_WEEKS` (default 12) and `SCHEDULE_CONCRETE_WEEKS` (default 3) are inputs to the drafting prompt as well as the horizon read.
+A drafted plan whose goal race falls inside the horizon is written as concrete sessions all the way to the race, bounded by the drafted contract's six-week concrete cap.
 `COACH_PERIOD_REPORT_ENABLED` (default True) gates every `/api/coach/period-reports` route with 503 and hides the frontend entry point.
 `EXCHANGE_STAGE2_DELAY_SECONDS` (default 10800) is the fuller-turn timer and `EXCHANGE_REPLY_WINDOW_SECONDS` (default 86400) is how long a reply still triggers the fuller turn early; both are inert under a single-shot prompt.
 `RQ_JOB_TIMEOUT_SECONDS` (default 600) is the RQ death-penalty ceiling, applied as the queue `default_timeout` and as explicit `job_timeout=` on `queue.enqueue_in` calls, because a two-stage generation runs past RQ's 180s default.
@@ -204,16 +207,12 @@ Data flow: Strava API, `strava_ingestion`, `Activity`/`ActivityStream` rows, the
 `redis`, `rq`: job queue for sync and processing background work.
 `numpy`: numerical computation in the processing pipeline.
 `anthropic`: Claude API client used by the coach service, pinned `>=0.125.0,<0.126.0` because 1.0.0 removed `temperature`/`top_p`/`top_k` from `messages.create()` and `.stream()` and neither takes `**kwargs`.
-`python-multipart`: form parsing required by FastAPI for non-JSON request bodies.
+A structured LLM call's wall-clock ceiling is derived from its `max_tokens` rather than fixed, so a large generation is not capped at a short call's limit.
 `sentry-sdk[fastapi]` (optional `observability` extra): error tracking, installed only when Sentry capture is enabled.
-`pytest`, `pytest-asyncio` (test extra): test runner and async test support.
 `next`, `react`, `react-dom`: frontend framework and renderer.
 `@clerk/nextjs`: social-login authentication and the frontend session gate.
 `recharts`: charting library for stream and trend views.
 `react-markdown`, `remark-gfm`: render the coach report body as GitHub-flavoured markdown.
-`date-fns`: date formatting in activity and trends views.
-`lucide-react`: icon set used across the UI.
-`next-themes`: dark/light/system theme switching with persistence and no flash on load.
 `tailwindcss`, `@tailwindcss/typography`, `autoprefixer`, `postcss`: styling pipeline.
 `typescript`, `eslint`, `eslint-config-next`: type checking and lint baseline.
 
@@ -230,12 +229,14 @@ A handler declares the owned resource it operates on (`OwnedActivity`, `OwnedBlo
 `backend/app/services/coach/` owns the LLM coach; each module has one job and the module map is its `__init__.py`.
 `turn.py` is the coaching-turn envelope shared by all generation paths: the `TurnKind` lane, `resolve_model`, `build_client` returning a spend-recording `MeteredClient`, the `over_budget` gate, and `relationship_for_user`.
 `chat.py`, `threads.py`, `thread_turn.py`, `proposed_actions.py`, `screen_context.py`, `coaching_skills.py`, and `query_tools.py` are the conversational surface.
+`query_tools.get_training_plan` is the coach's only forward-looking tool, returning the block week by week from the same builder the runner's horizon screen uses, each week labelled as written or shape only.
 `voice.py`, `stance.py`, and `corpus.py` are pure domains with no LLM and no I/O; `voice_rewrite.py`, `material_distiller.py`, `receipt.py`, and `receipt_voice.py` are their generative counterparts.
 `perceived_effort.py`, `adherence.py`, `calibration.py`, `volume.py`, `salience.py`, `intensity.py`, and `recent_training.py` are the pure read-time signal builders.
 `memory_store.py` and `memory_update.py` are the runner-memory DB layer and its rewrite-from-source writer.
 `period_report_pack.py`, `period_report.py`, and `period_report_store.py` are the period-report surface.
 `eval/` is the offline eval harness: `rubric.py`, `harness.py`, and `fixtures.py`.
 `backend/app/services/schedule/` is the schedule package: `disciplines.py`, `placement.py`, `rules.py`, `store.py`, `norms.py`, `week.py`, `horizon.py`, `draft.py`, `draft_contract.py`, `plan_validator.py`, `effort.py`, `completion.py`, and `coach_view.py`.
+`amend.py` rewrites one window of an existing plan through the same envelope, coercion and coherence gate the draft uses, and `app/jobs/amend_schedule.py` runs a confirmed amendment on the worker.
 The package computes no training total of its own: actuals and windows come from `activity_facts`, the week boundary from `weeks.py`, and typical from `coach/volume.py` and its own `norms.py`.
 `backend/app/services/notifications/` holds the notifier port and adapters, the channel selection and composer, the Telegram template, the shared prose-render helpers, and the opaque tap-token codec.
 `backend/app/services/` also holds `blocks.py`, `weeks.py`, `activity_facts.py`, `trends.py`, `training_load.py`, `readiness.py`, `laps.py`, `activity_queries.py`, `account_deletion.py`, `checkins.py`, `intents.py`, and `units/cadence.py`.

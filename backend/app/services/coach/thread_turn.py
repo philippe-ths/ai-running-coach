@@ -318,7 +318,10 @@ def _render_schedule_block(schedule: Optional[dict]) -> str:
         )
     return (
         "\nTHEIR SCHEDULE (this app's Schedule screen — yours to write; what was "
-        "ASKED FOR, never a compliance score):\n"
+        "ASKED FOR, never a compliance score). A session's `detail` is the note "
+        "you wrote when you drafted that session, so it describes the session "
+        "and not the block as it stands now: where it and a number disagree, the "
+        "number is current and the note is not:\n"
         + json.dumps(schedule, default=str)
     )
 

@@ -300,6 +300,8 @@ export default function HorizonChart({
       `Week of ${formatDateLabel(week.week_start)}`,
       load > 0 ? `${Math.round(load)} load` : zeroLoadCopy,
       week.running_distance_m ? `${km(week.running_distance_m)} km running` : null,
+      week.long_run_distance_m ? `${km(week.long_run_distance_m)} km long run` : null,
+      week.quality_focus ? `focus: ${week.quality_focus}` : null,
       disc.length ? `discipline: ${describeMix(disc)}` : null,
       intent.length ? `intent: ${describeMix(intent)}` : null,
     ]
@@ -568,6 +570,16 @@ function WeekDetail({
           <span className="font-mono tabular-nums">{km(week.running_distance_m)}</span> km
           running
         </span>
+        {/* #980: the long run, so a build reads as a build past the concrete
+            weeks. Omitted entirely rather than shown as "— km" when null,
+            since a week can genuinely hold no long run, and that is a
+            different claim from "not written yet". */}
+        {week.long_run_distance_m != null && week.long_run_distance_m > 0 && (
+          <span className="text-gray-600 dark:text-gray-300">
+            <span className="font-mono tabular-nums">{km(week.long_run_distance_m)}</span> km
+            long run
+          </span>
+        )}
         {load > 0 && (
           <span className="text-gray-600 dark:text-gray-300">
             <span className="font-mono tabular-nums">{Math.round(load)}</span> load
@@ -577,6 +589,14 @@ function WeekDetail({
           </span>
         )}
         <span className={coverageClass}>{coverageDetailText(week.coverage)}</span>
+        {/* #980: what the week's hard session is for. Only ever set on a
+            sketched week (a planned week states its quality work in the
+            sessions themselves), so this never contradicts "Shape only". */}
+        {week.quality_focus && (
+          <span className="italic text-gray-500 dark:text-gray-400">
+            Focus: {week.quality_focus}
+          </span>
+        )}
       </div>
 
       <dl className="mt-2 space-y-1">
@@ -679,6 +699,12 @@ function HorizonTable({
                 Running
               </th>
               <th scope="col" className={head}>
+                Long run
+              </th>
+              <th scope="col" className={head}>
+                Focus
+              </th>
+              <th scope="col" className={head}>
                 Discipline
               </th>
               <th scope="col" className={head}>
@@ -710,6 +736,10 @@ function HorizonTable({
                   <td className={`${cell} whitespace-nowrap font-mono tabular-nums`}>
                     {week.running_distance_m ? `${km(week.running_distance_m)} km` : "—"}
                   </td>
+                  <td className={`${cell} whitespace-nowrap font-mono tabular-nums`}>
+                    {week.long_run_distance_m ? `${km(week.long_run_distance_m)} km` : "—"}
+                  </td>
+                  <td className={cell}>{week.quality_focus ?? "—"}</td>
                   <td className={cell}>{describeMix(disciplineSegments(week.discipline_mix))}</td>
                   <td className={cell}>{describeMix(intentSegments(week.intent_mix))}</td>
                 </tr>

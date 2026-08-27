@@ -15,6 +15,25 @@ logger = logging.getLogger(__name__)
 # would block on a single hung call for that long otherwise.
 _TIMEOUT_SECONDS = 60.0
 
+# A structured call's ceiling FOLLOWS THE WORK it asked for. The flat 60s above
+# is sized for a short record, and the schedule draft is what broke it (#981):
+# asked for five concrete weeks instead of three it generates roughly thirty
+# sessions, and every attempt died on the cap with `APITimeoutError` and no plan
+# at all.
+#
+# Derived rather than passed, deliberately. A per-call argument puts the ceiling
+# in the hands of whoever remembers to set it, and the caller that forgets is
+# exactly the one generating too much to fit. `max_tokens` is already the
+# caller's own statement of how much output it expects, so the ceiling reads it
+# instead of asking twice. The rate is deliberately generous: this is a hung-call
+# guard, not a latency budget.
+_SECONDS_PER_1K_OUTPUT_TOKENS = 25.0
+
+
+def structured_timeout_for(max_tokens: int) -> float:
+    """Wall-clock ceiling for a structured call asking for `max_tokens`."""
+    return max(_TIMEOUT_SECONDS, (max_tokens / 1000.0) * _SECONDS_PER_1K_OUTPUT_TOKENS)
+
 # The A3 prose-message call runs adaptive thinking before the prose and the
 # tool tail, so it needs more wall-clock headroom than the old constrained-JSON
 # call. Streaming removes the SDK's non-streaming idle-timeout guard; this is the
@@ -350,7 +369,7 @@ class AnthropicClient:
                     messages=[{"role": "user", "content": user}],
                     tools=[tool],
                     tool_choice={"type": "tool", "name": tool_name},
-                    timeout=_TIMEOUT_SECONDS,
+                    timeout=structured_timeout_for(max_tokens),
                 )
                 usage = _usage_from_response(response)
                 stop_reason = (
