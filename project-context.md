@@ -11,8 +11,8 @@ The core flow is: connect Strava, sync activities, deep-process a run, then read
 ## Domain Concepts
 A `User` owns a `UserProfile`, a linked `StravaAccount` (OAuth tokens, athlete id), and a nullable `telegram_chat_id` for per-user notification routing (ADR 0023).
 `UserProfile` holds goal, experience, weekly volume, max HR, races, injuries, the Strava-sourced HR-zone lower bounds `hr_zones`/`hr_zones_source`, the runner's `week_starts_on` (Monday 0 or Sunday 6, null resolving to Monday), and the stated build `weight_kg`/`height_cm`.
-`weight_kg`/`height_cm` are nullable floats meaning NOT STATED rather than average, envelope-validated at the API so a unit slip never reaches the coach as a fact.
 `UserProfile.upcoming_races` is an untyped JSON blob no backend code reads; it is retained only because the frontend profile form still round-trips it.
+`weight_kg`/`height_cm` are nullable floats meaning NOT STATED rather than average, envelope-validated at the API so a unit slip never reaches the coach as a fact.
 An `Activity` is one Strava activity owned by a `User`, identified by `strava_activity_id`.
 An `ActivityStream` holds per-sample time-series data (HR, pace, cadence, power) for an `Activity`.
 A `DerivedMetric` row attaches one set of computed signals to one `Activity`: the five orthogonal classification axes, effort score, pace variability, HR drift, time-in-zones, stops, efficiency, intervals, flags, confidence, risk, discount signals, and a consolidated stream view.
@@ -78,7 +78,8 @@ The schedule exposes `GET /api/schedule/week`, `GET /api/schedule/horizon`, `GET
 `GET /api/schedule/plans/previous` reports the plan the runner trained to before this one, and `POST /api/schedule/plans/{plan_id}/restore` brings it back.
 `POST`/`DELETE /api/schedule/sessions/{session_id}/complete` tick and untick a session by hand, and `POST /api/schedule/sessions/{session_id}/dismiss` declines a suggestion only.
 There is no session-create endpoint: every `PlannedSession` is written by the coach's draft, not a form.
-`amend_plan` is the coach's bounded-window rewrite: the runner confirms it, and the sessions inside the named weeks are replaced while the plan's identity, rules, race, completions and every session outside the window stay as they are.
+`amend_plan` is the coach's bounded-window rewrite: the sessions inside the named weeks are replaced while the plan's identity, rules, race, completions and every session outside the window stay as they are.
+The amendment is generated and gated BEFORE the card is offered, so the card carries the settled week and its real difference, and confirming writes that week in the request rather than enqueueing a job.
 The whole schedule router sits behind the `SCHEDULE_ENABLED` router kill switch.
 Strava ingestion supports manual sync (`POST /api/sync`) and incoming webhooks (`/api/webhooks/strava`).
 Webhook `create` events enqueue `process_new_activity_job`, `update` events enqueue `sync_activity_job`, and `delete` events soft-delete the activity and detach it from its Block.
@@ -234,9 +235,8 @@ A handler declares the owned resource it operates on (`OwnedActivity`, `OwnedBlo
 `perceived_effort.py`, `adherence.py`, `calibration.py`, `volume.py`, `salience.py`, `intensity.py`, and `recent_training.py` are the pure read-time signal builders.
 `memory_store.py` and `memory_update.py` are the runner-memory DB layer and its rewrite-from-source writer.
 `period_report_pack.py`, `period_report.py`, and `period_report_store.py` are the period-report surface.
-`eval/` is the offline eval harness: `rubric.py`, `harness.py`, and `fixtures.py`.
 `backend/app/services/schedule/` is the schedule package: `disciplines.py`, `placement.py`, `rules.py`, `store.py`, `norms.py`, `week.py`, `horizon.py`, `draft.py`, `draft_contract.py`, `plan_validator.py`, `effort.py`, `completion.py`, and `coach_view.py`.
-`amend.py` rewrites one window of an existing plan through the same envelope, coercion and coherence gate the draft uses, and `app/jobs/amend_schedule.py` runs a confirmed amendment on the worker.
+`amend.py` rewrites one window of an existing plan through the same envelope, coercion and coherence gate the draft uses, splitting that into `propose_amendment` and `apply_proposal`.
 The package computes no training total of its own: actuals and windows come from `activity_facts`, the week boundary from `weeks.py`, and typical from `coach/volume.py` and its own `norms.py`.
 `backend/app/services/notifications/` holds the notifier port and adapters, the channel selection and composer, the Telegram template, the shared prose-render helpers, and the opaque tap-token codec.
 `backend/app/services/` also holds `blocks.py`, `weeks.py`, `activity_facts.py`, `trends.py`, `training_load.py`, `readiness.py`, `laps.py`, `activity_queries.py`, `account_deletion.py`, `checkins.py`, `intents.py`, and `units/cadence.py`.

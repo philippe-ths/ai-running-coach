@@ -12,7 +12,7 @@ import json
 import logging
 import secrets
 from datetime import date, datetime
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -34,19 +34,172 @@ _TOKEN_PREFIX = "coach-action:"
 _TOKEN_TTL_SECONDS = 1800
 _TOKEN_MAX_LENGTH = 64
 
-# The two actions whose confirm does not WRITE anything. Both hand a generation
-# to the worker and return, so the change is asked for here and made a minute
-# later somewhere else, if it is made at all.
+# The action whose confirm does not WRITE anything. `draft_plan` hands a
+# generation to the worker and returns, so the change is asked for here and made
+# a minute later somewhere else, if it is made at all.
 #
-# They are named because #778's ledger records writes rather than taps: "written
-# only after the change has actually been made". Recording these at confirm time
-# recorded an intention as an outcome, and the coach reads that list back under
+# It is named because #778's ledger records writes rather than taps: "written
+# only after the change has actually been made". Recording it at confirm time
+# records an intention as an outcome, and the coach reads that list back under
 # "ALREADY IN THEIR RECORD - what this conversation has written". Observed live:
 # a runner confirmed a hill session into next week, the transcript showed it
-# done, the job sat unprocessed, and the week held no hill session. Their trace
-# is written by the job instead, on success, so the ledger stays true rather
-# than needing a caveat that says when to disbelieve it.
-DEFERRED_ACTION_TYPES = frozenset({"draft_plan", "amend_plan"})
+# done, the job sat unprocessed, and the week held no hill session. Its trace is
+# written by the job instead, on success, so the ledger stays true rather than
+# needing a caveat that says when to disbelieve it.
+#
+# `amend_plan` left this set in #987: its week is settled before the card goes
+# up, so confirming it writes in that same request and there is no longer a
+# window between the tap and the change.
+DEFERRED_ACTION_TYPES = frozenset({"draft_plan"})
+
+# The actions whose CONTENT has to be settled before the card can be honest
+# (#987). Everything else names a change the runner can already read off the
+# card; an amendment's card is only meaningful once the week behind it exists,
+# so the generation runs before the offer rather than after the tap.
+#
+# Preparation is async and slow, roughly twenty seconds, which is why it is a
+# separate step the tool loop can announce rather than something buried in
+# `_build_offer`. The runner used to wait that long AFTER agreeing, watching a
+# promise; they now wait it out in front of a decision they have not made yet.
+PREPARED_ACTION_TYPES = frozenset({"amend_plan"})
+
+
+def needs_preparation(tool_input: Dict[str, Any]) -> bool:
+    """Whether this offer has to be worked out before it can be minted.
+
+    Reads the raw tool input rather than a parsed request, because it is asked
+    before validation: the caller only needs to know whether to announce the wait
+    and await `prepare_offer`, and an off-shape input is refused by the mint a
+    moment later either way.
+    """
+    return (tool_input or {}).get("action_type") in PREPARED_ACTION_TYPES
+
+
+class PreparedOffer(BaseModel):
+    """The settled content of an offer, handed from `prepare_offer` to the mint.
+
+    Opaque to the tool loop on purpose. The loop knows only that some offers need
+    preparing and that preparation can refuse; what is inside belongs to the
+    action, so adding a second prepared action later touches this module and not
+    the conversation.
+    """
+
+    action_type: str
+    ok: bool
+    # The refusal, in terms the coach can say back to the runner. This is the
+    # honest answer to an impossible request and it is why refusing no longer
+    # means silence: it comes back as a tool result the model must respond to,
+    # while the runner is still in the conversation, before anything is written.
+    detail: Optional[str] = None
+    amended_plan: Optional[Dict[str, Any]] = None
+    changes: List[str] = Field(default_factory=list)
+    week: List["ProposedSessionRow"] = Field(default_factory=list)
+    start: Optional[date] = None
+    end: Optional[date] = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+async def prepare_offer(
+    db: Session, owner_user_id: UUID, tool_input: Dict[str, Any]
+) -> Optional[PreparedOffer]:
+    """Work out what an offer would actually do, before the runner is asked.
+
+    Never raises: a preparation that fails comes back `ok=False` with something
+    the coach can say, because the failure IS the answer here. A request that
+    cannot be satisfied under the runner's own rules should produce an
+    explanation and alternatives in the conversation, not a card that cannot be
+    honoured and not a silence half a minute later.
+    """
+    try:
+        request = ProposedActionRequest.model_validate(tool_input or {})
+    except ValidationError:
+        # Let the mint produce the shape error, so there is one place that
+        # reports an off-contract offer to the model.
+        return None
+    if request.action_type != "amend_plan":
+        return None
+
+    from app.services.schedule import store as schedule_store
+    from app.services.schedule.amend import propose_amendment
+
+    if not settings.SCHEDULE_ENABLED:
+        return PreparedOffer(
+            action_type="amend_plan", ok=False, detail="the schedule is unavailable"
+        )
+    plan = schedule_store.get_active_plan(db, owner_user_id)
+    if plan is None:
+        return PreparedOffer(
+            action_type="amend_plan",
+            ok=False,
+            detail="this runner has no active plan to amend; offer draft_plan instead",
+        )
+    user = plan.user if getattr(plan, "user", None) is not None else None
+    if user is None:
+        from app.models.user import User
+
+        user = db.query(User).filter(User.id == owner_user_id).first()
+    if user is None:
+        return PreparedOffer(
+            action_type="amend_plan", ok=False, detail="this runner is gone"
+        )
+
+    proposal = await propose_amendment(
+        db,
+        user,
+        plan,
+        weeks_from=request.weeks_from,
+        weeks_through=request.weeks_through,
+        instruction=request.amend_reason or "",
+    )
+    if not proposal.ok or proposal.amended is None:
+        return PreparedOffer(
+            action_type="amend_plan",
+            ok=False,
+            detail="; ".join(proposal.failures or ["the amendment could not be written"]),
+            start=proposal.start,
+            end=proposal.end,
+        )
+
+    surviving = _titles_in_window(db, owner_user_id, plan, proposal.start, proposal.end)
+    return PreparedOffer(
+        action_type="amend_plan",
+        ok=True,
+        amended_plan=proposal.amended.model_dump(mode="json"),
+        changes=proposal.changes,
+        week=[
+            ProposedSessionRow(
+                date=session.window_start,
+                title=session.title,
+                intent=session.intent,
+                discipline=session.discipline,
+                distance_m=session.target_distance_m,
+                duration_s=session.target_duration_s,
+                changed=(session.window_start, session.title) not in surviving,
+            )
+            for week in proposal.amended.weeks
+            for session in sorted(week.sessions, key=lambda s: s.window_start)
+        ],
+        start=proposal.start,
+        end=proposal.end,
+    )
+
+
+def _titles_in_window(db: Session, owner_user_id: UUID, plan, start, end) -> set:
+    """What the window holds today, as (day, title), for marking what changed.
+
+    Compared by day and title, the pair `_describe_change` compares after a
+    write, so the card marks a session as new on exactly the terms the ledger
+    would later report it as added.
+    """
+    from app.services.schedule.amend import sessions_in_window
+
+    if start is None or end is None:
+        return set()
+    return {
+        (row.window_start, row.title)
+        for row in sessions_in_window(db, owner_user_id, plan, start, end)
+    }
 
 class ProposedActionFrame(BaseModel):
     action_type: Literal[
@@ -64,6 +217,31 @@ class ProposedActionFrame(BaseModel):
     description: str
     confirm_label: str
     dismiss_label: str = "Leave it"
+    # What the runner is agreeing to, shown rather than forecast (#987). Both
+    # are server-derived from the settled amendment: `changes` is the difference
+    # in the same words the ledger uses afterwards, `week` is the whole window as
+    # it would stand. Only `amend_plan` fills them, because it is the only offer
+    # whose content is decided rather than named.
+    changes: List[str] = Field(default_factory=list)
+    week: List["ProposedSessionRow"] = Field(default_factory=list)
+
+
+class ProposedSessionRow(BaseModel):
+    """One session on the card, as the runner would have it.
+
+    Deliberately display-only and flat. It exists so the sheet can render the
+    proposed window without teaching the client the schedule's shape, and it
+    carries no id: nothing here is a row yet.
+    """
+
+    date: date
+    title: str
+    intent: str
+    discipline: str
+    distance_m: Optional[float] = None
+    duration_s: Optional[int] = None
+    # Whether this session is new to the window, so the sheet can mark it.
+    changed: bool = False
 
 
 class ProposedActionRequest(BaseModel):
@@ -220,6 +398,18 @@ class StoredProposedAction(BaseModel):
     weeks_from: Optional[int] = None
     weeks_through: Optional[int] = None
     amend_reason: Optional[str] = None
+    # #987: the settled amendment itself, decided BEFORE the card went up and
+    # written verbatim when the runner taps. This is what makes the tap mean what
+    # the card said: with the week already chosen, confirming has nothing left to
+    # decide, and the retry loop that once turned a refusal into a substitution
+    # has no run at confirm time to do it in.
+    #
+    # Stored as the serialized `AmendedPlan`, beside the window it was proposed
+    # for so a token confirmed after midnight cannot land its weeks on different
+    # dates than the ones the runner read.
+    amended_plan: Optional[Dict[str, Any]] = None
+    amend_start: Optional[date] = None
+    amend_end: Optional[date] = None
     # The plan the offer was minted AGAINST, the `stated_max_hr_at_offer`
     # precedent. A plan can be replaced or restored in the half hour a token
     # lives, and an amendment aimed at one block must not silently land on a
@@ -383,6 +573,7 @@ def mint_proposed_action(
     tool_input: Dict[str, Any],
     *,
     thread_id: Optional[UUID] = None,
+    prepared: Optional["PreparedOffer"] = None,
 ) -> tuple[dict, Optional[dict]]:
     """Validate a model-authored offer and mint the user-scoped action token.
 
@@ -398,8 +589,22 @@ def mint_proposed_action(
     except ValidationError as exc:
         return {"ok": False, "error": "invalid_action", "detail": str(exc)}, None
 
+    if needs_preparation(tool_input) and (prepared is None or not prepared.ok):
+        # An offer whose content had to be settled and was not, or was and came
+        # back refused. Either way there is no card: what the model gets is the
+        # reason, so it can tell the runner what does not fit and what would.
+        # This is the refusal reaching the runner, in the turn they asked in.
+        detail = (
+            prepared.detail
+            if prepared is not None and prepared.detail
+            else "the amendment could not be worked out"
+        )
+        return {"ok": False, "error": "cannot_amend", "detail": detail}, None
+
     try:
-        frame, stored = _build_offer(db, owner_user_id, request, thread_id=thread_id)
+        frame, stored = _build_offer(
+            db, owner_user_id, request, thread_id=thread_id, prepared=prepared
+        )
     except LookupError as exc:
         return {"ok": False, "error": "not_found", "detail": str(exc)}, None
     except _InvalidIntent as exc:
@@ -442,7 +647,11 @@ def mint_proposed_action(
                 "them; do not describe the card or report the change as made."
             ),
         },
-        frame.model_copy(update={"token": token}).model_dump(),
+        # `mode="json"` because this frame is serialized straight onto the SSE
+        # stream by `json.dumps`, which has no encoder for a `date`. The card's
+        # week carries real dates (#987) and a plain dump put `date` objects in
+        # a frame the turn then died trying to send, losing the whole reply.
+        frame.model_copy(update={"token": token}).model_dump(mode="json"),
     )
 
 
@@ -454,11 +663,13 @@ def consume_and_execute(db: Session, owner_user_id: UUID, token: str) -> dict:
 
     result = _execute(db, owner_user_id, stored)
     if stored.action_type not in DEFERRED_ACTION_TYPES:
-        _record_confirmed(db, stored)
+        _record_confirmed(db, stored, result)
     return result
 
 
-def _record_confirmed(db: Session, stored: StoredProposedAction) -> None:
+def _record_confirmed(
+    db: Session, stored: StoredProposedAction, result: Optional[dict] = None
+) -> None:
     """Write the confirmation into the conversation that reached it (#778).
 
     Only after the change has been made: a refused or failed confirm leaves no
@@ -466,12 +677,25 @@ def _record_confirmed(db: Session, stored: StoredProposedAction) -> None:
     the runner's record, and losing the trace is a smaller harm than answering a
     successful confirm with a 500. A token minted before this shipped carries no
     thread or wording and simply records nothing.
+
+    An action that reports what it CHANGED has that recorded beside the card's
+    own words (#986). The card is what the runner agreed to and is how they
+    recognise the entry, so it stays the opening line; the change is what the
+    rows actually did. The two are kept separate here because the whole point is
+    that they must be able to disagree in the record if they ever disagree in
+    fact — the coach reads this back as "already in their record", and a forecast
+    standing in for an outcome is how it came to coach from a session that had
+    been deleted rather than written.
     """
+    description = stored.description or ""
+    changes = (result or {}).get("changes") or []
+    if description and changes:
+        description = description.rstrip() + " | " + " ".join(changes)
     try:
         from app.services.coach import threads as thread_service
 
         thread_service.record_action_event(
-            db, stored.thread_id, stored.activity_id, stored.description or ""
+            db, stored.thread_id, stored.activity_id, description
         )
     except Exception:  # noqa: BLE001 -- the change is made; the trace is not worth a 500
         logger.exception("coach proposed-action trace write failed")
@@ -539,7 +763,6 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
         }
 
     if stored.action_type == "amend_plan":
-        from app.jobs.amend_schedule import enqueue_amendment
         from app.services.schedule import store as schedule_store
 
         if not settings.SCHEDULE_ENABLED:
@@ -560,27 +783,36 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
             raise ValueError(
                 "your plan changed since this was offered, so nothing was changed"
             )
-        # Written on the worker: an amendment is a generation that takes about a
-        # minute, so like `draft_plan` the confirm answers immediately and says
-        # where the change will appear.
-        enqueue_amendment(
-            owner_user_id,
-            plan.id,
-            weeks_from=stored.weeks_from or 0,
-            weeks_through=stored.weeks_through or 0,
-            instruction=stored.amend_reason or "",
-            # Carried to the worker so the ledger entry is written where the
-            # sessions are, not where they were asked for.
-            thread_id=stored.thread_id,
-            description=stored.description,
+        # Written HERE, in the request the runner's tap made (#987). The whole
+        # generation happened before the card went up, so what is left is a
+        # delete and an insert: fast, deterministic, and with nothing to decide.
+        #
+        # That is what lets the confirm say what happened rather than what is
+        # about to. The old shape handed a generation to the worker and answered
+        # "your Schedule screen will show them in a minute", which was a promise
+        # the request had no way to keep: the runner watched for a change that a
+        # crashed work-horse, a refusal, or a substitution could each turn into
+        # something else, and nothing came back to say so.
+        from app.services.schedule.amend import AmendProposal, AmendedPlan, apply_proposal
+
+        proposal = AmendProposal(
+            ok=True,
+            amended=AmendedPlan.model_validate(stored.amended_plan),
+            start=stored.amend_start,
+            end=stored.amend_end,
         )
+        outcome = apply_proposal(db, plan.user, plan, proposal)
+        if not outcome.ok:
+            raise ValueError(
+                "; ".join(outcome.failures or ["the amendment could not be written"])
+            )
+        # The ledger entry is written by `_record_confirmed`, which every
+        # non-deferred action goes through; `changes` below is what it appends.
         return {
             "action_type": "amend_plan",
             "plan_id": str(plan.id),
-            "message": (
-                "Updating those weeks now — your Schedule screen will show them "
-                "in a minute. Everything else in your plan stays as it is."
-            ),
+            "changes": outcome.changes,
+            "message": _describe_applied(outcome.changes),
         }
 
     if stored.action_type == "adjust_session":
@@ -666,6 +898,19 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
     raise LookupError("Proposed action not found")
 
 
+def _describe_applied(changes: List[str]) -> str:
+    """What the confirm says back, once the change has actually been made.
+
+    Past tense, because by the time this is read the sessions exist. It leads
+    with the difference rather than the promise: the runner saw this same line on
+    the card, so reading it back is how they know the two agree, and a line that
+    does NOT match what they agreed is the one thing they most need to see.
+    """
+    if not changes:
+        return "Done. Nothing in those weeks needed to change."
+    return "Done. " + " ".join(changes) + " Everything else in your plan is as it was."
+
+
 def _require_owned_planned_session(db: Session, owner_user_id: UUID, session_id):
     """Ownership re-resolved at execute time, like every other action here."""
     from app.models.planned_session import PlannedSession
@@ -739,6 +984,7 @@ def _build_offer(
     request: ProposedActionRequest,
     *,
     thread_id: Optional[UUID] = None,
+    prepared: Optional[PreparedOffer] = None,
 ) -> tuple[ProposedActionFrame, StoredProposedAction]:
     if request.action_type == "draft_plan":
         from app.services.schedule import store as schedule_store
@@ -777,41 +1023,37 @@ def _build_offer(
 
     if request.action_type == "amend_plan":
         from app.services.schedule import store as schedule_store
-        from app.services.schedule.amend import resolve_window
-        from app.services.weeks import resolve_week_start
 
         if not settings.SCHEDULE_ENABLED:
             # The surface's kill switch reaches this write path too, exactly as
             # it reaches `draft_plan` and `adjust_session`.
             raise ValueError("the schedule is unavailable")
+        if prepared is None or not prepared.ok or prepared.amended_plan is None:
+            # Unreachable through `mint_proposed_action`, which refuses an
+            # unprepared amendment before it gets here. Checked anyway, because
+            # this is the branch where skipping preparation would mean minting a
+            # card with nothing behind it, which is the whole defect (#987).
+            raise ValueError("an amendment must be worked out before it is offered")
         plan = schedule_store.get_active_plan(db, owner_user_id)
         if plan is None:
-            # Refused HERE rather than at confirm time, the `adjust_session`
-            # precedent: there is nothing to amend, and a card the runner taps
-            # only to be told so is worse than no card. The coach still has
-            # `draft_plan` for a runner with no plan, which is the right offer.
             raise ValueError(
                 "this runner has no active plan to amend; offer draft_plan instead"
             )
-        profile = _profile_for(db, owner_user_id)
-        starts_on = resolve_week_start(profile)
-        today = date.today()
-        start, end = resolve_window(
-            today,
-            starts_on,
-            weeks_from=request.weeks_from,
-            weeks_through=request.weeks_through,
-        )
         frame = ProposedActionFrame(
             action_type="amend_plan",
             token="",
-            # The card names the WINDOW and what is left alone, not just the
-            # reason (#883's lesson, applied to the smaller verb). "Change your
-            # plan" is what a runner confirms and then discovers the scope of;
-            # naming the dates and the untouched remainder is what makes this
-            # something they can actually agree to.
-            description=_describe_amendment(start, end, request.amend_reason),
+            # The card names the WINDOW and what is left alone (#883's lesson,
+            # applied to the smaller verb), and now carries the change itself
+            # beside it. The sentence is still what the runner recognises; the
+            # `changes` and `week` below are what makes it checkable, because
+            # they are derived from the amendment that will actually be written
+            # rather than from what was asked for.
+            description=_describe_amendment(
+                prepared.start, prepared.end, request.amend_reason
+            ),
             confirm_label="Update my plan",
+            changes=prepared.changes,
+            week=prepared.week,
         )
         stored = StoredProposedAction(
             owner_user_id=owner_user_id,
@@ -819,6 +1061,9 @@ def _build_offer(
             weeks_from=request.weeks_from,
             weeks_through=request.weeks_through,
             amend_reason=request.amend_reason,
+            amended_plan=prepared.amended_plan,
+            amend_start=prepared.start,
+            amend_end=prepared.end,
             plan_id_at_offer=plan.id,
         )
         return frame, stored

@@ -579,15 +579,21 @@ class TestADeferredWriteIsNotRecordedUntilItHappens:
     """#778's contract is that the ledger records WRITES, not taps: "written only
     after the change has actually been made".
 
-    Two of the nine actions do not write when they are confirmed. `draft_plan`
-    and `amend_plan` hand the work to the worker and return, so recording at
-    confirm time records an intention as an outcome. The coach then reads it back
-    under "ALREADY IN THEIR RECORD - what this conversation has written" and
-    coaches from a change that has not happened, and may never happen.
+    `draft_plan` still does not write when it is confirmed: it hands a generation
+    to the worker and returns, so recording at confirm time would record an
+    intention as an outcome. The coach then reads it back under "ALREADY IN THEIR
+    RECORD - what this conversation has written" and coaches from a change that
+    has not happened, and may never happen.
 
     Observed live: a runner confirmed a hill session into next week, the
     transcript showed it done, the job sat unprocessed in the queue, and the week
     held no hill session.
+
+    `amend_plan` used to sit here too. It no longer does (#987): the amendment is
+    settled before the card goes up, so confirming it writes the sessions in that
+    same request and the trace is written beside them. The contract is unchanged
+    and the gap it guarded is closed rather than guarded — there is no longer a
+    window in which the tap and the write are different moments.
     """
 
     def _plan(self, db, user):
@@ -602,12 +608,42 @@ class TestADeferredWriteIsNotRecordedUntilItHappens:
         return plan
 
     def _stored_amendment(self, user, thread, plan):
+        """A card whose amendment is already settled (#987).
+
+        The week travels with the offer now, so the confirm has something to
+        write rather than an instruction to hand on.
+        """
+        from datetime import date, timedelta
+
+        from app.services.weeks import MONDAY, week_start
+
+        start = week_start(date.today(), MONDAY) + timedelta(days=7)
+        end = start + timedelta(days=6)
         return proposed_actions.StoredProposedAction(
             owner_user_id=user.id,
             action_type="amend_plan",
             weeks_from=1,
             weeks_through=1,
             amend_reason="replace one easy run with a hill rep session",
+            amended_plan={
+                "weeks": [
+                    {
+                        "week_start": start.isoformat(),
+                        "phase": None,
+                        "sessions": [
+                            {
+                                "window_start": (start + timedelta(days=1)).isoformat(),
+                                "window_end": (start + timedelta(days=1)).isoformat(),
+                                "intent": "quality",
+                                "discipline": "run",
+                                "title": "Hill Repeats",
+                            }
+                        ],
+                    }
+                ]
+            },
+            amend_start=start,
+            amend_end=end,
             plan_id_at_offer=plan.id,
             thread_id=thread.id,
             description="Replace one easy run with a hill rep session (31 Aug to 6 Sep).",
@@ -620,9 +656,14 @@ class TestADeferredWriteIsNotRecordedUntilItHappens:
             .all()
         )
 
-    def test_confirming_an_amendment_records_nothing_until_the_work_lands(
-        self, db
-    ):
+    def test_confirming_an_amendment_records_what_it_actually_wrote(self, db):
+        """The tap and the write are now one moment, so the trace is written
+        here — and it carries the CHANGE, not just the card's wording.
+
+        The card is what the runner agreed to and is how they recognise the
+        entry, so it stays as the opening line. What follows it is what the rows
+        actually did, because those are the two things that have to be able to
+        disagree in the record if they ever disagree in fact."""
         user = _seed_user(db)
         thread = Thread(user_id=user.id)
         db.add(thread)
@@ -632,16 +673,16 @@ class TestADeferredWriteIsNotRecordedUntilItHappens:
         fake_redis = _FakeRedis()
         stored = self._stored_amendment(user, thread, plan)
 
-        with patch.object(proposed_actions, "redis_conn", fake_redis), patch(
-            "app.jobs.amend_schedule.enqueue_amendment"
-        ) as enqueue:
+        with patch.object(proposed_actions, "redis_conn", fake_redis):
             token = proposed_actions._mint_token(user.id, stored)
             result = proposed_actions.consume_and_execute(db, user.id, token)
 
         assert result["action_type"] == "amend_plan"
-        assert enqueue.called, "the confirm must still hand the work to the worker"
-        # The change has been ASKED FOR. Nothing has been written.
-        assert self._events(db) == []
+        events = self._events(db)
+        assert len(events) == 1
+        assert events[0].content.startswith(stored.description)
+        # The change itself, in the words the card used for it.
+        assert "Added: " in events[0].content or "No session" in events[0].content
 
     def test_the_amendment_job_records_the_trace_once_it_has_written(self, db):
         from app.jobs import amend_schedule
