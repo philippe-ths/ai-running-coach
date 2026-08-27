@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, Literal, Optional
 from uuid import UUID
 
@@ -26,12 +26,27 @@ from app.services import activity_queries
 from app.services.blocks import blocks_are_adjacent, merge_blocks, split_block
 from app.services.checkins import write_checkin
 from app.services.intents import intent_options_for, write_activity_intent
+from app.services.schedule.amend import MAX_AMEND_WEEKS
 
 logger = logging.getLogger(__name__)
 
 _TOKEN_PREFIX = "coach-action:"
 _TOKEN_TTL_SECONDS = 1800
 _TOKEN_MAX_LENGTH = 64
+
+# The two actions whose confirm does not WRITE anything. Both hand a generation
+# to the worker and return, so the change is asked for here and made a minute
+# later somewhere else, if it is made at all.
+#
+# They are named because #778's ledger records writes rather than taps: "written
+# only after the change has actually been made". Recording these at confirm time
+# recorded an intention as an outcome, and the coach reads that list back under
+# "ALREADY IN THEIR RECORD - what this conversation has written". Observed live:
+# a runner confirmed a hill session into next week, the transcript showed it
+# done, the job sat unprocessed, and the week held no hill session. Their trace
+# is written by the job instead, on success, so the ledger stays true rather
+# than needing a caveat that says when to disbelieve it.
+DEFERRED_ACTION_TYPES = frozenset({"draft_plan", "amend_plan"})
 
 class ProposedActionFrame(BaseModel):
     action_type: Literal[
@@ -43,6 +58,7 @@ class ProposedActionFrame(BaseModel):
         "draft_plan",
         "adjust_session",
         "revise_max_hr",
+        "amend_plan",
     ]
     token: str
     description: str
@@ -65,6 +81,7 @@ class ProposedActionRequest(BaseModel):
         "draft_plan",
         "adjust_session",
         "revise_max_hr",
+        "amend_plan",
     ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = Field(default=None, ge=1, le=10)
@@ -81,6 +98,18 @@ class ProposedActionRequest(BaseModel):
     # is not a looser channel than the one that wrote the session.
     target_distance_m: Optional[float] = Field(default=None, gt=0, le=200_000)
     target_duration_s: Optional[int] = Field(default=None, gt=0, le=86_400)
+    # #981: the window an amendment rewrites, as WEEK OFFSETS from now, never as
+    # dates. The server resolves them against the runner's own week boundary
+    # (`amend.resolve_window`), the `ScreenPointer` discipline applied to a
+    # write: a model-supplied date can be a week wrong with nothing noticing,
+    # and this one decides which of the runner's sessions get overwritten.
+    weeks_from: Optional[int] = Field(default=None, ge=0, le=11)
+    weeks_through: Optional[int] = Field(default=None, ge=0, le=11)
+    # What the amendment is for, in the coach's own words. It goes onto the card
+    # the runner reads AND into the prompt that writes the sessions, so the
+    # change the runner agrees to and the change that gets made are described by
+    # one sentence rather than two that could differ.
+    amend_reason: Optional[str] = Field(default=None, min_length=1, max_length=300)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -120,6 +149,25 @@ class ProposedActionRequest(BaseModel):
                     "adjust_session requires target_distance_m or target_duration_s, "
                     "not both"
                 )
+        elif self.action_type == "amend_plan":
+            if self.weeks_from is None or self.weeks_through is None:
+                raise ValueError(
+                    "amend_plan requires weeks_from and weeks_through"
+                )
+            if self.weeks_through < self.weeks_from:
+                raise ValueError("weeks_through is before weeks_from")
+            if (self.weeks_through - self.weeks_from) + 1 > MAX_AMEND_WEEKS:
+                # The bound is what keeps "amend" from quietly becoming
+                # "redraft". An amendment promises the rest of the plan is
+                # untouched, and a window wide enough to swallow the block is
+                # not making that promise in good faith.
+                raise ValueError(
+                    f"an amendment may span at most {MAX_AMEND_WEEKS} weeks"
+                )
+            if not self.amend_reason:
+                # The card has to say WHY as well as what. "Change your next two
+                # weeks" is not something a runner can agree to.
+                raise ValueError("amend_plan requires amend_reason")
         # The correction's arguments belong to the correction. Riding along on
         # another action they would be silently dropped, and an instruction the
         # coach wrote and nothing stored is the shape #878 was raised for.
@@ -127,6 +175,12 @@ class ProposedActionRequest(BaseModel):
             self.target_distance_m is not None or self.target_duration_s is not None
         ):
             raise ValueError("only adjust_session takes a corrected target")
+        if self.action_type != "amend_plan" and (
+            self.weeks_from is not None
+            or self.weeks_through is not None
+            or self.amend_reason is not None
+        ):
+            raise ValueError("only amend_plan takes a window and a reason")
         # `revise_max_hr` (#945) deliberately takes NO arguments, the
         # `draft_plan` precedent: the evidence and the proposed number are
         # deterministic facts already in front of the coach in THE RUNNER
@@ -147,6 +201,7 @@ class StoredProposedAction(BaseModel):
         "draft_plan",
         "adjust_session",
         "revise_max_hr",
+        "amend_plan",
     ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = None
@@ -158,6 +213,18 @@ class StoredProposedAction(BaseModel):
     planned_session_id: Optional[UUID] = None
     target_distance_m: Optional[float] = None
     target_duration_s: Optional[int] = None
+    # #981: the amendment's window and its reason, carried to the worker that
+    # writes it. Offsets rather than dates for the same reason they are offsets
+    # on the request, and resolved once more at execute time so a card confirmed
+    # after midnight amends the week the runner is actually in.
+    weeks_from: Optional[int] = None
+    weeks_through: Optional[int] = None
+    amend_reason: Optional[str] = None
+    # The plan the offer was minted AGAINST, the `stated_max_hr_at_offer`
+    # precedent. A plan can be replaced or restored in the half hour a token
+    # lives, and an amendment aimed at one block must not silently land on a
+    # different one.
+    plan_id_at_offer: Optional[UUID] = None
     # #945: the revised max HR, in bpm. Always server-computed at offer time
     # from `max_hr_calibration.gather_max_hr_revision` — never model-supplied,
     # since there is no field on `ProposedActionRequest` for `revise_max_hr`.
@@ -196,7 +263,15 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
         "block of training you have settled together into their schedule "
         "(draft_plan — takes no arguments; this conversation IS the plan, so use "
         "it once the shape of the block is agreed rather than asking them to copy "
-        "it out), or updating their stated max heart rate when their own recent "
+        "it out), or rewriting a FEW WEEKS of the plan they already have while "
+        "the rest of it stays exactly as it is (amend_plan - use this whenever "
+        "the plan needs to change but does not need replacing: they are sore and "
+        "this week should soften, they want a session added or dropped, or their "
+        "written weeks have run out and the next block should be built from the "
+        "shape you already agreed. Prefer it over draft_plan every time: "
+        "draft_plan throws away the block they agreed to and writes a different "
+        "one, so it is for starting over, not for changing your mind), "
+        "or updating their stated max heart rate when their own recent "
         "training has clearly overtaken it (revise_max_hr — takes no arguments; "
         "the evidence and the proposed number are already in front of you in "
         "THE RUNNER section when this applies, so offer it there rather than "
@@ -222,6 +297,7 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
                     "draft_plan",
                     "adjust_session",
                     "revise_max_hr",
+                    "amend_plan",
                 ],
             },
             "activity_id": {"type": "string"},
@@ -261,6 +337,33 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
                 "description": (
                     "adjust_session only: what the whole session should be, in "
                     "seconds, when it is prescribed by time rather than distance."
+                ),
+            },
+            "weeks_from": {
+                "type": "integer",
+                "description": (
+                    "amend_plan only: the first week to rewrite, counted from "
+                    "the week the runner is in now. 0 is this week, 1 is next "
+                    "week. Never a date."
+                ),
+            },
+            "weeks_through": {
+                "type": "integer",
+                "description": (
+                    "amend_plan only: the last week to rewrite, counted the same "
+                    "way, and the same as weeks_from for a single week. Rewriting "
+                    "this week only is 0 and 0; this week and next is 0 and 1."
+                ),
+            },
+            "amend_reason": {
+                "type": "string",
+                "description": (
+                    "amend_plan only: why the plan is changing, in one short "
+                    "phrase and in the runner's terms. It is shown on the card "
+                    "they confirm and it is what the amendment is written from, "
+                    "so say the change rather than the situation: 'drop one hard "
+                    "session, right calf is sore', 'add a fourth easy run', "
+                    "'write the next block out of the agreed shape'."
                 ),
             },
         },
@@ -350,7 +453,8 @@ def consume_and_execute(db: Session, owner_user_id: UUID, token: str) -> dict:
         raise LookupError("Proposed action not found")
 
     result = _execute(db, owner_user_id, stored)
-    _record_confirmed(db, stored)
+    if stored.action_type not in DEFERRED_ACTION_TYPES:
+        _record_confirmed(db, stored)
     return result
 
 
@@ -419,7 +523,9 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
         existing = schedule_store.draft_in_flight(db, owner_user_id)
         if existing is None:
             existing = schedule_store.create_drafting_plan(db, owner_user_id)
-            enqueue_draft(owner_user_id, existing.id, stored.thread_id)
+            enqueue_draft(
+                owner_user_id, existing.id, stored.thread_id, stored.description
+            )
         # The one action whose write does not land where the runner is looking:
         # drafting runs on the worker, so without a word back the card simply
         # disappears and nothing visibly happens for a minute.
@@ -429,6 +535,51 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
             "message": (
                 "Writing it into your schedule now — it'll be on your Schedule "
                 "screen in a minute."
+            ),
+        }
+
+    if stored.action_type == "amend_plan":
+        from app.jobs.amend_schedule import enqueue_amendment
+        from app.services.schedule import store as schedule_store
+
+        if not settings.SCHEDULE_ENABLED:
+            raise ValueError("the schedule is unavailable")
+        plan = schedule_store.get_active_plan(db, owner_user_id)
+        if plan is None:
+            raise ValueError(
+                "you no longer have an active plan, so nothing was changed"
+            )
+        # The plan must still be the one this card was written against, the
+        # `revise_max_hr` precedent and for the same reason: the token lives half
+        # an hour, and a draft or a restore in that window makes a DIFFERENT plan
+        # current. Amending that one would apply a change the runner agreed for
+        # one block to a block they never saw it described against. Refused
+        # rather than reasoned about; the coach can offer again from what is now
+        # true.
+        if stored.plan_id_at_offer is not None and plan.id != stored.plan_id_at_offer:
+            raise ValueError(
+                "your plan changed since this was offered, so nothing was changed"
+            )
+        # Written on the worker: an amendment is a generation that takes about a
+        # minute, so like `draft_plan` the confirm answers immediately and says
+        # where the change will appear.
+        enqueue_amendment(
+            owner_user_id,
+            plan.id,
+            weeks_from=stored.weeks_from or 0,
+            weeks_through=stored.weeks_through or 0,
+            instruction=stored.amend_reason or "",
+            # Carried to the worker so the ledger entry is written where the
+            # sessions are, not where they were asked for.
+            thread_id=stored.thread_id,
+            description=stored.description,
+        )
+        return {
+            "action_type": "amend_plan",
+            "plan_id": str(plan.id),
+            "message": (
+                "Updating those weeks now — your Schedule screen will show them "
+                "in a minute. Everything else in your plan stays as it is."
             ),
         }
 
@@ -542,6 +693,37 @@ def _replace_description(existing, describe_age) -> str:
     return f"Write this plan into your schedule, replacing the one written {age}"
 
 
+def _profile_for(db: Session, owner_user_id: UUID):
+    """The runner's profile, for the week boundary an amendment resolves against."""
+    from app.models.user_profile import UserProfile
+
+    return (
+        db.query(UserProfile).filter(UserProfile.user_id == owner_user_id).first()
+    )
+
+
+def _describe_amendment(start: date, end: date, reason: Optional[str]) -> str:
+    """What the amendment card says: the reason, the window, and the promise.
+
+    All three, because the promise is the point. An amendment is worth having as
+    a separate action from `draft_plan` precisely because it leaves the rest of
+    the plan alone, and a card that did not say so would be asking the runner to
+    take that on trust — which is how a runner came to confirm a second draft
+    and lose the block they had agreed ninety seconds earlier (#883).
+    """
+    if start == end:
+        window = start.strftime("%a %-d %b")
+    elif start.month == end.month:
+        window = f"{start.strftime('%-d')}-{end.strftime('%-d %b')}"
+    else:
+        window = f"{start.strftime('%-d %b')} to {end.strftime('%-d %b')}"
+    reason_text = " ".join((reason or "").split()) or "Rewrite these weeks"
+    return (
+        f"{reason_text[0].upper()}{reason_text[1:]} ({window}). "
+        f"The rest of your plan, its rules and your race stay as they are."
+    )
+
+
 def _describe_complete_session(session) -> str:
     when = (
         session.window_start.strftime("%a %-d %b")
@@ -590,6 +772,54 @@ def _build_offer(
             owner_user_id=owner_user_id,
             action_type="draft_plan",
             thread_id=thread_id,
+        )
+        return frame, stored
+
+    if request.action_type == "amend_plan":
+        from app.services.schedule import store as schedule_store
+        from app.services.schedule.amend import resolve_window
+        from app.services.weeks import resolve_week_start
+
+        if not settings.SCHEDULE_ENABLED:
+            # The surface's kill switch reaches this write path too, exactly as
+            # it reaches `draft_plan` and `adjust_session`.
+            raise ValueError("the schedule is unavailable")
+        plan = schedule_store.get_active_plan(db, owner_user_id)
+        if plan is None:
+            # Refused HERE rather than at confirm time, the `adjust_session`
+            # precedent: there is nothing to amend, and a card the runner taps
+            # only to be told so is worse than no card. The coach still has
+            # `draft_plan` for a runner with no plan, which is the right offer.
+            raise ValueError(
+                "this runner has no active plan to amend; offer draft_plan instead"
+            )
+        profile = _profile_for(db, owner_user_id)
+        starts_on = resolve_week_start(profile)
+        today = date.today()
+        start, end = resolve_window(
+            today,
+            starts_on,
+            weeks_from=request.weeks_from,
+            weeks_through=request.weeks_through,
+        )
+        frame = ProposedActionFrame(
+            action_type="amend_plan",
+            token="",
+            # The card names the WINDOW and what is left alone, not just the
+            # reason (#883's lesson, applied to the smaller verb). "Change your
+            # plan" is what a runner confirms and then discovers the scope of;
+            # naming the dates and the untouched remainder is what makes this
+            # something they can actually agree to.
+            description=_describe_amendment(start, end, request.amend_reason),
+            confirm_label="Update my plan",
+        )
+        stored = StoredProposedAction(
+            owner_user_id=owner_user_id,
+            action_type="amend_plan",
+            weeks_from=request.weeks_from,
+            weeks_through=request.weeks_through,
+            amend_reason=request.amend_reason,
+            plan_id_at_offer=plan.id,
         )
         return frame, stored
 

@@ -1298,6 +1298,13 @@ class UpcomingSessionContext(BaseModel):
     intent: str
     discipline: str
     target: Optional[str] = None
+    # What the session is FOR, in the words the coach wrote when it drafted the
+    # plan (#973). Carried because "explain my next interval session" is a
+    # question about purpose, and without this the coach could only read back its
+    # own prescription: "5 x 800 m off 120 s" says what to do and nothing about
+    # why. It is the coach's own prose about its own plan, so it grounds nothing
+    # new and adds no tier; it is the note it already left itself.
+    detail: Optional[str] = None
 
 
 class ScheduleContext(BaseModel):

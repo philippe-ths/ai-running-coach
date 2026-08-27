@@ -385,7 +385,10 @@ def test_the_enqueue_hands_the_worker_the_job_it_expects(monkeypatch):
     # The screen's own button seeds no conversation, so the third argument (#856)
     # is explicitly None rather than absent — the job signature is one contract,
     # whichever route reached it.
-    assert enqueued["args"] == (str(user_id), str(plan_id), None)
+    # The trailing `description` is the confirm card's wording, carried so the
+    # ledger entry is written when the plan exists rather than when it was
+    # asked for (#778). The screen's own button has no card, so it is None.
+    assert enqueued["args"] == (str(user_id), str(plan_id), None, None)
 
 
 def test_the_enqueue_carries_the_conversation_that_settled_the_plan():
@@ -409,7 +412,7 @@ def test_the_enqueue_carries_the_conversation_that_settled_the_plan():
     finally:
         queue_mod.queue = original
 
-    assert enqueued["args"] == (str(user_id), str(plan_id), str(thread_id))
+    assert enqueued["args"] == (str(user_id), str(plan_id), str(thread_id), None)
 
 
 def test_a_queue_that_is_down_leaves_a_row_the_runner_can_retry_rather_than_a_500(

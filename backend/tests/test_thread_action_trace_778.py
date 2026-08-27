@@ -556,3 +556,195 @@ class TestTheTraceDisturbsNothingElse:
         db.commit()
 
         assert thread_maintenance._conversational_count(db, thread) == armed
+
+
+class _NoCloseSession:
+    """The test session, lent to a job that owns its own and closes it.
+
+    Everything delegates; `close` does not, because the fixture still needs the
+    session afterwards to assert against.
+    """
+
+    def __init__(self, session):
+        self._session = session
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+    def close(self):
+        return None
+
+
+class TestADeferredWriteIsNotRecordedUntilItHappens:
+    """#778's contract is that the ledger records WRITES, not taps: "written only
+    after the change has actually been made".
+
+    Two of the nine actions do not write when they are confirmed. `draft_plan`
+    and `amend_plan` hand the work to the worker and return, so recording at
+    confirm time records an intention as an outcome. The coach then reads it back
+    under "ALREADY IN THEIR RECORD - what this conversation has written" and
+    coaches from a change that has not happened, and may never happen.
+
+    Observed live: a runner confirmed a hill session into next week, the
+    transcript showed it done, the job sat unprocessed in the queue, and the week
+    held no hill session.
+    """
+
+    def _plan(self, db, user):
+        from app.models.training_plan import TrainingPlan
+
+        plan = TrainingPlan(
+            user_id=user.id, status="active", rules=[], week_shapes=[]
+        )
+        db.add(plan)
+        db.commit()
+        db.refresh(plan)
+        return plan
+
+    def _stored_amendment(self, user, thread, plan):
+        return proposed_actions.StoredProposedAction(
+            owner_user_id=user.id,
+            action_type="amend_plan",
+            weeks_from=1,
+            weeks_through=1,
+            amend_reason="replace one easy run with a hill rep session",
+            plan_id_at_offer=plan.id,
+            thread_id=thread.id,
+            description="Replace one easy run with a hill rep session (31 Aug to 6 Sep).",
+        )
+
+    def _events(self, db):
+        return (
+            db.query(CoachChatMessage)
+            .filter(CoachChatMessage.role == thread_service.ACTION_EVENT_ROLE)
+            .all()
+        )
+
+    def test_confirming_an_amendment_records_nothing_until_the_work_lands(
+        self, db
+    ):
+        user = _seed_user(db)
+        thread = Thread(user_id=user.id)
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+        plan = self._plan(db, user)
+        fake_redis = _FakeRedis()
+        stored = self._stored_amendment(user, thread, plan)
+
+        with patch.object(proposed_actions, "redis_conn", fake_redis), patch(
+            "app.jobs.amend_schedule.enqueue_amendment"
+        ) as enqueue:
+            token = proposed_actions._mint_token(user.id, stored)
+            result = proposed_actions.consume_and_execute(db, user.id, token)
+
+        assert result["action_type"] == "amend_plan"
+        assert enqueue.called, "the confirm must still hand the work to the worker"
+        # The change has been ASKED FOR. Nothing has been written.
+        assert self._events(db) == []
+
+    def test_the_amendment_job_records_the_trace_once_it_has_written(self, db):
+        from app.jobs import amend_schedule
+        from app.services.schedule.amend import AmendOutcome
+
+        user = _seed_user(db)
+        thread = Thread(user_id=user.id)
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+        plan = self._plan(db, user)
+        description = "Replace one easy run with a hill rep session (31 Aug to 6 Sep)."
+
+        # The job opens its OWN session, so the test one is handed to it with a
+        # no-op close. Without this the job's DB work fails, the job swallows the
+        # error by design, and an assertion that "nothing was recorded" passes
+        # for entirely the wrong reason.
+        with patch.object(
+            amend_schedule, "SessionLocal", return_value=_NoCloseSession(db)
+        ), patch.object(
+            amend_schedule,
+            "amend_plan",
+            return_value=AmendOutcome(
+                ok=True, weeks_touched=1, sessions_written=6
+            ),
+        ):
+            amend_schedule.amend_schedule_job(
+                str(user.id), str(plan.id), 1, 1, "reason",
+                str(thread.id), description,
+            )
+
+        events = self._events(db)
+        assert [e.content for e in events] == [description]
+
+    def test_an_amendment_that_does_not_land_records_nothing(self, db):
+        from app.jobs import amend_schedule
+        from app.services.schedule.amend import AmendOutcome
+
+        user = _seed_user(db)
+        thread = Thread(user_id=user.id)
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+        plan = self._plan(db, user)
+
+        with patch.object(
+            amend_schedule, "SessionLocal", return_value=_NoCloseSession(db)
+        ), patch.object(
+            amend_schedule,
+            "amend_plan",
+            return_value=AmendOutcome(
+                ok=False, failures=["the coach could not be reached"]
+            ),
+        ):
+            amend_schedule.amend_schedule_job(
+                str(user.id), str(plan.id), 1, 1, "reason",
+                str(thread.id), "Replace one easy run with a hill rep session.",
+            )
+
+        # The runner's plan is untouched, so the conversation says nothing
+        # happened to it. Telling them it FAILED is #984, and is not this.
+        assert self._events(db) == []
+
+    def test_the_entry_carries_the_real_change_beside_the_card(self, db):
+        """The card is what they AGREED to; the changes are what HAPPENED.
+
+        A live amendment made them differ: the card promised an easy run would
+        become hill reps and the rewrite removed the week's interval session
+        instead, because the plan's rules could not fit a second quality day. The
+        card alone was all the runner and the coach ever saw.
+        """
+        from app.jobs import amend_schedule
+        from app.services.schedule.amend import AmendOutcome
+
+        user = _seed_user(db)
+        thread = Thread(user_id=user.id)
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+        plan = self._plan(db, user)
+        card = "Replace one easy run with a hill rep session (31 Aug to 6 Sep)."
+
+        with patch.object(
+            amend_schedule, "SessionLocal", return_value=_NoCloseSession(db)
+        ), patch.object(
+            amend_schedule,
+            "amend_plan",
+            return_value=AmendOutcome(
+                ok=True,
+                weeks_touched=1,
+                sessions_written=2,
+                changes=["Removed: Wed Threshold Intervals",
+                         "Added: Wed Hill Reps"],
+            ),
+        ):
+            amend_schedule.amend_schedule_job(
+                str(user.id), str(plan.id), 1, 1, "reason",
+                str(thread.id), card,
+            )
+
+        entries = self._events(db)
+        assert len(entries) == 1
+        content = entries[0].content
+        assert card in content, "the runner has to recognise what they agreed to"
+        assert "Threshold Intervals" in content, "the session that actually went"
+        assert "Hill Reps" in content
