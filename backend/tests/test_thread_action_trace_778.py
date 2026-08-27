@@ -704,3 +704,47 @@ class TestADeferredWriteIsNotRecordedUntilItHappens:
         # The runner's plan is untouched, so the conversation says nothing
         # happened to it. Telling them it FAILED is #984, and is not this.
         assert self._events(db) == []
+
+    def test_the_entry_carries_the_real_change_beside_the_card(self, db):
+        """The card is what they AGREED to; the changes are what HAPPENED.
+
+        A live amendment made them differ: the card promised an easy run would
+        become hill reps and the rewrite removed the week's interval session
+        instead, because the plan's rules could not fit a second quality day. The
+        card alone was all the runner and the coach ever saw.
+        """
+        from app.jobs import amend_schedule
+        from app.services.schedule.amend import AmendOutcome
+
+        user = _seed_user(db)
+        thread = Thread(user_id=user.id)
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+        plan = self._plan(db, user)
+        card = "Replace one easy run with a hill rep session (31 Aug to 6 Sep)."
+
+        with patch.object(
+            amend_schedule, "SessionLocal", return_value=_NoCloseSession(db)
+        ), patch.object(
+            amend_schedule,
+            "amend_plan",
+            return_value=AmendOutcome(
+                ok=True,
+                weeks_touched=1,
+                sessions_written=2,
+                changes=["Removed: Wed Threshold Intervals",
+                         "Added: Wed Hill Reps"],
+            ),
+        ):
+            amend_schedule.amend_schedule_job(
+                str(user.id), str(plan.id), 1, 1, "reason",
+                str(thread.id), card,
+            )
+
+        entries = self._events(db)
+        assert len(entries) == 1
+        content = entries[0].content
+        assert card in content, "the runner has to recognise what they agreed to"
+        assert "Threshold Intervals" in content, "the session that actually went"
+        assert "Hill Reps" in content

@@ -95,7 +95,7 @@ def amend_schedule_job(
                 outcome.weeks_touched,
                 outcome.sessions_written,
             )
-            _record_in_thread(db, thread_id, description)
+            _record_in_thread(db, thread_id, description, outcome.changes)
         else:
             logger.warning(
                 "schedule amend: plan %s unchanged (%s): %s",
@@ -109,8 +109,18 @@ def amend_schedule_job(
         db.close()
 
 
-def _record_in_thread(db, thread_id, description: str | None) -> None:
+def _record_in_thread(db, thread_id, description: str | None, changes=None) -> None:
     """Leave the ledger entry for a change that has now actually been made.
+
+    It records what the amendment DID, not what the card asked for. The card is
+    minted before the generation runs, so it can only forecast; when the two
+    differ the ledger has to carry the truth, because it is what the coach reads
+    back as "already in their record". A live amendment differed silently: the
+    card promised an easy run would become hill reps, and the rewrite removed the
+    week's interval session instead.
+
+    The card's wording is kept as the opening line, because that is what the
+    runner agreed to and it is how they recognise the entry.
 
     Fail-soft, the `_record_confirmed` posture it replaces: the sessions are
     written and the runner can see them, so losing the trace is a smaller harm
@@ -119,6 +129,8 @@ def _record_in_thread(db, thread_id, description: str | None) -> None:
     """
     if not thread_id or not description:
         return
+    if changes:
+        description = description.rstrip() + " | " + " ".join(changes)
     try:
         from app.services.coach import threads as thread_service
 

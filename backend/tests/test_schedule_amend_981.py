@@ -270,7 +270,7 @@ def test_only_the_sessions_inside_the_window_are_replaced(db):
     untouched = {_snapshot(before)["id"]: _snapshot(before),
                  _snapshot(after)["id"]: _snapshot(after)}
 
-    written = _apply(
+    written, _changes = _apply(
         db,
         user,
         plan,
@@ -1044,3 +1044,61 @@ def test_the_action_is_declared_where_the_coach_can_reach_it(db):
     # And the description steers away from the destructive neighbour.
     assert "amend_plan" in tool["description"]
     assert "draft_plan throws away" in tool["description"]
+
+
+# --- what the amendment actually did, versus what the card forecast ----------
+#
+# The card is minted BEFORE the generation runs, so it can only say what was
+# asked for. Observed live: the coach recommended replacing one easy run with
+# hill reps and called the week's interval session "non-negotiable, stays as
+# is". The runner confirmed that card. The rewrite could not fit a second
+# quality session under the plan's own three-days-apart rule, so it removed the
+# intervals instead. Both easy runs survived. Nothing said so.
+#
+# A count-by-intent gate cannot catch it, which is why the RECORD is the remedy
+# rather than a check: quality went from one session to one session.
+
+
+def test_the_amendment_reports_the_sessions_that_actually_changed(db):
+    user = _user(db)
+    plan = _plan(db, user, horizon_end=WEEK_3 + timedelta(days=6))
+    _session(db, plan, start=WEEK_1 + timedelta(days=2), intent="quality",
+             title="Threshold Intervals")
+    _session(db, plan, start=WEEK_1, intent="easy", title="Easy Run")
+
+    _written, changes = _apply(
+        db, user, plan,
+        _amended(_week(
+            WEEK_1,
+            _new_session(WEEK_1, intent="easy", title="Easy Run"),
+            _new_session(WEEK_1 + timedelta(days=2), intent="quality",
+                         title="Hill Reps"),
+        )),
+        build_load_model([], TODAY),
+        start=WEEK_1, end=WEEK_1 + timedelta(days=6), today=TODAY,
+    )
+
+    joined = " ".join(changes)
+    # Both sides of the swap are named, so a runner reading it can see that the
+    # session they were told would survive is the one that went.
+    assert "Threshold Intervals" in joined
+    assert "Hill Reps" in joined
+    # A session the rewrite reproduced unchanged is not reported as churn.
+    assert "Easy Run" not in joined
+
+
+def test_a_window_that_comes_back_identical_reports_no_change(db):
+    """Silence would read as "something happened and we cannot say what"."""
+    user = _user(db)
+    plan = _plan(db, user, horizon_end=WEEK_3 + timedelta(days=6))
+    _session(db, plan, start=WEEK_1, intent="easy", title="Easy Run")
+
+    _written, changes = _apply(
+        db, user, plan,
+        _amended(_week(WEEK_1, _new_session(WEEK_1, intent="easy",
+                                            title="Easy Run"))),
+        build_load_model([], TODAY),
+        start=WEEK_1, end=WEEK_1 + timedelta(days=6), today=TODAY,
+    )
+
+    assert changes == ["No session in these weeks changed."]

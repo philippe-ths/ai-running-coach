@@ -30,7 +30,7 @@ and the runner would train it.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -169,6 +169,15 @@ progression and it is usually the reason they have a plan at all.
 Everything the plan's own rules require still binds. A week that cannot satisfy \
 them is rejected and you will be asked again.
 
+If the change you were asked to make CANNOT be made without touching something \
+the runner did not agree to lose, make no change at all and say so. This is the \
+one instruction here that overrides the others. The runner confirmed a specific \
+change, and a different change is not a smaller version of it: it is one they \
+never agreed to. Their rules can make a request genuinely impossible - adding a \
+second quality session to a week whose rules space quality three days apart, for \
+instance - and the honest answer then is that it does not fit, not a rearranged \
+week that removes the session they told you to keep.
+
 Answer only by calling record_plan_amendment."""
 
 
@@ -180,6 +189,13 @@ class AmendOutcome:
     summary: Optional[str] = None
     weeks_touched: int = 0
     sessions_written: int = 0
+    # What the amendment ACTUALLY did, derived from the rows it removed and the
+    # rows it wrote (#986 follow-up). The card is a forecast: it is minted before
+    # the generation runs, so it can only say what was ASKED for. When the two
+    # differ the runner has to be able to see it, and a live amendment differed
+    # silently: the card promised an easy run would become hill reps and the
+    # rewrite removed the week's interval session instead.
+    changes: List[str] = field(default_factory=list)
 
 
 def resolve_window(
@@ -448,7 +464,7 @@ async def amend_plan(
             )
             continue
 
-        written = _apply(
+        written, changes = _apply(
             db, user, plan, amended, load_model,
             start=start, end=end, today=today,
         )
@@ -457,6 +473,7 @@ async def amend_plan(
             summary=amended.summary,
             weeks_touched=len(amended.weeks),
             sessions_written=written,
+            changes=changes,
         )
 
     return AmendOutcome(ok=False, failures=failures, failure_kind=failure_kind)
@@ -485,7 +502,7 @@ def _apply(
     start: date,
     end: date,
     today: date,
-) -> int:
+) -> tuple:
     """Swap the window's replaceable sessions for the amended ones, in one
     transaction, on the plan the runner is already following.
 
@@ -498,13 +515,15 @@ def _apply(
     real sessions is `planned` and a leftover shape beside it would be a second
     answer about the same week.
     """
-    replaced = 0
+    removed: List[str] = []
     for row in sessions_in_window(db, user.id, plan, start, end):
         if not _is_replaceable(row, today):
             continue
+        removed.append(_describe_row(row))
         db.delete(row)
-        replaced += 1
+    replaced = len(removed)
 
+    added: List[str] = []
     written = 0
     for week in amended.weeks:
         for session in week.sessions:
@@ -530,6 +549,7 @@ def _apply(
                     structure=session.structure(),
                 )
             )
+            added.append(f"{session.window_start.strftime('%a')} {session.title}")
             written += 1
 
     written_weeks = {w.week_start for w in amended.weeks}
@@ -548,7 +568,32 @@ def _apply(
         "schedule: amended plan %s over %s..%s (%s replaced, %s written)",
         plan.id, start, end, replaced, written,
     )
-    return written
+    return written, _describe_change(removed, added)
+
+
+def _describe_row(row: Any) -> str:
+    """One session the amendment removed, in the terms the runner reads."""
+    return f"{row.window_start.strftime('%a')} {row.title}"
+
+
+def _describe_change(removed: List[str], added: List[str]) -> List[str]:
+    """What the window actually holds now that it did not, and vice versa.
+
+    Compared as SETS of "day + title", so a session the rewrite reproduced
+    unchanged is not reported as churn. What is left is the real difference, and
+    it is what the ledger records and the runner is shown, in place of the card's
+    forecast.
+    """
+    gone = [r for r in removed if r not in set(added)]
+    new = [a for a in added if a not in set(removed)]
+    lines: List[str] = []
+    if gone:
+        lines.append("Removed: " + "; ".join(gone))
+    if new:
+        lines.append("Added: " + "; ".join(new))
+    if not lines:
+        lines.append("No session in these weeks changed.")
+    return lines
 
 
 def _shape_week(shape: Any) -> Optional[date]:
