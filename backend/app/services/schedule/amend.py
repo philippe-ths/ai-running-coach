@@ -198,6 +198,37 @@ class AmendOutcome:
     changes: List[str] = field(default_factory=list)
 
 
+@dataclass
+class AmendProposal:
+    """A finished amendment that has not been written, and may never be (#987).
+
+    The decision moved in front of the runner's tap. `propose_amendment` runs the
+    generation and the whole coherence gate, then stops: the week it settled on
+    lives here until the runner has seen it and agreed to it, and `apply_proposal`
+    writes exactly this and nothing it recomputes.
+
+    That ordering is the fix for a defect the previous shape could not avoid. When
+    the writer ran AFTER the tap, the runner agreed to a forecast and received
+    whatever came back, and a rewrite that could not satisfy the plan's rules
+    produced a different legal week instead of refusing: a card promising one easy
+    run would become hill reps deleted the week's interval session.
+
+    `changes` is that difference, computed from the rows that would go and the
+    sessions that would arrive, in the same terms `_describe_change` uses after a
+    write. The runner reads it on the card, so a substitution is visible BEFORE it
+    can happen rather than recorded after. That is a structural guarantee and it
+    does not depend on the prompt refusing correctly.
+    """
+
+    ok: bool
+    amended: Optional[AmendedPlan] = None
+    changes: List[str] = field(default_factory=list)
+    start: Optional[date] = None
+    end: Optional[date] = None
+    failures: Optional[List[str]] = None
+    failure_kind: str = store.FAILURE_UNKNOWN
+
+
 def resolve_window(
     today: date, starts_on: int, *, weeks_from: int, weeks_through: int
 ) -> tuple:
@@ -338,7 +369,7 @@ def build_amend_context(
     return "\n".join(parts)
 
 
-async def amend_plan(
+async def propose_amendment(
     db: Session,
     user: User,
     plan: TrainingPlan,
@@ -347,12 +378,17 @@ async def amend_plan(
     weeks_through: int,
     instruction: str,
     today: Optional[date] = None,
-) -> AmendOutcome:
-    """Rewrite one window of the runner's plan, or change nothing.
+) -> AmendProposal:
+    """Settle what the window WOULD hold, and write none of it (#987).
 
-    The same envelope, coercion and coherence gate the draft uses, because an
-    amendment reaching the schedule through a conversation is not held to a lower
-    bar than a plan is.
+    Everything the amendment decides happens here: the same envelope, coercion
+    and coherence gate the draft uses, because an amendment reaching the schedule
+    through a conversation is not held to a lower bar than a plan is.
+
+    It stops at the point of writing. A proposal that cannot satisfy the plan's
+    own rules comes back refused, carrying the rule it could not satisfy, and the
+    coach answers the runner with that rather than putting up a card for a change
+    it cannot honour.
     """
     today = today or date.today()
     starts_on = resolve_week_start(getattr(user, "profile", None))
@@ -361,8 +397,10 @@ async def amend_plan(
     )
 
     if turn.over_budget(user.id):
-        return AmendOutcome(
+        return AmendProposal(
             ok=False,
+            start=start,
+            end=end,
             failures=["over the spend cap for this period"],
             failure_kind=store.FAILURE_OVER_BUDGET,
         )
@@ -373,7 +411,6 @@ async def amend_plan(
         instruction=instruction, facts=facts,
     )
     client = turn.build_client(turn.TurnKind.SCHEDULE, user.id)
-    load_model = build_load_model(facts, today)
     norm_running = running_norm_weekly_m(facts, today)
     rules = store.plan_rules(plan)
     races = store.list_goal_races(db, user.id, on_or_after=today)
@@ -390,10 +427,23 @@ async def amend_plan(
     while rewrites_left > 0:
         user_message = context
         if failures:
+            # The retry has to carry the refusal option forward with it (#987).
+            # Told only to fix the failures, a model does: it finds the nearest
+            # legal week, and when the request genuinely does not fit, the
+            # nearest legal week is one that drops a session the runner asked to
+            # keep. That is how an amendment promising to replace an easy run
+            # deleted a week's interval session instead. Refusing outranks the
+            # instructions above it, and it has to outrank this one too, or the
+            # last thing said wins.
             user_message = (
                 f"{context}\n\n## YOUR PREVIOUS ATTEMPT WAS REJECTED\n"
                 + "\n".join(f"- {failure}" for failure in failures)
-                + "\n\nWrite the amendment again, fixing every one of these."
+                + "\n\nWrite the amendment again, fixing every one of these. If "
+                "fixing them is only possible by changing something the runner "
+                "did not ask you to change, do not write an amendment at all: "
+                "refuse, exactly as the instructions above require. A legal week "
+                "that makes a change they never agreed to is a worse answer than "
+                "no change."
             )
         try:
             raw = await client.generate_structured(
@@ -407,8 +457,10 @@ async def amend_plan(
             if transport_retries_left > 0:
                 transport_retries_left -= 1
                 continue
-            return AmendOutcome(
+            return AmendProposal(
                 ok=False,
+                start=start,
+                end=end,
                 failures=["the coach could not be reached"],
                 failure_kind=store.FAILURE_UNREACHABLE,
             )
@@ -464,19 +516,106 @@ async def amend_plan(
             )
             continue
 
-        written, changes = _apply(
-            db, user, plan, amended, load_model,
-            start=start, end=end, today=today,
-        )
-        return AmendOutcome(
+        return AmendProposal(
             ok=True,
-            summary=amended.summary,
-            weeks_touched=len(amended.weeks),
-            sessions_written=written,
-            changes=changes,
+            amended=amended,
+            changes=_forecast_change(rows, amended, today),
+            start=start,
+            end=end,
         )
 
-    return AmendOutcome(ok=False, failures=failures, failure_kind=failure_kind)
+    return AmendProposal(
+        ok=False, start=start, end=end, failures=failures, failure_kind=failure_kind
+    )
+
+
+def _forecast_change(
+    rows: List[PlannedSession], amended: AmendedPlan, today: date
+) -> List[str]:
+    """What this proposal WOULD change, in the terms the runner reads after it
+    has been applied.
+
+    Derived from the same two sides `_describe_change` compares after a write —
+    the replaceable rows that would go, the sessions that would arrive — so the
+    line on the card and the line in the ledger are the same sentence about the
+    same change. That is the property that makes the card checkable: a rewrite
+    that quietly drops a session the runner meant to keep says so here, before
+    they agree to it, whatever the prompt did or did not do.
+    """
+    removed = [_describe_row(row) for row in rows if _is_replaceable(row, today)]
+    added = [
+        f"{session.window_start.strftime('%a')} {session.title}"
+        for week in amended.weeks
+        for session in week.sessions
+    ]
+    return _describe_change(removed, added)
+
+
+async def amend_plan(
+    db: Session,
+    user: User,
+    plan: TrainingPlan,
+    *,
+    weeks_from: int,
+    weeks_through: int,
+    instruction: str,
+    today: Optional[date] = None,
+) -> AmendOutcome:
+    """Propose an amendment and write it in one go, deciding nothing in between.
+
+    The path a runner takes no longer comes through here: the offer proposes and
+    the confirm applies, so the runner sees the week before agreeing to it. This
+    remains for callers that have no runner in the loop to show it to.
+    """
+    proposal = await propose_amendment(
+        db, user, plan,
+        weeks_from=weeks_from, weeks_through=weeks_through,
+        instruction=instruction, today=today,
+    )
+    if not proposal.ok:
+        return AmendOutcome(
+            ok=False,
+            failures=proposal.failures,
+            failure_kind=proposal.failure_kind,
+        )
+    return apply_proposal(db, user, plan, proposal, today=today)
+
+
+def apply_proposal(
+    db: Session,
+    user: User,
+    plan: TrainingPlan,
+    proposal: AmendProposal,
+    *,
+    today: Optional[date] = None,
+) -> AmendOutcome:
+    """Write the week the runner already saw and agreed to.
+
+    Deterministic and quick: no generation, no coherence gate, nothing left to
+    decide. That is the point of the split. Every judgement was made while the
+    runner could still say no, so the tap does one thing, and the only difference
+    between the card and the result is a row that stopped being replaceable in
+    between — which `changes` reports.
+    """
+    if not proposal.ok or proposal.amended is None:
+        return AmendOutcome(
+            ok=False,
+            failures=proposal.failures or ["nothing was proposed"],
+            failure_kind=proposal.failure_kind,
+        )
+    today = today or date.today()
+    facts = fetch_draft_facts(db, user, today)
+    written, changes = _apply(
+        db, user, plan, proposal.amended, build_load_model(facts, today),
+        start=proposal.start, end=proposal.end, today=today,
+    )
+    return AmendOutcome(
+        ok=True,
+        summary=proposal.amended.summary,
+        weeks_touched=len(proposal.amended.weeks),
+        sessions_written=written,
+        changes=changes,
+    )
 
 
 def _normalise(raw: Any) -> Any:

@@ -73,6 +73,16 @@ const RIBBON_LABELS: Record<string, string> = {
   profile: 'Profile',
 };
 
+/** The weekday an amendment's card shows against each session (#987).
+ *  Parsed as a plain calendar date rather than an instant: these are stored
+ *  day values, and `new Date("2026-08-31")` in a negative-offset timezone
+ *  lands on the day before. */
+function formatCardDay(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString('en-GB', { weekday: 'short' });
+}
+
 function askedFromLabel(key: string): string {
   return SCREEN_LABELS[key] ?? key;
 }
@@ -448,10 +458,18 @@ export default function CoachSheet() {
       const result = (await res.json().catch(() => null)) as ProposedActionResult | null;
       setActionDone(result?.message ?? '');
       const kind = proposedAction.action_type;
-      // #778: the tap leaves a mark. The server stores this same wording (the
-      // card's own description) against the thread, so the line rendered now and
-      // the line loaded on the next open are the same sentence.
-      const confirmed = proposedAction.description;
+      // #778: the tap leaves a mark, and #987 makes it the same mark the server
+      // stored. The ledger entry is the card's wording plus what the write
+      // actually did, so appending the result's `changes` here is what keeps the
+      // line rendered now and the line loaded on the next open identical.
+      //
+      // It matters most when the two halves disagree. Rendering only the card's
+      // promise meant the session showed the agreed change while the record held
+      // a different one, and the correction surfaced only if the thread was
+      // reopened — somewhere the runner had no reason to look.
+      const confirmed = [proposedAction.description, ...(result?.changes ?? [])]
+        .join(' | ')
+        .trim();
       setMessages(prev => [
         ...prev,
         {
@@ -693,6 +711,48 @@ export default function CoachSheet() {
                 <div className="text-[12.5px] leading-relaxed text-gray-800 dark:text-gray-100">
                   {proposedAction.description}
                 </div>
+                {/* #987: an amendment shows the week it settled on, not a
+                    sentence about it. The runner used to agree to a forecast and
+                    find out afterwards what had been decided, and one such card
+                    promised to replace an easy run while the rewrite deleted the
+                    week's interval session. What is rendered here is derived
+                    from the amendment that will actually be written, so a
+                    substitution is something they can decline. */}
+                {proposedAction.week && proposedAction.week.length > 0 && (
+                  <div className="flex flex-col gap-1 rounded-lg bg-gray-50 px-2.5 py-2 dark:bg-gray-900/40">
+                    {proposedAction.week.map(session => (
+                      <div
+                        key={`${session.date}-${session.title}`}
+                        className={`flex items-baseline gap-2 text-[11.5px] leading-relaxed ${
+                          session.changed
+                            ? 'font-semibold text-gray-900 dark:text-gray-50'
+                            : 'text-gray-500 dark:text-gray-400'
+                        }`}
+                      >
+                        <span
+                          aria-hidden
+                          className={`mt-[1px] h-3 w-[2px] shrink-0 rounded-full ${
+                            session.changed ? 'bg-blue-600' : 'bg-transparent'
+                          }`}
+                        />
+                        <span className="w-9 shrink-0 font-mono text-[10px] uppercase tracking-wide">
+                          {formatCardDay(session.date)}
+                        </span>
+                        <span className="flex-1">{session.title}</span>
+                        {session.distance_m ? (
+                          <span className="shrink-0 font-mono text-[10px] text-gray-400">
+                            {(session.distance_m / 1000).toFixed(1)} km
+                          </span>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {proposedAction.changes && proposedAction.changes.length > 0 && (
+                  <div className="text-[11.5px] leading-relaxed text-gray-600 dark:text-gray-300">
+                    {proposedAction.changes.join(' ')}
+                  </div>
+                )}
                 <div className="flex gap-2">
                   <button
                     onClick={() => void confirmProposedAction()}

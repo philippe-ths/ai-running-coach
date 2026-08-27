@@ -779,7 +779,48 @@ def test_a_coherent_amendment_passes_the_gate(db):
 REAL_TODAY = date.today()
 
 
-def _offer(db, user, **overrides) -> tuple:
+def _stub_proposal(weeks_from: int, weeks_through: int, *, changes=None):
+    """A settled amendment standing in for the generation (#987).
+
+    The offer no longer NAMES a change to be worked out later; it carries one
+    that has already been decided. These tests are about the offer layer, and the
+    generation and its gate are exercised directly above, so what is stubbed here
+    is the model call and nothing else: `prepare_offer`'s own refusals, the mint,
+    the token and the confirm all still run for real.
+    """
+    from app.services.schedule.amend import AmendProposal
+
+    start, end = resolve_window(
+        REAL_TODAY, MONDAY, weeks_from=weeks_from, weeks_through=weeks_through
+    )
+    weeks = []
+    day = start
+    while day <= end:
+        weeks.append(
+            _week(
+                day,
+                _new_session(
+                    day + timedelta(days=1),
+                    intent="easy",
+                    title="Easy Run",
+                    target_distance_m=8000,
+                ),
+            )
+        )
+        day += timedelta(days=7)
+    return AmendProposal(
+        ok=True,
+        amended=_amended(*weeks),
+        changes=changes if changes is not None else ["Added: Tue Easy Run"],
+        start=start,
+        end=end,
+    )
+
+
+def _offer(db, user, *, proposal=None, redis=None, **overrides) -> tuple:
+    """Mint an offer the way the turn does: prepare, then mint what it settled."""
+    import asyncio
+
     payload = {
         "action_type": "amend_plan",
         "weeks_from": 0,
@@ -787,8 +828,26 @@ def _offer(db, user, **overrides) -> tuple:
         "amend_reason": "drop one hard session, right calf is sore",
     }
     payload.update(overrides)
-    with patch.object(proposed_actions, "redis_conn", _FakeRedis()):
-        return proposed_actions.mint_proposed_action(db, user.id, payload)
+    settled = proposal
+    if settled is None:
+        try:
+            settled = _stub_proposal(payload["weeks_from"], payload["weeks_through"])
+        except (KeyError, TypeError, ValueError):
+            # An off-shape window has nothing to settle. The mint refuses it on
+            # shape before preparation is ever consulted, which is what the
+            # parametrized refusals below are pinning.
+            settled = None
+
+    async def _settled(*_a, **_k):
+        return settled
+
+    with patch.object(proposed_actions, "redis_conn", redis or _FakeRedis()), patch(
+        "app.services.schedule.amend.propose_amendment", new=_settled
+    ):
+        prepared = asyncio.run(proposed_actions.prepare_offer(db, user.id, payload))
+        return proposed_actions.mint_proposed_action(
+            db, user.id, payload, prepared=prepared
+        )
 
 
 def _live_plan(db, user) -> TrainingPlan:
@@ -899,33 +958,20 @@ def test_the_schedule_kill_switch_closes_the_confirm_too(db, monkeypatch):
     """A token minted before the switch was thrown must not still write. The
     offer and the execute are separated by up to half an hour."""
     user = _user(db)
-    _live_plan(db, user)
+    plan = _live_plan(db, user)
     redis = _FakeRedis()
     with patch.object(proposed_actions, "redis_conn", redis):
-        _, frame = proposed_actions.mint_proposed_action(
-            db,
-            user.id,
-            {
-                "action_type": "amend_plan",
-                "weeks_from": 0,
-                "weeks_through": 0,
-                "amend_reason": "soften this week",
-            },
-        )
+        _, frame = _offer(db, user, redis=redis, weeks_from=0, weeks_through=0)
         assert frame is not None, "the offer must succeed before the switch flips"
+        before = [_snapshot(r) for r in _rows(db, plan)]
         monkeypatch.setattr(settings, "SCHEDULE_ENABLED", False)
-        enqueued = []
-        with patch(
-            "app.jobs.amend_schedule.enqueue_amendment",
-            side_effect=lambda *a, **k: enqueued.append((a, k)),
-        ):
-            with pytest.raises(ValueError, match="unavailable"):
-                proposed_actions.consume_and_execute(db, user.id, frame["token"])
+        with pytest.raises(ValueError, match="unavailable"):
+            proposed_actions.consume_and_execute(db, user.id, frame["token"])
 
-    # Nothing was enqueued, and the confirm that DOES enqueue is pinned in
+    # Nothing was written, and the confirm that DOES write is pinned in
     # `test_a_confirm_lands_on_the_plan_it_was_offered_against`, so this is a
     # refusal rather than a path that never fires.
-    assert enqueued == []
+    assert [_snapshot(r) for r in _rows(db, plan)] == before
 
 
 def test_a_confirm_lands_on_the_plan_it_was_offered_against(db):
@@ -934,42 +980,25 @@ def test_a_confirm_lands_on_the_plan_it_was_offered_against(db):
     user = _user(db)
     plan = _live_plan(db, user)
     redis = _FakeRedis()
-    enqueued = []
 
     with patch.object(proposed_actions, "redis_conn", redis):
-        _, frame = proposed_actions.mint_proposed_action(
-            db,
-            user.id,
-            {
-                "action_type": "amend_plan",
-                "weeks_from": 0,
-                "weeks_through": 1,
-                "amend_reason": "write the next block from the agreed shape",
-            },
+        _, frame = _offer(
+            db, user, redis=redis,
+            amend_reason="write the next block from the agreed shape",
         )
-        with patch(
-            "app.jobs.amend_schedule.enqueue_amendment",
-            side_effect=lambda *a, **k: enqueued.append((a, k)),
-        ):
-            result = proposed_actions.consume_and_execute(db, user.id, frame["token"])
+        result = proposed_actions.consume_and_execute(db, user.id, frame["token"])
 
     assert result["action_type"] == "amend_plan"
     assert result["plan_id"] == str(plan.id)
-    assert "Everything else in your plan stays as it is." in result["message"]
-    assert enqueued and enqueued[0][0][1] == plan.id
-    # The trace travels WITH the work (#778). The ledger entry is written by the
-    # job once the sessions exist, not here where they have only been asked for,
-    # so the worker needs the conversation and the card's own wording.
-    assert enqueued[0][1] == {
-        "weeks_from": 0,
-        "weeks_through": 1,
-        "instruction": "write the next block from the agreed shape",
-        # No thread was named when this card was minted, so there is nowhere to
-        # write a trace; the card's own wording still travels, because that is
-        # what the entry would say.
-        "thread_id": None,
-        "description": frame["description"],
-    }
+    # The confirm reports in the PAST tense, because by the time it answers the
+    # sessions exist (#987). It used to promise a screen would update in a
+    # minute, which the request had no way to keep.
+    assert result["message"].startswith("Done.")
+    assert "Everything else in your plan is as it was." in result["message"]
+    # And the sessions the runner was shown are the sessions that landed.
+    shown = {(date.fromisoformat(row["date"]), row["title"]) for row in frame["week"]}
+    assert shown, "the card must carry the week it is proposing"
+    assert shown <= {(row.window_start, row.title) for row in _rows(db, plan)}
 
 
 def test_a_confirm_is_refused_when_the_plan_changed_under_it(db):
@@ -979,32 +1008,21 @@ def test_a_confirm_is_refused_when_the_plan_changed_under_it(db):
     user = _user(db)
     original = _live_plan(db, user)
     redis = _FakeRedis()
-    enqueued = []
 
     with patch.object(proposed_actions, "redis_conn", redis):
-        _, frame = proposed_actions.mint_proposed_action(
-            db,
-            user.id,
-            {
-                "action_type": "amend_plan",
-                "weeks_from": 0,
-                "weeks_through": 0,
-                "amend_reason": "soften this week",
-            },
-        )
+        _, frame = _offer(db, user, redis=redis, weeks_from=0, weeks_through=0,
+                          amend_reason="soften this week")
+        before = [_snapshot(r) for r in _rows(db, original)]
         # A new plan becomes current between the card going up and the tap.
         replacement = _plan(db, user, status="drafting")
         store.activate_plan(db, replacement)
         assert store.get_active_plan(db, user.id).id != original.id
 
-        with patch(
-            "app.jobs.amend_schedule.enqueue_amendment",
-            side_effect=lambda *a, **k: enqueued.append((a, k)),
-        ):
-            with pytest.raises(ValueError, match="plan changed"):
-                proposed_actions.consume_and_execute(db, user.id, frame["token"])
+        with pytest.raises(ValueError, match="plan changed"):
+            proposed_actions.consume_and_execute(db, user.id, frame["token"])
 
-    assert enqueued == []
+    assert [_snapshot(r) for r in _rows(db, original)] == before
+    assert _rows(db, replacement) == []
 
 
 @pytest.mark.parametrize(

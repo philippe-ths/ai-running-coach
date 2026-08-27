@@ -31,6 +31,19 @@ export interface ThreadDetail {
   messages: ChatMessage[];
 }
 
+/** One session on an amendment's card, as the runner would have it (#987).
+ *  Display-only and idless: nothing here is a row yet. */
+export interface ProposedSessionRow {
+  date: string;
+  title: string;
+  intent: string;
+  discipline: string;
+  distance_m?: number | null;
+  duration_s?: number | null;
+  /** New to this day, so the sheet marks it. */
+  changed: boolean;
+}
+
 export interface ProposedActionFrame {
   action_type:
     | "check_in"
@@ -39,11 +52,19 @@ export interface ProposedActionFrame {
     | "merge_blocks"
     | "complete_session"
     | "adjust_session"
-    | "draft_plan";
+    | "draft_plan"
+    | "amend_plan";
   token: string;
   description: string;
   confirm_label: string;
   dismiss_label: string;
+  /** What would actually change, in the words the record uses afterwards.
+   *  Server-derived from the settled amendment rather than from what was asked
+   *  for, which is the point: a rewrite that drops a session the runner meant to
+   *  keep says so here, before they agree to it. */
+  changes?: string[];
+  /** The whole window as it would stand. Only `amend_plan` fills it. */
+  week?: ProposedSessionRow[];
 }
 
 /** What the server did, echoed back on confirm. `message` is present only when
@@ -52,6 +73,9 @@ export interface ProposedActionFrame {
 export interface ProposedActionResult {
   action_type: string;
   message?: string | null;
+  /** What an amendment actually did, computed from the rows it wrote. Reported
+   *  because it is the one thing that must be able to disagree with the card. */
+  changes?: string[];
 }
 
 export interface ThreadMessageSend {

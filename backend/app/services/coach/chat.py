@@ -443,8 +443,26 @@ async def _buffered_tool_loop(
                     if name == "offer_proposed_action":
                         from app.services.coach.proposed_actions import (
                             mint_proposed_action,
+                            needs_preparation,
+                            prepare_offer,
                         )
 
+                        # An offer whose CONTENT has to be settled is settled
+                        # here, before the card exists (#987). The loop knows
+                        # only that some offers need preparing; what preparation
+                        # means belongs to the action. It is slow enough to need
+                        # its own affordance, and present-tense like every other
+                        # one, since it cannot yet know what it will find.
+                        prepared = None
+                        if needs_preparation(tool_input):
+                            yield ChatStreamEvent(
+                                status_label="Working out how it fits…",
+                                status_tool=name or "",
+                            )
+                            last_heartbeat = time.monotonic()
+                            prepared = await prepare_offer(
+                                db, owner_user_id, tool_input
+                            )
                         # The model reads `result` (pending, tokenless); the runner's
                         # client gets the `frame` that carries the one-shot token.
                         # #856: `draft_plan` records WHICH conversation settled
@@ -453,7 +471,11 @@ async def _buffered_tool_loop(
                         # the model's — a model-supplied thread id would be a
                         # route into another runner's conversation.
                         result, frame = mint_proposed_action(
-                            db, owner_user_id, tool_input, thread_id=thread_id
+                            db,
+                            owner_user_id,
+                            tool_input,
+                            thread_id=thread_id,
+                            prepared=prepared,
                         )
                         if proposed_action is None and frame is not None:
                             proposed_action = frame
