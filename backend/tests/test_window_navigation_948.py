@@ -176,6 +176,20 @@ def test_trends_endpoint_honours_as_of(client, db):
     assert body["summary"]["activity_count"] == 1
 
 
+def test_trends_endpoint_historical_totals_exclude_later_activities(client, db):
+    uid = get_current_user_profile(db).user_id
+    _activity_on(db, uid, _ANCHOR, distance_m=5_000)
+    _activity_on(db, uid, _ANCHOR + timedelta(days=1), distance_m=50_000)
+
+    resp = client.get(f"/api/trends?range=7D&mode=rolling&as_of={_ANCHOR.isoformat()}")
+
+    assert resp.status_code == 200, resp.text
+    summary = resp.json()["summary"]
+    assert summary["total_distance_m"] == 5_000
+    assert summary["total_moving_time_s"] == 1_500
+    assert summary["activity_count"] == 1
+
+
 def test_trends_endpoint_as_of_absent_is_unchanged(client, db):
     resp_default = client.get("/api/trends?range=7D&mode=rolling")
     resp_explicit = client.get(f"/api/trends?range=7D&mode=rolling&as_of={date.today().isoformat()}")
