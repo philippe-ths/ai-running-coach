@@ -225,8 +225,15 @@ function buildTrendsResponse(rangeKey, mode, asOf) {
       total_moving_time_s: inWindow.reduce((s, a) => s + a.moving_time_s, 0),
       activity_count: inWindow.length,
       total_suffer_score: inWindow.reduce((s, a) => s + a.effort_score, 0),
+      zone_2_plus_minutes: 91.0,
     },
-    previous_summary: null,
+    previous_summary: {
+      total_distance_m: 0,
+      total_moving_time_s: 0,
+      activity_count: 0,
+      total_suffer_score: 0,
+      zone_2_plus_minutes: 70.0,
+    },
     daily_distance: daily,
     weekly_distance: [],
     daily_time: daily.map((p) => ({
@@ -238,7 +245,12 @@ function buildTrendsResponse(rangeKey, mode, asOf) {
     daily_suffer_score: daily.map((p) => ({ date: p.date, effort_score: p.activity_count * 40 })),
     weekly_suffer_score: [],
     efficiency_trend: [],
-    daily_zone_load: [],
+    daily_zone_load: daily.map((point) => ({
+      date: point.date,
+      easy_min: point.activity_count * 12,
+      moderate_min: point.activity_count * 6,
+      hard_min: point.activity_count * 2,
+    })),
     weekly_zone_load: [],
     biweekly_distance: [],
     monthly_distance: [],
@@ -287,6 +299,11 @@ function buildVolumeResponse(rangeKey, asOf) {
           metric: "effort_score", current_all: 0, current_runs: 0,
           norm: null, norm_recent: null, pct_vs_norm: null,
           direction: "no_norm", direction_recent: "no_norm",
+        },
+        {
+          metric: "zone_2_plus_minutes", current_all: 91, current_runs: 91,
+          norm: 75, norm_recent: null, pct_vs_norm: 21.3,
+          direction: "up", direction_recent: "no_norm",
         },
       ],
     };

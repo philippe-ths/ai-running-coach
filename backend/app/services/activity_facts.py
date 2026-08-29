@@ -900,6 +900,16 @@ def zone_minutes(facts: List[ActivityFact]) -> Tuple[float, float, float]:
     return round(easy_s / 60, 1), round(mod_s / 60, 1), round(hard_s / 60, 1)
 
 
+def zone_2_plus_minutes(facts: List[ActivityFact]) -> float:
+    """Minutes in the runner's calibrated HR zones Z2 through Z5."""
+    seconds = sum(
+        sum((fact.time_in_zones.get(zone, 0) or 0) for zone in ("Z2", "Z3", "Z4", "Z5"))
+        for fact in facts
+        if fact.time_in_zones
+    )
+    return round(seconds / 60, 1)
+
+
 # ---------------------------------------------------------------------------
 # 5. Rollups and norms
 # ---------------------------------------------------------------------------
@@ -931,6 +941,10 @@ def metric_value(fact: Any, metric: str) -> float:
         return fact.moving_time_s or 0
     if metric == "effort_score":
         return fact.effort_score or 0
+    if metric == "zone_2_plus_minutes":
+        time_in_zones = getattr(fact, "time_in_zones", None) or {}
+        seconds = sum((time_in_zones.get(zone, 0) or 0) for zone in ("Z2", "Z3", "Z4", "Z5"))
+        return seconds / 60
     return 0
 
 
@@ -977,7 +991,11 @@ def baseline_window(
 
 
 def norm_per_day(
-    facts: List[Any], start: date, end: date, day_count: int
+    facts: List[Any],
+    start: date,
+    end: date,
+    day_count: int,
+    metrics: Tuple[str, ...] = METRICS,
 ) -> Dict[str, Optional[float]]:
     """Per-metric average daily output over ``[start, end]`` (``day_count`` calendar
     days), or None per metric when too few activities fall in it.
@@ -989,5 +1007,5 @@ def norm_per_day(
     """
     window = [f for f in facts if start <= f.local_date <= end]
     if len(window) < MIN_BASELINE_ACTIVITIES:
-        return {m: None for m in METRICS}
-    return {m: sum_metric(window, m) / day_count for m in METRICS}
+        return {m: None for m in metrics}
+    return {m: sum_metric(window, m) / day_count for m in metrics}

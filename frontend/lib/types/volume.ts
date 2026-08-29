@@ -6,7 +6,8 @@ export type VolumeMetricName =
   | "sessions"
   | "distance_m"
   | "moving_time_s"
-  | "effort_score";
+  | "effort_score"
+  | "zone_2_plus_minutes";
 
 export interface VolumeMetricVsNorm {
   metric: VolumeMetricName;

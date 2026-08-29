@@ -11,10 +11,19 @@ from types import SimpleNamespace
 from app.services.coach.volume import build_training_volume, build_volume_report
 
 
-def _fact(d: date, *, type="Run", distance_m=10000, moving_time_s=3600, effort_score=50.0):
+def _fact(
+    d: date,
+    *,
+    type="Run",
+    distance_m=10000,
+    moving_time_s=3600,
+    effort_score=50.0,
+    time_in_zones=None,
+):
     return SimpleNamespace(
         local_date=d, activity_type=type,
         distance_m=distance_m, moving_time_s=moving_time_s, effort_score=effort_score,
+        time_in_zones=time_in_zones,
     )
 
 
@@ -213,6 +222,34 @@ def test_report_consistent_history_reads_in_line():
     by = _by(r.rolling)
     assert by["sessions"].direction == "in_line"
     assert by["distance_m"].direction == "in_line"
+
+
+def test_report_zone_2_plus_compares_z2_to_z5_against_typical_without_changing_coach_metrics():
+    as_of = date(2026, 6, 20)
+    facts = [
+        _fact(
+            as_of - timedelta(days=days_ago),
+            time_in_zones={"Z1": 600, "Z2": 120, "Z3": 60, "Z4": 0, "Z5": 0},
+        )
+        for days_ago in range(7, 14)
+    ]
+    facts += [
+        _fact(
+            as_of - timedelta(days=days_ago),
+            time_in_zones={"Z1": 600, "Z2": 180, "Z3": 120, "Z4": 60, "Z5": 0},
+        )
+        for days_ago in range(7)
+    ]
+
+    report_metric = _by(build_volume_report(facts, as_of, "7D").rolling)[
+        "zone_2_plus_minutes"
+    ]
+    assert report_metric.current_all == 42.0
+    assert report_metric.norm == 21.0
+    assert report_metric.pct_vs_norm == 100.0
+
+    coach_metrics = _by_metric(build_training_volume(facts, as_of).rolling_7d)
+    assert "zone_2_plus_minutes" not in coach_metrics
 
 
 def test_report_light_current_window_reads_down():
