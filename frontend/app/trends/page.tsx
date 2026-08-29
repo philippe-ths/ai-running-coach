@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useState, useCallback } from "react";
+import { Fragment, useEffect, useRef, useState, useCallback } from "react";
 import { usePublishScreenSelections } from "@/components/coach/CoachSheetContext";
 import { TrendsData, TrendsRange, TrendsGranularity } from "@/lib/types";
 import { formatDistanceKm, formatDuration } from "@/lib/format";
@@ -119,6 +119,7 @@ export default function TrendsPage() {
   const [volumeLoading, setVolumeLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const trendsRequestId = useRef(0);
 
   // Window navigation (#948): `asOf` judges the (range, mode) window as of this
   // date instead of today; undefined means "today" (the live window). Stepping
@@ -197,6 +198,7 @@ export default function TrendsPage() {
 
   const fetchTrends = useCallback(
     async (r: TrendsRange, types: string[], m: WindowMode, asOfParam?: string) => {
+      const requestId = ++trendsRequestId.current;
       setLoading(true);
       setError(null);
       try {
@@ -207,11 +209,13 @@ export default function TrendsPage() {
         }
         if (asOfParam) params.set("as_of", asOfParam);
         const json: TrendsData = await fetchFromAPI(`/api/trends?${params}`);
-        setData(json);
+        if (requestId === trendsRequestId.current) setData(json);
       } catch (e: any) {
-        setError(e.message || "Failed to load trends");
+        if (requestId === trendsRequestId.current) {
+          setError(e.message || "Failed to load trends");
+        }
       } finally {
-        setLoading(false);
+        if (requestId === trendsRequestId.current) setLoading(false);
       }
     },
     [],

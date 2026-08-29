@@ -126,15 +126,17 @@ def build_activity_facts(
     *,
     user_id=None,
     since: Optional[date] = None,
+    until: Optional[date] = None,
 ) -> List[ActivityFact]:
     """
     Query activities within the given range and project them into ActivityFact rows.
     Optionally filter by activity type (case-insensitive).
     Pass ``user_id`` to restrict results to a single owner. Pass ``since`` to override
     the window start (the #400 calendar mode); otherwise it derives from range_key.
+    ``until`` is an exclusive upper bound when a report is anchored before today.
     """
     resolved_since = since if since is not None else resolve_since(range_key)
-    return query_facts(db, resolved_since, None, types, user_id=user_id)
+    return query_facts(db, resolved_since, until, types, user_id=user_id)
 
 
 def _window_frame(
@@ -576,7 +578,12 @@ def get_trends_report(
 
     # 1. Activity-level facts (filtered by types if provided)
     activity_facts = build_activity_facts(
-        db, range_upper, types=types, user_id=user_id, since=since
+        db,
+        range_upper,
+        types=types,
+        user_id=user_id,
+        since=since,
+        until=resolved_as_of + timedelta(days=1),
     )
 
     # 2. Daily facts (sum per local date)
