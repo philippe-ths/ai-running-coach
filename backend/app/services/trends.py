@@ -33,6 +33,7 @@ from app.services.activity_facts import (
     resolve_since,
     resolve_window,
     rolling_bin_start,
+    zone_2_plus_minutes,
     zone_minutes,
 )
 from app.services.weeks import MONDAY, resolve_week_start
@@ -611,6 +612,7 @@ def get_trends_report(
 
     # Summary totals across the entire range
     cur_easy, cur_mod, cur_hard = zone_minutes(activity_facts)
+    cur_zone_2_plus = zone_2_plus_minutes(activity_facts)
     cur_eff = efficiency_window_stats(activity_facts)
     summary = TrendsSummary(
         total_distance_m=sum(d.total_distance_m for d in daily_facts),
@@ -624,6 +626,7 @@ def get_trends_report(
         zone_easy_minutes=cur_easy,
         zone_moderate_minutes=cur_mod,
         zone_hard_minutes=cur_hard,
+        zone_2_plus_minutes=cur_zone_2_plus,
     )
 
     # Previous period summary (vs the equivalent prior window for this mode)
@@ -631,6 +634,7 @@ def get_trends_report(
     if prev_start is not None and prev_end is not None:
         prev_facts = query_facts(db, prev_start, prev_end, types=types, user_id=user_id)
         prev_easy, prev_mod, prev_hard = zone_minutes(prev_facts)
+        prev_zone_2_plus = zone_2_plus_minutes(prev_facts)
         prev_eff = efficiency_window_stats(prev_facts)
         previous_summary = TrendsSummary(
             total_distance_m=sum(f.distance_m for f in prev_facts),
@@ -644,6 +648,7 @@ def get_trends_report(
             zone_easy_minutes=prev_easy,
             zone_moderate_minutes=prev_mod,
             zone_hard_minutes=prev_hard,
+            zone_2_plus_minutes=prev_zone_2_plus,
         )
 
     # 3. Continuous daily facts (every day filled)

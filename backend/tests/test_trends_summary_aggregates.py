@@ -60,7 +60,7 @@ def test_summary_carries_efficiency_and_zone_minutes_per_window(db):
     # Current 7D window: speed = 3000/1000 = 3.0 m/s, hr = 150
     #   efficiency = 3.0 / 150 = 0.02 mps/bpm
     #   zones: easy = (300+300) = 600 s = 10.0 min; moderate = 300 s = 5.0 min;
-    #          hard = (60+40) = 100 s = 1.7 min
+    #          hard = (60+40) = 100 s = 1.7 min; Z2+ = 700 s = 11.7 min
     _activity(
         db, user_id, today - timedelta(days=1),
         distance_m=3000, moving_time_s=1000, avg_hr=150,
@@ -69,7 +69,7 @@ def test_summary_carries_efficiency_and_zone_minutes_per_window(db):
     # Previous 7D window: speed = 2000/1000 = 2.0 m/s, hr = 200
     #   efficiency = 2.0 / 200 = 0.01 mps/bpm
     #   zones: easy = (200+100) = 300 s = 5.0 min; moderate = 100 s = 1.7 min;
-    #          hard = (50+50) = 100 s = 1.7 min
+    #          hard = (50+50) = 100 s = 1.7 min; Z2+ = 300 s = 5.0 min
     _activity(
         db, user_id, today - timedelta(days=8),
         distance_m=2000, moving_time_s=1000, avg_hr=200,
@@ -84,10 +84,12 @@ def test_summary_carries_efficiency_and_zone_minutes_per_window(db):
     assert report.summary.zone_easy_minutes == 10.0
     assert report.summary.zone_moderate_minutes == 5.0
     assert report.summary.zone_hard_minutes == 1.7
+    assert report.summary.zone_2_plus_minutes == 11.7
 
     assert report.previous_summary.zone_easy_minutes == 5.0
     assert report.previous_summary.zone_moderate_minutes == 1.7
     assert report.previous_summary.zone_hard_minutes == 1.7
+    assert report.previous_summary.zone_2_plus_minutes == 5.0
 
 
 def test_efficiency_is_none_when_no_activity_has_usable_hr(db):
@@ -106,6 +108,7 @@ def test_efficiency_is_none_when_no_activity_has_usable_hr(db):
     assert report.summary.zone_easy_minutes == 0.0
     assert report.summary.zone_moderate_minutes == 0.0
     assert report.summary.zone_hard_minutes == 0.0
+    assert report.summary.zone_2_plus_minutes == 0.0
 
 
 # ---------------------------------------------------------------------------

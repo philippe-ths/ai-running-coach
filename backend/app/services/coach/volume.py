@@ -63,6 +63,8 @@ from app.services.activity_facts import (
 )
 from app.services.weeks import MONDAY, days_into_week, week_start
 
+TRENDS_METRICS = (*METRICS, "zone_2_plus_minutes")
+
 # #804: the rollup primitives this module used to own (the metric set, the per-metric
 # sum, the runs-only distinction, the clamped per-day norm, the deadbanded direction
 # verdict) and the calendar-period arithmetic now live in `app.services.activity_facts`
@@ -227,11 +229,11 @@ def _report_framing(
     # comparison is "this window vs the runner's typical preceding history".
     bl = baseline_window(facts, win_start - timedelta(days=1), baseline_days)
     if bl is None:
-        norm_pd: Dict[str, Optional[float]] = {m: None for m in METRICS}
+        norm_pd: Dict[str, Optional[float]] = {m: None for m in TRENDS_METRICS}
         b_start = b_end = None
     else:
         b_start, b_end, b_count = bl
-        norm_pd = norm_per_day(facts, b_start, b_end, b_count)
+        norm_pd = norm_per_day(facts, b_start, b_end, b_count, TRENDS_METRICS)
         # If the window didn't qualify (too few activities), drop the dates too.
         if all(v is None for v in norm_pd.values()):
             b_start = b_end = None
@@ -248,7 +250,8 @@ def _report_framing(
         metrics=[
             # Scale the norm by the FULL period length (#436), not days_elapsed, so
             # the "vs typical" read is full-period (consistent with "vs last period").
-            _report_metric(m, window_facts, window_days, norm_pd) for m in METRICS
+            _report_metric(m, window_facts, window_days, norm_pd)
+            for m in TRENDS_METRICS
         ],
     )
 

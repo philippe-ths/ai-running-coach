@@ -167,6 +167,7 @@ class TrendsSummary(BaseModel):
     zone_easy_minutes: float = 0.0
     zone_moderate_minutes: float = 0.0
     zone_hard_minutes: float = 0.0
+    zone_2_plus_minutes: float = 0.0
 
 
 class TrendsResponse(BaseModel):
@@ -248,7 +249,7 @@ class VolumeMetricVsNorm(BaseModel):
     period-to-date total is compared against a typical full period rather than a
     pro-rated slice. `direction` carries a deadband.
     """
-    metric: str  # sessions | distance_m | moving_time_s | effort_score
+    metric: str  # sessions | distance_m | moving_time_s | effort_score | zone_2_plus_minutes
     current_all: float
     current_runs: float
     norm: Optional[float] = None

@@ -138,6 +138,7 @@ export interface TrendsSummary {
   zone_easy_minutes?: number;
   zone_moderate_minutes?: number;
   zone_hard_minutes?: number;
+  zone_2_plus_minutes?: number;
 }
 
 export interface TrendsData {

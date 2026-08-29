@@ -546,33 +546,50 @@ export default function TrendsPage() {
             granularity={effectiveGranularity}
             rolling={effectiveMode === "rolling"}
             delta={
-              <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs tabular-nums">
-                {(
-                  [
-                    ["Easy", data.summary.zone_easy_minutes, data.previous_summary?.zone_easy_minutes],
-                    ["Moderate", data.summary.zone_moderate_minutes, data.previous_summary?.zone_moderate_minutes],
-                    ["Hard", data.summary.zone_hard_minutes, data.previous_summary?.zone_hard_minutes],
-                  ] as const
-                ).map(([zone, cur, prev]) => {
-                  const c = cur ?? 0;
-                  const pct = prev != null && prev > 0 ? Math.round(((c - prev) / prev) * 100) : null;
-                  return (
-                    <Fragment key={zone}>
-                      <span className="text-gray-400 dark:text-gray-500">{zone}</span>
-                      <span className="text-gray-400 dark:text-gray-500">
-                        {pct !== null ? (
-                          <span className={`font-medium ${DIR_TEXT[dirFromPct(pct)]}`}>
-                            {pct > 0 ? "+" : ""}
-                            {pct}%
-                          </span>
-                        ) : (
-                          "—"
-                        )}{" "}
-                        · {formatDuration(c * 60)}
-                      </span>
-                    </Fragment>
-                  );
-                })}
+              <div className="space-y-1 text-xs tabular-nums">
+                <div className="grid grid-cols-[auto_1fr] gap-x-3 font-medium text-gray-700 dark:text-gray-200">
+                  <span>Zone 2+</span>
+                  <span>
+                    {data.summary.zone_2_plus_minutes != null
+                      ? formatDuration(data.summary.zone_2_plus_minutes * 60)
+                      : "—"}
+                  </span>
+                </div>
+                <ComparisonRows
+                  metric={normByMetric["zone_2_plus_minutes"]}
+                  current={data.summary.zone_2_plus_minutes ?? 0}
+                  previous={data.previous_summary?.zone_2_plus_minutes}
+                  format={(minutes) => formatDuration(minutes * 60)}
+                  prevLabel={prevLabel}
+                />
+                <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 border-t border-gray-200 pt-1 dark:border-gray-700">
+                  {(
+                    [
+                      ["Easy", data.summary.zone_easy_minutes, data.previous_summary?.zone_easy_minutes],
+                      ["Moderate", data.summary.zone_moderate_minutes, data.previous_summary?.zone_moderate_minutes],
+                      ["Hard", data.summary.zone_hard_minutes, data.previous_summary?.zone_hard_minutes],
+                    ] as const
+                  ).map(([zone, cur, prev]) => {
+                    const c = cur ?? 0;
+                    const pct = prev != null && prev > 0 ? Math.round(((c - prev) / prev) * 100) : null;
+                    return (
+                      <Fragment key={zone}>
+                        <span className="text-gray-400 dark:text-gray-500">{zone}</span>
+                        <span className="text-gray-400 dark:text-gray-500">
+                          {pct !== null ? (
+                            <span className={`font-medium ${DIR_TEXT[dirFromPct(pct)]}`}>
+                              {pct > 0 ? "+" : ""}
+                              {pct}%
+                            </span>
+                          ) : (
+                            "—"
+                          )}{" "}
+                          · {formatDuration(c * 60)}
+                        </span>
+                      </Fragment>
+                    );
+                  })}
+                </div>
               </div>
             }
           />
