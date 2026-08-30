@@ -441,7 +441,7 @@ export default function CoachSheet() {
           err instanceof CoachStreamTruncatedError ||
           (err instanceof DOMException && err.name === 'AbortError');
         const note = truncated
-          ? "That took longer than a single message allows, so it stopped partway and nothing was saved. Asking for a smaller stretch — one week rather than several — usually gets there."
+          ? "That took longer than a single message allows, so it stopped partway. Your schedule is unchanged. Asking for a smaller stretch, one week rather than several, usually gets there."
           : "Sorry, I couldn't reach your coach just now. Please try again.";
         const errorMsg: ChatMessage = {
           id: crypto.randomUUID(),
@@ -452,6 +452,10 @@ export default function CoachSheet() {
         };
         setMessages(prev => [...prev, errorMsg]);
         setStreamingText('');
+        // The runner's own message was committed before generation began, and a
+        // new thread may have been created and announced, so the list is stale
+        // whether or not the coach got to answer.
+        void refreshThreads();
       } finally {
         clearTimeout(stall);
         setStreaming(false);

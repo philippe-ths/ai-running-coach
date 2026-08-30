@@ -43,7 +43,12 @@ from app.models.training_plan import TrainingPlan
 from app.models.user import User
 from app.services.coach import turn
 from app.services.schedule import store
-from app.services.schedule.draft import build_draft_context, fetch_draft_facts
+from app.services.schedule.draft import (
+    PLACING_AND_COMMITTING,
+    WRITING_A_SESSION,
+    build_draft_context,
+    fetch_draft_facts,
+)
 from app.services.schedule.draft_contract import SESSION_PROPERTIES, DraftedWeek
 from app.services.schedule.effort import build_load_model, estimate_effort
 from app.services.schedule.norms import running_norm_weekly_m
@@ -182,7 +187,8 @@ RECORD_AMENDMENT_TOOL: Dict[str, Any] = {
 }
 
 
-_SYSTEM_PROMPT = """You are a running coach amending this runner's existing training plan.
+_SYSTEM_PROMPT = (
+    """You are a running coach amending this runner's existing training plan.
 
 You are NOT writing a new plan. They have one, they agreed to it, and they are \
 living inside it. Your job is to rewrite the sessions inside one named window so \
@@ -229,7 +235,11 @@ second quality session to a week whose rules space quality three days apart, for
 instance - and the honest answer then is that it does not fit, not a rearranged \
 week that removes the session they told you to keep.
 
-Answer only by calling record_plan_amendment."""
+"""
+    + PLACING_AND_COMMITTING
+    + WRITING_A_SESSION
+    + "Answer only by calling record_plan_amendment."
+)
 
 
 @dataclass
@@ -557,6 +567,14 @@ async def propose_amendment(
                     else max(1.0, budget_seconds - (time.monotonic() - started_at))
                 ),
             )
+        except (TypeError, AttributeError):
+            # A bad kwarg or a missing method is a bug in this code, not a
+            # network that misbehaved, and the catch below cannot tell them
+            # apart. Left inside it, a signature change reports itself to the
+            # runner as "the coach could not be reached" after two retries that
+            # never reached anything — which is exactly what a test double
+            # missing the new `timeout` kwarg did (#995). Raised so it is found.
+            raise
         except Exception as exc:  # transport, timeout, refusal
             logger.warning("schedule amend: generation call failed: %s", exc)
             if transport_retries_left > 0:

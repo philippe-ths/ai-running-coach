@@ -59,6 +59,11 @@ def normalise(raw: dict) -> dict:
     return raw
 
 
+# How long a session's `detail` note may be. One name, so the schema the model
+# reads and the model that validates it cannot drift (#996).
+DETAIL_MAX_LENGTH = 400
+
+
 class DraftedSession(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -68,7 +73,7 @@ class DraftedSession(BaseModel):
     discipline: Literal["run", "walk", "bike", "strength", "row", "other"]
     commitment: Literal["committed", "suggested"] = "committed"
     title: str = Field(min_length=1, max_length=120)
-    detail: Optional[str] = Field(default=None, max_length=400)
+    detail: Optional[str] = Field(default=None, max_length=DETAIL_MAX_LENGTH)
     target_distance_m: Optional[float] = Field(default=None, ge=0, le=200_000)
     target_duration_s: Optional[int] = Field(default=None, ge=0, le=86_400)
     reps_planned: Optional[int] = Field(default=None, ge=1, le=60)
@@ -290,7 +295,19 @@ SESSION_PROPERTIES: Dict[str, Any] = {
         ),
     },
     "title": {"type": "string"},
-    "detail": {"type": "string"},
+    # The cap is stated here because it is ENFORCED here: the model wrote a rich
+    # note for one session and the whole amendment was thrown out on
+    # `String should have at most 400 characters`, a limit the schema had never
+    # mentioned (#996). A field the model cannot see the edge of is one it walks
+    # off. Kept in step with `DraftedSession.detail` by test.
+    "detail": {
+        "type": "string",
+        "maxLength": DETAIL_MAX_LENGTH,
+        "description": (
+            "One short note on how to run it, if it needs one. At most "
+            f"{DETAIL_MAX_LENGTH} characters, so a sentence or two, not a briefing."
+        ),
+    },
     "target_distance_m": {
         "type": "number",
         "description": (

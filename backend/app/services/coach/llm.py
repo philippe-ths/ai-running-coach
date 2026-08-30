@@ -4,6 +4,7 @@ LLM client abstraction — keeps the coach service decoupled from any specific p
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -368,7 +369,20 @@ class AnthropicClient:
         """
         tool_name = tool["name"]
         ladder = RetryLadder("anthropic_structured")
+        # `timeout` is a DEADLINE for the whole call, not a per-attempt budget.
+        # The ladder re-issues a timed-out request, and a per-attempt value is
+        # spent again in full on every rung — two attempts under a 42-second
+        # budget is 84 seconds, which is the very overrun this argument exists
+        # to prevent. Fixing the instant it is read, so no rung can reset it.
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
+            if deadline is not None:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError(
+                        f"{tool_name} ran out of its caller's budget before an "
+                        "attempt could complete"
+                    )
             try:
                 response = await self.client.messages.create(
                     model=self.model,
@@ -380,7 +394,7 @@ class AnthropicClient:
                     tool_choice={"type": "tool", "name": tool_name},
                     timeout=min(
                         structured_timeout_for(max_tokens),
-                        timeout if timeout is not None else float("inf"),
+                        float("inf") if deadline is None else deadline - time.monotonic(),
                     ),
                 )
                 usage = _usage_from_response(response)
