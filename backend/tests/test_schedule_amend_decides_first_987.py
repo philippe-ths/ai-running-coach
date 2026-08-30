@@ -1,4 +1,4 @@
-"""#987: the amendment decides before it offers.
+"""#987/#998: what an amendment promises, and who keeps the promise.
 
 The order used to be inverted. The coach put up a card naming a change, the
 runner tapped it, and only THEN did anything work out what the week would hold.
@@ -16,23 +16,37 @@ first attempt was rejected by the validator, and the retry asked it to "write th
 amendment again, fixing every one of these" without restating that refusing was
 allowed. The second attempt complied the only way it could.
 
-This file pins the three things that make that unreachable, in the order they
-matter:
+DECIDING FIRST WAS WITHDRAWN IN #998, and this file now pins what replaced it.
 
-**The card carries the real difference.** Not what was asked for: what the
-settled amendment would actually do. A rewrite that drops a session the runner
-meant to keep says so BEFORE the tap. This is structural and holds whatever the
-prompt does, which is why it is the first test here rather than the last.
+Settling the week before the card meant generating a plan inside the chat
+request, and that request is killed at a ceiling it cannot be told about. In
+production the turn reached the offer with between 10 and 35 seconds left of its
+42-second budget, because the rounds and tool calls before the offer are variable
+and often cost more than the generation. Every window was refused, and the
+refusal asked the runner to send the request again, which refused again. Six
+messages, no sessions, and the plan the runner was promised never existed.
 
-**An impossible request never becomes a card.** It comes back as a refusal the
-coach must answer in the conversation, carrying the rule that blocked it, so the
-runner gets alternatives instead of silence.
+So the generation moved to the worker, where there is no ceiling to run out of
+and the full retry budget is available again. What that costs is the settled
+card; what it buys is the amendment actually being written.
 
-**Confirming writes what was shown.** No generation runs at confirm time, so
-there is no second attempt in which a refusal can turn into a substitution.
+The defect #987 found is still unreachable, by a different route. It was never
+the card's TIMING that was dishonest, it was a card listing sessions nobody had
+generated yet. The contract now:
+
+**The card names the ask and nothing else.** "Rewrite the week of 31 Aug" is a
+promise the job can keep. A session list would not be, so there is not one.
+
+**Confirming hands the work over and says so.** No generation runs in the
+request, which is the property that made a second attempt impossible to hide in,
+and it still holds - now because there is no generation here at all.
+
+**The job reports back, either way.** Success writes the ledger entry from what
+was ACTUALLY written. Failure says so in the thread, in the coach's own voice,
+rather than leaving the runner watching a screen that never changes (#984).
 
 The retry's own instruction is pinned too, because it is the specific text whose
-absence caused the defect.
+absence caused the original defect, and the worker is where it runs again.
 
 All row data is synthetic test setup (exercises code paths; represents no real
 runner).
@@ -133,21 +147,15 @@ def _payload():
     }
 
 
-def _offer(db, user, proposal, *, redis=None):
-    """Mint through the real seam, with only the model call stood in for."""
+def _offer(db, user, _proposal=None, *, redis=None):
+    """Mint through the real seam.
 
-    async def _settled(*_a, **_k):
-        return proposal
-
-    with patch.object(
-        proposed_actions, "redis_conn", redis or _FakeRedis()
-    ), patch("app.services.schedule.amend.propose_amendment", new=_settled):
-        prepared = asyncio.run(
-            proposed_actions.prepare_offer(db, user.id, _payload())
-        )
-        return proposed_actions.mint_proposed_action(
-            db, user.id, _payload(), prepared=prepared
-        )
+    No model call is stood in for, because the real path no longer makes one
+    here: minting an amendment offer is now pure, and the generation happens on
+    the worker after the tap (#998).
+    """
+    with patch.object(proposed_actions, "redis_conn", redis or _FakeRedis()):
+        return proposed_actions.mint_proposed_action(db, user.id, _payload())
 
 
 def _substituting_proposal(start, end, db=None, plan=None):
@@ -206,104 +214,109 @@ def _substituting_proposal(start, end, db=None, plan=None):
     )
 
 
-# --- the card carries the real difference ------------------------------------
+# --- the card names the ask, and nothing it has not written -------------------
 
 
-def test_the_card_shows_the_session_a_substitution_would_remove(db):
-    """The structural guarantee, and the one that does not depend on the prompt.
+def test_the_card_names_the_window_rather_than_a_session_list(db):
+    """A promise the job can keep.
 
-    Given the exact rewrite that cost a runner their intervals, the card the
-    runner reads names that removal. They can decline it. Under the old order
-    there was nothing to decline: the removal was decided after the tap.
+    The card goes up before anything is generated, so the only honest thing it
+    can carry is what the runner asked for: which weeks, and that the rest of the
+    plan is untouched. #987 was right that a card must not describe sessions
+    nobody has written; naming the ask is how that stays true without settling
+    the week inside a request that cannot afford it.
     """
     user = _user(db)
     plan = _plan(db, user)
     start, end = _window()
     _session(db, plan, start=start, title="Easy Run")
-    _session(db, plan, start=start + timedelta(days=2), title="Threshold Intervals",
-             intent="quality")
 
-    result, frame = _offer(db, user, _substituting_proposal(start, end, db, plan))
+    result, frame = _offer(db, user, None)
 
     assert result["ok"] is True
-    shown = " ".join(frame["changes"])
-    assert "Threshold Intervals" in shown, (
-        "a rewrite that removes the runner's quality session must say so on the "
-        "card, not in a ledger line they read afterwards"
-    )
-    assert shown.startswith("Removed:")
+    assert start.strftime("%-d %b") in frame["description"]
+    assert frame["confirm_label"] == "Update my plan"
 
 
-def test_the_card_carries_the_week_it_is_proposing(db):
-    """The runner reads the week, not a sentence about the week. Each session is
-    marked for whether it is new to the window, so the change is visible in
-    place rather than only in the summary line."""
+def test_the_card_carries_no_week_it_has_not_generated(db):
+    """The #987 defect, made unreachable from the other side.
+
+    A card listing sessions is a card that can be wrong about them. There is no
+    list, so there is nothing for the writer to contradict later.
+    """
     user = _user(db)
     plan = _plan(db, user)
-    start, end = _window()
-    _session(db, plan, start=start, title="Easy Run")
-    _session(db, plan, start=start + timedelta(days=1), title="Easy Bike")
-    _session(db, plan, start=start + timedelta(days=2), title="Threshold Intervals",
-             intent="quality")
+    start, _end = _window()
+    _session(db, plan, start=start, title="Threshold Intervals", intent="quality")
 
-    _result, frame = _offer(db, user, _substituting_proposal(start, end, db, plan))
+    _result, frame = _offer(db, user, None)
 
-    week = frame["week"]
-    assert [row["title"] for row in week] == ["Hill Repeats", "Easy Bike", "Easy Run"]
-    assert all(isinstance(row["date"], str) for row in week)
-    by_title = {row["title"]: row for row in week}
-    # New to the window, so it is marked.
-    assert by_title["Hill Repeats"]["changed"] is True
-    # Untouched on the same day, so it is not dressed up as a change.
-    assert by_title["Easy Bike"]["changed"] is False
-    # Moved from Monday to Wednesday, which IS a change to that day.
-    assert by_title["Easy Run"]["changed"] is True
-    assert by_title["Hill Repeats"]["intent"] == "quality"
+    assert not frame.get("week"), (
+        "the card must not show a week before one has been written; that is the "
+        "promise #987 found being broken"
+    )
+    assert not frame.get("changes")
 
 
 def test_the_card_survives_the_journey_to_the_client(db):
-    """The frame is put straight onto the SSE stream by `json.dumps`, which has
-    no encoder for a `date`.
+    """The frame is put straight onto the SSE stream by `json.dumps`.
 
     Pinned because the unit tests above read the frame as Python objects and so
-    never crossed that boundary. A live turn did: the card was built correctly,
-    the stream died trying to send it, and the runner got "Sorry, I hit an error
+    never cross that boundary. A live turn did: the card was built correctly, the
+    stream died trying to send it, and the runner got "Sorry, I hit an error
     answering that" in place of the whole reply.
     """
     import json
 
     user = _user(db)
     plan = _plan(db, user)
-    start, end = _window()
+    start, _end = _window()
     _session(db, plan, start=start, title="Easy Run")
 
-    _result, frame = _offer(db, user, _substituting_proposal(start, end, db, plan))
+    _result, frame = _offer(db, user, None)
 
     encoded = json.dumps({"type": "proposed_action", **frame})
-    assert start.isoformat() in encoded
+    assert "amend_plan" in encoded
 
 
-# --- an impossible request never becomes a card ------------------------------
+# --- an impossible request is reported, never swallowed -----------------------
 
 
-def test_an_impossible_amendment_is_refused_instead_of_offered(db):
-    """The runner's own rules can make a request genuinely impossible. The
-    honest answer is that it does not fit, said in the conversation while they
-    are still in it — not a card, and not silence half a minute later."""
+def test_an_impossible_amendment_tells_the_runner_in_their_thread(db):
+    """The runner's own rules can make a request genuinely impossible.
+
+    That is now discovered on the worker, after the tap, so it cannot be said
+    before the card the way #987 arranged. What must not happen is the thing that
+    replaced it going silent: the job's own docstring used to promise that a
+    failure here was "silence plus a log line", on the reasoning that the runner
+    still has the plan they had a minute ago. True of the plan, false of the
+    person, who tapped a card and watched nothing happen (#984).
+    """
+    from app.jobs.amend_schedule import _say_it_failed
+    from app.models.coach_chat_message import CoachChatMessage
+    from app.models.thread import Thread
+
     user = _user(db)
-    _plan(db, user)
-    start, end = _window()
-    refused = AmendProposal(
-        ok=False, failures=[THREE_DAY_RULE], start=start, end=end
+    thread = Thread(user_id=user.id)
+    db.add(thread)
+    db.commit()
+
+    _say_it_failed(db, thread.id, [THREE_DAY_RULE])
+
+    said = (
+        db.query(CoachChatMessage)
+        .filter(CoachChatMessage.thread_id == thread.id)
+        .all()
     )
-
-    result, frame = _offer(db, user, refused)
-
-    assert frame is None, "an amendment that cannot be written must not be offered"
-    assert result["ok"] is False
-    assert result["error"] == "cannot_amend"
-    # And the coach is told WHY, in terms it can turn into alternatives.
-    assert "3 days between hard sessions" in result["detail"]
+    assert len(said) == 1
+    note = said[0]
+    assert note.role == "assistant", (
+        "a failure must not be recorded as a confirmed action event; the ledger "
+        "would then carry a write that never happened"
+    )
+    assert "could not write" in note.content
+    assert "3 days between hard sessions" in note.content
+    assert "unchanged" in note.content
 
 
 def test_a_refused_amendment_leaves_every_session_alone(db):
@@ -349,56 +362,58 @@ def test_confirming_runs_no_generation_at_all(db):
     assert result["action_type"] == "amend_plan"
 
 
-def test_what_lands_is_what_the_card_said(db):
-    """The whole point, asserted end to end across the offer and the confirm."""
+def test_confirming_hands_the_work_to_the_worker(db):
+    """The runner's tap enqueues; it does not write.
+
+    This is the property that keeps #987's defect unreachable. The old shape
+    could hide a second generation between the tap and the week; there is no
+    generation in this request to hide anything in, and the one that does run has
+    its full retry budget on the worker.
+    """
     user = _user(db)
     plan = _plan(db, user)
-    start, end = _window()
-    _session(db, plan, start=start, title="Easy Run")
-    _session(db, plan, start=start + timedelta(days=2), title="Threshold Intervals",
-             intent="quality")
     redis = _FakeRedis()
+    _result, frame = _offer(db, user, None, redis=redis)
 
-    _result, frame = _offer(
-        db, user, _substituting_proposal(start, end, db, plan), redis=redis
-    )
-    with patch.object(proposed_actions, "redis_conn", redis):
+    enqueued = []
+    with patch.object(proposed_actions, "redis_conn", redis), patch(
+        "app.jobs.amend_schedule.enqueue_amendment",
+        new=lambda *a, **k: enqueued.append((a, k)),
+    ):
         result = proposed_actions.consume_and_execute(db, user.id, frame["token"])
 
-    landed = {
-        (row.window_start, row.title)
-        for row in db.query(PlannedSession).filter(
-            PlannedSession.plan_id == plan.id,
-            PlannedSession.window_start >= start,
-            PlannedSession.window_start <= end,
-        )
-    }
-    assert {
-        (date.fromisoformat(row["date"]), row["title"]) for row in frame["week"]
-    } == landed
-    # And the confirm reports it in the past tense, because it has happened.
-    assert result["message"].startswith("Done.")
-    assert result["changes"] == frame["changes"]
+    assert result["action_type"] == "amend_plan"
+    assert len(enqueued) == 1, "the confirm must hand the amendment to the worker"
+    _args, kwargs = enqueued[0]
+    assert kwargs["weeks_from"] == 1 and kwargs["weeks_through"] == 1
+    assert kwargs["thread_id"] is None or kwargs["thread_id"] is not None
+    # Nothing was written in the request.
+    assert db.query(PlannedSession).count() == 0
 
 
-def test_the_confirm_reports_the_change_rather_than_promising_a_screen(db):
-    """The old answer was "your Schedule screen will show them in a minute",
-    which the request had no way to keep: a crashed work-horse, a refusal or a
-    substitution each turned it into something else and nothing came back."""
+def test_the_confirm_promises_only_what_the_job_will_do(db):
+    """It says the work is happening and where the answer will appear.
+
+    The previous wording said "Done." because the week really was already
+    written. It is not any more, and a confirm that still said so would be the
+    same lie #987 removed, told one step later.
+    """
     user = _user(db)
-    plan = _plan(db, user)
-    start, end = _window()
-    _session(db, plan, start=start, title="Easy Run")
+    _plan(db, user)
     redis = _FakeRedis()
+    _result, frame = _offer(db, user, None, redis=redis)
 
-    _result, frame = _offer(
-        db, user, _substituting_proposal(start, end, db, plan), redis=redis
-    )
-    with patch.object(proposed_actions, "redis_conn", redis):
+    with patch.object(proposed_actions, "redis_conn", redis), patch(
+        "app.jobs.amend_schedule.enqueue_amendment", new=lambda *a, **k: None
+    ):
         result = proposed_actions.consume_and_execute(db, user.id, frame["token"])
 
-    assert "in a minute" not in result["message"]
-    assert "Everything else in your plan is as it was." in result["message"]
+    message = result["message"]
+    assert not message.startswith("Done"), (
+        "nothing is done yet; the worker has not run"
+    )
+    assert "Schedule screen" in message
+    assert "tell you here" in message
 
 
 # --- the retry that caused it ------------------------------------------------

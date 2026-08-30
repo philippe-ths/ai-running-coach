@@ -128,7 +128,10 @@ costs from this runner's own history.
 mean an easy walk or a gentle spin, that is an easy session of that discipline \
 (intent `easy`, discipline `walk` or `bike`), not a rest day with a target on it.
 - Every other session needs enough to size it: a distance, a duration, or rep \
-structure. A session with none of the three is rejected.
+structure. A session with none of the three is rejected. A session with no \
+distance to give is sized by TIME: strength, mobility, a class, anything \
+measured in minutes rather than kilometres, needs `target_duration_s`. "Strength" \
+on its own is not a session anyone can do, and it is rejected like any other.
 - Write a warm-up and a cool-down as a DISTANCE, never as minutes. \
 `warmup_distance_m` and `cooldown_distance_m` are part of the session; the same \
 thing said in prose as "10 min easy" is not a distance and counts as nothing.

@@ -656,14 +656,16 @@ class TestADeferredWriteIsNotRecordedUntilItHappens:
             .all()
         )
 
-    def test_confirming_an_amendment_records_what_it_actually_wrote(self, db):
-        """The tap and the write are now one moment, so the trace is written
-        here — and it carries the CHANGE, not just the card's wording.
+    def test_confirming_an_amendment_records_nothing_yet(self, db):
+        """An amendment rejoined the deferred set in #998, so it obeys this
+        class's own rule again: the tap enqueues, and nothing is recorded until
+        the worker has actually written the week.
 
-        The card is what the runner agreed to and is how they recognise the
-        entry, so it stays as the opening line. What follows it is what the rows
-        actually did, because those are the two things that have to be able to
-        disagree in the record if they ever disagree in fact."""
+        It was briefly the exception. #987 made the tap and the write one moment,
+        so the trace belonged here; the generation that made that possible could
+        not fit inside the request and moved back to the worker. The trace moved
+        with it, and the sibling test below is where it is now pinned.
+        """
         user = _seed_user(db)
         thread = Thread(user_id=user.id)
         db.add(thread)
@@ -673,16 +675,17 @@ class TestADeferredWriteIsNotRecordedUntilItHappens:
         fake_redis = _FakeRedis()
         stored = self._stored_amendment(user, thread, plan)
 
-        with patch.object(proposed_actions, "redis_conn", fake_redis):
+        with patch.object(proposed_actions, "redis_conn", fake_redis), patch(
+            "app.jobs.amend_schedule.enqueue_amendment", new=lambda *a, **k: None
+        ):
             token = proposed_actions._mint_token(user.id, stored)
             result = proposed_actions.consume_and_execute(db, user.id, token)
 
         assert result["action_type"] == "amend_plan"
-        events = self._events(db)
-        assert len(events) == 1
-        assert events[0].content.startswith(stored.description)
-        # The change itself, in the words the card used for it.
-        assert "Added: " in events[0].content or "No session" in events[0].content
+        assert self._events(db) == [], (
+            "the week has not been written yet, so the ledger must not say it "
+            "has; that is the #778 defect this class exists to prevent"
+        )
 
     def test_the_amendment_job_records_the_trace_once_it_has_written(self, db):
         from app.jobs import amend_schedule

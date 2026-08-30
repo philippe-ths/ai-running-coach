@@ -103,10 +103,39 @@ def amend_schedule_job(
                 outcome.failure_kind,
                 "; ".join(outcome.failures or ["unknown"]),
             )
+            _say_it_failed(db, thread_id, outcome.failures)
     except Exception:
         logger.exception("schedule amend: job failed for plan %s", plan_id)
     finally:
         db.close()
+
+
+def _say_it_failed(db, thread_id, failures) -> None:
+    """Tell the runner their week was not written, in the thread they asked in.
+
+    The docstring above used to promise that a failure here was "silence plus a
+    log line", on the reasoning that the runner still has the plan they had a
+    minute ago. That reasoning holds for the PLAN and not for the runner: they
+    tapped a card, were told it was being worked out, and then watched a Schedule
+    screen that never changed, with nothing anywhere saying why (#984). Silence
+    is the right degradation for the data and the wrong one for the person.
+
+    Fail-soft, like its sibling: a note that cannot be written is not worth
+    raising over, because the job's real work is already decided by this point.
+    """
+    reason = "; ".join(failures or [])
+    note = (
+        "I could not write that into your plan after all"
+        + (f" - {reason}." if reason else ".")
+        + " Your schedule is unchanged. Tell me to try again and I will, or we "
+        "can change what we are asking for."
+    )
+    try:
+        from app.services.coach import threads as thread_service
+
+        thread_service.record_coach_note(db, thread_id, note)
+    except Exception:  # noqa: BLE001 - the note is the consolation, not the work
+        logger.exception("schedule amend: failure note not written to %s", thread_id)
 
 
 def _record_in_thread(db, thread_id, description: str | None, changes=None) -> None:

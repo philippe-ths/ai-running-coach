@@ -346,3 +346,33 @@ def touch_thread(db: Session, thread: Thread) -> None:
     """Record that a message just landed on this thread (switcher recency)."""
     thread.last_message_at = func.now()
     db.add(thread)
+
+
+def record_coach_note(db: Session, thread_id, text: str) -> None:
+    """Let a background job say something back into the conversation (#984).
+
+    An `assistant` row rather than an `ACTION_EVENT_ROLE` one, and the
+    distinction carries the whole meaning. An event says a change was made, and
+    reaches the coach as part of the confirmed ledger; this is used when a change
+    was NOT made, so recording it as an event would put a write into the ledger
+    that never happened. What this records is the coach speaking: the runner sees
+    it in the thread, and the coach reads it back as its own words.
+
+    The case it exists for is an amendment that fails on the worker. Before, that
+    was a log line and silence, and the runner was left watching a Schedule
+    screen that never changed.
+    """
+    body = " ".join((text or "").split())
+    if not thread_id or not body:
+        return
+    db.add(
+        CoachChatMessage(
+            thread_id=thread_id,
+            role="assistant",
+            content=body,
+        )
+    )
+    thread = db.query(Thread).filter(Thread.id == thread_id).first()
+    if thread is not None:
+        touch_thread(db, thread)
+    db.commit()

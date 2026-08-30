@@ -47,21 +47,27 @@ _TOKEN_MAX_LENGTH = 64
 # written by the job instead, on success, so the ledger stays true rather than
 # needing a caveat that says when to disbelieve it.
 #
-# `amend_plan` left this set in #987: its week is settled before the card goes
-# up, so confirming it writes in that same request and there is no longer a
-# window between the tap and the change.
-DEFERRED_ACTION_TYPES = frozenset({"draft_plan"})
+# `amend_plan` rejoined this set in #998, having left it in #987. Settling the
+# week before the card meant generating a plan inside the chat request, and the
+# request has a ceiling it cannot be told about: the runner's turn reaches the
+# offer with whatever is left of it, which in production was between 10 and 35
+# seconds of a 42-second budget, because the rounds and tool calls before the
+# offer are variable and often cost more than the generation itself. Under that,
+# every window was refused, and the refusal asked the runner to send the request
+# again, which refused again. Six messages, no sessions.
+#
+# On the worker there is no ceiling to run out of, so the amendment is generated
+# with its full retry budget and written when it is right.
+DEFERRED_ACTION_TYPES = frozenset({"draft_plan", "amend_plan"})
 
 # The actions whose CONTENT has to be settled before the card can be honest
-# (#987). Everything else names a change the runner can already read off the
-# card; an amendment's card is only meaningful once the week behind it exists,
-# so the generation runs before the offer rather than after the tap.
-#
-# Preparation is async and slow, roughly twenty seconds, which is why it is a
-# separate step the tool loop can announce rather than something buried in
-# `_build_offer`. The runner used to wait that long AFTER agreeing, watching a
-# promise; they now wait it out in front of a decision they have not made yet.
-PREPARED_ACTION_TYPES = frozenset({"amend_plan"})
+# (#987). Empty, and kept rather than removed: settling first is the better
+# design and the machinery below is one entry away from being live again, once
+# an amendment can be settled off the request and its card delivered when ready
+# (#998). What made the card dishonest was never its timing, it was listing
+# sessions that had not been generated. A card naming the ASK - "write the week
+# of Aug 31" - promises nothing it cannot keep, so the confirm step survives.
+PREPARED_ACTION_TYPES: frozenset = frozenset()
 
 
 def needs_preparation(tool_input: Dict[str, Any]) -> bool:
@@ -795,36 +801,35 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
             raise ValueError(
                 "your plan changed since this was offered, so nothing was changed"
             )
-        # Written HERE, in the request the runner's tap made (#987). The whole
-        # generation happened before the card went up, so what is left is a
-        # delete and an insert: fast, deterministic, and with nothing to decide.
+        # Handed to the worker (#998). The generation cannot run here: this is a
+        # request with a wall-clock ceiling, and an amendment needs more of it
+        # than the turn reliably has left. On the worker it gets its full retry
+        # budget, which is what recovers the coherence failures a single attempt
+        # cannot - the one that made this loop was a strength session written
+        # with no duration, exactly what a rewrite is for.
         #
-        # That is what lets the confirm say what happened rather than what is
-        # about to. The old shape handed a generation to the worker and answered
-        # "your Schedule screen will show them in a minute", which was a promise
-        # the request had no way to keep: the runner watched for a change that a
-        # crashed work-horse, a refusal, or a substitution could each turn into
-        # something else, and nothing came back to say so.
-        from app.services.schedule.amend import AmendProposal, AmendedPlan, apply_proposal
+        # The promise this returns is the same one `draft_plan` makes and keeps,
+        # and it is kept the same way: the job reports back into this thread,
+        # whether it wrote the week or could not (#984). What broke before was a
+        # promise with nothing behind it, not a promise made in advance.
+        from app.jobs.amend_schedule import enqueue_amendment
 
-        proposal = AmendProposal(
-            ok=True,
-            amended=AmendedPlan.model_validate(stored.amended_plan),
-            start=stored.amend_start,
-            end=stored.amend_end,
+        enqueue_amendment(
+            owner_user_id,
+            plan.id,
+            weeks_from=stored.weeks_from or 0,
+            weeks_through=stored.weeks_through or 0,
+            instruction=stored.amend_reason or "",
+            thread_id=stored.thread_id,
+            description=stored.description,
         )
-        outcome = apply_proposal(db, plan.user, plan, proposal)
-        if not outcome.ok:
-            raise ValueError(
-                "; ".join(outcome.failures or ["the amendment could not be written"])
-            )
-        # The ledger entry is written by `_record_confirmed`, which every
-        # non-deferred action goes through; `changes` below is what it appends.
         return {
             "action_type": "amend_plan",
             "plan_id": str(plan.id),
-            "changes": outcome.changes,
-            "message": _describe_applied(outcome.changes),
+            "message": (
+                "Working it out now — I'll put it on your Schedule screen and "
+                "tell you here when it's in."
+            ),
         }
 
     if stored.action_type == "adjust_session":
@@ -1040,32 +1045,34 @@ def _build_offer(
             # The surface's kill switch reaches this write path too, exactly as
             # it reaches `draft_plan` and `adjust_session`.
             raise ValueError("the schedule is unavailable")
-        if prepared is None or not prepared.ok or prepared.amended_plan is None:
-            # Unreachable through `mint_proposed_action`, which refuses an
-            # unprepared amendment before it gets here. Checked anyway, because
-            # this is the branch where skipping preparation would mean minting a
-            # card with nothing behind it, which is the whole defect (#987).
-            raise ValueError("an amendment must be worked out before it is offered")
         plan = schedule_store.get_active_plan(db, owner_user_id)
         if plan is None:
             raise ValueError(
                 "this runner has no active plan to amend; offer draft_plan instead"
             )
+        # The window is resolved from the runner's own week start, never from
+        # dates the model supplied, exactly as `propose_amendment` resolves it.
+        # The card and the job then agree about which weeks are in play without
+        # either of them having to be told by the other.
+        from app.services.schedule.amend import resolve_window
+        from app.services.weeks import resolve_week_start
+
+        start, end = resolve_window(
+            date.today(),
+            resolve_week_start(getattr(plan.user, "profile", None)),
+            weeks_from=request.weeks_from,
+            weeks_through=request.weeks_through,
+        )
         frame = ProposedActionFrame(
             action_type="amend_plan",
             token="",
             # The card names the WINDOW and what is left alone (#883's lesson,
-            # applied to the smaller verb), and now carries the change itself
-            # beside it. The sentence is still what the runner recognises; the
-            # `changes` and `week` below are what makes it checkable, because
-            # they are derived from the amendment that will actually be written
-            # rather than from what was asked for.
-            description=_describe_amendment(
-                prepared.start, prepared.end, request.amend_reason
-            ),
+            # applied to the smaller verb). It carries no session list, because
+            # nothing has been written yet and a card listing sessions that do
+            # not exist is the dishonesty #987 was right about. Naming the ask is
+            # a promise the job can keep.
+            description=_describe_amendment(start, end, request.amend_reason),
             confirm_label="Update my plan",
-            changes=prepared.changes,
-            week=prepared.week,
         )
         stored = StoredProposedAction(
             owner_user_id=owner_user_id,
@@ -1073,9 +1080,8 @@ def _build_offer(
             weeks_from=request.weeks_from,
             weeks_through=request.weeks_through,
             amend_reason=request.amend_reason,
-            amended_plan=prepared.amended_plan,
-            amend_start=prepared.start,
-            amend_end=prepared.end,
+            amend_start=start,
+            amend_end=end,
             plan_id_at_offer=plan.id,
         )
         return frame, stored
