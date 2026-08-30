@@ -54,6 +54,7 @@ change and this phase is behaviour-preserving.
 from __future__ import annotations
 
 import logging
+import time
 from enum import Enum
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
@@ -65,6 +66,42 @@ from app.services.coach import budget
 from app.services.coach.llm import AnthropicClient, ChatTurnDelta, MessageResult, Usage
 
 logger = logging.getLogger(__name__)
+
+
+# How long a conversational turn has, in total, before the platform stops caring
+# what it was doing (#995).
+#
+# A thread turn is generated here but reaches the runner through the Vercel
+# function in `frontend/app/api/[...path]/route.ts`, whose `maxDuration` is a
+# wall-clock kill: at the ceiling the function is terminated mid-response, this
+# generator is cancelled, and the runner sees a turn that never ends. Heartbeats
+# do not help — that was #375, an IDLE timeout, and a different thing.
+#
+# The number is the frontend's, mirrored rather than owned:
+# `frontend/lib/turnBudget.ts` holds it too, and
+# `backend/tests/test_turn_budget_995.py` fails when the two disagree. Mirroring
+# with a guard is deliberate. The alternative was a comment asserting the two
+# agreed, which is exactly what `route.ts` carried — "the underlying LLM call is
+# bounded well below this" — and which stayed green for the three days after
+# #989 put a 205-second generation inside a 60-second request.
+TURN_BUDGET_SECONDS = 60.0
+
+# What the turn's own work costs around any single in-request generation: the
+# pack build, the model round that decides to call a tool, and the round that
+# speaks the answer afterwards. Measured at ~12s end to end against production
+# (a real two-round turn, 2026-08-30T13:17:09 to :21); carried at 18 so the
+# reserve is not itself the thing that overruns.
+TURN_RESERVE_SECONDS = 18.0
+
+
+def turn_budget_remaining(started_at: float, *, now: Optional[float] = None) -> float:
+    """Seconds an in-request generation may still take, given when the turn began.
+
+    `started_at` is a `time.monotonic()` reading. Never negative: a turn already
+    past its budget gets zero, which every caller reads as "do not start".
+    """
+    elapsed = (time.monotonic() if now is None else now) - started_at
+    return max(0.0, TURN_BUDGET_SECONDS - TURN_RESERVE_SECONDS - elapsed)
 
 
 class TurnKind(str, Enum):
@@ -192,9 +229,11 @@ class MeteredClient:
         user: str,
         tool: Dict[str, Any],
         max_tokens: int = 1024,
+        timeout: Optional[float] = None,
     ) -> tuple[Dict[str, Any], Usage]:
         result, usage = await self._inner.generate_structured_with_usage(
-            system=system, user=user, tool=tool, max_tokens=max_tokens
+            system=system, user=user, tool=tool, max_tokens=max_tokens,
+            timeout=timeout,
         )
         self._record(usage)
         return result, usage
@@ -206,9 +245,11 @@ class MeteredClient:
         user: str,
         tool: Dict[str, Any],
         max_tokens: int = 1024,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         result, _usage = await self.generate_structured_with_usage(
-            system=system, user=user, tool=tool, max_tokens=max_tokens
+            system=system, user=user, tool=tool, max_tokens=max_tokens,
+            timeout=timeout,
         )
         return result
 

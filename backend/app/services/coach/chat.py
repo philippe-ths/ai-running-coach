@@ -44,7 +44,7 @@ from app.models.coach_report import CoachReport
 from app.models.coaching_relationship import CoachingRelationship
 from app.schemas.chat import ChatMessageRead
 from app.schemas.coach_context import CoachContextPack, unnest_pack
-from app.services.coach import coach_units
+from app.services.coach import coach_units, turn
 from app.services.coach.coach_framing import coach_llm_view
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.prompts import render_voice_block
@@ -362,6 +362,11 @@ async def _buffered_tool_loop(
     skills_used: List[str] = []
     proposed_action = None
     last_heartbeat = time.monotonic()
+    # #995: when this turn began, so an in-request generation can be told how
+    # much of the request's wall-clock is left. Taken at the top of the loop
+    # rather than at the offer, because the reserve is for the rounds on BOTH
+    # sides of it and the rounds before it have already been paid for.
+    turn_started_at = last_heartbeat
     try:
         for round_idx in range(_MAX_TOOL_ROUNDS):
             # The final round runs tools-off, forcing a text answer rather than another
@@ -461,7 +466,12 @@ async def _buffered_tool_loop(
                             )
                             last_heartbeat = time.monotonic()
                             prepared = await prepare_offer(
-                                db, owner_user_id, tool_input
+                                db,
+                                owner_user_id,
+                                tool_input,
+                                budget_seconds=turn.turn_budget_remaining(
+                                    turn_started_at
+                                ),
                             )
                         # The model reads `result` (pending, tokenless); the runner's
                         # client gets the `frame` that carries the one-shot token.

@@ -30,6 +30,7 @@ and the runner would train it.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
@@ -56,6 +57,56 @@ logger = logging.getLogger(__name__)
 # this week; the next block, written out of its sketch) and narrow enough that
 # "amend" cannot quietly become "redraft" and take the plan with it.
 MAX_AMEND_WEEKS = 6
+
+
+# What one generation of an N-week amendment actually costs, measured (#995).
+#
+# Against the real production plan on 2026-08-30, per generation:
+#
+#     window   per-generation seconds
+#     1 week   23.5
+#     2 weeks  34.6, 40.6
+#     4 weeks  53.8, 60.9
+#     6 weeks  ~65
+#
+# which `14 + 10 * weeks` tracks closely and slightly conservatively. This is an
+# estimate of the MODEL, so it is a straight line fitted to observation rather
+# than anything derivable: when the model or the prompt changes materially,
+# re-measure rather than reason about it.
+_ESTIMATED_BASE_SECONDS = 14.0
+_ESTIMATED_SECONDS_PER_WEEK = 10.0
+
+
+def estimated_seconds(weeks: int) -> float:
+    """Wall-clock a single amendment generation of this size should be given."""
+    return _ESTIMATED_BASE_SECONDS + _ESTIMATED_SECONDS_PER_WEEK * max(1, weeks)
+
+
+def weeks_that_fit(budget_seconds: float) -> int:
+    """The widest window one generation can settle inside `budget_seconds`.
+
+    Zero when not even a single week fits, which the caller must read as "do not
+    start" rather than as "ask for one week".
+    """
+    fits = int((budget_seconds - _ESTIMATED_BASE_SECONDS) // _ESTIMATED_SECONDS_PER_WEEK)
+    return max(0, min(MAX_AMEND_WEEKS, fits))
+
+
+# Output room for an N-week amendment. Sized to the work rather than flat, so the
+# ceiling `structured_timeout_for` derives from it is a truthful statement about
+# THIS call — a flat 8192 claimed 205 seconds for a one-week rewrite that takes
+# 24, which is how a generation came to outlive the request carrying it (#995).
+#
+# Generous against the observed shape: a settled 4-week window came back as 28
+# sessions, so ~1300 tokens per week leaves real headroom. Undersizing this is
+# not a soft failure — `generate_structured` raises on a `max_tokens` stop by
+# design (#931) rather than returning half a plan.
+_MAX_TOKENS_BASE = 1200
+_MAX_TOKENS_PER_WEEK = 1300
+
+
+def amend_max_tokens(weeks: int) -> int:
+    return min(8192, _MAX_TOKENS_BASE + _MAX_TOKENS_PER_WEEK * max(1, weeks))
 
 
 class AmendedPlan(BaseModel):
@@ -378,6 +429,7 @@ async def propose_amendment(
     weeks_through: int,
     instruction: str,
     today: Optional[date] = None,
+    budget_seconds: Optional[float] = None,
 ) -> AmendProposal:
     """Settle what the window WOULD hold, and write none of it (#987).
 
@@ -389,12 +441,40 @@ async def propose_amendment(
     own rules comes back refused, carrying the rule it could not satisfy, and the
     coach answers the runner with that rather than putting up a card for a change
     it cannot honour.
+
+    `budget_seconds` is the wall-clock this may take when it is running INSIDE a
+    request that will be killed at a ceiling (#995). Given one, a window too wide
+    to settle within it is refused BEFORE any tokens are spent, carrying the
+    window that would have fitted — so the coach narrows the ask in conversation
+    instead of starting work that gets severed halfway. Left None, there is no
+    ceiling to respect and the size gate does not apply.
     """
     today = today or date.today()
     starts_on = resolve_week_start(getattr(user, "profile", None))
     start, end = resolve_window(
         today, starts_on, weeks_from=weeks_from, weeks_through=weeks_through
     )
+    weeks = max(1, weeks_through - weeks_from + 1)
+
+    if budget_seconds is not None and estimated_seconds(weeks) > budget_seconds:
+        fits = weeks_that_fit(budget_seconds)
+        if fits <= 0:
+            detail = (
+                "there is no time left in this message to work out an amendment; "
+                "ask the runner to send the request again on its own"
+            )
+        else:
+            detail = (
+                f"a {weeks}-week amendment takes longer than one message allows; "
+                f"offer to settle {fits} week{'s' if fits > 1 else ''} now "
+                f"(weeks_from={weeks_from}, weeks_through={weeks_from + fits - 1}) "
+                "and do the rest in a follow-up"
+            )
+        logger.info(
+            "schedule amend: %s-week window refused, %.0fs budget fits %s",
+            weeks, budget_seconds, fits,
+        )
+        return AmendProposal(ok=False, start=start, end=end, failures=[detail])
 
     if turn.over_budget(user.id):
         return AmendProposal(
@@ -423,8 +503,26 @@ async def propose_amendment(
     failure_kind = store.FAILURE_UNKNOWN
     rewrites_left = 2
     transport_retries_left = 1
+    max_tokens = amend_max_tokens(weeks)
+    started_at = time.monotonic()
 
     while rewrites_left > 0:
+        # #995: a rewrite is a whole second generation, and the budget covers one.
+        # Checked per attempt rather than once up front, because the decision is
+        # about the time LEFT: a first pass that ran long has already spent what
+        # the retry would need, and starting it anyway is how the request comes to
+        # be severed with nothing to show. Stopping here returns the real failures
+        # instead, which is a worse plan than a rewrite would have found and a far
+        # better answer than silence.
+        if budget_seconds is not None:
+            left = budget_seconds - (time.monotonic() - started_at)
+            if left < estimated_seconds(weeks):
+                logger.info(
+                    "schedule amend: stopping after %d attempt(s), %.0fs left of %.0fs",
+                    2 - rewrites_left, left, budget_seconds,
+                )
+                break
+
         user_message = context
         if failures:
             # The retry has to carry the refusal option forward with it (#987).
@@ -450,7 +548,14 @@ async def propose_amendment(
                 system=_SYSTEM_PROMPT,
                 user=user_message,
                 tool=RECORD_AMENDMENT_TOOL,
-                max_tokens=8192,
+                max_tokens=max_tokens,
+                # Never outlive the request carrying this call. The derived
+                # ceiling is a hung-call guard sized for the work; the budget is
+                # what the platform will actually allow. The smaller wins (#995).
+                timeout=(
+                    None if budget_seconds is None
+                    else max(1.0, budget_seconds - (time.monotonic() - started_at))
+                ),
             )
         except Exception as exc:  # transport, timeout, refusal
             logger.warning("schedule amend: generation call failed: %s", exc)

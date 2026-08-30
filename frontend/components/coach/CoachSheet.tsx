@@ -28,7 +28,8 @@ import {
   ThreadListItem,
   ToolTraceEntry,
 } from '@/lib/types';
-import { readCoachStream } from '@/lib/coachStream';
+import { readCoachStream, CoachStreamTruncatedError } from '@/lib/coachStream';
+import { CLIENT_TURN_TIMEOUT_MS } from '@/lib/turnBudget';
 import { useDraftStatus } from '@/lib/useDraftStatus';
 import { useCoachSheet } from './CoachSheetContext';
 import ThreadSwitcher from './ThreadSwitcher';
@@ -370,9 +371,15 @@ export default function CoachSheet() {
 
       let fullResponse = '';
       const toolsUsed: ToolTraceEntry[] = [];
+      // #995: a turn severed at the function ceiling can leave the socket open
+      // with nothing more to read, which the reader cannot tell from a slow
+      // coach. Bound the wait so the sheet always resolves to something.
+      const abort = new AbortController();
+      const stall = setTimeout(() => abort.abort(), CLIENT_TURN_TIMEOUT_MS);
       try {
         const res = await fetch('/api/coach/threads/messages', {
           method: 'POST',
+          signal: abort.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message: text,
@@ -423,16 +430,30 @@ export default function CoachSheet() {
         setMessages(prev => [...prev, assistantMsg]);
         setStreamingText('');
         void refreshThreads();
-      } catch {
+      } catch (err) {
+        // #995: name what actually happened. A turn cut off at the ceiling is
+        // not an unreachable coach — the coach was reached and was still
+        // working — and it is the one failure the runner can do something
+        // about, by asking for less at a time. Any partial prose is kept: it
+        // was really said, and throwing it away is what made the old behaviour
+        // read as nothing having happened at all.
+        const truncated =
+          err instanceof CoachStreamTruncatedError ||
+          (err instanceof DOMException && err.name === 'AbortError');
+        const note = truncated
+          ? "That took longer than a single message allows, so it stopped partway and nothing was saved. Asking for a smaller stretch — one week rather than several — usually gets there."
+          : "Sorry, I couldn't reach your coach just now. Please try again.";
         const errorMsg: ChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: "Sorry, I couldn't reach your coach just now. Please try again.",
+          content: fullResponse ? `${fullResponse}\n\n---\n\n_${note}_` : note,
+          tools_used: toolsUsed.length ? toolsUsed : null,
           created_at: new Date().toISOString(),
         };
         setMessages(prev => [...prev, errorMsg]);
         setStreamingText('');
       } finally {
+        clearTimeout(stall);
         setStreaming(false);
         setFetchingLabel('');
         setStreamingTools([]);

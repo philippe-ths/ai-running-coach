@@ -23,6 +23,24 @@ export interface CoachStreamHandlers {
   onToolTrace?: (entry: ToolTraceEntry) => void;
 }
 
+// #995: a stream that stops early is not a stream that finished. The backend
+// closes every turn with `[DONE]` — including the one it emits from its own
+// `except` — so the sentinel arriving is the only proof the turn ran to an end
+// the server chose. Without this the two are byte-indistinguishable: the reader
+// returns normally, the caller believes the coach replied, and a severed
+// connection shows up as an empty message or an endless spinner.
+//
+// The severing is real and not hypothetical. `maxDuration` on the API proxy
+// route is a wall-clock kill, and unlike the idle timeout of #375 no heartbeat
+// can hold it off — when a turn outlives it the function is terminated
+// mid-response with no error frame, because there is nothing left to write one.
+export class CoachStreamTruncatedError extends Error {
+  constructor() {
+    super('The coach stream ended before the reply was complete.');
+    this.name = 'CoachStreamTruncatedError';
+  }
+}
+
 export async function readCoachStream(
   res: Response,
   handlers: CoachStreamHandlers,
@@ -32,12 +50,16 @@ export async function readCoachStream(
 
   const decoder = new TextDecoder();
   let buffer = "";
+  let sawDone = false;
 
   const handleEvent = (event: string) => {
     for (const line of event.split("\n")) {
       if (!line.startsWith("data: ")) continue;
       const data = line.slice(6);
-      if (data === "[DONE]") continue;
+      if (data === "[DONE]") {
+        sawDone = true;
+        continue;
+      }
       try {
         const parsed = JSON.parse(data);
         if (typeof parsed === "string") {
@@ -70,4 +92,8 @@ export async function readCoachStream(
     for (const event of events) handleEvent(event);
   }
   if (buffer.trim()) handleEvent(buffer);
+
+  // Checked after the trailing partial is drained, so a `[DONE]` that arrived
+  // in the same chunk as the last content frame still counts.
+  if (!sawDone) throw new CoachStreamTruncatedError();
 }

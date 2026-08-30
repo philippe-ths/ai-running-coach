@@ -319,11 +319,12 @@ class AnthropicClient:
         user: str,
         tool: Dict[str, Any],
         max_tokens: int = 1024,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """A structured-output-only call: force the model to emit exactly the given
         tool's input and return it as a dict. See `generate_structured_with_usage`."""
         result, _usage = await self.generate_structured_with_usage(
-            system=system, user=user, tool=tool, max_tokens=max_tokens
+            system=system, user=user, tool=tool, max_tokens=max_tokens, timeout=timeout
         )
         return result
 
@@ -334,6 +335,7 @@ class AnthropicClient:
         user: str,
         tool: Dict[str, Any],
         max_tokens: int = 1024,
+        timeout: Optional[float] = None,
     ) -> tuple[Dict[str, Any], Usage]:
         """A structured-output-only call that also returns token usage (#472).
 
@@ -356,6 +358,13 @@ class AnthropicClient:
         Not retried, for the same reason a missing block is not: the same call at
         the same cap truncates again. The right fix is a cap that fits the work,
         and this raise is what makes an undersized one findable instead of silent.
+
+        `timeout` overrides the ceiling derived from `max_tokens`, and is how a
+        caller running inside a request that will be killed at a platform ceiling
+        says so (#995). The derived value is a hung-call guard sized for the work
+        and knows nothing about who is waiting; where both apply the SMALLER is
+        the honest one, because a call allowed to outlive its own request is not
+        a call that succeeds slowly, it is one whose result nobody receives.
         """
         tool_name = tool["name"]
         ladder = RetryLadder("anthropic_structured")
@@ -369,7 +378,10 @@ class AnthropicClient:
                     messages=[{"role": "user", "content": user}],
                     tools=[tool],
                     tool_choice={"type": "tool", "name": tool_name},
-                    timeout=structured_timeout_for(max_tokens),
+                    timeout=min(
+                        structured_timeout_for(max_tokens),
+                        timeout if timeout is not None else float("inf"),
+                    ),
                 )
                 usage = _usage_from_response(response)
                 stop_reason = (

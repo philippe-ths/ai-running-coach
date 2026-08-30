@@ -419,7 +419,13 @@ def test_the_retry_tells_the_writer_it_may_still_refuse(db):
     prompts = []
 
     class _Client:
-        async def generate_structured(self, *, system, user, tool, max_tokens=1024):
+        # `timeout` is accepted because the real client takes it (#995). A double
+        # that omits a kwarg the caller passes raises TypeError INSIDE the loop's
+        # `except Exception`, which reads it as a transport failure — so the test
+        # goes green-then-red for a reason that has nothing to do with retries.
+        async def generate_structured(
+            self, *, system, user, tool, max_tokens=1024, timeout=None
+        ):
             prompts.append(user)
             # Off-contract, so the loop rejects and retries.
             return {"weeks": "not a list"}
