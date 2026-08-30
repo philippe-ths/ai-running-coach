@@ -101,7 +101,11 @@ class PreparedOffer(BaseModel):
 
 
 async def prepare_offer(
-    db: Session, owner_user_id: UUID, tool_input: Dict[str, Any]
+    db: Session,
+    owner_user_id: UUID,
+    tool_input: Dict[str, Any],
+    *,
+    budget_seconds: Optional[float] = None,
 ) -> Optional[PreparedOffer]:
     """Work out what an offer would actually do, before the runner is asked.
 
@@ -110,6 +114,13 @@ async def prepare_offer(
     cannot be satisfied under the runner's own rules should produce an
     explanation and alternatives in the conversation, not a card that cannot be
     honoured and not a silence half a minute later.
+
+    `budget_seconds` is how much of the carrying request's wall-clock is left
+    (#995). The silence this docstring promised not to produce is exactly what
+    shipped: preparation was given no ceiling, a wide window took longer than the
+    platform allows a request to live, and the turn was severed with the runner
+    still watching a status label. Passing the budget down is what makes the
+    promise structural — too wide a window is refused in time to SAY so.
     """
     try:
         request = ProposedActionRequest.model_validate(tool_input or {})
@@ -151,6 +162,7 @@ async def prepare_offer(
         weeks_from=request.weeks_from,
         weeks_through=request.weeks_through,
         instruction=request.amend_reason or "",
+        budget_seconds=budget_seconds,
     )
     if not proposal.ok or proposal.amended is None:
         return PreparedOffer(

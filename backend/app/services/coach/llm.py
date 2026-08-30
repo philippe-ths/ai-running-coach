@@ -4,6 +4,7 @@ LLM client abstraction — keeps the coach service decoupled from any specific p
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -319,11 +320,12 @@ class AnthropicClient:
         user: str,
         tool: Dict[str, Any],
         max_tokens: int = 1024,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """A structured-output-only call: force the model to emit exactly the given
         tool's input and return it as a dict. See `generate_structured_with_usage`."""
         result, _usage = await self.generate_structured_with_usage(
-            system=system, user=user, tool=tool, max_tokens=max_tokens
+            system=system, user=user, tool=tool, max_tokens=max_tokens, timeout=timeout
         )
         return result
 
@@ -334,6 +336,7 @@ class AnthropicClient:
         user: str,
         tool: Dict[str, Any],
         max_tokens: int = 1024,
+        timeout: Optional[float] = None,
     ) -> tuple[Dict[str, Any], Usage]:
         """A structured-output-only call that also returns token usage (#472).
 
@@ -356,10 +359,30 @@ class AnthropicClient:
         Not retried, for the same reason a missing block is not: the same call at
         the same cap truncates again. The right fix is a cap that fits the work,
         and this raise is what makes an undersized one findable instead of silent.
+
+        `timeout` overrides the ceiling derived from `max_tokens`, and is how a
+        caller running inside a request that will be killed at a platform ceiling
+        says so (#995). The derived value is a hung-call guard sized for the work
+        and knows nothing about who is waiting; where both apply the SMALLER is
+        the honest one, because a call allowed to outlive its own request is not
+        a call that succeeds slowly, it is one whose result nobody receives.
         """
         tool_name = tool["name"]
         ladder = RetryLadder("anthropic_structured")
+        # `timeout` is a DEADLINE for the whole call, not a per-attempt budget.
+        # The ladder re-issues a timed-out request, and a per-attempt value is
+        # spent again in full on every rung — two attempts under a 42-second
+        # budget is 84 seconds, which is the very overrun this argument exists
+        # to prevent. Fixing the instant it is read, so no rung can reset it.
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
+            if deadline is not None:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError(
+                        f"{tool_name} ran out of its caller's budget before an "
+                        "attempt could complete"
+                    )
             try:
                 response = await self.client.messages.create(
                     model=self.model,
@@ -369,7 +392,10 @@ class AnthropicClient:
                     messages=[{"role": "user", "content": user}],
                     tools=[tool],
                     tool_choice={"type": "tool", "name": tool_name},
-                    timeout=structured_timeout_for(max_tokens),
+                    timeout=min(
+                        structured_timeout_for(max_tokens),
+                        float("inf") if deadline is None else deadline - time.monotonic(),
+                    ),
                 )
                 usage = _usage_from_response(response)
                 stop_reason = (

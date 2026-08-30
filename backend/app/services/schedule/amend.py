@@ -30,6 +30,7 @@ and the runner would train it.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
@@ -42,13 +43,23 @@ from app.models.training_plan import TrainingPlan
 from app.models.user import User
 from app.services.coach import turn
 from app.services.schedule import store
-from app.services.schedule.draft import build_draft_context, fetch_draft_facts
+from app.services.schedule.draft import (
+    PLACING_AND_COMMITTING,
+    WRITING_A_SESSION,
+    build_draft_context,
+    fetch_draft_facts,
+)
 from app.services.schedule.draft_contract import SESSION_PROPERTIES, DraftedWeek
 from app.services.schedule.effort import build_load_model, estimate_effort
 from app.services.schedule.norms import running_norm_weekly_m
 from app.services.schedule.plan_validator import VOLUME_CEILING, validate_amendment
 from app.services.schedule.rule_text import describe_rule
-from app.services.weeks import resolve_week_start, week_start
+from app.services.weeks import (
+    MONDAY,
+    describe_week_span,
+    resolve_week_start,
+    week_start,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +67,62 @@ logger = logging.getLogger(__name__)
 # this week; the next block, written out of its sketch) and narrow enough that
 # "amend" cannot quietly become "redraft" and take the plan with it.
 MAX_AMEND_WEEKS = 6
+
+# How long the amendment's own note about itself may be. Stated in the schema
+# and truncated on the way in, because it is the one field here that is purely
+# cosmetic: a summary running long threw away the whole amendment, every
+# session of both weeks, on `String should have at most 600 characters` (#1001).
+SUMMARY_MAX_CHARS = 600
+
+
+# What one generation of an N-week amendment actually costs, measured (#995).
+#
+# Against the real production plan on 2026-08-30, per generation:
+#
+#     window   per-generation seconds
+#     1 week   23.5
+#     2 weeks  34.6, 40.6
+#     4 weeks  53.8, 60.9
+#     6 weeks  ~65
+#
+# which `14 + 10 * weeks` tracks closely and slightly conservatively. This is an
+# estimate of the MODEL, so it is a straight line fitted to observation rather
+# than anything derivable: when the model or the prompt changes materially,
+# re-measure rather than reason about it.
+_ESTIMATED_BASE_SECONDS = 14.0
+_ESTIMATED_SECONDS_PER_WEEK = 10.0
+
+
+def estimated_seconds(weeks: int) -> float:
+    """Wall-clock a single amendment generation of this size should be given."""
+    return _ESTIMATED_BASE_SECONDS + _ESTIMATED_SECONDS_PER_WEEK * max(1, weeks)
+
+
+def weeks_that_fit(budget_seconds: float) -> int:
+    """The widest window one generation can settle inside `budget_seconds`.
+
+    Zero when not even a single week fits, which the caller must read as "do not
+    start" rather than as "ask for one week".
+    """
+    fits = int((budget_seconds - _ESTIMATED_BASE_SECONDS) // _ESTIMATED_SECONDS_PER_WEEK)
+    return max(0, min(MAX_AMEND_WEEKS, fits))
+
+
+# Output room for an N-week amendment. Sized to the work rather than flat, so the
+# ceiling `structured_timeout_for` derives from it is a truthful statement about
+# THIS call — a flat 8192 claimed 205 seconds for a one-week rewrite that takes
+# 24, which is how a generation came to outlive the request carrying it (#995).
+#
+# Generous against the observed shape: a settled 4-week window came back as 28
+# sessions, so ~1300 tokens per week leaves real headroom. Undersizing this is
+# not a soft failure — `generate_structured` raises on a `max_tokens` stop by
+# design (#931) rather than returning half a plan.
+_MAX_TOKENS_BASE = 1200
+_MAX_TOKENS_PER_WEEK = 1300
+
+
+def amend_max_tokens(weeks: int) -> int:
+    return min(8192, _MAX_TOKENS_BASE + _MAX_TOKENS_PER_WEEK * max(1, weeks))
 
 
 class AmendedPlan(BaseModel):
@@ -70,7 +137,7 @@ class AmendedPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     weeks: List[DraftedWeek] = Field(default_factory=list, max_length=MAX_AMEND_WEEKS)
-    summary: Optional[str] = Field(default=None, max_length=600)
+    summary: Optional[str] = Field(default=None, max_length=SUMMARY_MAX_CHARS)
 
 
 RECORD_AMENDMENT_TOOL: Dict[str, Any] = {
@@ -121,9 +188,10 @@ RECORD_AMENDMENT_TOOL: Dict[str, Any] = {
             },
             "summary": {
                 "type": "string",
+                "maxLength": SUMMARY_MAX_CHARS,
                 "description": (
                     "One or two sentences on what you changed and why, in the "
-                    "runner's terms."
+                    f"runner's terms. At most {SUMMARY_MAX_CHARS} characters."
                 ),
             },
         },
@@ -131,7 +199,8 @@ RECORD_AMENDMENT_TOOL: Dict[str, Any] = {
 }
 
 
-_SYSTEM_PROMPT = """You are a running coach amending this runner's existing training plan.
+_SYSTEM_PROMPT = (
+    """You are a running coach amending this runner's existing training plan.
 
 You are NOT writing a new plan. They have one, they agreed to it, and they are \
 living inside it. Your job is to rewrite the sessions inside one named window so \
@@ -178,7 +247,11 @@ second quality session to a week whose rules space quality three days apart, for
 instance - and the honest answer then is that it does not fit, not a rearranged \
 week that removes the session they told you to keep.
 
-Answer only by calling record_plan_amendment."""
+"""
+    + PLACING_AND_COMMITTING
+    + WRITING_A_SESSION
+    + "Answer only by calling record_plan_amendment."
+)
 
 
 @dataclass
@@ -276,19 +349,39 @@ def _is_replaceable(session: PlannedSession, today: date) -> bool:
     return session.window_end >= today
 
 
-def _shape_lines(plan: TrainingPlan, start: date, end: date) -> List[str]:
+def _weeks_in(start: date, end: date, starts_on: int) -> List[date]:
+    """Every week start in the window, first to last."""
+    weeks: List[date] = []
+    cursor = week_start(start, starts_on)
+    while cursor <= end:
+        weeks.append(cursor)
+        cursor = cursor + timedelta(days=7)
+    return weeks
+
+
+def _shape_lines(
+    plan: TrainingPlan, start: date, end: date, starts_on: int = MONDAY
+) -> List[str]:
     """The agreed shape for the weeks being written out, when there is one.
 
     This is what makes rolling the plan forward a continuation rather than a
     fresh plan: the sketch already carries the long run and the focus the runner
     settled on (#980), so the amendment honours a decision instead of taking it
     again.
+
+    Each week names both its ends (#1001). A rule like "long run on Saturday or
+    Sunday" is a claim about weekdays, and resolving it to dates from a start
+    alone is arithmetic the model gets wrong at exactly the boundary that
+    matters.
     """
     lines: List[str] = []
     for shape in store.plan_week_shapes(plan):
         if not (start <= shape.week_start <= end):
             continue
-        bits = [f"- Week of {shape.week_start.isoformat()}"]
+        bits = [
+            f"- Week of {shape.week_start.isoformat()} "
+            f"({describe_week_span(shape.week_start, starts_on)})"
+        ]
         if shape.phase:
             bits.append(f"phase {shape.phase}")
         if shape.target_running_distance_m:
@@ -322,6 +415,7 @@ def build_amend_context(
     """
     rows = sessions_in_window(db, user.id, plan, start, end)
     keeping = [r for r in rows if not _is_replaceable(r, today)]
+    starts_on = resolve_week_start(getattr(user, "profile", None))
 
     parts: List[str] = [
         build_draft_context(
@@ -332,6 +426,16 @@ def build_amend_context(
         "\n## THE WINDOW",
         f"Rewrite the weeks from {start.isoformat()} to {end.isoformat()} "
         f"inclusive. Nothing outside those dates changes.",
+        # The weeks written out rather than implied by their first day (#1001).
+        # Every rule the plan carries is a claim about weekdays, and a session's
+        # window has to sit inside ONE of these; both of those need a day-to-date
+        # mapping the model was previously left to work out, and got wrong at the
+        # join between two weeks.
+        "These are the weeks. Every session's window sits inside ONE of them:",
+        *(
+            f"- {describe_week_span(ws, starts_on)}"
+            for ws in _weeks_in(start, end, starts_on)
+        ),
     ]
 
     rules = store.plan_rules(plan)
@@ -339,7 +443,7 @@ def build_amend_context(
         parts.append("\n## THE PLAN'S RULES (unchanged, and still enforced)")
         parts.extend(f"- {describe_rule(rule)}" for rule in rules)
 
-    shape = _shape_lines(plan, start, end)
+    shape = _shape_lines(plan, start, end, starts_on)
     if shape:
         parts.append("\n## THE SHAPE ALREADY AGREED FOR THESE WEEKS")
         parts.extend(shape)
@@ -378,6 +482,7 @@ async def propose_amendment(
     weeks_through: int,
     instruction: str,
     today: Optional[date] = None,
+    budget_seconds: Optional[float] = None,
 ) -> AmendProposal:
     """Settle what the window WOULD hold, and write none of it (#987).
 
@@ -389,12 +494,40 @@ async def propose_amendment(
     own rules comes back refused, carrying the rule it could not satisfy, and the
     coach answers the runner with that rather than putting up a card for a change
     it cannot honour.
+
+    `budget_seconds` is the wall-clock this may take when it is running INSIDE a
+    request that will be killed at a ceiling (#995). Given one, a window too wide
+    to settle within it is refused BEFORE any tokens are spent, carrying the
+    window that would have fitted — so the coach narrows the ask in conversation
+    instead of starting work that gets severed halfway. Left None, there is no
+    ceiling to respect and the size gate does not apply.
     """
     today = today or date.today()
     starts_on = resolve_week_start(getattr(user, "profile", None))
     start, end = resolve_window(
         today, starts_on, weeks_from=weeks_from, weeks_through=weeks_through
     )
+    weeks = max(1, weeks_through - weeks_from + 1)
+
+    if budget_seconds is not None and estimated_seconds(weeks) > budget_seconds:
+        fits = weeks_that_fit(budget_seconds)
+        if fits <= 0:
+            detail = (
+                "there is no time left in this message to work out an amendment; "
+                "ask the runner to send the request again on its own"
+            )
+        else:
+            detail = (
+                f"a {weeks}-week amendment takes longer than one message allows; "
+                f"offer to settle {fits} week{'s' if fits > 1 else ''} now "
+                f"(weeks_from={weeks_from}, weeks_through={weeks_from + fits - 1}) "
+                "and do the rest in a follow-up"
+            )
+        logger.info(
+            "schedule amend: %s-week window refused, %.0fs budget fits %s",
+            weeks, budget_seconds, fits,
+        )
+        return AmendProposal(ok=False, start=start, end=end, failures=[detail])
 
     if turn.over_budget(user.id):
         return AmendProposal(
@@ -423,8 +556,26 @@ async def propose_amendment(
     failure_kind = store.FAILURE_UNKNOWN
     rewrites_left = 2
     transport_retries_left = 1
+    max_tokens = amend_max_tokens(weeks)
+    started_at = time.monotonic()
 
     while rewrites_left > 0:
+        # #995: a rewrite is a whole second generation, and the budget covers one.
+        # Checked per attempt rather than once up front, because the decision is
+        # about the time LEFT: a first pass that ran long has already spent what
+        # the retry would need, and starting it anyway is how the request comes to
+        # be severed with nothing to show. Stopping here returns the real failures
+        # instead, which is a worse plan than a rewrite would have found and a far
+        # better answer than silence.
+        if budget_seconds is not None:
+            left = budget_seconds - (time.monotonic() - started_at)
+            if left < estimated_seconds(weeks):
+                logger.info(
+                    "schedule amend: stopping after %d attempt(s), %.0fs left of %.0fs",
+                    2 - rewrites_left, left, budget_seconds,
+                )
+                break
+
         user_message = context
         if failures:
             # The retry has to carry the refusal option forward with it (#987).
@@ -450,8 +601,23 @@ async def propose_amendment(
                 system=_SYSTEM_PROMPT,
                 user=user_message,
                 tool=RECORD_AMENDMENT_TOOL,
-                max_tokens=8192,
+                max_tokens=max_tokens,
+                # Never outlive the request carrying this call. The derived
+                # ceiling is a hung-call guard sized for the work; the budget is
+                # what the platform will actually allow. The smaller wins (#995).
+                timeout=(
+                    None if budget_seconds is None
+                    else max(1.0, budget_seconds - (time.monotonic() - started_at))
+                ),
             )
+        except (TypeError, AttributeError):
+            # A bad kwarg or a missing method is a bug in this code, not a
+            # network that misbehaved, and the catch below cannot tell them
+            # apart. Left inside it, a signature change reports itself to the
+            # runner as "the coach could not be reached" after two retries that
+            # never reached anything — which is exactly what a test double
+            # missing the new `timeout` kwarg did (#995). Raised so it is found.
+            raise
         except Exception as exc:  # transport, timeout, refusal
             logger.warning("schedule amend: generation call failed: %s", exc)
             if transport_retries_left > 0:
@@ -620,14 +786,25 @@ def apply_proposal(
 
 def _normalise(raw: Any) -> Any:
     """The drafted-plan normaliser's amendment-shaped sibling: tolerate a tool
-    result handed back as a JSON string, and nothing else."""
+    result handed back as a JSON string, and trim the one cosmetic field.
+
+    The summary is trimmed for the same reason the drafted plan's is: it is a
+    note ABOUT the amendment rather than part of it, so a long one is not a
+    reason to lose the weeks. Everything structural is still left exactly as
+    the model produced it, because quietly repairing a session would mean
+    storing something the coach did not actually say.
+    """
     import json
 
     if isinstance(raw, str):
         try:
-            return json.loads(raw)
+            raw = json.loads(raw)
         except ValueError:
             return raw
+    if isinstance(raw, dict):
+        summary = raw.get("summary")
+        if isinstance(summary, str) and len(summary) > SUMMARY_MAX_CHARS:
+            raw = {**raw, "summary": summary[:SUMMARY_MAX_CHARS].rstrip()}
     return raw
 
 

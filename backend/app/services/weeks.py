@@ -50,3 +50,30 @@ def days_into_week(d: date, starts_on: int = MONDAY) -> int:
 def is_last_day_of_week(d: date, starts_on: int = MONDAY) -> bool:
     """True when d is the final day of its week (the day before the next week_start)."""
     return _offset(d, starts_on) == 6
+
+
+def week_end(d: date, starts_on: int = MONDAY) -> date:
+    """The last day of the week containing d."""
+    return week_start(d, starts_on) + timedelta(days=6)
+
+
+def describe_week_span(d: date, starts_on: int = MONDAY) -> str:
+    """The week containing d, written so a model does not have to derive it.
+
+    "Mon 2026-08-31 to Sun 2026-09-06".
+
+    A prompt that gives a model only a week's first day is asking it to do
+    calendar arithmetic, and it gets it wrong (#1001). Told the plan's rule
+    "long run on Saturday or Sunday" and the bare start `2026-08-31`, the
+    amendment twice windowed the long run `2026-09-06..2026-09-07` - the Sunday
+    of one week and the Monday of the next, which is the exact pair the prompt
+    uses as its counter-example. It knew the rule and could not resolve the days
+    to dates. Naming both ends anchors the weekday-to-date mapping at each edge,
+    which is where the mistakes land.
+    """
+    first = week_start(d, starts_on)
+    last = first + timedelta(days=6)
+    return (
+        f"{first.strftime('%a')} {first.isoformat()} "
+        f"to {last.strftime('%a')} {last.isoformat()}"
+    )
