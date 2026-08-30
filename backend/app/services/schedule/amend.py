@@ -54,7 +54,12 @@ from app.services.schedule.effort import build_load_model, estimate_effort
 from app.services.schedule.norms import running_norm_weekly_m
 from app.services.schedule.plan_validator import VOLUME_CEILING, validate_amendment
 from app.services.schedule.rule_text import describe_rule
-from app.services.weeks import resolve_week_start, week_start
+from app.services.weeks import (
+    MONDAY,
+    describe_week_span,
+    resolve_week_start,
+    week_start,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +67,12 @@ logger = logging.getLogger(__name__)
 # this week; the next block, written out of its sketch) and narrow enough that
 # "amend" cannot quietly become "redraft" and take the plan with it.
 MAX_AMEND_WEEKS = 6
+
+# How long the amendment's own note about itself may be. Stated in the schema
+# and truncated on the way in, because it is the one field here that is purely
+# cosmetic: a summary running long threw away the whole amendment, every
+# session of both weeks, on `String should have at most 600 characters` (#1001).
+SUMMARY_MAX_CHARS = 600
 
 
 # What one generation of an N-week amendment actually costs, measured (#995).
@@ -126,7 +137,7 @@ class AmendedPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     weeks: List[DraftedWeek] = Field(default_factory=list, max_length=MAX_AMEND_WEEKS)
-    summary: Optional[str] = Field(default=None, max_length=600)
+    summary: Optional[str] = Field(default=None, max_length=SUMMARY_MAX_CHARS)
 
 
 RECORD_AMENDMENT_TOOL: Dict[str, Any] = {
@@ -177,9 +188,10 @@ RECORD_AMENDMENT_TOOL: Dict[str, Any] = {
             },
             "summary": {
                 "type": "string",
+                "maxLength": SUMMARY_MAX_CHARS,
                 "description": (
                     "One or two sentences on what you changed and why, in the "
-                    "runner's terms."
+                    f"runner's terms. At most {SUMMARY_MAX_CHARS} characters."
                 ),
             },
         },
@@ -337,19 +349,39 @@ def _is_replaceable(session: PlannedSession, today: date) -> bool:
     return session.window_end >= today
 
 
-def _shape_lines(plan: TrainingPlan, start: date, end: date) -> List[str]:
+def _weeks_in(start: date, end: date, starts_on: int) -> List[date]:
+    """Every week start in the window, first to last."""
+    weeks: List[date] = []
+    cursor = week_start(start, starts_on)
+    while cursor <= end:
+        weeks.append(cursor)
+        cursor = cursor + timedelta(days=7)
+    return weeks
+
+
+def _shape_lines(
+    plan: TrainingPlan, start: date, end: date, starts_on: int = MONDAY
+) -> List[str]:
     """The agreed shape for the weeks being written out, when there is one.
 
     This is what makes rolling the plan forward a continuation rather than a
     fresh plan: the sketch already carries the long run and the focus the runner
     settled on (#980), so the amendment honours a decision instead of taking it
     again.
+
+    Each week names both its ends (#1001). A rule like "long run on Saturday or
+    Sunday" is a claim about weekdays, and resolving it to dates from a start
+    alone is arithmetic the model gets wrong at exactly the boundary that
+    matters.
     """
     lines: List[str] = []
     for shape in store.plan_week_shapes(plan):
         if not (start <= shape.week_start <= end):
             continue
-        bits = [f"- Week of {shape.week_start.isoformat()}"]
+        bits = [
+            f"- Week of {shape.week_start.isoformat()} "
+            f"({describe_week_span(shape.week_start, starts_on)})"
+        ]
         if shape.phase:
             bits.append(f"phase {shape.phase}")
         if shape.target_running_distance_m:
@@ -383,6 +415,7 @@ def build_amend_context(
     """
     rows = sessions_in_window(db, user.id, plan, start, end)
     keeping = [r for r in rows if not _is_replaceable(r, today)]
+    starts_on = resolve_week_start(getattr(user, "profile", None))
 
     parts: List[str] = [
         build_draft_context(
@@ -393,6 +426,16 @@ def build_amend_context(
         "\n## THE WINDOW",
         f"Rewrite the weeks from {start.isoformat()} to {end.isoformat()} "
         f"inclusive. Nothing outside those dates changes.",
+        # The weeks written out rather than implied by their first day (#1001).
+        # Every rule the plan carries is a claim about weekdays, and a session's
+        # window has to sit inside ONE of these; both of those need a day-to-date
+        # mapping the model was previously left to work out, and got wrong at the
+        # join between two weeks.
+        "These are the weeks. Every session's window sits inside ONE of them:",
+        *(
+            f"- {describe_week_span(ws, starts_on)}"
+            for ws in _weeks_in(start, end, starts_on)
+        ),
     ]
 
     rules = store.plan_rules(plan)
@@ -400,7 +443,7 @@ def build_amend_context(
         parts.append("\n## THE PLAN'S RULES (unchanged, and still enforced)")
         parts.extend(f"- {describe_rule(rule)}" for rule in rules)
 
-    shape = _shape_lines(plan, start, end)
+    shape = _shape_lines(plan, start, end, starts_on)
     if shape:
         parts.append("\n## THE SHAPE ALREADY AGREED FOR THESE WEEKS")
         parts.extend(shape)
@@ -743,14 +786,25 @@ def apply_proposal(
 
 def _normalise(raw: Any) -> Any:
     """The drafted-plan normaliser's amendment-shaped sibling: tolerate a tool
-    result handed back as a JSON string, and nothing else."""
+    result handed back as a JSON string, and trim the one cosmetic field.
+
+    The summary is trimmed for the same reason the drafted plan's is: it is a
+    note ABOUT the amendment rather than part of it, so a long one is not a
+    reason to lose the weeks. Everything structural is still left exactly as
+    the model produced it, because quietly repairing a session would mean
+    storing something the coach did not actually say.
+    """
     import json
 
     if isinstance(raw, str):
         try:
-            return json.loads(raw)
+            raw = json.loads(raw)
         except ValueError:
             return raw
+    if isinstance(raw, dict):
+        summary = raw.get("summary")
+        if isinstance(summary, str) and len(summary) > SUMMARY_MAX_CHARS:
+            raw = {**raw, "summary": summary[:SUMMARY_MAX_CHARS].rstrip()}
     return raw
 
 
