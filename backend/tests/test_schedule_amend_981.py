@@ -990,15 +990,14 @@ def test_a_confirm_lands_on_the_plan_it_was_offered_against(db):
 
     assert result["action_type"] == "amend_plan"
     assert result["plan_id"] == str(plan.id)
-    # The confirm reports in the PAST tense, because by the time it answers the
-    # sessions exist (#987). It used to promise a screen would update in a
-    # minute, which the request had no way to keep.
-    assert result["message"].startswith("Done.")
-    assert "Everything else in your plan is as it was." in result["message"]
-    # And the sessions the runner was shown are the sessions that landed.
-    shown = {(date.fromisoformat(row["date"]), row["title"]) for row in frame["week"]}
-    assert shown, "the card must carry the week it is proposing"
-    assert shown <= {(row.window_start, row.title) for row in _rows(db, plan)}
+    # What this test is for: the confirm resolved to the plan the card was
+    # written against, rather than refusing. The wording of the answer is pinned
+    # in the #987/#998 file; what matters here is which plan it landed on.
+    #
+    # It reports in the FUTURE tense again since #998: the amendment is settled
+    # on the worker, because generating it inside this request needed more
+    # wall-clock than the request reliably has.
+    assert "Schedule screen" in result["message"]
 
 
 def test_a_confirm_is_refused_when_the_plan_changed_under_it(db):
