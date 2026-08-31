@@ -16,10 +16,43 @@
 // local patch, the same reason the tick, untick and dismiss controls refetch.
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Undo2 } from "lucide-react";
+import { Loader2, Undo2, X } from "lucide-react";
 import { fetchFromAPI } from "@/lib/api";
 import { formatDateLabel } from "@/lib/format";
 import type { PreviousPlan } from "@/lib/types/schedule";
+
+// #1003: dismissal is remembered per PLAN, not per runner.
+//
+// The offer draws on every visit to the week, above everything else on it, and
+// on a phone that is most of the first screen. A runner who has decided against
+// going back has no way to say so, and the only thing that ever removed it was
+// superseding a different plan.
+//
+// Keyed on the plan id so "no thanks" means no thanks to THIS plan. Replace the
+// current block again and the new offer is a genuinely different question, and
+// gets asked. Kept in `localStorage` because that is what it is: a per-device
+// piece of screen state, not a fact about the training that the coach should
+// read or the server should hold.
+const DISMISSED_KEY = "schedule.previousPlan.dismissed";
+
+function readDismissed(): string | null {
+  try {
+    return window.localStorage.getItem(DISMISSED_KEY);
+  } catch {
+    // Private windows and blocked site data both throw. The banner showing is
+    // the safe failure: it is an offer, not a warning.
+    return null;
+  }
+}
+
+function writeDismissed(planId: string): void {
+  try {
+    window.localStorage.setItem(DISMISSED_KEY, planId);
+  } catch {
+    // Nothing to do. It reappears next visit, which is better than losing the
+    // way back to a plan.
+  }
+}
 
 export default function PreviousPlanBanner({
   onRestored,
@@ -34,6 +67,11 @@ export default function PreviousPlanBanner({
   const [previous, setPrevious] = useState<PreviousPlan | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Read on mount rather than during render: `localStorage` is not available on
+  // the server, and reading it while rendering makes the first client paint
+  // disagree with the markup that came from it.
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  useEffect(() => setDismissed(readDismissed()), []);
 
   const load = useCallback(async () => {
     try {
@@ -69,6 +107,7 @@ export default function PreviousPlanBanner({
   }, [previous, restoring, load, onRestored]);
 
   if (!previous?.plan_id) return null;
+  if (dismissed === String(previous.plan_id)) return null;
 
   return (
     <div
@@ -89,6 +128,7 @@ export default function PreviousPlanBanner({
         {/* Only when the server says it can be restored. Offering a button that
             answers 422 would be telling the runner to do a thing the screen
             cannot do: the defect #879 was raised for, in reverse. */}
+        <div className="flex shrink-0 items-center gap-1.5">
         {previous.restorable && (
           <button
             type="button"
@@ -104,6 +144,19 @@ export default function PreviousPlanBanner({
             {restoring ? "Going back…" : "Go back to it"}
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => {
+            const id = String(previous.plan_id);
+            writeDismissed(id);
+            setDismissed(id);
+          }}
+          aria-label="Dismiss the offer to go back to your previous plan"
+          className="inline-flex shrink-0 items-center rounded-md p-1 text-gray-500 hover:bg-gray-200 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-gray-700/60 dark:hover:text-gray-200"
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
+        </div>
       </div>
 
       {error && (

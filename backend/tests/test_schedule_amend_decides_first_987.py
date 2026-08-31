@@ -234,7 +234,12 @@ def test_the_card_names_the_window_rather_than_a_session_list(db):
     result, frame = _offer(db, user, None)
 
     assert result["ok"] is True
-    assert start.strftime("%-d %b") in frame["description"]
+    # The window, without assuming how the range is punctuated: a same-month
+    # span renders compactly ("7-13 Sep"), and asserting one rendering makes the
+    # test fail on the day of the month rather than on the behaviour (#949).
+    described = frame["description"]
+    assert str(start.day) in described and start.strftime("%b") in described
+    assert str(end.day) in described
     assert frame["confirm_label"] == "Update my plan"
 
 

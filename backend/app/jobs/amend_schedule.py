@@ -19,6 +19,7 @@ path by name.
 import asyncio
 import logging
 import uuid
+from datetime import date
 
 from app.db.session import SessionLocal
 from app.models.user import User
@@ -78,6 +79,16 @@ def amend_schedule_job(
             )
             return
 
+        from app.services.schedule import amend_watch
+        from app.services.schedule.amend import resolve_window
+        from app.services.weeks import resolve_week_start
+
+        start, end = resolve_window(
+            date.today(),
+            resolve_week_start(getattr(user, "profile", None)),
+            weeks_from=int(weeks_from),
+            weeks_through=int(weeks_through),
+        )
         outcome = asyncio.run(
             amend_plan(
                 db,
@@ -96,6 +107,8 @@ def amend_schedule_job(
                 outcome.sessions_written,
             )
             _record_in_thread(db, thread_id, description, outcome.changes)
+            _say_it_landed(db, thread_id, outcome)
+            amend_watch.mark_done(user.id, start, end, outcome.changes)
         else:
             logger.warning(
                 "schedule amend: plan %s unchanged (%s): %s",
@@ -104,10 +117,41 @@ def amend_schedule_job(
                 "; ".join(outcome.failures or ["unknown"]),
             )
             _say_it_failed(db, thread_id, outcome.failures)
+            amend_watch.mark_failed(
+                user.id, start, end, "; ".join(outcome.failures or [])
+            )
     except Exception:
         logger.exception("schedule amend: job failed for plan %s", plan_id)
     finally:
         db.close()
+
+
+def _say_it_landed(db, thread_id, outcome) -> None:
+    """Tell the runner their week is in, in the thread they asked in (#1003).
+
+    Separate from the ledger entry beside it, because they have different
+    readers. `record_action_event` writes an `ACTION_EVENT_ROLE` row, which
+    `threads.CONVERSATIONAL_ROLES` filters out of everything that reads what was
+    SAID: it is what the COACH reads back as "already in their record", and the
+    runner never sees it. So the amendment landed and the conversation went
+    quiet, and the runner found out by reloading the page on a hunch.
+
+    The wording is the coach's, not the ledger's, for the same reason: the ledger
+    records the change, this tells someone about it.
+    """
+    weeks = getattr(outcome, "weeks_touched", 0) or 0
+    written = getattr(outcome, "sessions_written", 0) or 0
+    note = (
+        f"That's in — {written} session{'s' if written != 1 else ''} written across "
+        f"{weeks} week{'s' if weeks != 1 else ''}, on your Schedule screen now. "
+        "Everything else in your plan is as it was."
+    )
+    try:
+        from app.services.coach import threads as thread_service
+
+        thread_service.record_coach_note(db, thread_id, note)
+    except Exception:  # noqa: BLE001 - the week is written; the telling is not worth a raise
+        logger.exception("schedule amend: landing note not written to %s", thread_id)
 
 
 def _say_it_failed(db, thread_id, failures) -> None:

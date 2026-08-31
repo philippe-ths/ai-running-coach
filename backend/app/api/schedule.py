@@ -33,6 +33,7 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.schemas.schedule import (
+    AmendmentStatusRead,
     DraftStatusRead,
     GoalRaceCreate,
     GoalRaceRead,
@@ -40,7 +41,7 @@ from app.schemas.schedule import (
     ScheduleHorizonRead,
     ScheduleWeekRead,
 )
-from app.services.schedule import completion, store
+from app.services.schedule import amend_watch, completion, store
 from app.services.schedule.draft import enqueue_draft
 from app.services.schedule.horizon import (
     DEFAULT_HORIZON_WEEKS,
@@ -203,6 +204,36 @@ def start_draft(db: DbSession, user: CurrentUser) -> DraftStatusRead:
 def read_draft_status(db: DbSession, user: CurrentUser) -> DraftStatusRead:
     """Where the runner's most recent plan stands. Polled while drafting."""
     return _draft_status(store.latest_plan(db, user.id))
+
+
+@router.get("/amendment", response_model=AmendmentStatusRead)
+def read_amendment_status(user: CurrentUser) -> AmendmentStatusRead:
+    """Whether a confirmed amendment is being written. Polled after a tap (#1003).
+
+    Takes no database session: the whole answer is the in-flight state, and an
+    amendment deliberately leaves no row to read while it runs.
+    """
+    state = amend_watch.current(user.id)
+    if not state:
+        return AmendmentStatusRead()
+    return AmendmentStatusRead(
+        status=state.get("status"),
+        start=state.get("start"),
+        end=state.get("end"),
+        changes=state.get("changes") or [],
+        detail=state.get("detail") or None,
+    )
+
+
+@router.post("/amendment/seen", status_code=204)
+def clear_amendment_status(user: CurrentUser) -> None:
+    """Stop reporting the last outcome, once a surface has shown it.
+
+    Without this the finished state keeps answering until it expires, and every
+    surface that mounts inside the window re-announces a change the runner
+    already watched land.
+    """
+    amend_watch.clear(user.id)
 
 
 _NO_PREVIOUS_PLAN = "You have no earlier plan to go back to."
