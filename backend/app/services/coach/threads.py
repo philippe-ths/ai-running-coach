@@ -8,6 +8,7 @@ pre-thread code, and keeping `last_message_at` honest for the switcher ordering.
 
 from __future__ import annotations
 
+import uuid
 from typing import Dict, List, Optional, Sequence
 
 from sqlalchemy import select
@@ -365,6 +366,15 @@ def record_coach_note(db: Session, thread_id, text: str) -> None:
     body = " ".join((text or "").split())
     if not thread_id or not body:
         return
+    # The job hands its ids across as strings, because RQ serializes them that
+    # way. `record_action_event` never noticed: it only ever INSERTS, and the
+    # column adapts a string on the way in. This reads first, and a query
+    # comparing a UUID column to a string is a type error rather than a miss.
+    if not isinstance(thread_id, uuid.UUID):
+        try:
+            thread_id = uuid.UUID(str(thread_id))
+        except (TypeError, ValueError):
+            return
     db.add(
         CoachChatMessage(
             thread_id=thread_id,

@@ -498,3 +498,28 @@ class PreviousPlanRead(BaseModel):
     sessions_ahead: int = 0
     restorable: bool = False
     message: str
+
+
+class AmendmentStatusRead(BaseModel):
+    """Whether a confirmed amendment is being written, and how the last one ended.
+
+    Its own read rather than a field on the week (#1003), because the runner may
+    be looking at a week the amendment does not touch, and the window is what
+    decides where the indicator belongs.
+
+    `status` is None when there is nothing to say, which is both "never amended
+    anything" and "the last one finished long enough ago to have expired". A
+    caller must not read None as "nothing is running": the state is kept for
+    minutes, and its expiry means the watching stopped, not the work.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Optional[Literal["working", "done", "failed"]] = None
+    start: Optional[date] = None
+    end: Optional[date] = None
+    # What it actually did, once it has done it. The card could only name the
+    # ask, so this is the first honest account of the change.
+    changes: List[str] = Field(default_factory=list)
+    # Runner-facing, and only on a failure.
+    detail: Optional[str] = None

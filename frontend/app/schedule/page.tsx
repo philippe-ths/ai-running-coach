@@ -24,6 +24,8 @@ import LoggedList from "@/components/schedule/LoggedList";
 import EmptyWeek from "@/components/schedule/EmptyWeek";
 import PlanRunsOutBanner from "@/components/schedule/PlanRunsOutBanner";
 import DraftBanner from "@/components/schedule/DraftBanner";
+import IncomingChangeBanner from "@/components/schedule/IncomingChangeBanner";
+import { useAmendmentStatus } from "@/lib/useAmendmentStatus";
 import PreviousPlanBanner from "@/components/schedule/PreviousPlanBanner";
 import HorizonView from "@/components/schedule/HorizonView";
 import GoalRacePanel from "@/components/schedule/GoalRacePanel";
@@ -99,6 +101,10 @@ export default function SchedulePage() {
   // A new plan landing, and going back to the previous one, both swap what the
   // whole schedule says: the week AND the horizon change together, so both are
   // told. #857.
+  // #1003: an amendment rewrites one window, so unlike a draft it changes the
+  // week without changing which plan is current. Only the week needs re-reading.
+  const amendmentWatch = useAmendmentStatus(refresh);
+
   const onPlanChanged = useCallback(() => {
     load(weekParam, true);
     setRaceToken((t) => t + 1);
@@ -298,6 +304,13 @@ export default function SchedulePage() {
           banner does: a runner with no plan at all has no superseded one. */}
       {week && !isEmpty && (
         <PreviousPlanBanner onRestored={onPlanChanged} refreshToken={planToken} />
+      )}
+
+      {/* #1003: over the week actually being rewritten, empty or not. An empty
+          week is the commonest place to confirm one from, so this deliberately
+          does NOT stand down for the empty state the way the draft banner does. */}
+      {week && (
+        <IncomingChangeBanner watch={amendmentWatch} weekStart={week.week_start} />
       )}
 
       {week && isEmpty && <EmptyWeek onPlanReady={refresh} />}

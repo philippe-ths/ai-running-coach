@@ -31,6 +31,7 @@ import {
 import { readCoachStream, CoachStreamTruncatedError } from '@/lib/coachStream';
 import { CLIENT_TURN_TIMEOUT_MS } from '@/lib/turnBudget';
 import { useDraftStatus } from '@/lib/useDraftStatus';
+import { useAmendmentStatus } from '@/lib/useAmendmentStatus';
 import { useCoachSheet } from './CoachSheetContext';
 import ThreadSwitcher from './ThreadSwitcher';
 import { useRouter } from 'next/navigation';
@@ -239,6 +240,20 @@ export default function CoachSheet() {
     { pollOnMount: false },
   );
 
+  // #1003: an amendment is written on the worker like a draft, and the runner
+  // was told nothing when it landed. The job writes the coach's own note into
+  // the thread, so re-reading the thread is what makes the coach "come back and
+  // say it's done" rather than inventing a second sentence here.
+  const currentThreadRef = useRef<string | null>(null);
+  const amendmentWatch = useAmendmentStatus(
+    useCallback(() => {
+      const id = currentThreadRef.current;
+      if (id) void openThreadRef.current?.(id);
+      router.refresh();
+    }, [router]),
+  );
+  const openThreadRef = useRef<((id: string) => Promise<void>) | null>(null);
+
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -295,6 +310,12 @@ export default function CoachSheet() {
       // Leave whatever was on screen.
     }
   }, [scrollToBottom]);
+
+  // Read through refs by the landing callback, which is created once so the
+  // poll loop does not re-subscribe on every render. Assigned during render,
+  // the `useDraftStatus` idiom.
+  currentThreadRef.current = currentThreadId;
+  openThreadRef.current = openThread;
 
   const startNewThread = useCallback(() => {
     setSwitcherOpen(false);
@@ -514,6 +535,10 @@ export default function CoachSheet() {
       // Nothing did, and a runner sat here reading "it'll be on your Schedule
       // screen in a minute" about a plan that never arrived.
       if (kind === 'draft_plan') watchDraft();
+      // The same promise, for the smaller verb (#1003). An amendment is written
+      // on the worker too, and until this watched for it the week changed with
+      // nothing on screen saying so.
+      if (kind === 'amend_plan') amendmentWatch.watch();
     } catch (err) {
       // A tap that changed nothing must say so. An offer is single-use and
       // short-lived, so a 404 means it is spent or stale, not that it failed.
@@ -525,7 +550,7 @@ export default function CoachSheet() {
     } finally {
       setConfirmingAction(false);
     }
-  }, [confirmingAction, proposedAction, router]);
+  }, [confirmingAction, proposedAction, router, watchDraft, amendmentWatch]);
 
   const renameThread = useCallback(
     async (id: string, title: string) => {

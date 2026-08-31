@@ -813,7 +813,12 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
         # whether it wrote the week or could not (#984). What broke before was a
         # promise with nothing behind it, not a promise made in advance.
         from app.jobs.amend_schedule import enqueue_amendment
+        from app.services.schedule import amend_watch
 
+        # Marked BEFORE the enqueue, so the window is watchable from the moment
+        # the runner taps rather than from whenever a worker picks the job up
+        # (#1003). The gap is small and the screen is wrong for all of it.
+        amend_watch.mark_started(owner_user_id, stored.amend_start, stored.amend_end)
         enqueue_amendment(
             owner_user_id,
             plan.id,
