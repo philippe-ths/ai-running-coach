@@ -34,9 +34,31 @@ const isPublicRoute = createRouteMatcher([
 ]);
 
 const enforce = clerkMiddleware((auth, req) => {
-  if (!isPublicRoute(req)) {
-    auth().protect();
+  if (isPublicRoute(req)) return;
+
+  // #1008: the apex answers every unauthenticated client the same way.
+  //
+  // `auth().protect()` only redirects a request that looks like a document
+  // navigation; anything else it answers with a 404. A browser sends
+  // `Accept: text/html` and lands on sign-in, so a real user never sees this --
+  // but curl, uptime monitors, link unfurlers, crawlers and agents probing the
+  // deployed app are told the home page does not exist, and have repeatedly read
+  // that as production being down. This is #228 (/apple-icon) and #964
+  // (/privacy, /terms) a third time: a path whose status code depends on request
+  // headers no build ever exercises.
+  //
+  // Redirecting by hand rather than marking `/` public keeps the gate: a signed
+  // out visitor still cannot see the dashboard. `redirectToSignIn` is the same
+  // call `protect()` makes for a document request, so the destination a real
+  // browser reaches is byte-for-byte what it was before -- the only change is
+  // that clients without a browser-shaped `Accept` header now reach it too.
+  if (req.nextUrl.pathname === '/') {
+    const { userId, redirectToSignIn } = auth();
+    if (!userId) return redirectToSignIn({ returnBackUrl: req.url });
+    return;
   }
+
+  auth().protect();
 });
 
 export default clerkEnabled ? enforce : () => NextResponse.next();

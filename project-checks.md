@@ -116,11 +116,16 @@ Railway CLI is not logged in; commands below read a project token from
 ### Deployed frontend
 - Check: `curl -sSI -m 15 https://pulsecoachai.com/sign-in`
 - Normal: HTTP 200 with `x-matched-path: /sign-in/[[...sign-in]]`.
-- Matters: the check deliberately targets `/sign-in` rather than `/`. The apex
-  returns **404 by design** to any client without a Clerk session: `middleware.ts`
-  calls `auth().protect()` on every non-public route, which rewrites to `_not-found`
-  rather than redirecting. A 404 on `/` from curl is therefore normal and proves
-  nothing; a non-200 on `/sign-in` is a real outage.
+- Matters: a non-200 on `/sign-in` is a real outage.
+- The apex is also a valid check since #1008: `curl -sS -o /dev/null -w '%{http_code}'
+  https://pulsecoachai.com/` returns **307** to the hosted sign-in for any client
+  with no Clerk session, whatever its `Accept` header. Before #1008 it returned
+  **404** to anything that did not look like a browser navigation, because
+  `auth().protect()` answers a non-document request that way, and agents probing
+  the deployed app repeatedly read that as production being down. A 404 on `/` is
+  now a real signal, not the expected answer. Every other protected page still
+  answers a non-browser GET with 404, so keep probing `/` or `/sign-in`, not
+  `/trends`.
 
 ### Deployed worker
 - Check: query the API as in the production-logs check below, filtering for
