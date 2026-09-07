@@ -265,6 +265,13 @@ export default function CoachSheet() {
     if (force || nearBottom) el.scrollTop = el.scrollHeight;
   }, []);
 
+  // Both halves together, always. They are one fact - what became of the last
+  // action - and clearing only the success left a stale failure in its place.
+  const clearActionOutcome = useCallback(() => {
+    setActionDone('');
+    setActionError('');
+  }, []);
+
   const refreshThreads = useCallback(async (): Promise<ThreadListItem[]> => {
     try {
       const res = await fetch('/api/coach/threads');
@@ -282,6 +289,10 @@ export default function CoachSheet() {
     setCurrentThreadId(id);
     setHeadReport(null);
     setProposedAction(null);
+    // #1006: as for a new thread. Switching to an EXISTING one carried the
+    // outcome across too; a new thread was only where it was most obviously
+    // wrong, because nothing else was on screen to attribute it to.
+    clearActionOutcome();
     try {
       const res = await fetch(`/api/coach/threads/${id}`);
       if (!res.ok) return;
@@ -309,7 +320,7 @@ export default function CoachSheet() {
     } catch {
       // Leave whatever was on screen.
     }
-  }, [scrollToBottom]);
+  }, [scrollToBottom, clearActionOutcome]);
 
   // Read through refs by the landing callback, which is created once so the
   // poll loop does not re-subscribe on every render. Assigned during render,
@@ -324,10 +335,15 @@ export default function CoachSheet() {
     setMessages([]);
     setHeadReport(null);
     setProposedAction(null);
+    // #1006: the outcome of a confirmed action belongs to the conversation it
+    // was confirmed in. Left behind, it rendered under the empty state of a
+    // thread that had not started, describing a week the runner agreed to
+    // somewhere else.
+    clearActionOutcome();
     // Born on an activity page, a new thread anchors to that run (a framing
     // hint, never a data boundary — ADR 0027).
     setAnchorActivityId(screen.activityId ?? null);
-  }, [screen.activityId]);
+  }, [screen.activityId, clearActionOutcome]);
 
   // On first open: land on the screen's own thread when there is one (an
   // activity page with an anchored thread), else the most recent conversation,
