@@ -30,7 +30,18 @@ Railway CLI is not logged in; commands below read a project token from
   git branch --format='%(refname:short)' | sort -u | comm -12 /tmp/merged -
   git ls-remote --heads origin | sed 's|.*refs/heads/||' | sort -u | comm -12 /tmp/merged -
   ```
-- Normal: both empty.
+- Normal: both empty. The local side was cleared on 2026-08-30 (18 branches from
+  PRs #897-#979). The remote still carries `chore/vendor-workflow-3-27-0-975` from
+  merged PR #979 and `chore/1010-workflow-5-12-0` from merged PR #1011, left for
+  the human per the note below.
+- Before deleting, verify per branch that the work landed: **do not** use
+  `git diff main...<branch>` or a tip-vs-`headRefOid` comparison. The first diffs
+  from an old merge-base, so under squash-merge it reports the branch's whole
+  change as missing from main even when it landed; the second differs routinely
+  because the merged head is often not the ref a local branch still points at.
+  The decisive pair is that the PR's squash commit is reachable on `main`
+  (`git log main --oneline --grep '(#<pr>)'`) and the local tip's committer date
+  predates `mergedAt`, which together rule out post-merge local work.
 - Matters: **do not use `git branch --merged`.** This repository squash-merges, so
   a branch tip never becomes an ancestor of `main` and the ancestry test reports a
   false clean for every ordinary merged branch. It appears to work only for a
@@ -44,22 +55,44 @@ Railway CLI is not logged in; commands below read a project token from
 ### Branches left behind without a merge
 - Check: `git ls-remote --heads origin | sed 's|.*refs/heads/||'`, then date each
   tip with `git log -1 --format='%ci %s' <sha>`.
-- Normal: exactly `main` plus these three known long-lived branches, none of which
-  came from a merged PR and so are invisible to the check above:
-  `claude/table-header-clipping-wrkz14` (2026-06-16),
-  `experiment/726-stream-representation-image-vs-json` (2026-07-21, the #726
-  experiment, also checked out locally), and `feat/118-magic-link-auth-infra`
-  (2026-06-02, superseded by Clerk under ADR 0022). Report any fourth.
+  For each one not in the merged set, ask GitHub whether a PR exists and in what
+  state: `gh pr list --state all --head <branch> --json number,state,title`.
+- Normal: exactly `main` plus these known branches, none of which came from a
+  merged PR and so are invisible to the check above:
+  - Long-lived: `claude/table-header-clipping-wrkz14` (2026-06-16),
+    `experiment/726-stream-representation-image-vs-json` (2026-07-21, the #726
+    experiment, also checked out locally), and `feat/118-magic-link-auth-infra`
+    (2026-06-02, superseded by Clerk under ADR 0022).
+  - Closed-PR leftovers from the 2026-08-18 diagram batch, superseded by the
+    consolidated `fix/793-870-871-diagram-capture-followup` work:
+    `chore/871-guard-screen-view-builders` (PR #900 closed),
+    `fix/870-chat-generator-refuses-empty-capture` (PR #902 closed), and
+    `fix/793-diagram-history-bound` (PR #905 closed).
+  Local-only branches, never pushed and carrying no PR, are also normal:
+  `chore/update-ai-workflow-990` (2026-08-27, sits on a `main` commit with no work
+  of its own, opened for #990), `docs/refresh-project-context` (2026-08-18),
+  `fix/793-870-871-diagram-capture-followup` (2026-08-18, the work that superseded
+  the three closed PRs above), and `integration/batch-2026-08-23` (2026-08-23, the
+  trial-merge branch for that batch).
+  Report any branch outside those lists.
 - Matters: the merged-branch check answers "was this cleaned up after merging" and
   says nothing about a branch that was abandoned instead. Left alone, an abandoned
-  branch is indistinguishable from work in flight.
+  branch is indistinguishable from work in flight. A branch whose PR was **closed
+  unmerged** is the blind spot that matters most: it never enters the merged set,
+  so it passes the check above and looks live.
 
 ### Registered worktrees
 - Check: `git worktree list`
-- Normal: exactly one line, the main checkout. `.claude/worktrees/` empty.
+- Normal: exactly one line, the main checkout, with no entry marked `prunable`.
+  `.claude/worktrees/` empty. Ten prunable `/private/tmp/wt-*` registrations were
+  cleared on 2026-08-30.
 - Matters: a stale worktree holds a branch checked out and blocks deleting it. The
   policy hooks also cannot run from a worktree (#813), so work started in one skips
   the commit gate.
+- Note: a `prunable` entry means the registration outlived its directory, which is
+  what `/private/tmp/wt-*` worktrees do when macOS clears the temp directory. The
+  branch is still held, so report these; `git worktree prune` is a write and the
+  human's call.
 
 ### Open pull requests
 - Check: `gh pr list --state open --json number,title,isDraft,statusCheckRollup`
@@ -70,7 +103,8 @@ Railway CLI is not logged in; commands below read a project token from
 
 ### Open issues
 - Check: `gh issue list --state open --limit 200 --json number --jq 'length'`
-- Normal: 39 as of 2026-08-12. Report the count and any issue opened since the last
+- Normal: 57 as of 2026-08-30 (was 39 on 2026-08-12; the 2026-08-19..08-26 audit and
+  schedule sweeps added ~37). Report the count and any issue opened since the last
   session; do not list all of them.
 - Matters: an issue filed by the audit sweeps often already covers the work about to
   be started.
@@ -90,8 +124,8 @@ Railway CLI is not logged in; commands below read a project token from
 
 ### Alembic head count
 - Check: `cd backend && .venv/bin/python -m alembic heads`
-- Normal: exactly one head. Currently `b7d2e4f19a83` (#830's schedule tables; was
-  `14eca2b25785` before 2026-08-12).
+- Normal: exactly one head. Currently `a4f6d9c2e871` (#946's period-report table,
+  2026-08-24; was `b7d2e4f19a83` for #830's schedule tables before that).
 - Matters: a migration-bearing branch can fork into two heads on rebase or merge.
   `make backend-test` cannot see it because the test session builds the schema with
   `create_all`, but the web service runs `alembic upgrade head` on deploy and fails.
@@ -189,9 +223,10 @@ Railway CLI is not logged in; commands below read a project token from
 
 ### Active coach prompt
 - Check: `railway variables --service web --kv | grep COACH_PROMPT_ID`
-- Normal: `coach_message_lean_grouped_v9` with `COACH_RECEIPT_CADENCE=true`, on both
-  the `web` and `worker` services. Flipped 2026-08-12 from `grouped_v7`; rollback is
-  `grouped_v7`, or `grouped_v8` to back out SCHEDULE while keeping BODY.
+- Normal: `coach_message_lean_grouped_v11` with `COACH_RECEIPT_CADENCE=true`, on both
+  the `web` and `worker` services (observed 2026-08-30). Every earlier
+  `coach_message_lean_grouped_*` id stays registered, so rollback is a pure config
+  flip to `grouped_v9`, `grouped_v8`, or `grouped_v7`.
 - Matters: rollback is a pure config flip, so an unexpected value here means someone
   rolled back and the codebase's default no longer describes production. The flip
   skipped `grouped_v8`, so BODY (#742) and SCHEDULE (#830) both went live in one
@@ -200,7 +235,7 @@ Railway CLI is not logged in; commands below read a project token from
 ### Coach input kill switches
 - Check: `railway variables --service worker --kv | grep -E '^COACH_' | sort`
 - Normal: exactly this set (#522's eleven plus the ADR 0025 memory switch), observed
-  2026-08-12:
+  identical on **both** `web` and `worker` on 2026-08-30 (unchanged since 2026-08-12):
   `COACH_CONTINUITY_ENABLED=false`, `COACH_HOUSE_SCHOOLS_ENABLED=false`,
   `COACH_LONGITUDINAL_ENABLED=false`, `COACH_MEMORY_ENABLED=true`,
   `COACH_PLAYBOOK_ENABLED=false`, `COACH_PREVIOUS_30D_ENABLED=false`,
@@ -217,8 +252,9 @@ Railway CLI is not logged in; commands below read a project token from
 
 ### Third-party account ceilings
 - Check: no command; read the tracking issues.
-- Normal: Clerk still runs its **dev** instance in production, tolerated to ~100
-  signups (#626); Strava OAuth is Standard Tier, capped at 10 athletes (#723).
+- Normal: Clerk runs its **production** instance since the 2026-08-24 cutover
+  (`pk_live_*`, `clerk.pulsecoachai.com`), so #626 is closed and that ceiling is
+  gone; Strava OAuth is still Standard Tier, capped at 10 athletes (#723, open).
 - Matters: both are silent ceilings that convert into a signup outage rather than a
   degraded experience. Neither is measurable from the repository, so they are
   recorded here to stay visible.
@@ -261,9 +297,10 @@ Railway CLI is not logged in; commands below read a project token from
 
 ### Quarantined tests
 - Check: `grep -rn "pytest.mark.skip\|pytest.mark.xfail" backend/tests/`
-- Normal: exactly 3, all `skipif` guards on an absent API key or optional SDK, none
-  unconditional. Baseline suite ~3000 tests (2996 passing, 12 deselected, on
-  2026-08-12).
+- Normal: exactly 4, all `skipif` guards on an absent API key or optional SDK, none
+  unconditional: `test_observability.py` (sentry_sdk) plus the three
+  `*_invariance_integration.py` files (live `ANTHROPIC_API_KEY`). Baseline suite
+  3863 passing, 13 deselected on 2026-09-21 (was 2996/12 on 2026-08-12).
 - Matters: an unconditional skip is a test that stopped being evidence while still
   counting toward a green bar.
 
