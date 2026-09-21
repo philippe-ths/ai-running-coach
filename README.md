@@ -1,6 +1,8 @@
 # Running Coach — an AI coach for your Strava runs
 
-Running Coach connects to Strava, deeply processes each run into deterministic training signals, and turns those signals into an ongoing relationship with an LLM coach: short, human, opinionated coaching that arrives after you run and remembers you over time. It runs locally via `docker compose`, or as a deployed multi-user app on Railway (backend) and Vercel (frontend) — see [Production deployment](#production-deployment).
+Running Coach connects to Strava, deeply processes each run into deterministic training signals, and turns those signals into an ongoing relationship with an LLM coach: short, human, opinionated coaching that arrives after you run and remembers you over time.
+
+It is live as a multi-user product at [pulsecoachai.com](https://pulsecoachai.com), on Railway (backend) and Vercel (frontend) — see [Production deployment](#production-deployment). It also runs locally via `docker compose`.
 
 Most Strava-based tools surface raw stats but little actionable insight — they tell you what happened, not what to do next. This project bridges that gap: a correct, auditable deterministic substrate (metrics, blocks, training load) under an LLM coaching layer that has a voice, a point of view, and durable memory — while never letting personality override the measured data or a safety floor.
 
@@ -12,9 +14,22 @@ Most Strava-based tools surface raw stats but little actionable insight — they
 - **Memory that compounds.** A durable, split memory (auditable deterministic facts + an LLM-written relationship narrative) plus a learning loop that tracks which advice you actually act on, so the coach advances the conversation instead of repeating itself.
 - **Training load.** A deterministic acute / chronic / form readiness model (fitness, fatigue, form) built from your own per-activity load, shown on the activity page and read by the coach.
 - **Multi-activity sessions.** Temporally-contiguous activities (a walk, then a run, then a row) are grouped into one **Block**, so the coach reasons about the whole session, not each fragment.
-- **A web app.** An activity list and detail view (stream charts, splits, laps, a training-load card, the coach report and a follow-up chat), a trends dashboard, a training-load view, and a profile editor for voice / stance / materials. Light / dark / system theming.
+- **A coach you can talk to.** Coach threads are streamed conversational turns (SSE) in which the coach can read your data through tools, follow coaching skills, and offer actions as cards you confirm before anything is written.
+- **A training schedule.** The coach drafts a plan towards a race, as concrete sessions inside a horizon; a plan is amended by rewriting a bounded window of weeks, never the whole thing, and every planned session is a window rather than a day.
+- **Period reports.** A coaching read over a chosen period, not just a run.
+- **Your history, your account.** A resumable import of Strava history, and account deletion that removes the Clerk user first and then every row you own.
+- **A web app.** An activity list and detail view (stream charts, splits, laps, a training-load card, the coach report and the coach sheet), a trends dashboard, a training-load view, a schedule page, period reports, and a profile editor for voice / stance / materials. Light / dark / system theming.
 
-A deterministic policy validator gates every coach message (medical scope, HR-zone language, interval claims), and an offline eval harness scores reports against a rubric so quality regressions are caught before they ship.
+## How it is kept honest
+
+- A deterministic policy validator gates every coach message, including streamed output: medical scope (a validator rule, [ADR 0024](docs/adr/0024-the-coach-medical-scope-floor-is-a-deterministic-validator-rule.md)), HR-zone language, interval claims.
+- Uploaded coaching materials are distilled on ingestion and made inert by containment, so a document cannot steer the coach ([ADR 0017](docs/adr/0017-user-materials-are-distilled-on-ingestion-and-made-inert-by-containment.md)).
+- Per-user and global LLM spend caps (daily and monthly) are checked before generation; at the ceiling the coach degrades to a deterministic fallback rather than spending someone else's budget.
+- An offline eval harness scores stored reports against a versioned rubric and flags regressions across prompt versions; it has its own self-test against synthetic fixtures. It is run by hand (`make eval`) before a prompt change ships; it is not a CI job.
+- CI on every pull request: the backend suite, an Alembic check that the models match the migrations, frontend lint and build, and a post-deploy verification on push.
+- Production does not run the code defaults: eleven coach inputs are off in the deployed environment, the list is declared in `backend/.env.example`, and a test fails the build if the documentation drifts from what the app resolves.
+
+**Numbers, as of 2026-09-21:** 3,863 backend tests passing; 32 ADRs. Start with [ADR 0014](docs/adr/0014-coaching-corpus-is-keyed-lexical-retrieval-over-a-code-resident-house-library.md) (retrieval is keyed and lexical, not vector), [ADR 0022](docs/adr/0022-identity-is-social-login-via-clerk-strava-stays-an-integration.md) (identity) and ADR 0024 (the medical floor).
 
 ## How it's built (deeper docs)
 
