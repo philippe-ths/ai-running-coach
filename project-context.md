@@ -204,10 +204,11 @@ Data flow: Strava API, `strava_ingestion`, `Activity`/`ActivityStream` rows, the
 `sqlalchemy`, `psycopg`, `alembic`: ORM, Postgres driver, and schema migrations.
 `pydantic`, `pydantic-settings`: request/response schemas and environment configuration.
 `pyjwt`: verifies the Clerk session JWT against Clerk's JWKS.
-`httpx`: outbound HTTP client used for Strava and Anthropic calls.
+`httpx`: outbound HTTP client for the Strava API, the Telegram Bot API, and the Clerk JWKS fetch.
 `redis`, `rq`: job queue for sync and processing background work.
 `numpy`: numerical computation in the processing pipeline.
-`anthropic`: Claude API client used by the coach service, pinned `>=0.125.0,<0.126.0` because 1.0.0 removed `temperature`/`top_p`/`top_k` from `messages.create()` and `.stream()` and neither takes `**kwargs`.
+`anthropic`: Claude API client used by the coach service, pinned below its next major so a new major is adopted deliberately.
+`httpx2`: the `anthropic` SDK's HTTP layer, declared because `RetryLadder` matches its `RemoteProtocolError` to retry a mid-stream disconnect.
 A structured LLM call's wall-clock ceiling is derived from its `max_tokens` rather than fixed, so a large generation is not capped at a short call's limit.
 `sentry-sdk[fastapi]` (optional `observability` extra): error tracking, installed only when Sentry capture is enabled.
 `next`, `react`, `react-dom`: frontend framework and renderer.
@@ -262,8 +263,7 @@ Backend unit and policy coverage exists for analysis, intervals, the policy vali
 Structural route sweeps walk the route table through one shared enumeration, `backend/tests/_route_table.py`, because a sweep over an empty enumeration passes silently rather than erroring.
 `assert_enumeration_is_not_vacuous` proves the enumeration against the app's own OpenAPI document plus a hard route-count floor, and `tests/test_route_table.py` is the guard on that guard.
 `tests/test_route_ownership_802.py` fails when any route taking an owned-resource path parameter does not resolve it through `deps.py`.
-`tests/test_context_budget_907.py` fails when this file exceeds its declared line and character budget.
-`tests/test_anthropic_pin_966.py` asserts the installed `anthropic` version satisfies the declared line and that the line still excludes 1.0.0.
+`tests/test_anthropic_sdk_binding_1023.py` drives `llm.py` through the real `anthropic` SDK over an `httpx2` mock transport, so a call-site signature break fails CI.
 Frontend regression runs via `npm run test`, which invokes `next lint` then `next build`; there is no Jest or component test runner.
 Frontend smoke runs via `npm run smoke` (`frontend/scripts/smoke.mjs`), booting a mock API and a Next dev server on dynamically chosen free ports and verifying core routes load.
 `make alembic-check` brings a throwaway Postgres to head then runs `alembic check`, catching the model/migration drift `make backend-test` is structurally blind to because the suite builds its schema with `create_all`.
