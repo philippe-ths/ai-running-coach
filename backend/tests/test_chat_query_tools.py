@@ -96,6 +96,22 @@ def test_get_session_detail_returns_own_session(db):
     assert out["splits"], "splits summary present when streams exist"
 
 
+def test_get_session_detail_cadence_is_one_unit_for_activity_and_splits(db):
+    """#934: Strava per-leg cadence (83) must be reported as spm (166) at the activity
+    level, in the same unit as the per-km splits in the same payload."""
+    u = _user(db)
+    a = _activity(db, u, days_ago=2, with_streams=True)
+    a.avg_cadence = 83.0
+    n = len(list(range(0, a.moving_time_s, 10)))
+    db.add(ActivityStream(activity_id=a.id, stream_type="cadence", data=[83] * n))
+    db.commit()
+
+    out = qt.get_session_detail(db, u.id, activity_id=str(a.id), today=TODAY)
+    split_cadences = {s["avg_cadence_spm"] for s in out["splits"]}
+    assert split_cadences == {166}
+    assert out["avg_cadence_spm"] == 166
+
+
 def test_training_summary_is_owner_scoped(db):
     a_user, b_user = _user(db), _user(db)
     _activity(db, a_user, days_ago=3, distance_m=10000)
