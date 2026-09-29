@@ -2,10 +2,16 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { fetchFromAPI } from '@/lib/api';
+import { dialLabel, dialValueText } from './dialScale';
 import type { EmphasisKey, StanceCatalog, StanceConfig } from '@/lib/types';
 
 // The two emphasis axes in canonical order: x = data_sentiment, y = process_outcome.
 const EMPHASIS_KEYS: EmphasisKey[] = ['data_sentiment', 'process_outcome'];
+
+const EMPHASIS_NAMES: Record<EmphasisKey, string> = {
+  data_sentiment: 'Data or sentiment emphasis',
+  process_outcome: 'Process or outcome emphasis',
+};
 
 type EmphasisState = Record<EmphasisKey, number>;
 
@@ -110,8 +116,8 @@ export default function StanceDialsPanel() {
 
       {/* School picker */}
       <div>
-        <label className="block text-sm font-medium mb-2">Training philosophy</label>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <label id="stance-school-label" className="block text-sm font-medium mb-2">Training philosophy</label>
+        <div role="group" aria-labelledby="stance-school-label" className="grid grid-cols-1 md:grid-cols-2 gap-2">
           {catalog.schools.map((s) => (
             <button
               key={s.key}
@@ -173,9 +179,9 @@ export default function StanceDialsPanel() {
             return (
               <div key={key}>
                 <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-                  <span>{axis?.low_pole}</span>
+                  <span aria-hidden="true">{axis?.low_pole}</span>
                   <span className="font-medium text-gray-700 dark:text-gray-200">{emphasis[key]}</span>
-                  <span>{axis?.high_pole}</span>
+                  <span aria-hidden="true">{axis?.high_pole}</span>
                 </div>
                 <input
                   type="range"
@@ -185,7 +191,16 @@ export default function StanceDialsPanel() {
                   value={emphasis[key]}
                   onChange={(e) => nudge(key, Number(e.target.value))}
                   className="w-full"
-                  aria-label={`${key} emphasis`}
+                  aria-label={dialLabel(
+                    EMPHASIS_NAMES[key],
+                    axis?.low_pole ?? '',
+                    axis?.high_pole ?? '',
+                  )}
+                  aria-valuetext={dialValueText(
+                    emphasis[key],
+                    axis?.low_pole ?? '',
+                    axis?.high_pole ?? '',
+                  )}
                 />
               </div>
             );
