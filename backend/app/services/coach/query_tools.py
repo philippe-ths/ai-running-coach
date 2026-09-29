@@ -46,6 +46,7 @@ from app.models import Activity, UserProfile
 from app.models.derived_metric import DerivedMetric
 from app.services.coach import coach_units
 from app.services.analysis.splits import calculate_splits
+from app.services.units.cadence import normalize_cadence_spm
 from app.services.coach.recent_training import _interval_shape
 from app.services.coach.volume import build_volume_report
 from app.services.activity_facts import query_facts as _query_activity_facts
@@ -340,7 +341,13 @@ def get_session_detail(db: Session, owner_user_id, *, activity_id: str, today: d
         "effort": m.effort if m else None,
         "effort_score": round(m.effort_score, 1) if m and m.effort_score is not None else None,
         "avg_hr": coach_units.bpm(activity.avg_hr),
-        "avg_cadence_spm": round(activity.avg_cadence) if activity.avg_cadence else None,
+        # Same shared per-leg -> spm rule (and the same effective type) the splits above
+        # and the coach pack use, so one payload reports one cadence unit (#934).
+        "avg_cadence_spm": (
+            round(normalize_cadence_spm(effective_type, activity.avg_cadence))
+            if activity.avg_cadence
+            else None
+        ),
         "hr_drift_pct": round(m.hr_drift, 1) if m and m.hr_drift is not None else None,
         "structure": m.structure if m else None,
         "interval": interval,
