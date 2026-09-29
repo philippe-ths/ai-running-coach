@@ -192,11 +192,21 @@ function askedTurn(){
   return null;
 }
 /* The rows that existed when this turn generated: everything before the reply
-   (the runner's message is written before generation, so it is included). */
-function historyForTurn(){
+   (the runner's message is written before generation, so it is included).
+   #793: mirrors `stream_thread_turn` exactly -- only what was SAID (an `event`
+   row reaches the model through the system prompt's ledger, never as a message),
+   then the last `max_llm_history_turns` of those. `historyCut` counts the said
+   rows the bound dropped, so the node can say when it actually bit. */
+const CONVERSATIONAL_ROLES = ['user', 'assistant'];
+function saidBeforeTurn(){
   const c = conv(), a = selectedTurn(); if(!c || !a) return [];
-  return c.turns.slice(0, a.i);
+  return c.turns.slice(0, a.i).filter(t => CONVERSATIONAL_ROLES.includes(t.role));
 }
+function historyForTurn(){
+  const said = saidBeforeTurn(), bound = (CHAT.bounds||{}).max_llm_history_turns;
+  return bound ? said.slice(-bound) : said;
+}
+function historyCut(){ return saidBeforeTurn().length - historyForTurn().length; }
 /* #792: the screen pointer, the resolved view, the LOOKING AT block and the
    assembled prompt are all resolved PER TURN by `stream_thread_turn`, so a
    runner who asks from Trends and then from an activity page gets two different
@@ -734,10 +744,12 @@ const NODES = [
 
 /* ===== 5 · THE TURN ===== */
 { id:'history', layer:'loop', kind:'store', tag:'bounded read',
-  title:'Thread history', path:'threads.thread_messages(...)[-40:]',
+  title:'Thread history', path:'threads.thread_messages(...) · said rows only · [-'+((CHAT.bounds||{}).max_llm_history_turns||'?')+':]',
   from:['t_chat','t_thread','user_msg'],
   body:()=> { const h=historyForTurn(), c=conv(); if(!c) return none('no capture');
-    return head('sent to the model for '+turnLabel()+' — '+h.length+' of '+c.turn_count+' rows')
+    const cut=historyCut(), B=(CHAT.bounds||{}).max_llm_history_turns;
+    return head('sent to the model for '+turnLabel()+' — '+h.length+' of '+c.turn_count+' rows'
+      + (cut>0 ? ' · the '+B+'-turn bound dropped the '+cut+' oldest' : ' · under the '+B+'-turn bound, nothing dropped'))
     + jsonHTML(h.map(t=>({role:t.role, content:t.content})), true); } },
 
 { id:'llm', layer:'loop', kind:'llm', tag:'LLM call', span:true,
