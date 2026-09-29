@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { fetchFromAPI } from '@/lib/api';
+import { dialLabel, dialValueText } from './dialScale';
 import type { DialKey, VoiceCatalog, VoiceConfig } from '@/lib/types';
 
 // The balanced centre of a 1-5 axis. Default sits here because Default means no
@@ -187,8 +188,8 @@ export default function VoiceDialsPanel() {
 
       {/* Preset cast */}
       <div>
-        <label className="block text-sm font-medium mb-2">Starting character</label>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+        <label id="voice-preset-label" className="block text-sm font-medium mb-2">Starting character</label>
+        <div role="group" aria-labelledby="voice-preset-label" className="grid grid-cols-2 md:grid-cols-3 gap-2">
           {/* Default is a first-class choice, not the absence of one: it is the
               only option that adds nothing at all to how the coach speaks. It
               means off on BOTH surfaces — the report is written without a voice
@@ -299,11 +300,11 @@ export default function VoiceDialsPanel() {
             return (
               <div key={key}>
                 <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
-                  <span>{axis.low_pole}</span>
+                  <span aria-hidden="true">{axis.low_pole}</span>
                   <span className="font-medium text-gray-700 dark:text-gray-200">
                     {titleCase(key)}: {dials[key]}
                   </span>
-                  <span>{axis.high_pole}</span>
+                  <span aria-hidden="true">{axis.high_pole}</span>
                 </div>
                 <input
                   type="range"
@@ -313,7 +314,8 @@ export default function VoiceDialsPanel() {
                   value={dials[key]}
                   onChange={(e) => nudge(key, Number(e.target.value))}
                   className="w-full"
-                  aria-label={`${key} dial`}
+                  aria-label={dialLabel(titleCase(key), axis.low_pole, axis.high_pole)}
+                  aria-valuetext={dialValueText(dials[key], axis.low_pole, axis.high_pole)}
                 />
               </div>
             );
@@ -327,8 +329,11 @@ export default function VoiceDialsPanel() {
 
       {/* Free-text escape-hatch */}
       <div>
-        <label className="block text-sm font-medium mb-1">In your own words (optional)</label>
+        <label htmlFor="voice-freetext" className="block text-sm font-medium mb-1">
+          In your own words (optional)
+        </label>
         <textarea
+          id="voice-freetext"
           value={freetext}
           onChange={(e) => setFreetext(e.target.value)}
           rows={2}

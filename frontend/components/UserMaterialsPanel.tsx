@@ -195,8 +195,11 @@ export default function UserMaterialsPanel() {
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
-            <label className="block text-sm font-medium mb-1">Kind</label>
+            <label htmlFor="materials-kind" className="block text-sm font-medium mb-1">
+              Kind
+            </label>
             <select
+              id="materials-kind"
               value={kind}
               onChange={(e) => setKind(e.target.value as MaterialKind)}
               aria-describedby={kind === 'philosophy' ? 'materials-kind-hint' : undefined}
@@ -216,8 +219,11 @@ export default function UserMaterialsPanel() {
             )}
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Title (optional)</label>
+            <label htmlFor="materials-title" className="block text-sm font-medium mb-1">
+              Title (optional)
+            </label>
             <input
+              id="materials-title"
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -229,8 +235,11 @@ export default function UserMaterialsPanel() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">Markdown file</label>
+          <label htmlFor="materials-file" className="block text-sm font-medium mb-1">
+            Markdown file
+          </label>
           <input
+            id="materials-file"
             ref={fileInputRef}
             type="file"
             accept=".md,.markdown,text/markdown,text/plain"
