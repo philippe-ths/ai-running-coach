@@ -866,9 +866,17 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
             complete_planned_session,
         )
 
+        if not settings.SCHEDULE_ENABLED:
+            raise ValueError("the schedule is unavailable")
         session = _require_owned_planned_session(
             db, owner_user_id, stored.planned_session_id
         )
+        # Every refusal the offer checked, again (the `adjust_session` shape): the
+        # session can be ticked by the tap or an activity match while the card
+        # waits, and the writer below is NOT idempotent, it would overwrite the
+        # source and the credited activity.
+        if session.completed_at is not None:
+            raise ValueError("that session is already done")
         # The same writer the tap and the auto-match use. Three routes to done,
         # one write — the `write_checkin` shape.
         complete_planned_session(db, session, source=CONVERSATION)
@@ -1171,9 +1179,17 @@ def _build_offer(
         return frame, stored
 
     if request.action_type == "complete_session":
+        if not settings.SCHEDULE_ENABLED:
+            # Same kill-switch reach as `draft_plan` and `adjust_session`.
+            raise ValueError("the schedule is unavailable")
         session = _require_owned_planned_session(
             db, owner_user_id, request.planned_session_id
         )
+        # Refused at offer time like `adjust_session`'s "already done"; unlike it,
+        # a past or declined session stays tickable, since logging what the runner
+        # did yesterday is the point of this action.
+        if session.completed_at is not None:
+            raise ValueError("that session is already done")
         frame = ProposedActionFrame(
             action_type="complete_session",
             token="",
