@@ -154,6 +154,19 @@ class TelegramNotifier:
         }
         self._post("editMessageReplyMarkup", body)
 
+    def set_webhook(self, *, url: str, secret_token: str) -> None:
+        """Point Telegram's update delivery at `url` (#1024). Idempotent, so it
+        is safe to call on every boot; revoking the bot token drops the prior
+        registration, which is what makes re-registering on boot necessary."""
+        self._post(
+            "setWebhook",
+            {
+                "url": url,
+                "secret_token": secret_token,
+                "allowed_updates": ["message", "callback_query"],
+            },
+        )
+
     def _post(self, method: str, body: dict) -> dict:
         """POST one Bot API method and return its payload, or raise
         TelegramAPIError. `from None` drops the httpx exception from the chain:

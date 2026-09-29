@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -33,10 +35,22 @@ assert_production_config()
 # (the #543 guard took prod down on Railway, #549).
 log_budget_cap_status()
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Re-point Telegram's inbound delivery at this service on every boot
+    (#1024), so a rotated bot token only needs the env var updated. No-op
+    outside production or when Telegram is unconfigured; never fails the boot."""
+    from app.services.notifications.telegram_webhook import register_webhook
+
+    register_webhook(settings)
+    yield
+
+
 app = FastAPI(
     title="Running Coach",
     description="Local-first Strava Coach MVP",
     version="0.2.0",
+    lifespan=_lifespan,
 )
 
 
