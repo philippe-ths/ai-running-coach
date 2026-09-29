@@ -1,3 +1,5 @@
+import logging
+import traceback
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -5,7 +7,7 @@ import pytest
 
 from app.services.notifications import Notification, NotifierPort
 from app.services.notifications.port import NotificationAction
-from app.services.notifications.telegram_adapter import TelegramNotifier
+from app.services.notifications.telegram_adapter import TelegramAPIError, TelegramNotifier
 
 
 def _notifier() -> TelegramNotifier:
@@ -74,17 +76,53 @@ def test_send_escapes_html_special_characters_in_content():
     assert "4:30 &lt; 4:45 &amp; dropping" in text
 
 
-def test_send_raises_on_http_error_status():
-    response = MagicMock()
-    response.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "401", request=MagicMock(), response=MagicMock()
-    )
-    with patch(
-        "app.services.notifications.telegram_adapter.httpx.post",
-        return_value=response,
-    ):
-        with pytest.raises(httpx.HTTPStatusError):
-            _notifier().send(_notification())
+_SECRET_TOKEN = "8849636880:SECRET-token-value"
+
+
+def _real_http_failure(status: int):
+    """A real httpx error status: raise_for_status puts the full URL, token
+    included, into the exception message, exactly as production saw (#1024)."""
+
+    def post(url, **_):
+        return httpx.Response(
+            status,
+            json={"ok": False, "description": "Bad Request: query is too old"},
+            request=httpx.Request("POST", url),
+        )
+
+    return post
+
+
+def _transport_failure(url, **_):
+    raise httpx.ConnectError(f"connection failed for {url}")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda n: n.send(_notification()),
+        lambda n: n.answer_callback("smoke"),
+        lambda n: n.edit_message_reply_markup(message_id=1, reply_markup={}),
+    ],
+    ids=["sendMessage", "answerCallbackQuery", "editMessageReplyMarkup"],
+)
+@pytest.mark.parametrize(
+    "post", [_real_http_failure(400), _transport_failure], ids=["http-400", "transport"]
+)
+def test_failed_call_never_exposes_the_bot_token(call, post, caplog):
+    notifier = TelegramNotifier(bot_token=_SECRET_TOKEN, chat_id="42")
+    with patch("app.services.notifications.telegram_adapter.httpx.post", side_effect=post):
+        with pytest.raises(TelegramAPIError) as info:
+            call(notifier)
+    # What a caller's logger.exception writes: message plus the whole chain.
+    logging.getLogger("t").error("failed", exc_info=info.value)
+    rendered = "".join(traceback.format_exception(info.value)) + caplog.text
+    assert _SECRET_TOKEN not in rendered
+    assert "SECRET" not in rendered
+    # Still says what failed and why.
+    assert "failed" in str(info.value)
+    if post is not _transport_failure:
+        assert "HTTP 400" in str(info.value) and "query is too old" in str(info.value)
 
 
 def test_send_raises_when_api_reports_not_ok():
