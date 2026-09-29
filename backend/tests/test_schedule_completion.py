@@ -842,6 +842,81 @@ def test_ownership_is_re_resolved_when_the_runner_confirms(db):
     assert session.completed_at is None
 
 
+def _offer_complete(db, user, session):
+    from app.services.coach import proposed_actions
+
+    fake = _FakeRedis()
+    with patch.object(proposed_actions, "redis_conn", fake):
+        result, frame = proposed_actions.mint_proposed_action(
+            db,
+            user.id,
+            {
+                "action_type": "complete_session",
+                "planned_session_id": str(session.id),
+            },
+        )
+    return fake, result, frame
+
+
+def test_the_schedule_kill_switch_stops_a_complete_session_offer(db, monkeypatch):
+    from app.core.config import settings
+
+    user = _seed_user(db)
+    session = _seed_session(db, _seed_plan(db, user), title="Lower body")
+    monkeypatch.setattr(settings, "SCHEDULE_ENABLED", False)
+
+    fake, result, frame = _offer_complete(db, user, session)
+
+    assert result["ok"] is False
+    assert frame is None
+    assert fake._store == {}
+
+
+def test_an_already_done_session_is_not_offered_for_completion(db):
+    user = _seed_user(db)
+    session = _seed_session(db, _seed_plan(db, user), title="Lower body")
+    completion.complete_planned_session(db, session, source=completion.MANUAL)
+
+    fake, result, frame = _offer_complete(db, user, session)
+
+    assert result["ok"] is False
+    assert frame is None
+    assert fake._store == {}
+
+
+def test_the_kill_switch_and_a_tick_are_re_checked_when_the_runner_confirms(
+    db, monkeypatch
+):
+    """The token outlives the state it was built from."""
+    from app.core.config import settings
+    from app.services.coach import proposed_actions
+
+    user = _seed_user(db)
+    session = _seed_session(db, _seed_plan(db, user), title="Lower body")
+    fake = _FakeRedis()
+    with patch.object(proposed_actions, "redis_conn", fake):
+        _o, frame = proposed_actions.mint_proposed_action(
+            db, user.id,
+            {"action_type": "complete_session", "planned_session_id": str(session.id)},
+        )
+        monkeypatch.setattr(settings, "SCHEDULE_ENABLED", False)
+        with pytest.raises(ValueError, match="unavailable"):
+            proposed_actions.consume_and_execute(db, user.id, frame["token"])
+        db.refresh(session)
+        assert session.completed_at is None
+
+        monkeypatch.setattr(settings, "SCHEDULE_ENABLED", True)
+        _o, frame = proposed_actions.mint_proposed_action(
+            db, user.id,
+            {"action_type": "complete_session", "planned_session_id": str(session.id)},
+        )
+        completion.complete_planned_session(db, session, source=completion.MANUAL)
+        with pytest.raises(ValueError, match="already done"):
+            proposed_actions.consume_and_execute(db, user.id, frame["token"])
+    db.refresh(session)
+    assert session.completion_source == completion.MANUAL
+
+
 # --- the delete path -------------------------------------------------------
 
 
