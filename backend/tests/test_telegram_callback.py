@@ -11,6 +11,7 @@ The inbound endpoint is BasicAuth-exempt (the /api/webhooks prefix), so the auth
 checks below are the only thing standing between an untrusted POST and a DB write.
 """
 
+import logging
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -28,6 +29,7 @@ from app.schemas.coach import (
     TappableOption,
 )
 from app.services.notifications import build_coach_notification
+from app.services.notifications.telegram_adapter import TelegramAPIError
 from app.services.notifications.callback_token import (
     CallbackAction,
     decode,
@@ -278,6 +280,28 @@ class TestInboundAuth:
         assert resp.json()["reason"] == "unauthorized_chat"
         assert db.query(CheckIn).filter(CheckIn.activity_id == a.id).first() is None
         isolate_side_effects["answer"].assert_called_once()
+
+    def test_refused_ack_of_a_fake_tap_logs_a_warning_not_a_traceback(
+        self, client, db, configured, isolate_side_effects, caplog
+    ):
+        # What the deploy smoke does every release (#1024): an authentic but
+        # unauthorized fake tap, whose ack Telegram then refuses with a 400.
+        isolate_side_effects["answer"].side_effect = TelegramAPIError(
+            "Telegram answerCallbackQuery failed: HTTP 400: query is too old"
+        )
+        a = _seed_activity(db)
+        token = encode(kind="rpe", activity_id=str(a.id), value=7)
+        with caplog.at_level(logging.WARNING, logger="app.api.webhooks"):
+            resp = client.post(
+                "/api/webhooks/telegram",
+                json=_update(token, chat_id=999),
+                headers={"X-Telegram-Bot-Api-Secret-Token": _SECRET},
+            )
+        assert resp.status_code == 200
+        refusals = [r for r in caplog.records if "not answered" in r.getMessage()]
+        assert len(refusals) == 1
+        assert refusals[0].levelno == logging.WARNING and refusals[0].exc_info is None
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
     def test_empty_secret_in_production_fails_closed(
         self, client, db, monkeypatch, isolate_side_effects

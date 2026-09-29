@@ -15,6 +15,12 @@ _TIMEOUT_SECONDS = 20
 _API_BASE = "https://api.telegram.org"
 
 
+class TelegramAPIError(RuntimeError):
+    """A Bot API call failed. The message names the method and Telegram's reason
+    and never carries the request URL, because the Bot API puts the bot token in
+    the URL path and callers log this exception with its traceback (#1024)."""
+
+
 class TelegramNotifier:
     """Telegram Bot API transport over HTTPS.
 
@@ -106,7 +112,6 @@ class TelegramNotifier:
         self.timeout = timeout
 
     def send(self, notification: Notification) -> None:
-        url = f"{self.api_base}/bot{self.bot_token}/sendMessage"
         # P2.4 (#120, ADR 0023): route to the per-notification recipient when set
         # (the activity owner's bound chat), falling back to the adapter's
         # configured chat for the single-user / back-compat path.
@@ -119,13 +124,7 @@ class TelegramNotifier:
         reply_markup = self._reply_markup(notification)
         if reply_markup is not None:
             body["reply_markup"] = reply_markup
-        response = httpx.post(url, json=body, timeout=self.timeout)
-        response.raise_for_status()
-        payload = response.json()
-        if not payload.get("ok", False):
-            raise RuntimeError(
-                f"Telegram API rejected the message: {payload.get('description', 'unknown error')}"
-            )
+        self._post("sendMessage", body)
 
     def answer_callback(self, callback_query_id: str, *, text: str = "") -> None:
         """Acknowledge a tapped inline-keyboard button (I1b).
@@ -134,17 +133,10 @@ class TelegramNotifier:
         it (optionally with a brief toast). Best-effort by the caller's contract,
         but still raises on a hard transport/API error so failures are visible in
         logs rather than silently swallowed here."""
-        url = f"{self.api_base}/bot{self.bot_token}/answerCallbackQuery"
         body: dict = {"callback_query_id": callback_query_id}
         if text:
             body["text"] = text
-        response = httpx.post(url, json=body, timeout=self.timeout)
-        response.raise_for_status()
-        payload = response.json()
-        if not payload.get("ok", False):
-            raise RuntimeError(
-                f"Telegram API rejected answerCallbackQuery: {payload.get('description', 'unknown error')}"
-            )
+        self._post("answerCallbackQuery", body)
 
     def edit_message_reply_markup(
         self, *, message_id: int, reply_markup: dict, chat_id: str | int | None = None
@@ -155,19 +147,36 @@ class TelegramNotifier:
         defaults to the globally-configured chat for the single-owner back-compat
         path. Same error contract as answer_callback: best-effort by the caller,
         but raises on transport/API errors so failures land in logs."""
-        url = f"{self.api_base}/bot{self.bot_token}/editMessageReplyMarkup"
         body = {
             "chat_id": chat_id if chat_id is not None else self.chat_id,
             "message_id": message_id,
             "reply_markup": reply_markup,
         }
-        response = httpx.post(url, json=body, timeout=self.timeout)
-        response.raise_for_status()
-        payload = response.json()
+        self._post("editMessageReplyMarkup", body)
+
+    def _post(self, method: str, body: dict) -> dict:
+        """POST one Bot API method and return its payload, or raise
+        TelegramAPIError. `from None` drops the httpx exception from the chain:
+        its message is the full URL, token included, and a chained cause is
+        printed in the logged traceback."""
+        url = f"{self.api_base}/bot{self.bot_token}/{method}"
+        try:
+            response = httpx.post(url, json=body, timeout=self.timeout)
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            reason = f"HTTP {exc.response.status_code}: {_description(exc.response)}"
+            raise TelegramAPIError(self._redact(f"Telegram {method} failed: {reason}")) from None
+        except (httpx.HTTPError, ValueError) as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            raise TelegramAPIError(self._redact(f"Telegram {method} failed: {reason}")) from None
         if not payload.get("ok", False):
-            raise RuntimeError(
-                f"Telegram API rejected editMessageReplyMarkup: {payload.get('description', 'unknown error')}"
-            )
+            reason = payload.get("description", "unknown error")
+            raise TelegramAPIError(self._redact(f"Telegram API rejected {method}: {reason}"))
+        return payload
+
+    def _redact(self, message: str) -> str:
+        return message.replace(self.bot_token, "<redacted>") if self.bot_token else message
 
     @staticmethod
     def _reply_markup(notification: Notification) -> dict | None:
@@ -192,3 +201,11 @@ class TelegramNotifier:
             link = escape(notification.url, quote=True)
             parts.append(f'<a href="{link}">View in app</a>')
         return "\n\n".join(parts)
+
+
+def _description(response: httpx.Response) -> str:
+    """Telegram's own reason for an error status, from its JSON body."""
+    try:
+        return str(response.json().get("description", "unknown error"))
+    except Exception:
+        return "unknown error"

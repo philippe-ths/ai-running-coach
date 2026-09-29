@@ -24,6 +24,7 @@ from app.services.notifications import get_notifier, resolve_owner_user
 from app.services.notifications import telegram_link_token
 from app.services.notifications.port import Notification
 from app.services.notifications.callback_token import decode as decode_callback_token
+from app.services.notifications.telegram_adapter import TelegramAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -388,6 +389,10 @@ def _answer_callback(callback_query_id: str, *, text: str = "") -> None:
         return
     try:
         answer(callback_query_id, text=text)
+    except TelegramAPIError as exc:
+        # Telegram refusing the ack (a stale or fake query id, as the deploy
+        # smoke sends) is expected and harmless, so no traceback.
+        logger.warning("telegram callback %s not answered: %s", callback_query_id, exc)
     except Exception:
         logger.exception("failed to answer telegram callback %s", callback_query_id)
 
