@@ -18,7 +18,16 @@ dependencies = [
     # satisfies this line, so a stale venv is a failure rather than a surprise.
     "fastapi>=0.141.0,<0.142.0",
     "uvicorn[standard]>=0.27.0",
-    "sqlalchemy>=2.0.0",
+    # BOUNDED DELIBERATELY (#1021). SQLAlchemy 2.1 stopped installing `greenlet`
+    # by default, and `alembic/env.py` imports `sqlalchemy.ext.asyncio`, which
+    # refuses to load without it. Unbounded at `>=2.0.0`, CI resolved 2.1.1 on
+    # 29 Sep 2026 and `alembic-check` failed on every PR, while `backend-test`
+    # stayed green because the suite builds its schema with `create_all` and
+    # never imports env.py. The same image would fail the pre-deploy
+    # `alembic upgrade head`. The ceiling means 2.1 is adopted on purpose, run
+    # against the suite and a real migration first. `test_sqlalchemy_pin_1021.py`
+    # asserts the INSTALLED version satisfies this line.
+    "sqlalchemy>=2.0.0,<2.1",
     "psycopg>=3.1.0",
     "pydantic[email]>=2.6.0",
     "pydantic-settings>=2.1.0",
