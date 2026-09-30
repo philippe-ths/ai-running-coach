@@ -8,7 +8,7 @@ an RQ worker for ten minutes. Acceptance:
 - Non-retriable errors (4xx other than 429) propagate immediately.
 - After the retry is exhausted, the underlying error propagates so the
   caller's fallback path (services/coach/service.py is_fallback=True) fires.
-- A mid-stream httpx.RemoteProtocolError (peer closed connection) is treated
+- A mid-stream httpx2.RemoteProtocolError (peer closed connection) is treated
   as a transient transport failure in generate_coach_message — retried once,
   and propagates after retry exhaustion so the service fallback path fires.
   It must NOT crash the job with an uncaught raw exception.
@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
-import httpx
+import httpx2
 import pytest
 
 from app.services.coach.llm import AnthropicClient
@@ -32,8 +32,8 @@ def _ok_response(text: str = '{"key_takeaways":[{"text":"ok"}],"next_steps":[{"a
 
 def _make_status_error(status: int) -> anthropic.APIStatusError:
     """Build a real APIStatusError instance with the requested status code."""
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    response = httpx.Response(status_code=status, request=request)
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx2.Response(status_code=status, request=request)
     return anthropic.APIStatusError(
         f"status {status}", response=response, body=None
     )
@@ -70,7 +70,7 @@ async def test_returns_first_attempt_when_call_succeeds():
 async def test_retries_once_on_timeout_then_succeeds():
     client = AnthropicClient(api_key="k", model="m")
     timeout_err = anthropic.APITimeoutError(
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     )
     fake_create = AsyncMock(side_effect=[timeout_err, _ok_response("ok")])
     client.client.messages.create = fake_create
@@ -86,7 +86,7 @@ async def test_retries_once_on_timeout_then_succeeds():
 async def test_retries_once_on_connection_error_then_succeeds():
     client = AnthropicClient(api_key="k", model="m")
     conn_err = anthropic.APIConnectionError(
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     )
     fake_create = AsyncMock(side_effect=[conn_err, _ok_response("ok")])
     client.client.messages.create = fake_create
@@ -130,7 +130,7 @@ async def test_does_not_retry_on_4xx_non_429():
 async def test_propagates_underlying_exception_after_retry_exhausted():
     client = AnthropicClient(api_key="k", model="m")
     timeout_err = anthropic.APITimeoutError(
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     )
     fake_create = AsyncMock(side_effect=[timeout_err, timeout_err])
     client.client.messages.create = fake_create
@@ -159,7 +159,7 @@ async def test_propagates_5xx_after_retry_exhausted():
 # ---------------------------------------------------------------------------
 # generate_coach_message — streaming disconnect (#302)
 #
-# httpx.RemoteProtocolError (peer closed connection without completing the
+# httpx2.RemoteProtocolError (peer closed connection without completing the
 # chunked stream) is raised from stream.get_final_message() inside the async
 # context manager. It is NOT a subclass of anthropic.APIConnectionError, so
 # the existing except clause does not catch it. The fix must treat it as a
@@ -167,10 +167,10 @@ async def test_propagates_5xx_after_retry_exhausted():
 # fallback path (is_fallback=True) fires — exactly like APIConnectionError.
 # ---------------------------------------------------------------------------
 
-def _make_remote_protocol_error() -> httpx.RemoteProtocolError:
-    """Build a real httpx.RemoteProtocolError as the peer-disconnect case."""
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    return httpx.RemoteProtocolError(
+def _make_remote_protocol_error() -> httpx2.RemoteProtocolError:
+    """Build a real httpx2.RemoteProtocolError as the peer-disconnect case."""
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    return httpx2.RemoteProtocolError(
         "peer closed connection without sending complete message body"
         " (incomplete chunked read)",
         request=request,
@@ -234,7 +234,7 @@ async def test_generate_coach_message_propagates_remote_protocol_error_after_ret
     client.client.messages.stream = _make_streaming_ctx([err1, err2])
 
     with patch("asyncio.sleep", new=AsyncMock()):
-        with pytest.raises(httpx.RemoteProtocolError):
+        with pytest.raises(httpx2.RemoteProtocolError):
             await client.generate_coach_message(
                 system="sys", user="user", tools=[]
             )
@@ -278,11 +278,11 @@ from app.services.coach import llm as _llm_mod  # noqa: E402
 def _make_rate_limit_error(retry_after=None) -> anthropic.RateLimitError:
     """Build a real anthropic.RateLimitError (429), optionally carrying a
     Retry-After header (a string count of seconds, as the API sends it)."""
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     headers = {}
     if retry_after is not None:
         headers["retry-after"] = str(retry_after)
-    response = httpx.Response(status_code=429, request=request, headers=headers)
+    response = httpx2.Response(status_code=429, request=request, headers=headers)
     return anthropic.RateLimitError("rate limited", response=response, body=None)
 
 
@@ -498,7 +498,7 @@ async def test_stream_chat_turn_retries_transient_drop_before_first_token():
     client = AnthropicClient(api_key="k", model="m")
     final = _make_ok_message_result()
     client.client.messages.stream = _make_chat_streaming_ctx(
-        [anthropic.APIConnectionError(request=httpx.Request("POST", "https://x")),
+        [anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x")),
          (["Hi"], final)]
     )
 
@@ -547,7 +547,7 @@ async def test_stream_chat_turn_does_not_retry_4xx():
 @pytest.mark.parametrize(
     "raised",
     [
-        anthropic.APIConnectionError(request=httpx.Request("POST", "https://x")),
+        anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x")),
         _make_status_error(503),
         _make_rate_limit_error(retry_after=1),
     ],

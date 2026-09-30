@@ -11,10 +11,11 @@ raise TypeError. Unbounded at `>=0.40.0`, the 24 Aug 2026 image build resolved
 memory update, material distillation and receipt-voice pass failed in production
 while CI stayed green, because the suite mocks the client end to end.
 
-This test does NOT close that blindness -- it cannot, since it reads a declared
-string rather than binding call sites to the SDK's real signature. What it does is
-make the bound honest: a venv, a CI runner and a deploy that resolve different
-majors is a named failure here rather than a divergence nobody notices.
+This test does NOT close that blindness -- it reads a declared string, and
+`test_anthropic_sdk_binding_1023.py` is what binds the call sites to the SDK's
+real signature. What this one does is make the bound honest: a venv, a CI
+runner and a deploy that resolve different majors is a named failure here rather
+than a divergence nobody notices.
 """
 
 
@@ -45,21 +46,22 @@ def test_the_installed_anthropic_matches_the_declared_constraint():
     )
 
 
-def test_the_constraint_excludes_the_major_that_broke_production():
+def test_the_constraint_excludes_the_next_major():
     """The bound must have a CEILING, not just a floor.
 
-    A floor alone is what `>=0.40.0` already was, and it is precisely what let
-    1.0.0 in. Stated as a property of the specifier rather than as a literal
-    string, so raising the floor within 0.x does not touch this test, while
-    widening it to admit 1.x does -- which is the change that must be made on
-    purpose, together with the two call-site fixes the upgrade needs.
+    A floor alone is what `>=0.40.0` was, and it is precisely what let 1.0.0 in
+    unannounced. Stated relative to the INSTALLED major rather than as a literal,
+    so it holds across a floor raise and needs no edit when a later major is
+    adopted on purpose (#1023 took 1.x); it fails only when the ceiling is gone.
     """
-    spec = _declared_specifier("anthropic")
+    import anthropic
 
-    assert "1.0.0" not in spec, (
-        "the declared constraint admits anthropic 1.0.0, which removed the sampling "
-        "parameters `services/coach/llm.py` passes. Adopting 1.x is a deliberate "
-        "change: move `temperature` into `extra_body` (or drop it) at the three "
-        "call sites, and re-point the `httpx.RemoteProtocolError` catch in "
-        "`RetryLadder` at `httpx2`, whose exception classes are unrelated."
+    spec = _declared_specifier("anthropic")
+    next_major = f"{int(anthropic.__version__.split('.')[0]) + 1}.0.0"
+
+    assert next_major not in spec, (
+        f"the declared constraint admits anthropic {next_major}. A new SDK major "
+        "can change the call signatures `services/coach/llm.py` binds to (1.0.0 "
+        "removed `temperature`, #966); adopt it on purpose, with "
+        "`test_anthropic_sdk_binding_1023.py` green against it."
     )

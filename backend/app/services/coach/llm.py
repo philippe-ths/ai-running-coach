@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-import httpx
+import httpx2
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,18 @@ _MESSAGE_TIMEOUT_SECONDS = 180.0
 # "high" favours coaching quality (the product is the prose); drop to "medium"
 # if per-report cost matters more.
 _COACH_EFFORT = "high"
+
+
+def _sampling(temperature: float) -> Dict[str, Any]:
+    """The request-body field that keeps a call site's sampling temperature.
+
+    `anthropic` 1.0.0 removed `temperature` from `messages.create()` and
+    `.stream()`, and a keyword either one does not accept is a TypeError on every
+    call (#966). The API still honours it on the models these lanes run, so it
+    travels in `extra_body` and each lane keeps the determinism it was tuned at
+    (#1023). A model that rejects it answers 400, the same as before 1.x.
+    """
+    return {"extra_body": {"temperature": temperature}}
 
 # Initial backoff before the single retry on transient failures.
 _RETRY_BACKOFF_SECONDS = 1.0
@@ -112,9 +124,9 @@ class RetryLadder:
     - the streaming method carried the 429 rung ONLY, so a connection drop or a
       5xx on a chat turn degraded on the first failure while the same failure on
       a report was retried;
-    - `httpx.RemoteProtocolError` was caught by `generate_coach_message` alone.
+    - the mid-stream `RemoteProtocolError` was caught by `generate_coach_message` alone.
       Sharing the ladder means the two non-streaming create-based methods now
-      catch it too. That can only widen: the SDK wraps httpx errors from the
+      catch it too. That can only widen: the SDK wraps transport errors from the
       initial HTTP call into APIConnectionError, so a non-streaming call has no
       way to raise it unwrapped in the first place.
 
@@ -142,13 +154,14 @@ class RetryLadder:
             (
                 anthropic.APITimeoutError,
                 anthropic.APIConnectionError,
-                # httpx.RemoteProtocolError is raised mid-stream when the peer
-                # closes the connection before the chunked response body is
-                # complete ("incomplete chunked read"). The SDK wraps httpx errors
+                # RemoteProtocolError is raised mid-stream when the peer closes
+                # the connection before the chunked response body is complete
+                # ("incomplete chunked read"). The SDK wraps transport errors
                 # from the *initial* HTTP call into APIConnectionError, but errors
                 # surfacing during SSE iteration escape unwrapped. Same transient
-                # transport class, same rung (#302).
-                httpx.RemoteProtocolError,
+                # transport class, same rung (#302). It is `httpx2`'s class, the
+                # SDK's HTTP layer since 1.0.0 and unrelated to `httpx`'s (#1023).
+                httpx2.RemoteProtocolError,
             ),
         ):
             return await self._transient(exc)
@@ -302,7 +315,7 @@ class AnthropicClient:
                 response = await self.client.messages.create(
                     model=self.model,
                     max_tokens=max_tokens,
-                    temperature=0.2,
+                    **_sampling(0.2),
                     system=_cacheable_system(system),  # #629 prompt caching
                     messages=[{"role": "user", "content": user}],
                     timeout=_TIMEOUT_SECONDS,
@@ -387,7 +400,7 @@ class AnthropicClient:
                 response = await self.client.messages.create(
                     model=self.model,
                     max_tokens=max_tokens,
-                    temperature=0,
+                    **_sampling(0),
                     system=_cacheable_system(system),  # #629 prompt caching
                     messages=[{"role": "user", "content": user}],
                     tools=[tool],
@@ -520,7 +533,7 @@ class AnthropicClient:
         stream_kwargs: Dict[str, Any] = dict(
             model=self.model,
             max_tokens=max_tokens,
-            temperature=0.3,
+            **_sampling(0.3),
             # #766: the chat/thread system prefix is byte-identical across the
             # tool rounds of one turn (and often across turns), so the #629
             # cache breakpoint applies here too — tools render before system,
