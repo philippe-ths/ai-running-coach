@@ -135,11 +135,23 @@ jobs:
     needs: [backend-test, frontend-test, alembic-check]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # Above the health wait below, so the verifier's own verdict is what fails
+    # the job rather than the runner's ceiling.
+    timeout-minutes: 20
     env:
       SMOKE_BASE_URL: ${{ secrets.PROD_BACKEND_URL }}
       SMOKE_TELEGRAM_WEBHOOK_SECRET: ${{ secrets.PROD_TELEGRAM_WEBHOOK_SECRET }}
+      # Healthy is not enough: the previous deployment answers healthy for the
+      # whole build of this one, so the gate waits for THIS push's commit to be
+      # the one serving (#1027). A Railway build plus boot runs past five minutes.
+      SMOKE_EXPECTED_COMMIT: ${{ github.sha }}
+      POST_DEPLOY_HEALTH_TIMEOUT_SECONDS: "900"
     steps:
+      # Full history: when a later push supersedes this one's deploy, the gate
+      # passes only if the commit serving contains this one.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Check prod URL is configured
         id: guard

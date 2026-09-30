@@ -127,3 +127,61 @@ def test_handshake_checks_fail_when_a_gate_opens():
     with _client(handler) as client:
         results = run_handshake_checks(client, _BASE, tg_secret="")
     assert any(r.status == "FAIL" for r in results)
+
+
+# --- deployed commit (#1027) ------------------------------------------------
+# Health alone cannot tell the new deploy from the old one: the outgoing
+# deployment answers healthy for the whole build. Given the pushed commit, the
+# gate passes only once production reports running it.
+
+_NEW = "b" * 40
+_OLD = "a" * 40
+
+
+def _serving(*commits):
+    """Health answers ok, reporting each commit in turn and then the last forever."""
+    seen = list(commits)
+
+    def handler(_request):
+        commit = seen.pop(0) if len(seen) > 1 else seen[0]
+        return httpx.Response(200, json={"status": "ok", "database": "ok", "commit": commit})
+
+    return handler
+
+
+def test_poll_health_waits_through_the_old_deploy_for_the_pushed_commit():
+    with _client(_serving(_OLD, _OLD, _NEW)) as client:
+        result = poll_health(
+            client, _BASE, timeout_seconds=5, poll_seconds=0.01, expected_commit=_NEW
+        )
+    assert result.status == "PASS"
+
+
+def test_poll_health_fails_when_the_old_deploy_stays_live():
+    with _client(_serving(_OLD)) as client:
+        result = poll_health(
+            client, _BASE, timeout_seconds=0.2, poll_seconds=0.01,
+            expected_commit=_NEW, contains=lambda live, expected: False,
+        )
+    assert result.status == "FAIL"
+    assert _OLD[:12] in result.detail
+
+
+def test_poll_health_passes_when_a_newer_deploy_superseded_the_pushed_commit():
+    # Railway can skip a commit's build when a later push lands first; the
+    # later deploy still contains it, so the gate for the earlier push passes.
+    with _client(_serving(_OLD)) as client:
+        result = poll_health(
+            client, _BASE, timeout_seconds=5, poll_seconds=0.01,
+            expected_commit=_NEW, contains=lambda live, expected: live == _OLD,
+        )
+    assert result.status == "PASS"
+
+
+def test_poll_health_names_a_deploy_that_reports_no_commit():
+    with _client(_serving(None)) as client:
+        result = poll_health(
+            client, _BASE, timeout_seconds=0.2, poll_seconds=0.01, expected_commit=_NEW
+        )
+    assert result.status == "FAIL"
+    assert "RAILWAY_GIT_COMMIT_SHA" in result.detail
