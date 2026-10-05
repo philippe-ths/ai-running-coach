@@ -16,7 +16,7 @@ dependencies = [
     # `tests/_route_table.py` still enumerates the app (its anti-vacuity test
     # will say so). `test_route_table.py` asserts the INSTALLED version
     # satisfies this line, so a stale venv is a failure rather than a surprise.
-    "fastapi>=0.141.0,<0.142.0",
+    "fastapi>=0.142.2,<0.143.0",
     "uvicorn[standard]>=0.27.0",
     # BOUNDED DELIBERATELY (#1021). SQLAlchemy 2.1 stopped installing `greenlet`
     # by default, and `alembic/env.py` imports `sqlalchemy.ext.asyncio`, which
