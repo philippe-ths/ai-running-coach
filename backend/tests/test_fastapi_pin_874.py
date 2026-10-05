@@ -36,6 +36,13 @@ from scripts.check_fastapi_pin import (
 
 _REPO = Path(__file__).resolve().parents[2]
 _PYPROJECT = _REPO / "backend" / "pyproject.toml"
+
+# `main()` reads the REAL pin, so the end-to-end tests below take their
+# versions from it rather than naming them. Hardcoded, they go red on every
+# renewal for a reason that has nothing to do with the trigger.
+_REAL_PIN = read_pin(_PYPROJECT.read_text())
+_COVERED = _REAL_PIN.lower if _REAL_PIN else "0.0.0"
+_PAST = _REAL_PIN.upper if _REAL_PIN else "999.0.0"
 _WORKFLOW = _REPO / ".github" / "workflows" / "fastapi-pin.yml"
 
 
@@ -53,8 +60,8 @@ def test_the_real_pin_is_read_off_the_real_pyproject():
         "backend/pyproject.toml no longer declares fastapi as "
         '"fastapi>=X,<Y", so the renewal trigger cannot describe it'
     )
-    assert pin.lower.startswith("0.141")
-    assert pin.upper == "0.142.0"
+    assert pin.lower.startswith("0.142")
+    assert pin.upper == "0.143.0"
 
 
 def test_an_unbounded_constraint_is_read_as_no_pin_at_all():
@@ -151,18 +158,18 @@ def test_a_release_past_the_pin_exits_non_zero(capsys):
     """The whole posture. A warning in a scheduled job's log is no signal."""
     code = main(
         [],
-        fetch=lambda: _payload("0.141.0", "0.142.0"),
+        fetch=lambda: _payload(_COVERED, _PAST),
         run_guard=lambda version: True,
     )
 
     assert code == 1
-    assert "0.142.0" in capsys.readouterr().err
+    assert _PAST in capsys.readouterr().err
 
 
 def test_a_release_inside_the_pin_exits_zero(capsys):
     code = main(
         [],
-        fetch=lambda: _payload("0.141.0", "0.141.9"),
+        fetch=lambda: _payload(_COVERED),
         run_guard=lambda version: pytest.fail("the guard ran for a covered release"),
     )
 
@@ -174,9 +181,9 @@ def test_the_guard_actually_runs_against_the_candidate_release():
     """AC2: the trigger covers the route-model behaviour rather than just the
     number. The candidate version is what gets installed and tested."""
     seen = []
-    main([], fetch=lambda: _payload("0.142.3"), run_guard=lambda v: seen.append(v) or True)
+    main([], fetch=lambda: _payload(_PAST), run_guard=lambda v: seen.append(v) or True)
 
-    assert seen == ["0.142.3"]
+    assert seen == [_PAST]
 
 
 def test_a_pin_the_reader_cannot_find_is_itself_a_failure(monkeypatch, tmp_path, capsys):
