@@ -11,7 +11,6 @@ The core flow is: connect Strava, sync activities, deep-process a run, then read
 ## Domain Concepts
 A `User` owns a `UserProfile`, a linked `StravaAccount` (OAuth tokens, athlete id), and a nullable `telegram_chat_id` for per-user notification routing (ADR 0023).
 `UserProfile` holds goal, experience, weekly volume, max HR, races, injuries, the Strava-sourced HR-zone lower bounds `hr_zones`/`hr_zones_source`, the runner's `week_starts_on` (Monday 0 or Sunday 6, null resolving to Monday), and the stated build `weight_kg`/`height_cm`.
-`UserProfile.upcoming_races` is an untyped JSON blob no backend code reads; it is retained only because the frontend profile form still round-trips it.
 `weight_kg`/`height_cm` are nullable floats meaning NOT STATED rather than average, envelope-validated at the API so a unit slip never reaches the coach as a fact.
 An `Activity` is one Strava activity owned by a `User`, identified by `strava_activity_id`.
 An `ActivityStream` holds per-sample time-series data (HR, pace, cadence, power) for an `Activity`.
@@ -141,8 +140,6 @@ Telegram is the only notification channel, active when `TELEGRAM_BOT_TOKEN` and 
 The Telegram vars must be set on both Railway app services, with `TELEGRAM_WEBHOOK_SECRET` and `TELEGRAM_BOT_USERNAME` needed on web only.
 `SELF_HEAL_MIN_INTERVAL_SECONDS` (default 60) bounds the per-user Strava check via an atomic Redis key, and the check looks back a fixed 7-day window.
 The self-pacing jobs are paced by `BACKFILL_BATCH_SIZE`/`BACKFILL_BATCH_PAUSE_SECONDS` (20/300, keeping the stream backfill under Strava's 100-requests/15-min ceiling), `IMPORT_PAGE_SIZE`/`IMPORT_BATCH_PAUSE_SECONDS` (50/5), and `REANALYZE_BATCH_SIZE`/`REANALYZE_BATCH_PAUSE_SECONDS` (100/5, local compute only).
-`CORS_ALLOWED_ORIGINS` (comma-separated, default `http://localhost:3000,http://localhost:8000`) is parsed by `Settings.cors_allowed_origins_list`.
-Error tracking is logs-only by default; Sentry capture requires the `observability` extra and `SENTRY_DSN`, otherwise `init_sentry` is a no-op.
 Platform training-load numbers (Strava Fitness/Freshness, Garmin Training Load) are validation-only: never authoritative, and never a cold-start seed for our own readiness model, because they are a different unit.
 A stored `context_pack` is expected to strict-parse under the current `CoachContextPack` unless its prompt id is in `UNREADABLE_PACK_PROMPT_IDS` (ADR 0032).
 Every site re-parsing a stored pack goes through `load_stored_pack`, which raises `StoredPackUnreadable` past that cutoff and re-raises the underlying `ValidationError` otherwise; no stored pack is ever migrated or deleted.
@@ -157,6 +154,8 @@ The Strava integration is a port (`StravaPort`) with `HTTPStravaAdapter` and `In
 Analysis is a pipeline of pure-ish functions in `app/services/analysis/` composed by `_orchestrator.py`; the public surface is `analyze` and `analyze_with_streams`.
 `stages.py` holds the `ANALYSIS_STAGES` registry of thirteen `Stage` descriptors, each declaring what it READS and WRITES, with `assert_stage_contract` running at import so a stage reading an unwritten field is a startup `RuntimeError`.
 The `DerivedMetric` upsert writes all 23 columns unconditionally, so a stage that abstains overwrites the prior value.
+Race detection (`classifier.race_source`) counts a run on the local date of one of the runner's `GoalRace`s at 0.85-1.25x its distance, a stated intent containing "race", Strava's `workout_type` race marker, or "race" in the name.
+On a race, `risk.compute_risk_score` scores a `load_spike` as zero while keeping the flag and a reason marked as expected.
 The interval stage has two sources behind one `interval_structure` contract: `detect_intervals_from_laps` reads the runner's recorded Strava laps and takes precedence on a clear bimodal pattern, tagged `source="recorded_laps"`.
 The coach layer chains `context.py`, `llm.py`, the Pydantic schemas in `app/schemas/coach.py`, `validator.py`, `service.py`, and finally `voice_rewrite.py`.
 `service.py` dispatches on prompt family to `_generate_structured` or `_generate_message`, caches the result in `CoachReport`, and sets `is_fallback=True` on LLM or parse failure.
@@ -174,7 +173,7 @@ A medical overreach withholds the raw reply and serves `MEDICAL_REDIRECT_MESSAGE
 `services/coach/signal_registry.py` is the ONE declaration every derived view reads: one frozen `CoachSignal` row per flat pack section carrying its group, flat position, `PromptFeature` gate, drop and nested trim, kill switches with effect and application site, read-time adapters, and either a switch or a recorded `ungated_reason`.
 `coach_context.py` derives `_SECTION_GROUP`, `_FLAT_ORDER`, and `PACK_SECTIONS` from it, and `context.py` derives its `ReadTimeSignal` objects from it, registering only the `compute`.
 Under a `GROUPED_PACK` prompt the same content is re-nested into five coaching-question groups (`this_run`, `right_now`, `the_runner`, `our_thread`, `how_to_coach`) plus top-level `safety_rules`, via `pack.to_grouped_dict`.
-The flat pack sections, by group, are `this_run` (`activity`, `metrics`, `check_in`, `perceived_effort`, `calibration`, `block`, `stream_view`, `intensity`, `intensity_read`, `referral`), `right_now` (`training_load`, `training_volume`, `recent_training`, `readiness`, `recent_weeks`, `intensity_mix`, `schedule`), `the_runner` (`profile`, `training_history`, `memory`), `our_thread` (`longitudinal`, `adherence`, `continuity`), `how_to_coach` (`corpus`, `stance`), plus top-level `salience`.
+The flat pack sections, by group, are `this_run` (`activity`, `metrics`, `check_in`, `perceived_effort`, `calibration`, `block`, `stream_view`, `intensity`, `intensity_read`, `referral`, `notable`), `right_now` (`training_load`, `training_volume`, `recent_training`, `readiness`, `recent_weeks`, `intensity_mix`, `schedule`), `the_runner` (`profile`, `training_history`, `memory`), `our_thread` (`longitudinal`, `adherence`, `continuity`), `how_to_coach` (`corpus`, `stance`), plus top-level `salience`.
 `recent_training_summary`, `believed_facts`, `preference_profile`, and `narrative` are never-populated Optional stubs retained so older stored packs still validate under the pack's `extra="forbid"`.
 The outgoing LLM message is a one-way view built by `coach_framing.coach_llm_view`, shared by the report and chat seams so both LLMs read an identical pack.
 `prompts.py` is the prompt registry and assembly, `prompt_clauses.py` owns the live grouped lineage's text as named clauses plus `compose`, and `prompt_archive.py` holds every retired prompt string verbatim.
@@ -209,7 +208,6 @@ Data flow: Strava API, `strava_ingestion`, `Activity`/`ActivityStream` rows, the
 `numpy`: numerical computation in the processing pipeline.
 `anthropic`: Claude API client used by the coach service, pinned below its next major so a new major is adopted deliberately.
 `httpx2`: the `anthropic` SDK's HTTP layer, declared because `RetryLadder` matches its `RemoteProtocolError` to retry a mid-stream disconnect.
-A structured LLM call's wall-clock ceiling is derived from its `max_tokens` rather than fixed, so a large generation is not capped at a short call's limit.
 `sentry-sdk[fastapi]` (optional `observability` extra): error tracking, installed only when Sentry capture is enabled.
 `next`, `react`, `react-dom`: frontend framework and renderer.
 `@clerk/nextjs`: social-login authentication and the frontend session gate.
@@ -234,6 +232,7 @@ A handler declares the owned resource it operates on (`OwnedActivity`, `OwnedBlo
 `query_tools.get_training_plan` is the coach's only forward-looking tool, returning the block week by week from the same builder the runner's horizon screen uses, each week labelled as written or shape only.
 `voice.py`, `stance.py`, and `corpus.py` are pure domains with no LLM and no I/O; `voice_rewrite.py`, `material_distiller.py`, `receipt.py`, and `receipt_voice.py` are their generative counterparts.
 `perceived_effort.py`, `adherence.py`, `calibration.py`, `volume.py`, `salience.py`, `intensity.py`, and `recent_training.py` are the pure read-time signal builders.
+`notable.py` builds `this_run.notable`: the race, ranked best efforts with a previous best only when stored efforts cover every earlier run that long, and records more than 10% past the past-year most among at least 10 same-discipline activities.
 `memory_store.py` and `memory_update.py` are the runner-memory DB layer and its rewrite-from-source writer.
 `period_report_pack.py`, `period_report.py`, and `period_report_store.py` are the period-report surface.
 `backend/app/services/schedule/` is the schedule package: `disciplines.py`, `placement.py`, `rules.py`, `store.py`, `norms.py`, `week.py`, `horizon.py`, `draft.py`, `draft_contract.py`, `plan_validator.py`, `effort.py`, `completion.py`, and `coach_view.py`.
@@ -242,6 +241,7 @@ The package computes no training total of its own: actuals and windows come from
 `backend/app/services/notifications/` holds the notifier port and adapters, the channel selection and composer, the Telegram template, the shared prose-render helpers, and the opaque tap-token codec.
 `backend/app/services/` also holds `blocks.py`, `weeks.py`, `activity_facts.py`, `trends.py`, `training_load.py`, `readiness.py`, `laps.py`, `activity_queries.py`, `account_deletion.py`, `checkins.py`, `intents.py`, and `units/cadence.py`.
 `checkins.py` and `intents.py` are shared single write paths used by both the API and the Telegram or proposed-action callers.
+`best_efforts.py` parses Strava's per-run `best_efforts` and their `pr_rank`, and `upsert_activity` preserves them across a summary-only re-sync as it does laps.
 `intents.py` is also the single home of the stated-intent vocabulary, rendered by the frontend from `ActivityDetailRead.intent_options` rather than a frontend copy.
 `backend/app/jobs/` holds the RQ jobs, with `process_new_activity.py` as the convergence pipeline and the job layer's four entrypoints.
 Those four entrypoints must keep this module path, because RQ serializes a deferred job as its `module.function` string.

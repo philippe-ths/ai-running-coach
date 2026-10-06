@@ -326,6 +326,7 @@ def _assemble_pack(db, activity, continuity, prompt_id, stance) -> CoachContextP
         intensity_read=intensity_read,
         referral=referral,
         intensity_mix=intensity_mix,
+        notable=gather(_NOTABLE_SIGNAL, db, activity, prompt_id, as_of),
         salience=b.salience,
         # #522: COACH_CONTINUITY_ENABLED drops the fuller-turn continuity section.
         continuity=(
@@ -1569,6 +1570,103 @@ def _build_schedule_context(db, activity, as_of):
         return None
 
 
+def _build_notable_context(db, activity, as_of):
+    """#1032: why this activity stands out for this runner (see `coach/notable.py`).
+
+    Gathers the three kinds of reason from the store and hands them to the pure
+    builders. Its prompt gate (PromptFeature.NOTABLE) and its `COACH_NOTABLE_ENABLED`
+    switch are applied by `gather` from the signal declaration. Never fatal: a report must survive a fault in a read that only adds
+    emphasis.
+    """
+    try:
+        return _gather_notable(db, activity)
+    except Exception:  # noqa: BLE001 — a report must survive a notable-read fault
+        logger.exception(
+            "notable: pack section failed for activity %s; coaching without it",
+            getattr(activity, "id", None),
+        )
+        return None
+
+
+def _gather_notable(db, activity):
+    from app.services import activity_facts as af
+    from app.services.analysis.classifier import matching_goal_race, race_source
+    from app.services.best_efforts import efforts as parse_efforts
+    from app.services.coach import notable
+    from app.services.schedule.disciplines import (
+        discipline_for_activity_type,
+        discipline_for_fact,
+    )
+    from app.services.schedule.store import goal_races_on
+
+    day = af.local_day(activity.start_date, activity.start_date_local)
+
+    goal_races = goal_races_on(db, activity.user_id, day)
+    goal_race = matching_goal_race(activity, goal_races)
+    race = notable.build_race(race_source(activity, goal_races), goal_race)
+
+    best_efforts = recorded_since = None
+    found = parse_efforts(activity.raw_summary)
+    if found:
+        prior_rows = db.execute(
+            select(
+                Activity.start_date,
+                Activity.start_date_local,
+                Activity.distance_m,
+                Activity.moving_time_s,
+                Activity.raw_summary["best_efforts"].label("best_efforts"),
+            ).where(
+                Activity.user_id == activity.user_id,
+                Activity.is_deleted == False,  # noqa: E712
+                Activity.start_date < activity.start_date,
+                func.lower(Activity.type).in_(("run", "virtualrun")),
+            )
+        ).all()
+        prior_runs, prior_efforts = [], []
+        for row in prior_rows:
+            on = af.local_day(row.start_date, row.start_date_local)
+            row_efforts = parse_efforts({"best_efforts": row.best_efforts})
+            prior_runs.append(
+                notable.PriorRun(
+                    on=on,
+                    distance_m=row.distance_m or 0,
+                    moving_time_s=row.moving_time_s or 0,
+                    has_efforts=bool(row_efforts),
+                )
+            )
+            prior_efforts.extend(notable.PriorEffort(effort=e, on=on) for e in row_efforts)
+        best_efforts = notable.build_best_efforts(
+            found,
+            prior_efforts,
+            prior_runs,
+            race_distance_m=goal_race.distance_m if goal_race is not None else None,
+        )
+        recorded_since = notable.recorded_since(prior_runs, day)
+
+    discipline = discipline_for_activity_type(activity.type)
+    records = None
+    if discipline in notable.RECORD_DISCIPLINES:
+        prior_same = [
+            fact
+            for fact in af.scan(db, None, day + timedelta(days=1), user_id=activity.user_id)
+            if fact.start_date < activity.start_date
+            and fact.activity_id != activity.id
+            and discipline_for_fact(fact) == discipline
+        ]
+        this = af.ActivityFact.__new__(af.ActivityFact)
+        this.distance_m = activity.distance_m or 0
+        this.moving_time_s = activity.moving_time_s or 0
+        this.elev_gain_m = activity.elev_gain_m or 0.0
+        records = notable.build_records(discipline, this, day, prior_same)
+
+    return notable.build_notable(
+        race=race,
+        best_efforts=best_efforts,
+        records=records,
+        best_efforts_recorded_since=recorded_since,
+    )
+
+
 _COMPUTES: dict[str, SignalCompute] = {
     "calibration": _build_calibration_context,
     "adherence": _build_adherence_context,
@@ -1590,6 +1688,8 @@ _COMPUTES: dict[str, SignalCompute] = {
     # declared in signal_registry and applied by `gather`, so this registers only
     # the compute.
     "schedule": _build_schedule_context,
+    # #1032: why this activity stands out (race, best efforts, records).
+    "notable": _build_notable_context,
 }
 
 _SIGNALS = build_signals(_COMPUTES)
@@ -1606,6 +1706,7 @@ _TRAINING_HISTORY_2WK_SIGNAL = _SIGNALS["training_history_2wk"]
 _MEMORY_SIGNAL = _SIGNALS["memory"]
 _INTENSITY_SIGNAL = _SIGNALS["intensity"]
 _SCHEDULE_SIGNAL = _SIGNALS["schedule"]
+_NOTABLE_SIGNAL = _SIGNALS["notable"]
 
 
 # ---------------------------------------------------------------------------

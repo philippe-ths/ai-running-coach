@@ -1224,6 +1224,77 @@ class RecentWeeksContext(BaseModel):
 # and every historical prompt, and `flatten(grouped) == flat` holds by construction.
 
 
+# ---------------------------------------------------------------------------
+# #1032 (parent #1035): what makes this activity stand out for THIS runner, so the
+# coach does not read a race, a personal best or an unusual outing as one more
+# training session. Every item is measured against the runner's own history,
+# never a population norm, and carries its own reading so it cannot be misread as
+# a warning or a verdict.
+
+
+class NotableRace(BaseModel):
+    """This activity was a race, and how we know."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # goal_race (a race the runner set on their schedule, on this day, at about this
+    # distance) | stated_intent | strava_marked | activity_name.
+    source: str
+    # The goal race's own name and the runner's A/B/C priority; None for a race the
+    # runner did not set as a goal.
+    name: Optional[str] = None
+    priority: Optional[str] = None
+    reading: str
+
+
+class NotableBestEffort(BaseModel):
+    """One of this run's best efforts at a standard distance (Strava's own segments)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    distance: str  # Strava's label, e.g. "Half-Marathon", "5K"
+    time: str  # H:MM:SS / M:SS
+    # "fastest ever" | "2nd fastest ever" | "3rd fastest ever", ranked by Strava across
+    # the runner's whole Strava history. None when it is not in their top three (only a
+    # race's own distance is listed then).
+    strava_rank: Optional[str] = None
+    # The fastest earlier effort at this distance that WE HOLD (our records start at
+    # `NotableContext.best_efforts_recorded_since`), with its date, and this effort
+    # against it. Never their previous best as such: Strava's rank is the authority on
+    # that. Both None when our records cannot answer; the note then says why.
+    best_we_hold_before: Optional[str] = None
+    margin: Optional[str] = None
+    note: Optional[str] = None
+
+
+class NotableRecord(BaseModel):
+    """A measure on which this activity clearly beats the runner's own recent best."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    measure: str  # "climb" | "distance" | "moving time"
+    value: str
+    previous_most: str  # the most they did in the comparison window, with its date
+    times_previous: float  # this value / previous_most, 1 dp
+    compared_with: str  # which of their activities, over what window
+    beats_all_we_hold: bool  # also more than any earlier activity of theirs we have
+
+
+class NotableContext(BaseModel):
+    """Why this activity is not a routine session for this runner (#1032).
+
+    Absent when nothing about it stands out, which is most of the time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    race: Optional[NotableRace] = None
+    best_efforts: Optional[List[NotableBestEffort]] = None
+    # When our records of their best efforts begin. Strava ranks against the runner's
+    # whole history; we can state a previous best only from this date on.
+    best_efforts_recorded_since: Optional[str] = None
+    records: Optional[List[NotableRecord]] = None
+
+
 class ThisRun(BaseModel):
     """ADR 0026: what was this session, and how hard was it really?
 
@@ -1253,6 +1324,9 @@ class ThisRun(BaseModel):
     # prompt; None (dropped) elsewhere.
     intensity_read: Optional["IntensityRead"] = None
     referral: Optional[str] = None
+    # #1032: why this activity stands out for this runner. Gated (PromptFeature.NOTABLE)
+    # and None when nothing does; dropped from serialization either way.
+    notable: Optional[NotableContext] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1561,6 +1635,10 @@ class CoachContextPack(BaseModel):
         return self.this_run.referral
 
     @property
+    def notable(self) -> Optional[NotableContext]:
+        return self.this_run.notable
+
+    @property
     def intensity_mix(self) -> Optional["IntensityMix"]:
         return self.right_now.intensity_mix
 
@@ -1635,6 +1713,7 @@ class CoachContextPack(BaseModel):
         intensity_read: Optional["IntensityRead"] = None,
         referral: Optional[str] = None,
         intensity_mix: Optional["IntensityMix"] = None,
+        notable: Optional[NotableContext] = None,
         longitudinal: Optional[LongitudinalContext] = None,
         salience: Optional[SalienceContext] = _UNSET,
         continuity: Optional[ContinuityContext] = _UNSET,
@@ -1672,6 +1751,7 @@ class CoachContextPack(BaseModel):
                 intensity=intensity,
                 intensity_read=intensity_read,
                 referral=referral,
+                notable=notable,
             ),
             right_now=RightNow(
                 training_load=training_load,

@@ -57,6 +57,7 @@ class PromptFeature(Enum):
     BODY = "body"                      # #742: the runner's stated build in `profile.body` + the BODY clause
     GROUPED_PACK = "grouped_pack"      # ADR 0026 Slice 1: serve the pack GROUPED (pack.to_grouped_dict()) rather than flat. Presentation-only, exactly like METRICS_COACH_FRAMED / SALIENCE_DROPPED / PACK_COACH_VIEW — it changes the SHAPE the pack is serialized in, never which sections it CONTAINS. #800 moved it here from a hand-maintained frozenset in prompts.py, the last prompt-id set that did not derive from this manifest.
     SCHEDULE = "schedule"              # #830: the runner's own plan for this week in `right_now.schedule` — what this session was FOR and what it sets up
+    NOTABLE = "notable"                # #1032 (parent #1035): `this_run.notable` — why this activity stands out for this runner (a race, Strava best efforts with their PB rank, records against their own past year) + the NOTABLE clause
     PACK_COACH_VIEW = "pack_coach_view"  # ADR 0026 Slice 5 (#682): the COMPLETED coach LLM view — readiness verdict-only, recent_weeks per-session bpm, the four interval blocks collapsed to one `interval_read`, plan-less `workout_match` dropped, `hr_drift` deduped, training-history sentinel/dupes cleaned, empty `our_thread` dropped; a one-way view over the canonical grouped pack (like METRICS_COACH_FRAMED), no section added to the store
 
 
@@ -508,6 +509,34 @@ PROMPT_FEATURES: dict[str, frozenset[PromptFeature]] = {
             _F.PACK_COACH_VIEW,
             _F.BODY,
             _F.SCHEDULE,
+        }
+    ),
+    # #1032 (parent #1035): v11 plus the notable-activity read. The owner's goal half
+    # marathon, a lifetime best by Strava's own ranking, was coached as a hard long
+    # run and opened as a missed target: nothing told the coach it was a race or a PB.
+    # Adds `this_run.notable` and the clause that reads it. Ships INERT (flip target:
+    # grouped_v11 -> grouped_v12).
+    "coach_message_lean_grouped_v12": frozenset(
+        {
+            _F.GROUPED_PACK,
+            _F.TWO_STAGE,
+            _F.VOICE,
+            _F.CORPUS,
+            _F.STANCE,
+            _F.READINESS,
+            _F.USER_MATERIALS,
+            _F.RECENT_WEEKS,
+            _F.STREAM_VIEW,
+            _F.TRAINING_HISTORY_2WK,
+            _F.MEMORY,
+            _F.INTENSITY_READ,
+            _F.INTENSITY_MIX,
+            _F.METRICS_COACH_FRAMED,
+            _F.SALIENCE_DEPTH,
+            _F.PACK_COACH_VIEW,
+            _F.BODY,
+            _F.SCHEDULE,
+            _F.NOTABLE,
         }
     ),
 }

@@ -64,6 +64,30 @@ def _resolve_planned_session(db: Session, activity) -> Any:
         return None
 
 
+def _resolve_goal_races_on_day(db: Session, activity) -> list:
+    """The runner's goal races on this activity's local day (#1032), or [].
+
+    The race-detection witness: a run on the day of a race the runner set, at
+    about that race's distance, IS that race. Lazily imported and never fatal for
+    the same reasons as `_resolve_planned_session`.
+    """
+    try:
+        from app.services.activity_facts import local_day
+        from app.services.schedule.store import goal_races_on
+
+        return goal_races_on(
+            db,
+            activity.user_id,
+            local_day(activity.start_date, activity.start_date_local),
+        )
+    except Exception:  # noqa: BLE001 — analysis must survive a schedule fault
+        logger.exception(
+            "goal-race lookup failed for activity %s; analysing without it",
+            getattr(activity, "id", None),
+        )
+        return []
+
+
 def _extract_planned_workout(planned_session) -> dict | None:
     """The rep structure this activity was PLANNED to have, or None.
 
@@ -275,6 +299,7 @@ def _stage_classification(ctx: StageContext) -> None:
         pace_variability=ctx.get("pace_variability"),
         has_interval_structure=ctx.get("probed_structure") is not None,
         max_hr=ctx.get("max_hr"),
+        goal_races=ctx.get("goal_races_on_day"),
     )
     ctx.set("effort", classification.effort)
     ctx.set("duration_class", classification.duration_class)
@@ -379,7 +404,10 @@ def _stage_risk(ctx: StageContext) -> None:
         "rpe": check_in.rpe if check_in else None,
     }
     risk_result = compute_risk_score(
-        ctx.get("flags"), check_in_data, ctx.get("training_context")
+        ctx.get("flags"),
+        check_in_data,
+        ctx.get("training_context"),
+        is_race=bool(ctx.get("is_race")),
     )
     ctx.set("risk_level", risk_result["risk_level"])
     ctx.set("risk_score", risk_result["risk_score"])
@@ -539,6 +567,7 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     # every entry point — the pipeline, a re-analysis, the backfill — resolves it
     # the same way, and so the stage layer stays free of a service import.
     planned_session = _resolve_planned_session(db, activity)
+    goal_races_on_day = _resolve_goal_races_on_day(db, activity)
 
     state = DerivedMetricFields(effort_score=0.0)
     ctx = StageContext(
@@ -548,6 +577,7 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
         streams_dict=streams_dict,
         check_in=check_in,
         planned_session=planned_session,
+        goal_races_on_day=goal_races_on_day,
         profile=profile,
         max_hr=max_hr,
         zone_boundaries=zone_boundaries,
