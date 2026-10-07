@@ -872,7 +872,7 @@ async def test_the_prompt_states_the_constraints_the_validator_enforces():
 
     assert "must stay INSIDE one week" in _SYSTEM_PROMPT
     assert "A rest day is REST" in _SYSTEM_PROMPT
-    assert "a distance, a duration, or rep structure" in _SYSTEM_PROMPT
+    assert "a session with no time, distance or rep structure is rejected" in _SYSTEM_PROMPT
     # The volume ceiling (#859) was the one gate stated nowhere: a block the
     # runner had already settled in conversation could be rejected against a
     # number the coach was never shown, and the runner read one generic sentence
@@ -1028,8 +1028,10 @@ async def test_a_runner_who_trains_but_does_not_run_is_given_no_ceiling_either(d
 
     assert "Typical week, ALL activities" in context  # the section IS written
     assert "RUNNING ONLY" not in context
-    assert "is rejected outright" not in context
-    assert "limit, not a target" not in context
+    assert "km of committed running is rejected" not in context
+    # They DO have a typical week of time, so the hours ceiling (#1044) applies
+    # to them and is stated.
+    assert "h of committed time, every activity together, is rejected" in context
 
 
 async def test_the_ceiling_the_coach_is_told_is_the_ceiling_that_rejects_it(db):

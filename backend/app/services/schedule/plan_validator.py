@@ -94,6 +94,45 @@ def volume_ceilings(
     )
 
 
+def hours_ceilings(norm_weekly_s: Optional[float]) -> Optional[tuple]:
+    """The concrete and sketched ceilings on a week's TIME, every activity (#1044).
+
+    The same multiples as the running ceiling, against the runner's own typical
+    weekly moving time. Running km alone let a plan pile walking or cycling on
+    top of a running build unchecked, and time on feet is load too.
+    """
+    if not norm_weekly_s:
+        return None
+    return (norm_weekly_s * MAX_WEEKLY_MULTIPLE, norm_weekly_s * MAX_SKETCH_MULTIPLE)
+
+
+def _hours(seconds: float) -> str:
+    return f"{seconds / 3600:.1f} h"
+
+
+def committed_duration_s(sessions, race: Optional[tuple] = None) -> float:
+    """A week's committed time across every activity, the race left out.
+
+    A session that states no time counts as nothing, the way a session with no
+    distance counts as nothing towards running km: the app does not turn a
+    distance into a time with an assumed pace. The race is left out for the
+    reason `_validate_volume` gives: it is the runner's fixed commitment.
+    """
+    race_date = race[0] if race is not None else None
+    return float(
+        sum(
+            session.target_duration_s or 0
+            for session in sessions
+            if session.commitment == "committed"
+            and not (
+                race_date is not None
+                and session.discipline == "run"
+                and session.window_start == session.window_end == race_date
+            )
+        )
+    )
+
+
 @dataclass
 class PlanCheck:
     ok: bool = True
@@ -137,6 +176,7 @@ def validate_drafted_plan(
     norm_weekly_running_m: Optional[float] = None,
     horizon_weeks: Optional[int] = None,
     race: Optional[tuple] = None,
+    norm_weekly_s: Optional[float] = None,
 ) -> PlanCheck:
     """Everything that must hold before a drafted plan reaches the store.
 
@@ -174,6 +214,9 @@ def validate_drafted_plan(
         _validate_sessions(check, week, today, starts_on)
         _validate_rules_are_satisfiable(check, plan, week, starts_on)
         _validate_volume(check, week, norm_weekly_running_m, race=race, starts_on=starts_on)
+        _validate_hours(
+            check, week.week_start, committed_duration_s(week.sessions, race), norm_weekly_s
+        )
 
     for sketch in plan.sketch_weeks:
         if sketch.week_start != week_start(sketch.week_start, starts_on):
@@ -201,6 +244,13 @@ def validate_drafted_plan(
                 f"a typical {norm_weekly_running_m / 1000:.0f} km",
                 code=VOLUME_CEILING,
             )
+        _validate_hours(
+            check,
+            sketch.week_start,
+            sketch.target_duration_s or 0,
+            norm_weekly_s,
+            sketched=True,
+        )
 
     return check
 
@@ -215,6 +265,7 @@ def validate_amendment(
     norm_weekly_running_m: Optional[float] = None,
     expected_weeks: Optional[Sequence[date]] = None,
     race: Optional[tuple] = None,
+    norm_weekly_s: Optional[float] = None,
 ) -> PlanCheck:
     """The same coherence gate, applied to a plan being amended in part (#981).
 
@@ -332,7 +383,36 @@ def validate_amendment(
                     code=VOLUME_CEILING,
                 )
 
+        # Kept sessions count here too, for the same reason they do above.
+        _validate_hours(
+            check,
+            week.week_start,
+            committed_duration_s(list(week.sessions) + surviving, race),
+            norm_weekly_s,
+        )
+
     return check
+
+
+def _validate_hours(
+    check: PlanCheck,
+    week_start_date: date,
+    planned_s: float,
+    norm_weekly_s: Optional[float],
+    *,
+    sketched: bool = False,
+) -> None:
+    """The time ceiling, or no check when the runner has no typical week yet."""
+    ceilings = hours_ceilings(norm_weekly_s)
+    if ceilings is None:
+        return
+    if planned_s > ceilings[1 if sketched else 0]:
+        label = "sketched week" if sketched else "week"
+        check.fail(
+            f"{label} {week_start_date} plans {_hours(planned_s)} of training, "
+            f"every activity together, against a typical {_hours(norm_weekly_s)}",
+            code=VOLUME_CEILING,
+        )
 
 
 def _validate_sessions(check: PlanCheck, week, today: date, starts_on: int) -> None:

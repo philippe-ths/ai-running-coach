@@ -203,6 +203,11 @@ class SketchedWeek(BaseModel):
     # paces would be a concrete session wearing a sketch's clothes, and the
     # runner would read a promise into a week nobody has written yet.
     quality_focus: Optional[str] = Field(default=None, max_length=80)
+    # The whole week's time across every activity, and its walking distance
+    # (#1044). A runner whose training is mostly walking has a week the running
+    # total does not describe, and the time is what the hours ceiling bounds.
+    target_duration_s: Optional[float] = Field(default=None, ge=0, le=7 * 86_400)
+    target_walking_distance_m: Optional[float] = Field(default=None, ge=0, le=500_000)
     sessions_by_discipline: Dict[str, int] = Field(default_factory=dict)
     intent_counts: Dict[str, int] = Field(default_factory=dict)
 
@@ -497,6 +502,14 @@ RECORD_TRAINING_PLAN_TOOL = {
                                 "has written yet."
                             ),
                         },
+                        "target_duration_s": {
+                            "type": "number",
+                            "description": (
+                                "The week's total time in seconds, every "
+                                "activity together: runs, walks, bike, strength."
+                            ),
+                        },
+                        "target_walking_distance_m": {"type": "number"},
                         "sessions_by_discipline": {
                             "type": "object",
                             "additionalProperties": {"type": "integer"},

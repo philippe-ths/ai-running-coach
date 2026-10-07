@@ -52,7 +52,7 @@ from app.services.schedule.draft import (
 )
 from app.services.schedule.draft_contract import SESSION_PROPERTIES, DraftedWeek
 from app.services.schedule.effort import build_load_model, estimate_effort
-from app.services.schedule.norms import running_norm_weekly_m
+from app.services.schedule.norms import running_norm_weekly_m, weekly_hours_norm_s
 from app.services.schedule.plan_validator import VOLUME_CEILING, validate_amendment
 from app.services.schedule.rule_text import describe_rule
 from app.services.weeks import (
@@ -387,6 +387,10 @@ def _shape_lines(
             bits.append(f"phase {shape.phase}")
         if shape.target_running_distance_m:
             bits.append(f"{shape.target_running_distance_m / 1000:.0f} km running")
+        if shape.target_walking_distance_m:
+            bits.append(f"{shape.target_walking_distance_m / 1000:.0f} km walking")
+        if shape.target_duration_s:
+            bits.append(f"{shape.target_duration_s / 3600:.1f} h in all")
         if shape.long_run_distance_m:
             bits.append(f"long run {shape.long_run_distance_m / 1000:.1f} km")
         if shape.quality_focus:
@@ -546,6 +550,7 @@ async def propose_amendment(
     )
     client = turn.build_client(turn.TurnKind.SCHEDULE, user.id)
     norm_running = running_norm_weekly_m(facts, today)
+    norm_hours = weekly_hours_norm_s(facts, today)
     rules = store.plan_rules(plan)
     races = store.list_goal_races(db, user.id, on_or_after=today)
     race_arg = goals.validator_race(races)
@@ -669,6 +674,7 @@ async def propose_amendment(
             norm_weekly_running_m=norm_running,
             expected_weeks=_weeks_in(start, end, starts_on),
             race=race_arg,
+            norm_weekly_s=norm_hours,
         )
         if not check.ok:
             logger.info("schedule amend: rejected: %s", check.failures)

@@ -52,9 +52,14 @@ from app.services.schedule.draft_contract import (
     normalise,
 )
 from app.services.schedule.effort import build_load_model, estimate_effort
-from app.services.schedule.norms import running_norm_weekly_m
+from app.services.schedule.norms import (
+    running_norm_weekly_m,
+    weekly_hours_norm_s,
+    weekly_norms_by_discipline,
+)
 from app.services.schedule.plan_validator import (
     VOLUME_CEILING,
+    hours_ceilings,
     validate_drafted_plan,
     volume_ceilings,
 )
@@ -112,8 +117,8 @@ runner has signed up to.
 something I respond to. Almost everything I prescribe is committed — that is what \
 makes it a plan rather than a menu.
 - `suggested` is an offer they can decline with no trace and no follow-up. Use it \
-sparingly, for the genuinely optional extra: a bonus mobility session, an easy \
-walk if they feel like it.
+sparingly, for the genuinely optional extra: a bonus mobility session, a spin \
+on a day they would otherwise rest.
 
 A week of suggestions is not a plan. If I am not willing to commit to a session, \
 I should ask myself whether it belongs in the week at all.
@@ -128,11 +133,13 @@ costs from this runner's own history.
 - Do not put a distance or duration on a rest day. A rest day is REST. If you \
 mean an easy walk or a gentle spin, that is an easy session of that discipline \
 (intent `easy`, discipline `walk` or `bike`), not a rest day with a target on it.
-- Every other session needs enough to size it: a distance, a duration, or rep \
-structure. A session with none of the three is rejected. A session with no \
-distance to give is sized by TIME: strength, mobility, a class, anything \
-measured in minutes rather than kilometres, needs `target_duration_s`. "Strength" \
-on its own is not a session anyone can do, and it is rejected like any other.
+- Give every other session the time it will take, `target_duration_s`: that is \
+how their whole week adds up, across every activity. A run or a walk also gets \
+its distance (or rep structure), because that is how the runner measures it: \
+"8 km easy, about 50 minutes", "6 km dog walk, about 70 minutes". Strength, a \
+spin, mobility or a class is sized by time alone: "45 minutes". "Strength" on \
+its own is not a session anyone can do, and a session with no time, distance or \
+rep structure is rejected.
 - Write a warm-up and a cool-down as a DISTANCE, never as minutes. \
 `warmup_distance_m` and `cooldown_distance_m` are part of the session; the same \
 thing said in prose as "10 min easy" is not a distance and counts as nothing.
@@ -154,7 +161,8 @@ nothing clinical.
 """
 
 _SYSTEM_PROMPT = (
-    """You are a running coach writing this runner's training plan.
+    """You are a running coach writing this runner's training plan: their whole \
+week, every activity they train in, with running at its centre.
 
 You are given what you already know about them: their goal, the goals and races \
 they have stated, what they have actually been doing, their current condition, what they \
@@ -169,6 +177,12 @@ point to depart from, not a template to apply. A build that is right for a 60 km
 runner can injure a 25 km/week one, and the same is true in reverse: do not prescribe \
 a beginner's week to someone who has been training for years.
 
+Plan their whole week. What they do most weeks besides running, the context \
+shows by activity, belongs in the plan as committed sessions, sized and placed \
+around the running: for a runner who walks six times a week, a plan with one \
+walk is a plan for someone else. Keep it easy where it is easy, and keep it off \
+the days that need fresh legs.
+
 Give CONCRETE sessions for the near weeks and SHAPE ONLY for the weeks beyond. \
 Nobody knows what week nine looks like yet, and pretending to is how a plan stops \
 being believable. The context below says how many weeks get real sessions; when a \
@@ -177,8 +191,8 @@ weeks that decide the race and the runner will train every one of them.
 
 A shape is what those later weeks get WRITTEN FROM when the runner reaches them, \
 so say enough that the build you intend survives being read back: the phase, the \
-running distance, how far the long run goes, and what the week's hard session is \
-for. A weekly total on its own cannot tell anyone whether the week was built \
+running distance, the walking distance and the week's hours, how far the long run \
+goes, and what the week's hard session is for. A weekly total on its own cannot tell anyone whether the week was built \
 around a 20 km long run or four 9 km ones, and the long run is usually the thing \
 the runner agreed to.
 
@@ -437,6 +451,35 @@ def build_draft_context(
                 parts.append(
                     f"- Typical week: {metric.norm_weekly:.1f} sessions of any kind"
                 )
+        # The week by activity, in the units each is trained in (#1044). The
+        # all-activity km above hides that a walker's week is mostly walking, so
+        # a plan written from it left out the activity they do most.
+        by_discipline = weekly_norms_by_discipline(facts, today)
+        if by_discipline:
+            total_h = sum(n.moving_time_s for n in by_discipline) / 3600
+            parts.append(
+                f"- Typical week, by activity ({total_h:.1f} h moving in all):"
+            )
+            for norm in by_discipline:
+                if norm.moving_time_s < 360:
+                    continue  # under six minutes a week is noise, not a habit
+                km = (
+                    f", {norm.distance_m / 1000:.1f} km"
+                    if norm.distance_m >= 500
+                    else ""
+                )
+                parts.append(
+                    f"  - {norm.discipline}: {norm.moving_time_s / 3600:.1f} h over "
+                    f"{norm.sessions:.1f} sessions{km}"
+                )
+            # Said from `hours_ceilings`, the function the gate calls, so the
+            # limit stated is the limit enforced (the #859 rule for km below).
+            hours_limit = hours_ceilings(total_h * 3600)
+            parts.append(
+                f"- A concrete week above {hours_limit[0] / 3600:.0f} h of committed "
+                f"time, every activity together, is rejected outright; a sketched "
+                f"week may reach {hours_limit[1] / 3600:.0f} h. A limit, not a target."
+            )
         # The number that actually bounds a running plan, given explicitly. The
         # all-activity figure above is the one a coach is most likely to misread
         # as running volume — for a runner who walks a lot it is more than double
@@ -709,6 +752,7 @@ async def draft_plan(
             norm_weekly_running_m=norm_running,
             horizon_weeks=weeks,
             race=race_arg,
+            norm_weekly_s=weekly_hours_norm_s(facts, today),
         )
         if not check.ok:
             logger.info("schedule draft: rejected: %s", check.failures)
@@ -848,6 +892,8 @@ def _shape_for(sketch, load_model) -> Optional[dict]:
         # are here is that nothing else in a shape records them.
         "long_run_distance_m": sketch.long_run_distance_m,
         "quality_focus": sketch.quality_focus,
+        "target_duration_s": sketch.target_duration_s,
+        "target_walking_distance_m": sketch.target_walking_distance_m,
         "discipline_mix": discipline_mix,
         "intent_mix": intent_mix,
     }

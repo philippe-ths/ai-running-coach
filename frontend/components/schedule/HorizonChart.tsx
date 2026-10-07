@@ -134,6 +134,26 @@ function km(metres: number | null): string {
   return (metres / 1000).toFixed(1);
 }
 
+/** Hours across every activity, to a tenth. */
+function hours(seconds: number | null): string {
+  if (seconds == null || seconds <= 0) return "—";
+  return (seconds / 3600).toFixed(1);
+}
+
+/** The row's figure: the week's hours when stated, else its running km, each
+ *  with its unit so a plan drafted before hours existed is not misread. */
+function weekFigure(week: HorizonWeek): string {
+  if (week.duration_s) return `${hours(week.duration_s)} h`;
+  return week.running_distance_m ? `${km(week.running_distance_m)} km` : "—";
+}
+
+/** "14.0 km", or "90 min" for a long run given only as a time (#985). */
+function longRun(week: HorizonWeek): string | null {
+  if (week.long_run_distance_m) return `${km(week.long_run_distance_m)} km`;
+  if (week.long_run_duration_s) return `${Math.round(week.long_run_duration_s / 60)} min`;
+  return null;
+}
+
 function describeMix(segments: Segment[]): string {
   if (segments.length === 0) return "no mix";
   return segments.map((s) => `${s.label} ${pct(s.share)}%`).join(", ");
@@ -192,9 +212,9 @@ function Band({
 
 const GRID_STOPS = [25, 50, 75];
 
-// Five columns: date · planned tick · bar · running km · the expand chevron.
+// Five columns: date · planned tick · bar · hours (else running km) · the expand chevron.
 const ROW_GRID =
-  "grid grid-cols-[3.25rem_0.75rem_minmax(0,1fr)_3rem_1rem] items-center gap-x-2";
+  "grid grid-cols-[3.25rem_0.75rem_minmax(0,1fr)_3.25rem_1rem] items-center gap-x-2";
 
 /** The day a goal stands on in the chart: its exact date, else the start of its window. */
 function goalDay(goal: GoalRace): string | null {
@@ -344,8 +364,10 @@ export default function HorizonChart({
     const summary = [
       `Week of ${formatDateLabel(week.week_start)}`,
       load > 0 ? `${Math.round(load)} load` : zeroLoadCopy,
+      week.duration_s ? `${hours(week.duration_s)} hours, every activity` : null,
       week.running_distance_m ? `${km(week.running_distance_m)} km running` : null,
-      week.long_run_distance_m ? `${km(week.long_run_distance_m)} km long run` : null,
+      week.walking_distance_m ? `${km(week.walking_distance_m)} km walking` : null,
+      longRun(week) ? `${longRun(week)} long run` : null,
       week.quality_focus ? `focus: ${week.quality_focus}` : null,
       disc.length ? `discipline: ${describeMix(disc)}` : null,
       intent.length ? `intent: ${describeMix(intent)}` : null,
@@ -440,7 +462,7 @@ export default function HorizonChart({
                   : "text-gray-600 dark:text-gray-300"
               }`}
             >
-              {km(week.running_distance_m)}
+              {weekFigure(week)}
             </span>
 
             <span className="flex justify-end" aria-hidden="true">
@@ -526,7 +548,9 @@ export default function HorizonChart({
             )}
           </span>
         </span>
-        <span />
+        <span className="text-right text-[10px] text-gray-400 dark:text-gray-500">
+          {horizon.weeks.some((w) => w.duration_s) ? "hours" : "run km"}
+        </span>
         <span />
       </div>
 
@@ -547,9 +571,9 @@ export default function HorizonChart({
           Bar length is the week&rsquo;s load against your biggest week. Solid tick =
           real sessions, hollow tick = shape only, faint dot = nothing planned.
           Rows past a &ldquo;Plan ends here&rdquo; line carry no tick at all — your
-          coach has not reached that far yet. The number on the right is running
-          km, so a long bar beside a small number is a week you cross-train. Tap
-          any week for its detail.
+          coach has not reached that far yet. The number on the right is the
+          week&rsquo;s hours, every activity together (running km on a plan written
+          before hours). Tap any week for its running and walking km.
         </p>
       </div>
 
@@ -618,18 +642,29 @@ function WeekDetail({
         <span className="font-medium text-gray-700 dark:text-gray-200">
           {week.phase ?? "No phase"}
         </span>
+        {week.duration_s != null && week.duration_s > 0 && (
+          <span className="text-gray-600 dark:text-gray-300">
+            <span className="font-mono tabular-nums">{hours(week.duration_s)}</span> h, every
+            activity
+          </span>
+        )}
         <span className="text-gray-600 dark:text-gray-300">
           <span className="font-mono tabular-nums">{km(week.running_distance_m)}</span> km
           running
         </span>
+        {week.walking_distance_m != null && week.walking_distance_m > 0 && (
+          <span className="text-gray-600 dark:text-gray-300">
+            <span className="font-mono tabular-nums">{km(week.walking_distance_m)}</span> km
+            walking
+          </span>
+        )}
         {/* #980: the long run, so a build reads as a build past the concrete
             weeks. Omitted entirely rather than shown as "— km" when null,
             since a week can genuinely hold no long run, and that is a
             different claim from "not written yet". */}
-        {week.long_run_distance_m != null && week.long_run_distance_m > 0 && (
+        {longRun(week) && (
           <span className="text-gray-600 dark:text-gray-300">
-            <span className="font-mono tabular-nums">{km(week.long_run_distance_m)}</span> km
-            long run
+            <span className="font-mono tabular-nums">{longRun(week)}</span> long run
           </span>
         )}
         {load > 0 && (
@@ -748,7 +783,13 @@ function HorizonTable({
                 Load
               </th>
               <th scope="col" className={head}>
+                Hours
+              </th>
+              <th scope="col" className={head}>
                 Running
+              </th>
+              <th scope="col" className={head}>
+                Walking
               </th>
               <th scope="col" className={head}>
                 Long run
@@ -786,10 +827,16 @@ function HorizonTable({
                     {load > 0 ? `${share}% of peak` : "—"}
                   </td>
                   <td className={`${cell} whitespace-nowrap font-mono tabular-nums`}>
+                    {week.duration_s ? `${hours(week.duration_s)} h` : "—"}
+                  </td>
+                  <td className={`${cell} whitespace-nowrap font-mono tabular-nums`}>
                     {week.running_distance_m ? `${km(week.running_distance_m)} km` : "—"}
                   </td>
                   <td className={`${cell} whitespace-nowrap font-mono tabular-nums`}>
-                    {week.long_run_distance_m ? `${km(week.long_run_distance_m)} km` : "—"}
+                    {week.walking_distance_m ? `${km(week.walking_distance_m)} km` : "—"}
+                  </td>
+                  <td className={`${cell} whitespace-nowrap font-mono tabular-nums`}>
+                    {longRun(week) ?? "—"}
                   </td>
                   <td className={cell}>{week.quality_focus ?? "—"}</td>
                   <td className={cell}>{describeMix(disciplineSegments(week.discipline_mix))}</td>
