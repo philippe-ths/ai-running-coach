@@ -276,6 +276,8 @@ class MessageResult:
     # Prompt-cache verification (#629); not billed on the budget gate.
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    # Server-side web searches this call ran (#1051), billed per query on the budget gate.
+    web_search_requests: int = 0
 
 
 @dataclass
@@ -574,6 +576,9 @@ class AnthropicClient:
                 cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
                 cache_creation_input_tokens=getattr(
                     usage, "cache_creation_input_tokens", 0
+                ) or 0,
+                web_search_requests=getattr(
+                    getattr(usage, "server_tool_use", None), "web_search_requests", 0
                 ) or 0,
             )
         )

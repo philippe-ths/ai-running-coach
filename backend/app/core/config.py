@@ -340,6 +340,12 @@ class Settings(BaseSettings):
     # renders no entry point. Off hides the feature without deleting anything:
     # stored period reports are untouched.
     COACH_PERIOD_REPORT_ENABLED: bool = True
+    # #1051: the coach's web search for races and events. Off => the thread turn is
+    # handed no search tool and the add_goal offer is refused, so the coach answers
+    # from what it knows and says so. Unlike the input switches above it adds a
+    # capability rather than a pack section, and it is the fastest lever if search
+    # cost or result quality misbehaves: search is billed per query on top of tokens.
+    COACH_EVENT_SEARCH_ENABLED: bool = True
     # #946: the model lane for a period report, the `COACH_VOICE_MODEL_ID`
     # precedent — unset falls back to COACH_MODEL_ID, so day-one behaviour is
     # byte-identical. Its own lever because a period report is runner-requested,

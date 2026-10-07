@@ -126,6 +126,7 @@ class TestBoundaries:
             "adjust_session",
             "draft_plan",
             "amend_plan",
+            "add_goal",
         }
 
     @pytest.mark.parametrize("skill", SKILLS, ids=[s.name for s in SKILLS])

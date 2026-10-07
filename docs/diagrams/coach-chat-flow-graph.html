@@ -443,6 +443,7 @@ const NODE_ACTIVE = {
   tool_list:    () => convUsedTool('list_activities_in_range'),
   tool_summary: () => convUsedTool('get_training_summary'),
   tool_detail:  () => convUsedTool('get_session_detail'),
+  tool_web:     () => convUsedTool('web_search'),
   tool_skill:   () => convLoadedAnySkill(),
   // the action path and the medical redirect follow the same rule as the tools:
   // a node whose body reads "this never happened here" must not render live

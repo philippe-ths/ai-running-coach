@@ -137,7 +137,8 @@ def prompt_line(goal: Any, today: date, *, suffix: str = "") -> str:
 
 def line_from(facts: Dict[str, Any], *, suffix: str = "") -> str:
     """A `for_coach` dict as one prompt line (for packs that store the dict)."""
-    parts = [f"- {facts['name']} (priority {facts['priority']}): {facts['when']}"]
+    name = " ".join(str(facts["name"]).split())
+    parts = [f"- {name} (priority {facts['priority']}): {facts['when']}"]
     if "weeks_away" in facts:
         parts.append(f"{facts['weeks_away']:.0f} weeks away")
     parts.append(f"{facts['distance_km']:g} km" if "distance_km" in facts else "no fixed distance")

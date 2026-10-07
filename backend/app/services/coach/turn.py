@@ -184,6 +184,7 @@ class MeteredClient:
             cache_creation_input_tokens=getattr(
                 usage, "cache_creation_input_tokens", 0
             ) or 0,
+            web_search_requests=getattr(usage, "web_search_requests", 0) or 0,
         )
 
     async def generate_coach_message(
