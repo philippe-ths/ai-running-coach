@@ -201,6 +201,18 @@ function goalDay(goal: GoalRace): string | null {
   return goal.race_date ?? goal.window_start;
 }
 
+/** The date column's short label: "Nov 8", or "~Oct" for a window (its start). */
+function goalColumnLabel(goal: GoalRace): string {
+  if (goal.race_date) return formatDateLabel(goal.race_date);
+  return goal.window_start ? `~${formatDateLabel(goal.window_start).split(" ")[0]}` : "";
+}
+
+/** Whether a week overlaps a goal's window: the weeks a range goal runs through. */
+function weekInWindow(weekStart: string, goal: GoalRace): boolean {
+  if (goal.race_date || !goal.window_start || !goal.window_end) return false;
+  return weekStart <= goal.window_end && addDaysIso(weekStart, 6) >= goal.window_start;
+}
+
 /** "Nov 8" for an exact date; "~Mar" or "~May–Jun" for an approximate one. */
 function goalDayLabel(goal: GoalRace): string {
   if (goal.race_date) return formatDateLabel(goal.race_date);
@@ -252,6 +264,17 @@ export default function HorizonChart({
     racesByWeek.set(week.week_start, list);
   }
   const unplacedRaces = horizon.races.filter((r) => !placed.has(r.id));
+
+  // A range goal ("10h a week, Oct–Dec") runs THROUGH weeks rather than landing
+  // on one, so every week it covers carries a thin rail down the left edge.
+  const windowGoals = horizon.races.filter((r) => !r.race_date && r.window_start && r.window_end);
+  const railFor = (weekStart: string) =>
+    windowGoals.some((g) => weekInWindow(weekStart, g)) ? (
+      <span
+        className="pointer-events-none absolute -left-2 inset-y-0 w-0.5 rounded bg-rose-500/70 dark:bg-rose-400/70"
+        aria-hidden="true"
+      />
+    ) : null;
 
   const rows: ReactNode[] = [];
   let lastPhase: string | null = null;
@@ -331,7 +354,8 @@ export default function HorizonChart({
       .join(" · ");
 
     rows.push(
-      <div key={week.week_start}>
+      <div key={week.week_start} className="relative">
+        {railFor(week.week_start)}
         <button
           type="button"
           aria-expanded={open}
@@ -444,16 +468,22 @@ export default function HorizonChart({
 
     for (const race of racesByWeek.get(week.week_start) ?? []) {
       rows.push(
-        <div key={race.id} className={`${ROW_GRID} py-0.5`}>
+        <div key={race.id} className={`relative ${ROW_GRID} py-0.5`}>
+          {railFor(week.week_start)}
           <span className="font-mono text-[11px] tabular-nums text-rose-700 dark:text-rose-400">
-            {goalDayLabel(race)}
+            {goalColumnLabel(race)}
           </span>
           <span className="flex justify-center" aria-hidden="true">
             <span className="h-2 w-0.5 bg-rose-700 dark:bg-rose-400" />
           </span>
           <span className="flex items-center gap-2 truncate text-[11px] font-medium text-rose-700 dark:text-rose-400">
             <span className="h-px w-3 shrink-0 bg-rose-700 dark:bg-rose-400" aria-hidden="true" />
-            <span className="truncate">{race.name}</span>
+            <span className="truncate">
+              {race.name}
+              {!race.race_date && (
+                <span className="font-normal opacity-80"> · {goalDayLabel(race).slice(1)}</span>
+              )}
+            </span>
           </span>
           <span className="text-right font-mono text-[11px] tabular-nums text-rose-700 dark:text-rose-400">
             {race.distance_m ? `${(race.distance_m / 1000).toFixed(0)}k` : ""}
