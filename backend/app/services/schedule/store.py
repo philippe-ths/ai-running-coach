@@ -23,6 +23,7 @@ from app.models.goal_race import GoalRace
 from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
 from app.schemas.schedule import PlannedWeekShape, SpacingRule
+from app.services.schedule import goals
 
 logger = logging.getLogger(__name__)
 
@@ -411,10 +412,16 @@ def plan_week_shapes(plan: Optional[TrainingPlan]) -> List[PlannedWeekShape]:
 def list_goal_races(
     db: Session, user_id: uuid.UUID, *, on_or_after: Optional[date] = None
 ) -> List[GoalRace]:
-    query = db.query(GoalRace).filter(GoalRace.user_id == user_id)
+    """The runner's goals, soonest first and undated last (#1042).
+
+    With `on_or_after`, only goals still ahead of that day: an exact date not yet
+    passed, a window not yet closed, or no date at all. Ordered by
+    `goals.ready_by`, the one date every caller plans against.
+    """
+    races = db.query(GoalRace).filter(GoalRace.user_id == user_id).all()
     if on_or_after is not None:
-        query = query.filter(GoalRace.race_date >= on_or_after)
-    return query.order_by(GoalRace.race_date.asc()).all()
+        races = [race for race in races if goals.is_upcoming(race, on_or_after)]
+    return sorted(races, key=goals.sort_key)
 
 
 def goal_races_on(db: Session, user_id: uuid.UUID, day: date) -> List[GoalRace]:
@@ -442,29 +449,45 @@ def plan_target_race(
     recorded a different race depending on which button started it would be
     worse than one that recorded none.
     """
-    races = list_goal_races(db, user_id, on_or_after=on_or_after)
+    # An undated goal ("someday") is a direction, not something a block can be
+    # built backwards from, so it never anchors a plan (#1042).
+    races = [
+        race
+        for race in list_goal_races(db, user_id, on_or_after=on_or_after)
+        if goals.ready_by(race) is not None
+    ]
     if not races:
         return None
     return next((race for race in races if race.priority == "A"), races[0])
 
 
-def create_goal_race(
-    db: Session,
-    user_id: uuid.UUID,
-    *,
-    name: str,
-    race_date: date,
-    distance_m: float,
-    priority: str,
-) -> GoalRace:
-    race = GoalRace(
-        user_id=user_id,
-        name=name,
-        race_date=race_date,
-        distance_m=distance_m,
-        priority=priority,
-    )
+GOAL_FIELDS = (
+    "name",
+    "race_date",
+    "window_start",
+    "window_end",
+    "distance_m",
+    "target_time_s",
+    "notes",
+    "booked",
+    "priority",
+)
+
+
+def create_goal_race(db: Session, user_id: uuid.UUID, **fields) -> GoalRace:
+    race = GoalRace(user_id=user_id, **{k: fields[k] for k in GOAL_FIELDS if k in fields})
     db.add(race)
+    db.commit()
+    db.refresh(race)
+    return race
+
+
+def update_goal_race(db: Session, race: GoalRace, **fields) -> GoalRace:
+    """Replace the goal's fields with the ones given (#1042: booking a goal
+    sharpens it in place, so a plan anchored to it stays anchored)."""
+    for key in GOAL_FIELDS:
+        if key in fields:
+            setattr(race, key, fields[key])
     db.commit()
     db.refresh(race)
     return race

@@ -43,6 +43,7 @@ from app.services.coach.retrieval import fetch_corpus
 from app.services.coach.stance import resolve_stance
 from app.services.coach.volume import build_training_volume
 from app.services.readiness import build_readiness
+from app.services.schedule import goals
 from app.services.schedule import store
 from app.services.schedule.draft_contract import (
     MAX_CONCRETE_WEEKS,
@@ -155,8 +156,8 @@ nothing clinical.
 _SYSTEM_PROMPT = (
     """You are a running coach writing this runner's training plan.
 
-You are given what you already know about them: their goal, their race if they \
-have one, what they have actually been doing, their current condition, what they \
+You are given what you already know about them: their goal, the goals and races \
+they have stated, what they have actually been doing, their current condition, what they \
 have told you, and the school of training you coach from. Write the plan you would \
 write for THIS runner.
 
@@ -181,7 +182,8 @@ for. A weekly total on its own cannot tell anyone whether the week was built \
 around a 20 km long run or four 9 km ones, and the long run is usually the thing \
 the runner agreed to.
 
-If they have a goal race, the block is built BACKWARDS from its date. Work out \
+If they have a goal race, the block is built BACKWARDS from its date; where they \
+only know roughly when ("around March"), from the start of that window. Work out \
 where each week sits relative to the race and let that decide the week's job: the \
 peak lands far enough out to absorb it, the taper runs into the race, and the \
 phase names say which block a week belongs to. A plan that ignores the date it is \
@@ -323,7 +325,12 @@ def concrete_weeks_for(
     if not races:
         return settings.SCHEDULE_CONCRETE_WEEKS
     horizon_end = week_start(today, starts_on) + timedelta(days=7 * weeks - 1)
-    inside = [race for race in races if race.race_date <= horizon_end]
+    # Only an exact date is planned backwards session by session; an approximate
+    # window ("~March") has no fixed day to write the weeks towards (#1042).
+    inside = [
+        race for race in races
+        if race.race_date is not None and race.race_date <= horizon_end
+    ]
     if not inside:
         return settings.SCHEDULE_CONCRETE_WEEKS
     furthest = max(race.race_date for race in inside)
@@ -393,21 +400,18 @@ def build_draft_context(
     parts.extend(_profile_lines(user, getattr(user, "profile", None)))
 
     if races:
-        parts.append("\n## THEIR RACE")
-        for race in races[:3]:
-            weeks_out = (race.race_date - today).days / 7
-            parts.append(
-                f"- {race.name}: {race.race_date.isoformat()} "
-                f"({race.distance_m / 1000:.1f} km, priority {race.priority}, "
-                f"{weeks_out:.0f} weeks away — the week beginning "
-                f"{week_start(race.race_date, starts_on).isoformat()})"
-            )
+        parts.append("\n## THEIR GOALS")
+        for race in races:
+            line = goals.prompt_line(race, today)
+            if race.race_date is not None:
+                line += f" (the week beginning {week_start(race.race_date, starts_on).isoformat()})"
+            parts.append(line)
         parts.append(
-            "- Build the block backwards from that date. Every week you plan has a "
-            "job relative to it."
+            "- The block is built for their A goal, or the soonest dated one if none "
+            "is A. A goal with no date is a direction, not a deadline."
         )
     else:
-        parts.append("\n## THEIR RACE\nNo race stated. Plan for general progression.")
+        parts.append("\n## THEIR GOALS\nNo goal stated. Plan for general progression.")
 
     volume = build_training_volume(facts, today, starts_on)
     parts.append("\n## WHAT THEY ACTUALLY DO")
@@ -639,10 +643,7 @@ async def draft_plan(
     # The goal race, for the volume ceiling only. A race is the runner's own
     # fixed commitment, not a training decision the gate has a view on.
     races = store.list_goal_races(db, user.id, on_or_after=today)
-    target_race = next((r for r in races if r.priority == "A"), races[0] if races else None)
-    race_arg = (
-        (target_race.race_date, target_race.distance_m) if target_race else None
-    )
+    race_arg = goals.validator_race(races)
 
     # Two budgets, deliberately separate. A transport blip is not the coach's
     # fault, so it must not consume the one chance to REWRITE a rejected plan —

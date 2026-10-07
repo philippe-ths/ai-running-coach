@@ -301,12 +301,14 @@ def test_the_races_the_block_is_aimed_at_come_back_with_it(db):
 
     races = qt.get_training_plan(db, user.id, today=TODAY)["races"]
 
+    race_day = WEEK_4 + timedelta(days=5)
     assert races == [
         {
             "name": "Autumn Half",
-            "date": (WEEK_4 + timedelta(days=5)).isoformat(),
-            "distance_km": 21.1,
             "priority": "A",
+            "when": f"{race_day.day} {race_day:%B %Y} (exact date, not booked yet)",
+            "weeks_away": round((race_day - TODAY).days / 7, 1),
+            "distance_km": 21.1,
         }
     ]
 

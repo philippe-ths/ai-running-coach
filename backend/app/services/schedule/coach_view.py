@@ -45,7 +45,7 @@ from app.schemas.coach_context import (
     ScheduleContext,
     UpcomingSessionContext,
 )
-from app.services.schedule import store
+from app.services.schedule import goals, store
 from app.services.schedule.completion import find_matching_session
 from app.services.schedule.planned_distance import planned_distance_m
 from app.services.schedule.placement import (
@@ -390,12 +390,16 @@ def _draft_state(db: Session, user_id) -> Optional[dict]:
     return None
 
 
-def _race_section(db: Session, user_id: Any, plan: Any, today: date) -> dict:
-    """The race this runner is training for (#973).
+def _goals_section(db: Session, user_id: Any, today: date) -> dict:
+    """Every goal this runner holds, as the coach should read it (#973, #1042).
 
     Read from their own `goal_races` rather than from `plan.goal_race_id`,
     because the question the coach is answering is "what is this runner training
-    for", and that is a fact about the runner rather than about a row.
+    for", and that is a fact about the runner rather than about a row. All of
+    them, not one: a 10k in November, a half "~March" and a marathon "May to
+    June" are one season, and a coach shown only the A goal cannot talk about
+    the races on the way to it. Each states how exact its date is
+    (`goals.for_coach`), so "around March" is never read as a booked date.
 
     Whether the BLOCK is built for that race is a different question, and this
     deliberately does not answer it. `goal_race_id` looks like the answer and is
@@ -411,16 +415,7 @@ def _race_section(db: Session, user_id: Any, plan: Any, today: date) -> dict:
     races = store.list_goal_races(db, user_id, on_or_after=today)
     if not races:
         return {}
-    race = next((r for r in races if r.priority == "A"), races[0])
-    weeks_away = max(0, (race.race_date - today).days) / 7
-    return {
-        "race": {
-            "name": race.name,
-            "date": race.race_date.isoformat(),
-            "distance_km": round(race.distance_m / 1000, 1),
-            "weeks_away": round(weeks_away, 1),
-        }
-    }
+    return {"goals": [goals.for_coach(race, today) for race in races]}
 
 
 def _written_through(
@@ -497,11 +492,14 @@ def build_thread_schedule(
     """
     draft = _draft_state(db, user.id)
     plan = store.get_active_plan(db, user.id)
+    today = today or date.today()
     if plan is None:
-        return {"has_plan": False, "draft": draft} if draft else None
+        # Goals reach the coach with or without a plan (#1042): "what should I
+        # train for my March half" is a question a runner asks BEFORE a plan.
+        no_plan = {**({"draft": draft} if draft else {}), **_goals_section(db, user.id, today)}
+        return {"has_plan": False, **no_plan} if no_plan else None
 
     starts_on = resolve_week_start(getattr(user, "profile", None))
-    today = today or date.today()
     upcoming, committed, done, planned_running = _week_view(
         db, user.id, plan, today, starts_on
     )
@@ -509,7 +507,7 @@ def build_thread_schedule(
     return {
         "has_plan": True,
         **({"draft": draft} if draft else {}),
-        # The race, and whether this plan is actually built for it (#973/#939).
+        # The goals, and whether this plan is actually built for them (#973/#939).
         # "Talk me through my schedule up to my half marathon" cannot be answered
         # by a coach that does not know which race is meant or how far away it
         # is, and the anchoring is a real distinction the runner cannot see: a
@@ -517,7 +515,7 @@ def build_thread_schedule(
         # it, so its phases were never built backwards from that date. Saying so
         # is what stops the coach describing a race build the plan does not
         # contain.
-        **_race_section(db, user.id, plan, today),
+        **_goals_section(db, user.id, today),
         # Where the WRITTEN sessions stop (#981). A plan holds real sessions for
         # its near weeks and shape beyond, so "the plan runs to 11 Oct" and "the
         # plan tells you what to do until 30 Aug" are different facts and the

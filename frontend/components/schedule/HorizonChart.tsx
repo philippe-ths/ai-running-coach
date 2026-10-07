@@ -196,6 +196,18 @@ const GRID_STOPS = [25, 50, 75];
 const ROW_GRID =
   "grid grid-cols-[3.25rem_0.75rem_minmax(0,1fr)_3rem_1rem] items-center gap-x-2";
 
+/** The day a goal stands on in the chart: its exact date, else the start of its window. */
+function goalDay(goal: GoalRace): string | null {
+  return goal.race_date ?? goal.window_start;
+}
+
+/** "Nov 8" for an exact date, "~Mar" for an approximate one. */
+function goalDayLabel(goal: GoalRace): string {
+  if (goal.race_date) return formatDateLabel(goal.race_date);
+  const day = goalDay(goal);
+  return day ? `~${formatDateLabel(day).split(" ")[0]}` : "";
+}
+
 export default function HorizonChart({
   horizon,
   segmentation,
@@ -217,12 +229,16 @@ export default function HorizonChart({
   // A race lands in the week whose seven days contain it. Weeks are contiguous
   // and the API only returns races inside the span, so a race that matches no
   // week is a mismatch worth not silently dropping — it falls to the tail.
+  // A goal with only an approximate date ("~March") stands at the start of its
+  // window, which is the date the plan works to (#1042). The API leaves out goals
+  // with no date at all; the goals panel lists those.
   const racesByWeek = new Map<string, GoalRace[]>();
   const placed = new Set<string>();
   for (const race of horizon.races) {
-    const week = horizon.weeks.find(
-      (w) => race.race_date >= w.week_start && race.race_date <= addDaysIso(w.week_start, 6),
-    );
+    const day = goalDay(race);
+    const week = day
+      ? horizon.weeks.find((w) => day >= w.week_start && day <= addDaysIso(w.week_start, 6))
+      : undefined;
     if (!week) continue;
     placed.add(race.id);
     const list = racesByWeek.get(week.week_start) ?? [];
@@ -424,7 +440,7 @@ export default function HorizonChart({
       rows.push(
         <div key={race.id} className={`${ROW_GRID} py-0.5`}>
           <span className="font-mono text-[11px] tabular-nums text-rose-700 dark:text-rose-400">
-            {formatDateLabel(race.race_date)}
+            {goalDayLabel(race)}
           </span>
           <span className="flex justify-center" aria-hidden="true">
             <span className="h-2 w-0.5 bg-rose-700 dark:bg-rose-400" />
@@ -434,7 +450,7 @@ export default function HorizonChart({
             <span className="truncate">{race.name}</span>
           </span>
           <span className="text-right font-mono text-[11px] tabular-nums text-rose-700 dark:text-rose-400">
-            {(race.distance_m / 1000).toFixed(0)}k
+            {race.distance_m ? `${(race.distance_m / 1000).toFixed(0)}k` : ""}
           </span>
           <span />
         </div>,
@@ -751,11 +767,12 @@ function HorizonTable({
 
       {horizon.races.length > 0 && (
         <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
-          Races in this window:{" "}
+          Goals in this window:{" "}
           {horizon.races
             .map(
               (r) =>
-                `${r.name} on ${formatDateLabel(r.race_date)} (${(r.distance_m / 1000).toFixed(0)} km)`,
+                `${r.name} ${r.race_date ? "on" : "around"} ${goalDayLabel(r)}` +
+                (r.distance_m ? ` (${(r.distance_m / 1000).toFixed(0)} km)` : ""),
             )
             .join("; ")}
           .

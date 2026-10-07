@@ -314,14 +314,17 @@ def create_race(
 ) -> GoalRaceRead:
     """The runner states their own race. A plan is anchored to it, never the
     other way round — the coach does not decide what the runner is training for."""
-    race = store.create_goal_race(
-        db,
-        user.id,
-        name=body.name,
-        race_date=body.race_date,
-        distance_m=body.distance_m,
-        priority=body.priority,
-    )
+    race = store.create_goal_race(db, user.id, **body.model_dump())
+    return GoalRaceRead.model_validate(race)
+
+
+@router.put("/races/{race_id}", response_model=GoalRaceRead)
+def update_race(
+    body: GoalRaceCreate, race: OwnedGoalRace, db: DbSession
+) -> GoalRaceRead:
+    """Replace a goal with the runner's edit. Booking a vague goal is this call
+    with an exact date added, so a plan anchored to the goal stays anchored."""
+    race = store.update_goal_race(db, race, **body.model_dump())
     return GoalRaceRead.model_validate(race)
 
 

@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from app.services.schedule import goals
 from app.models import Activity, UserProfile
 from app.models.derived_metric import DerivedMetric
 from app.services.coach import coach_units
@@ -525,15 +526,9 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
             )
         weeks.append(entry)
 
-    races = [
-        {
-            "name": race.name,
-            "date": race.race_date.isoformat(),
-            "distance_km": round(race.distance_m / 1000, 1),
-            "priority": race.priority,
-        }
-        for race in horizon.races
-    ]
+    # Each goal states how exact its date is (#1042), so an approximate month
+    # on the horizon is never read as a booked race.
+    races = [goals.for_coach(race, today) for race in horizon.races]
     written = [w for w in weeks if w["written"]]
     return {
         "has_plan": True,
