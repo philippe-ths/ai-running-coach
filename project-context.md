@@ -50,6 +50,7 @@ A `TrainingPlan` is the plan container: a nullable `goal_race_id`, a `horizon_en
 Its `status` is `drafting`, `active`, `superseded`, or `failed`, with at most one active plan per user held by the writer rather than a DB constraint.
 A `PlannedWeekShape` also carries `long_run_distance_m` and `quality_focus`, so a sketched week states the progression it was agreed on rather than only a weekly total.
 A `PlannedWeekShape` also carries `target_duration_s` (the week's time across every activity) and `target_walking_distance_m`.
+A concrete week's phase is kept as a phase-only `week_shapes` entry, since `PlannedSession` rows have nowhere to hold it.
 `superseded_at` records when a plan stopped being current, written only by `activate_plan` and cleared on the row it activates, so a superseded plan stays reachable and restorable.
 A `PlannedSession` is the schedule's concrete unit, described along three independent axes: PLACEMENT, COMMITMENT (`committed` or `suggested`), and DISCIPLINE (`run`, `walk`, `bike`, `strength`, `row`, `other`).
 Placement has no column: a session stores an inclusive `[window_start, window_end]`, and `derive_placement` reads `pinned`, `week`, or `window` from its span.
@@ -135,7 +136,6 @@ A drafted plan whose goal race falls inside the horizon is written as concrete s
 `EXCHANGE_STAGE2_DELAY_SECONDS` (default 10800) is the fuller-turn timer and `EXCHANGE_REPLY_WINDOW_SECONDS` (default 86400) is how long a reply still triggers the fuller turn early; both are inert under a single-shot prompt.
 `RQ_JOB_TIMEOUT_SECONDS` (default 600) is the RQ death-penalty ceiling, applied as the queue `default_timeout` and as explicit `job_timeout=` on `queue.enqueue_in` calls, because a two-stage generation runs past RQ's 180s default.
 `BLOCK_GAP_SECONDS` (default 1800) is both the block grouping threshold and the block-complete debounce that gates the opener.
-Block assignment runs under every prompt, while the block-complete opener trigger is two-stage-only.
 Telegram is the only notification channel, active when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are both set, otherwise the notifier is a no-op.
 `resolve_recipient(user)` returns the activity owner's bound `User.telegram_chat_id`; an unbound user falls back to the global `TELEGRAM_CHAT_ID` only for the identified deployment owner (`OWNER_EMAIL`, or a db-proven single-user deploy) and otherwise fails closed to null.
 The Telegram vars must be set on both Railway app services, with `TELEGRAM_WEBHOOK_SECRET` and `TELEGRAM_BOT_USERNAME` needed on web only.
