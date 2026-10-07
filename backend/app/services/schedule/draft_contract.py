@@ -19,15 +19,17 @@ Those are shares of a load total, so they are derived from the session counts th
 model DOES give and the same load model. One number, one owner.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.schedule import SpacingRule
+from app.services.weeks import week_start
 
 MAX_CONCRETE_WEEKS = 6
 MAX_SKETCH_WEEKS = 26
+MAX_OUTLINE_BLOCKS = 12
 MAX_SESSIONS_PER_WEEK = 14
 MAX_RULES = 8
 SUMMARY_MAX_CHARS = 2000
@@ -62,6 +64,9 @@ def normalise(raw: dict) -> dict:
 # How long a session's `detail` note may be. One name, so the schema the model
 # reads and the model that validates it cannot drift (#996).
 DETAIL_MAX_LENGTH = 400
+# The same rule for a week's or a block's `quality_focus` (#1043): a live draft
+# spent an attempt on a focus longer than a limit the schema never stated.
+QUALITY_FOCUS_MAX_LENGTH = 80
 
 
 class DraftedSession(BaseModel):
@@ -202,7 +207,9 @@ class SketchedWeek(BaseModel):
     # "cruise intervals"), never a prescription. A sketch that named reps and
     # paces would be a concrete session wearing a sketch's clothes, and the
     # runner would read a promise into a week nobody has written yet.
-    quality_focus: Optional[str] = Field(default=None, max_length=80)
+    quality_focus: Optional[str] = Field(
+        default=None, max_length=QUALITY_FOCUS_MAX_LENGTH
+    )
     # The whole week's time across every activity, and its walking distance
     # (#1044). A runner whose training is mostly walking has a week the running
     # total does not describe, and the time is what the hours ceiling bounds.
@@ -228,6 +235,73 @@ class SketchedWeek(BaseModel):
         return self
 
 
+class OutlineBlock(BaseModel):
+    """A run of weeks far out, given as one block rather than week by week (#1043).
+
+    A plan that reaches a goal seven months away cannot honestly say what week
+    twenty-six holds, and forty weekly sketches would pretend it can. A block
+    says what a coach actually decides that far ahead: what the stretch is for,
+    roughly how big a week in it is, and how far the long run has got by its
+    end. Each week the block spans is stored as that typical week, marked as
+    outline, so nothing downstream reads it as a figure set for that week.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    week_start: date
+    # The FIRST day of the block's last week, so a block is a span of whole weeks.
+    through_week_start: date
+    phase: str = Field(min_length=1, max_length=60)
+    target_running_distance_m: Optional[float] = Field(default=None, ge=0, le=500_000)
+    target_walking_distance_m: Optional[float] = Field(default=None, ge=0, le=500_000)
+    target_duration_s: float = Field(ge=0, le=7 * 86_400)
+    # How far the long run has got by the block's end: the one number a runner
+    # holds about a stretch months away.
+    long_run_distance_m: Optional[float] = Field(default=None, ge=0, le=200_000)
+    quality_focus: Optional[str] = Field(
+        default=None, max_length=QUALITY_FOCUS_MAX_LENGTH
+    )
+    sessions_by_discipline: Dict[str, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_span(self) -> "OutlineBlock":
+        if self.through_week_start < self.week_start:
+            raise ValueError("through_week_start is before week_start")
+        allowed = {"run", "walk", "bike", "strength", "row", "other"}
+        for key, value in self.sessions_by_discipline.items():
+            if key not in allowed:
+                raise ValueError(f"unknown discipline {key!r}")
+            if value < 0 or value > MAX_SESSIONS_PER_WEEK:
+                raise ValueError(f"implausible session count for {key!r}")
+        return self
+
+    def on_week_boundary(self, starts_on: int) -> "OutlineBlock":
+        """The block with each end read as the runner's week that day falls in.
+
+        A block's ends are claims about WHICH WEEKS, and the week holding the
+        stated day is the week the coach named. A live draft dated a block
+        "2027-01-26", a Tuesday, from date arithmetic thirty weeks out; refusing
+        the whole season over it would throw away a correct plan for a slip in
+        arithmetic. A session's day is different, a fact the runner acts on, and
+        nothing reads it this loosely.
+        """
+        return self.model_copy(
+            update={
+                "week_start": week_start(self.week_start, starts_on),
+                "through_week_start": week_start(self.through_week_start, starts_on),
+            }
+        )
+
+    def weeks(self) -> List[date]:
+        """Every week start the block spans, first to last."""
+        out: List[date] = []
+        cursor = self.week_start
+        while cursor <= self.through_week_start:
+            out.append(cursor)
+            cursor = cursor + timedelta(days=7)
+        return out
+
+
 class DraftedPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -235,6 +309,9 @@ class DraftedPlan(BaseModel):
     weeks: List[DraftedWeek] = Field(default_factory=list, max_length=MAX_CONCRETE_WEEKS)
     sketch_weeks: List[SketchedWeek] = Field(
         default_factory=list, max_length=MAX_SKETCH_WEEKS
+    )
+    outline_blocks: List[OutlineBlock] = Field(
+        default_factory=list, max_length=MAX_OUTLINE_BLOCKS
     )
     # Generous, and TRUNCATED rather than rejected (see `normalise`). A live run
     # threw an entire valid twelve-week plan away because the blurb explaining it
@@ -357,8 +434,9 @@ RECORD_TRAINING_PLAN_TOOL = {
     "name": "record_training_plan",
     "description": (
         "Record the training plan you have decided on. This is the only way to "
-        "return your answer. Give concrete sessions for the near weeks and shape "
-        "only for the weeks beyond. Do not estimate training load for a session — "
+        "return your answer. Give concrete sessions for the near weeks, shape "
+        "only for the weeks beyond, and outline blocks for the far weeks when "
+        "the plan reaches that far. Do not estimate training load for a session — "
         "say what the session IS (discipline, intent, how long or how far) and the "
         "app computes what it costs from this runner's own history."
     ),
@@ -491,7 +569,13 @@ RECORD_TRAINING_PLAN_TOOL = {
                                 "into a label per row."
                             ),
                         },
-                        "target_running_distance_m": {"type": "number"},
+                        "target_running_distance_m": {
+                            "type": "number",
+                            "description": (
+                                "The week's running in metres, a race that "
+                                "week included."
+                            ),
+                        },
                         "long_run_distance_m": {
                             "type": "number",
                             "description": (
@@ -504,13 +588,15 @@ RECORD_TRAINING_PLAN_TOOL = {
                         },
                         "quality_focus": {
                             "type": "string",
+                            "maxLength": QUALITY_FOCUS_MAX_LENGTH,
                             "description": (
                                 "What the week's hard session is FOR, in a few "
                                 "words: 'race-pace tempo', 'cruise intervals', "
                                 "'hill strength'. Not a prescription. Reps, "
                                 "paces and rest belong to a concrete session, and "
                                 "stating them here would promise a week nobody "
-                                "has written yet."
+                                "has written yet. At most "
+                                f"{QUALITY_FOCUS_MAX_LENGTH} characters."
                             ),
                         },
                         "target_duration_s": {
@@ -532,6 +618,76 @@ RECORD_TRAINING_PLAN_TOOL = {
                             "additionalProperties": {"type": "integer"},
                         },
                         "intent_counts": {
+                            "type": "object",
+                            "additionalProperties": {"type": "integer"},
+                        },
+                    },
+                },
+            },
+            "outline_blocks": {
+                "type": "array",
+                "description": (
+                    "The far weeks, when the plan reaches further than the "
+                    "week-by-week shape: one entry per block (Base, Build, Peak, "
+                    "Taper, Recovery), each a run of whole weeks. Say what a "
+                    "typical week in the block holds and how far the long run has "
+                    "got by the block's end. Blocks do not overlap each other or "
+                    "any concrete or sketched week. A week holding a race on an "
+                    "exact date is never a block, not even a one-week one: it "
+                    "goes in sketch_weeks, and the blocks either side end and "
+                    "start around it."
+                ),
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "week_start",
+                        "through_week_start",
+                        "phase",
+                        "target_duration_s",
+                    ],
+                    "properties": {
+                        "week_start": {
+                            "type": "string",
+                            "description": "The first day of the block's first week.",
+                        },
+                        "through_week_start": {
+                            "type": "string",
+                            "description": "The first day of the block's LAST week.",
+                        },
+                        "phase": {"type": "string"},
+                        "target_running_distance_m": {
+                            "type": "number",
+                            "description": "A typical week's running in this block.",
+                        },
+                        "target_walking_distance_m": {
+                            "type": "number",
+                            "description": "A typical week's walking, 0 if none.",
+                        },
+                        "target_duration_s": {
+                            "type": "number",
+                            "description": (
+                                "A typical week's total time in seconds, every "
+                                "activity together."
+                            ),
+                        },
+                        "long_run_distance_m": {
+                            "type": "number",
+                            "description": (
+                                "How far the long run has got by the end of the "
+                                "block, in metres."
+                            ),
+                        },
+                        "quality_focus": {
+                            "type": "string",
+                            "maxLength": QUALITY_FOCUS_MAX_LENGTH,
+                            "description": (
+                                "What the block's hard sessions are FOR, in a few "
+                                f"words. At most {QUALITY_FOCUS_MAX_LENGTH} "
+                                "characters."
+                            ),
+                        },
+                        "sessions_by_discipline": {
                             "type": "object",
                             "additionalProperties": {"type": "integer"},
                         },

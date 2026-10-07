@@ -474,14 +474,17 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
     it would sound exactly as confident as the truth.
     """
     from app.models.user import User
-    from app.services.schedule.horizon import build_horizon
+    from app.services.schedule.horizon import MAX_HORIZON_WEEKS, build_horizon
 
     today = today or date.today()
     user = db.query(User).filter(User.id == owner_user_id).first()
     if user is None:
         return {"error": "not_found"}
 
-    horizon = build_horizon(db, user, today=today)
+    # The plan's whole reach, not the screen's default window (#1043): a plan
+    # built to a goal seven months out is read to that goal, and `beyond_plan`
+    # weeks past its end are dropped below.
+    horizon = build_horizon(db, user, today=today, weeks=MAX_HORIZON_WEEKS)
     if not horizon.has_plan:
         # A real answer, not an error: free mode is a destination. Saying it
         # plainly is what stops the coach reading an empty result as a fetch
@@ -497,10 +500,17 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
         }
 
     weeks = []
+    blocks: List[Dict[str, Any]] = []
     for week in horizon.weeks:
         if week.coverage == "beyond_plan":
             # Past the plan's own reach. Listing it would invite the coach to
             # describe a week the plan never claimed.
+            continue
+        if week.coverage == "outlined":
+            # A far block is handed over as ONE block, never as weeks (#1043).
+            # Its weeks all carry the block's typical figures, and listed one by
+            # one they would read as a flat plan that sets 30 km for each.
+            _add_to_block(blocks, week)
             continue
         entry: Dict[str, Any] = {
             "week_start": week.week_start.isoformat(),
@@ -536,11 +546,16 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
     # on the horizon is never read as a booked race.
     races = [goals.for_coach(race, today) for race in horizon.races]
     written = [w for w in weeks if w["written"]]
-    return {
+    covered = [w["week_start"] for w in weeks] + [b["through_week_starting"] for b in blocks]
+    out: Dict[str, Any] = {
         "has_plan": True,
         "today": today.isoformat(),
         "week_count": len(weeks),
         "weeks": weeks,
+    }
+    if blocks:
+        out["outline_blocks"] = blocks
+    out.update({
         "races": races,
         # Two different facts, and the coach was previously given only the first
         # (#981). A plan can run to October while telling the runner what to do
@@ -550,7 +565,7 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
         # same two facts as DAYS (`runs_through`, `sessions_written_through`), and
         # a coach holding "2026-10-05" and "2026-10-11" for what sounds like one
         # question will eventually pick the wrong one to say out loud.
-        "plan_covers_through_week_starting": weeks[-1]["week_start"] if weeks else None,
+        "plan_covers_through_week_starting": max(covered) if covered else None,
         "sessions_written_through_week_starting": (
             written[-1]["week_start"] if written else None
         ),
@@ -560,8 +575,54 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
             "prescription: say what it is FOR, and never name a session, a day or "
             "a distance in it as though it were written. If the runner needs one "
             "of those weeks written out, offer amend_plan."
+            + (
+                " An outline block is coarser still: a stretch of weeks described "
+                "by its typical week and where its long run gets to, so speak of "
+                "it as a stretch and never give any one of its weeks a figure."
+                if blocks
+                else ""
+            )
         ),
-    }
+    })
+    return out
+
+
+def _add_to_block(blocks: List[Dict[str, Any]], week: Any) -> None:
+    """Fold one outlined horizon week into the block it belongs to (#1043).
+
+    Consecutive outlined weeks under one phase are one block. The long run is
+    stated on a block's last week only (where the block says it gets to), so the
+    latest one seen is the block's.
+    """
+    start = week.week_start.isoformat()
+    last = blocks[-1] if blocks else None
+    if (
+        last is not None
+        and last["phase"] == week.phase
+        and date.fromisoformat(last["through_week_starting"]) + timedelta(days=7)
+        == week.week_start
+    ):
+        last["through_week_starting"] = start
+        last["weeks"] += 1
+    else:
+        last = {
+            "phase": week.phase,
+            "from_week_starting": start,
+            "through_week_starting": start,
+            "weeks": 1,
+        }
+        if week.running_distance_m is not None:
+            last["typical_week_running_km"] = round(week.running_distance_m / 1000, 1)
+        if week.walking_distance_m is not None:
+            last["typical_week_walking_km"] = round(week.walking_distance_m / 1000, 1)
+        if week.duration_s is not None:
+            last["typical_week_hours_all_activities"] = round(week.duration_s / 3600, 1)
+        if week.quality_focus:
+            last["quality_focus"] = week.quality_focus
+        last["note"] = "outline only: the block's typical week, no week in it set yet"
+        blocks.append(last)
+    if week.long_run_distance_m is not None:
+        last["long_run_reaches_km_by_block_end"] = round(week.long_run_distance_m / 1000, 1)
 
 
 TOOL_STATUS_LABELS = {
@@ -696,7 +757,8 @@ CHAT_TOOLS: List[Dict[str, Any]] = [
         "description": (
             "Read this runner's training plan: every week from now to the end of "
             "the block, with its phase, its running distance, how far its long "
-            "run goes, and whether it holds real sessions or is shape only. Use "
+            "run goes, and whether it holds real sessions or is shape only; a "
+            "plan reaching months ahead gives its far stretch as outline blocks. Use "
             "this for any question about what is COMING — the block ahead, the "
             "weeks between now and their race, what a future week is for, "
             "whether the plan still covers them. Your other tools read what they "

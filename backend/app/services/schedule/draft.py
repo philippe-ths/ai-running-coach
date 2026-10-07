@@ -50,6 +50,7 @@ from app.services.schedule.draft_contract import (
     MAX_CONCRETE_WEEKS,
     RECORD_TRAINING_PLAN_TOOL,
     DraftedPlan,
+    SketchedWeek,
     normalise,
 )
 from app.services.schedule.effort import build_load_model, estimate_effort
@@ -184,11 +185,16 @@ around the running: for a runner who walks six times a week, a plan with one \
 walk is a plan for someone else. Keep it easy where it is easy, and keep it off \
 the days that need fresh legs.
 
-Give CONCRETE sessions for the near weeks and SHAPE ONLY for the weeks beyond. \
-Nobody knows what week nine looks like yet, and pretending to is how a plan stops \
-being believable. The context below says how many weeks get real sessions; when a \
-race falls inside the horizon that is every week up to it, because those are the \
-weeks that decide the race and the runner will train every one of them.
+Give CONCRETE sessions for the near weeks, SHAPE ONLY for the weeks beyond, and, \
+when the plan reaches months ahead, OUTLINE BLOCKS for the far stretch: the \
+resolution falls as certainty does. Nobody knows what week nine looks like yet, \
+still less week twenty-five, and pretending to is how a plan stops being \
+believable. The context below says how many weeks get each; when a race falls \
+inside the first weeks, every week up to it gets real sessions, because those are \
+the weeks that decide the race and the runner will train every one of them. An \
+outline block is still this runner's: size its typical week from where their own \
+weeks are now and where the goal needs them, not from a stock plan for the \
+distance.
 
 A shape is what those later weeks get WRITTEN FROM when the runner reaches them, \
 so say enough that the build you intend survives being read back: the phase, the \
@@ -203,6 +209,11 @@ where each week sits relative to the race and let that decide the week's job: th
 peak lands far enough out to absorb it, the taper runs into the race, and the \
 phase names say which block a week belongs to. A plan that ignores the date it is \
 aimed at is a volume curve, not a plan.
+
+Every other race on an exact date between now and then is a CHECKPOINT on the way, not a \
+week like the rest: give its race week its own week, and let the runner's own \
+priority say how far the build bends around it. A B race usually earns a few \
+easier days either side; a C race is trained through.
 
 If the race falls inside the horizon, do not stop dead at it. Sketch the weeks \
 after it too — easy, short, and honest that they are recovery — so the runner can \
@@ -358,6 +369,82 @@ def concrete_weeks_for(
     return max(settings.SCHEDULE_CONCRETE_WEEKS, min(span_weeks, MAX_CONCRETE_WEEKS))
 
 
+# How far ahead a drafted plan may reach, in weeks (#1043). Far enough for a
+# marathon build from a standing start (the owner's A goal sat 30 weeks out),
+# short of a year, past which "the plan" is a guess about a different runner.
+MAX_REACH_WEEKS = 40
+
+
+def plan_reach_weeks(today: date, races: List[Any], *, starts_on: int) -> int:
+    """How many weeks this plan reaches: to the target goal, never less than the
+    configured horizon, never more than `MAX_REACH_WEEKS` (#1043).
+
+    A plan that stopped at twelve weeks could not see a goal seven months away,
+    so the block it was built for was a sentence in the prompt rather than a
+    shape the plan held. The reach comes from the goal the runner named, read
+    through `goals.reach_end`, so it is this runner's season and not a default.
+    """
+    near = settings.SCHEDULE_HORIZON_WEEKS
+    target = goals.target_goal(races)
+    end = goals.reach_end(target) if target is not None else None
+    if end is None:
+        return near
+    weeks = (week_start(end, starts_on) - week_start(today, starts_on)).days // 7 + 1
+    return max(near, min(weeks, MAX_REACH_WEEKS))
+
+
+def reach_goal(today: date, races: List[Any], *, starts_on: int) -> Optional[tuple]:
+    """`(name, ready_by)` of the target goal when the plan's reach covers it,
+    for the validator's "the plan has to get there" check; else None."""
+    target = goals.target_goal(races)
+    when = goals.ready_by(target) if target is not None else None
+    if when is None or when < today:
+        return None
+    reach = plan_reach_weeks(today, races, starts_on=starts_on)
+    last_week = week_start(today, starts_on) + timedelta(days=7 * (reach - 1))
+    return (target.name, when) if week_start(when, starts_on) <= last_week else None
+
+
+def _horizon_lines(
+    today: date, near_weeks: int, races: List[Any], *, starts_on: int
+) -> List[str]:
+    """The HORIZON instruction: how far the plan reaches and at what resolution."""
+    concrete = concrete_weeks_for(today, near_weeks, races, starts_on=starts_on)
+    reach = plan_reach_weeks(today, races, starts_on=starts_on)
+    first = week_start(today, starts_on)
+    if reach <= near_weeks:
+        if concrete >= near_weeks:
+            return [
+                f"HORIZON: {near_weeks} weeks, and the runner's race falls inside it. "
+                f"Give concrete sessions for ALL {near_weeks} weeks."
+            ]
+        return [
+            f"HORIZON: {near_weeks} weeks. Give concrete sessions for the first "
+            f"{concrete} weeks and shape only beyond that."
+        ]
+    target = goals.target_goal(races)
+    last = first + timedelta(days=7 * (reach - 1))
+    outline_from = first + timedelta(days=7 * near_weeks)
+    end = goals.reach_end(target)
+    reaches = (
+        f"so the plan reaches {target.name} and the weeks after it"
+        if end is not None and week_start(end, starts_on) <= last
+        else (
+            f"the furthest a plan reaches; {target.name} is beyond it, so build "
+            "these weeks towards it"
+        )
+    )
+    return [
+        f"HORIZON: {reach} weeks, through the week beginning {last.isoformat()}, "
+        f"{reaches}. Concrete sessions for the first {concrete} weeks; a shape for "
+        f"each week after that through the week beginning "
+        f"{(outline_from - timedelta(days=7)).isoformat()}; outline blocks from "
+        f"the week beginning {outline_from.isoformat()} to the end. A race on an "
+        "exact date inside that stretch keeps its race week in sketch_weeks, "
+        "between two blocks, never inside one."
+    ]
+
+
 def build_draft_context(
     db: Session,
     user: User,
@@ -402,17 +489,7 @@ one. The runner's week "
     # first N weeks" is an instruction about writing a whole plan and would sit
     # beside the window contradicting it.
     if state_horizon:
-        concrete = concrete_weeks_for(today, weeks, races, starts_on=starts_on)
-        if concrete >= weeks:
-            parts.append(
-                f"HORIZON: {weeks} weeks, and the runner's race falls inside it. "
-                f"Give concrete sessions for ALL {weeks} weeks."
-            )
-        else:
-            parts.append(
-                f"HORIZON: {weeks} weeks. Give concrete sessions for the first "
-                f"{concrete} weeks and shape only beyond that."
-            )
+        parts.extend(_horizon_lines(today, weeks, races, starts_on=starts_on))
 
     parts.append("\n## THE RUNNER")
     parts.extend(_profile_lines(user, getattr(user, "profile", None)))
@@ -699,10 +776,11 @@ async def draft_plan(
 
     load_model = build_load_model(facts, today)
     norm_running = running_norm_weekly_m(facts, today)
-    # The goal race, for the volume ceiling only. A race is the runner's own
-    # fixed commitment, not a training decision the gate has a view on.
+    # Every dated goal, for the volume ceiling: a race is the runner's own fixed
+    # commitment, not a training decision the gate has a view on (#1043).
     races = store.list_goal_races(db, user.id, on_or_after=today)
-    race_arg = goals.validator_race(races)
+    race_args = goals.validator_races(races)
+    reach = plan_reach_weeks(today, races, starts_on=starts_on)
 
     # Two budgets, deliberately separate. A transport blip is not the coach's
     # fault, so it must not consume the one chance to REWRITE a rejected plan —
@@ -746,6 +824,9 @@ async def draft_plan(
 
         try:
             drafted = DraftedPlan.model_validate(normalise(raw))
+            drafted.outline_blocks = [
+                block.on_week_boundary(starts_on) for block in drafted.outline_blocks
+            ]
         except Exception as exc:
             logger.warning("schedule draft: off-contract plan: %s", exc)
             failures = [f"the plan was not the shape the tool requires: {exc}"]
@@ -757,9 +838,10 @@ async def draft_plan(
             today=today,
             starts_on=starts_on,
             norm_weekly_running_m=norm_running,
-            horizon_weeks=weeks,
-            race=race_arg,
+            horizon_weeks=reach,
+            races=race_args,
             norm_weekly_s=weekly_hours_norm_s(facts, today),
+            reach_goal=reach_goal(today, races, starts_on=starts_on),
         )
         if not check.ok:
             logger.info("schedule draft: rejected: %s", check.failures)
@@ -791,16 +873,26 @@ def _persist(
 ) -> None:
     """Write the accepted plan and make it the runner's active one."""
     plan.rules = [rule.model_dump(mode="json") for rule in drafted.rules]
-    plan.week_shapes = [
-        shape
-        for shape in (
-            _shape_for(week, load_model) for week in drafted.sketch_weeks
-        )
-        if shape is not None
-    ] + store.concrete_week_phases(drafted.weeks)
-    horizon_ends = [w.week_start for w in drafted.weeks] + [
-        s.week_start for s in drafted.sketch_weeks
-    ]
+    plan.week_shapes = (
+        [
+            shape
+            for shape in (
+                _shape_for(week, load_model) for week in drafted.sketch_weeks
+            )
+            if shape is not None
+        ]
+        + store.concrete_week_phases(drafted.weeks)
+        + [
+            shape
+            for block in drafted.outline_blocks
+            for shape in _outline_shapes(block, load_model)
+        ]
+    )
+    horizon_ends = (
+        [w.week_start for w in drafted.weeks]
+        + [s.week_start for s in drafted.sketch_weeks]
+        + [b.through_week_start for b in drafted.outline_blocks]
+    )
     plan.horizon_end = (
         max(horizon_ends) + timedelta(days=6) if horizon_ends else None
     )
@@ -904,6 +996,36 @@ def _shape_for(sketch, load_model) -> Optional[dict]:
         "discipline_mix": discipline_mix,
         "intent_mix": intent_mix,
     }
+
+
+def _outline_shapes(block, load_model) -> List[dict]:
+    """An outline block as one stored shape per week it spans (#1043).
+
+    Stored per week so every reader that maps a week to its shape (the horizon,
+    an amendment writing that week out later, the plan's reach) keeps working,
+    and so writing one week of a block leaves the rest of it standing. Each
+    carries `outline_block_start`, which is what stops a reader taking the
+    block's typical week for a figure set for that particular week. The long run
+    rides on the block's LAST week only, because that is where the block says it
+    gets to.
+    """
+    weeks = block.weeks()
+    out: List[dict] = []
+    for week in weeks:
+        sketch = SketchedWeek(
+            week_start=week,
+            phase=block.phase,
+            target_running_distance_m=block.target_running_distance_m,
+            long_run_distance_m=block.long_run_distance_m if week == weeks[-1] else None,
+            quality_focus=block.quality_focus,
+            target_duration_s=block.target_duration_s,
+            target_walking_distance_m=block.target_walking_distance_m,
+            sessions_by_discipline=block.sessions_by_discipline,
+        )
+        shape = _shape_for(sketch, load_model)
+        shape["outline_block_start"] = block.week_start.isoformat()
+        out.append(shape)
+    return out
 
 
 def enqueue_draft(user_id, plan_id, thread_id=None, description=None) -> None:

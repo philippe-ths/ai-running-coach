@@ -168,6 +168,7 @@ function describeMix(segments: Segment[]): string {
 const PLAN_COLUMN_TEXT: Record<HorizonWeek["coverage"], string> = {
   planned: "Sessions",
   sketched: "Shape only",
+  outlined: "Outline",
   empty: "Nothing planned",
   beyond_plan: "Past the end of the plan",
 };
@@ -182,6 +183,9 @@ function coverageDetailText(coverage: HorizonWeek["coverage"]): string {
       return "Real sessions planned";
     case "sketched":
       return "Shape only, not written yet";
+    case "outlined":
+      // #1043: the block's typical week, so no figure reads as set for this week.
+      return "Outline: a typical week of this block, not this week's own";
     case "empty":
       return "Nothing planned this week";
     case "beyond_plan":
@@ -405,6 +409,10 @@ export default function HorizonChart({
                 <span className="h-2 w-2 rounded-full bg-gray-600 dark:bg-gray-300" />
               ) : week.coverage === "sketched" ? (
                 <span className="block h-2 w-2 rounded-full border border-dashed border-gray-400 dark:border-gray-500" />
+              ) : week.coverage === "outlined" ? (
+                // #1043: a dash, coarser than a sketch's dot, for a week that is
+                // one stretch of a far block rather than a shape of its own.
+                <span className="block h-0.5 w-2.5 rounded-full bg-gray-400 dark:bg-gray-500" />
               ) : week.coverage === "empty" ? (
                 <span className="h-1 w-1 rounded-full bg-gray-300 dark:bg-gray-600" />
               ) : null}

@@ -184,6 +184,11 @@ class PlannedWeekShape(BaseModel):
     # as the coach stated them. Older shapes read None, as above.
     target_duration_s: Optional[float] = Field(default=None, ge=0)
     target_walking_distance_m: Optional[float] = Field(default=None, ge=0)
+    # Set when this week is part of an OUTLINE block (#1043): the first week of
+    # that block. The figures above are then the block's typical week, not ones
+    # set for this week, and every reader says so. None for a week sketched on
+    # its own and on every shape stored before outlines existed.
+    outline_block_start: Optional[date] = None
     # discipline -> share of the week's load, 0..1. Shares, not absolutes, so a
     # mix cannot contradict the total it is a mix of.
     discipline_mix: Dict[str, float] = Field(default_factory=dict)
@@ -405,7 +410,9 @@ class HorizonWeek(BaseModel):
     # the plan never sketched it, so it must not wear the same "shape only, not
     # written yet" claim a real sketched week earns. `planned == (coverage ==
     # "planned")` always holds; see `services/schedule/horizon.py`.
-    coverage: Literal["planned", "sketched", "empty", "beyond_plan"]
+    # `outlined` (#1043) is a week inside a far OUTLINE block: its figures are
+    # the block's typical week, a lower resolution than a sketched week's own.
+    coverage: Literal["planned", "sketched", "outlined", "empty", "beyond_plan"]
     is_current: bool
     running_distance_m: Optional[float] = None
     effort_score: Optional[float] = None
@@ -452,6 +459,9 @@ class ScheduleHorizonRead(BaseModel):
     # The largest weekly load in the window; bar lengths are true proportions of
     # it, so the ramp reads honestly instead of every bar looking maxed out.
     peak_effort_score: Optional[float] = None
+    # How many weeks from this week the active plan covers, whatever window was
+    # asked for (#1043), so the screen can offer the plan's whole reach.
+    plan_reach_weeks: Optional[int] = None
 
 
 # --- goal race writes ------------------------------------------------------

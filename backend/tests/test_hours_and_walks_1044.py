@@ -179,7 +179,7 @@ def test_the_race_is_not_training_time():
     )
 
     with_race = validate_drafted_plan(
-        plan, today=TODAY, norm_weekly_s=3600, race=(SAT, 42195)
+        plan, today=TODAY, norm_weekly_s=3600, races=[(SAT, 42195)]
     )
     without = validate_drafted_plan(plan, today=TODAY, norm_weekly_s=3600)
 
@@ -194,7 +194,7 @@ def test_a_shakeout_on_race_day_is_still_training():
                        sketch_weeks=[])
 
     check = validate_drafted_plan(
-        plan, today=TODAY, norm_weekly_s=1800, race=(SAT, 42195)
+        plan, today=TODAY, norm_weekly_s=1800, races=[(SAT, 42195)]
     )
 
     assert not check.ok  # 2 h of training against a 1 h ceiling

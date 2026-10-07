@@ -389,6 +389,14 @@ def _shape_lines(
         ]
         if shape.phase:
             bits.append(f"phase {shape.phase}")
+        if shape.outline_block_start:
+            # #1043: an outline week carries its block's typical week, so it
+            # says so; read as this week's own figures, every week of the block
+            # would be written out flat.
+            bits.append(
+                "outline only (the block's typical week, set this week's own "
+                "place in it)"
+            )
         if shape.target_running_distance_m:
             bits.append(f"{shape.target_running_distance_m / 1000:.0f} km running")
         if shape.target_walking_distance_m:
@@ -557,7 +565,7 @@ async def propose_amendment(
     norm_hours = weekly_hours_norm_s(facts, today)
     rules = store.plan_rules(plan)
     races = store.list_goal_races(db, user.id, on_or_after=today)
-    race_arg = goals.validator_race(races)
+    race_args = goals.validator_races(races)
 
     failures: List[str] = []
     failure_kind = store.FAILURE_UNKNOWN
@@ -677,7 +685,7 @@ async def propose_amendment(
             starts_on=starts_on,
             norm_weekly_running_m=norm_running,
             expected_weeks=_weeks_in(start, end, starts_on),
-            race=race_arg,
+            races=race_args,
             norm_weekly_s=norm_hours,
         )
         if not check.ok:

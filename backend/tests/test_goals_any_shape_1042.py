@@ -182,7 +182,7 @@ def test_the_anchor_the_validator_and_the_prompt_name_the_same_goal(db):
     races = store.list_goal_races(db, user.id, on_or_after=TODAY)
 
     assert store.plan_target_race(db, user.id, on_or_after=TODAY).name == "Chatham 10k"
-    assert goals.validator_race(races) == (date(2026, 11, 8), 10000)
+    assert goals.validator_races(races) == [(date(2026, 11, 8), 10000)]
     assert "The block is built for Chatham 10k." in build_draft_context(db, user, today=TODAY, weeks=12)
 
 
@@ -199,16 +199,13 @@ def test_a_note_cannot_start_a_line_of_its_own_in_the_prompt(db):
 
 
 def test_the_validator_gets_a_race_week_only_for_an_exact_date(db):
-    """The volume ceiling's race-week exemption needs a real day to fall on."""
+    """The volume ceiling's race-week exemption needs a real day to fall on, and
+    since #1043 every goal on an exact date gets one, not only the target."""
     user = _user(db)
-    season = _season(db, user)
+    _season(db, user)
 
-    assert goals.validator_race(store.list_goal_races(db, user.id, on_or_after=TODAY)) is None
-
-    season["marathon"].priority = "C"
-    db.commit()
     races = store.list_goal_races(db, user.id, on_or_after=TODAY)
-    assert goals.validator_race(races) == (date(2026, 11, 8), 10000)
+    assert goals.validator_races(races) == [(date(2026, 11, 8), 10000)]
 
 
 # --- race detection only on an exact date ----------------------------------

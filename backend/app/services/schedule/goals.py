@@ -17,8 +17,8 @@ Pure: no I/O.
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Any, Dict, Optional
+from datetime import date, timedelta
+from typing import Any, Dict, List, Optional
 
 
 def ready_by(goal: Any) -> Optional[date]:
@@ -31,23 +31,44 @@ def target_goal(races: Any) -> Optional[Any]:
     goals with a date to build backwards from. An undated goal never anchors a
     plan. `races` must already be soonest first (`store.list_goal_races`).
 
-    One definition, read by the plan's anchor, the validator's race week and the
+    One definition, read by the plan's anchor, how far the plan reaches and the
     drafting prompt's wording, so the three cannot name different goals.
     """
     dated = [r for r in races if ready_by(r) is not None]
     return next((r for r in dated if r.priority == "A"), dated[0] if dated else None)
 
 
-def validator_race(races: Any) -> Optional[tuple]:
-    """The `(date, distance)` the plan validator treats as the race week, or None.
+def validator_races(races: Any) -> List[tuple]:
+    """Every `(date, distance)` the plan validator treats as a race week (#1043).
 
-    The target goal, and only when it has an exact date: a window has no day for
-    a race week to fall on.
+    Every goal with an exact date, whatever its priority: a B race between here
+    and the A goal is still a fixed distance on a fixed day that the runner chose,
+    not training volume the ceiling has a view on. Only the target used to be
+    exempt, so a booked half three months before the marathon counted its 21 km
+    against the ceiling as though the coach had prescribed it. A window has no
+    day for a race week to fall on, so it is never one.
     """
-    target = target_goal(races)
-    if target is None or target.race_date is None:
-        return None
-    return (target.race_date, target.distance_m)
+    return [
+        (r.race_date, r.distance_m) for r in races if r.race_date is not None
+    ]
+
+
+# How long after a dated goal a plan keeps going: the recovery weeks the drafting
+# prompt asks for, so the plan does not stop dead at the race.
+RECOVERY_WEEKS_AFTER_GOAL = 2
+
+
+def reach_end(goal: Any) -> Optional[date]:
+    """The last day a plan built towards this goal has to cover (#1043).
+
+    An exact date reaches past the race by the recovery weeks. A window reaches
+    its END: the event falls somewhere inside it, and a plan that stopped at the
+    start would leave the runner with no plan at the moment the goal arrives.
+    The plan still aims to be ready by `ready_by`, the window's start.
+    """
+    if goal.race_date is not None:
+        return goal.race_date + timedelta(weeks=RECOVERY_WEEKS_AFTER_GOAL)
+    return goal.window_end or goal.window_start
 
 
 def is_upcoming(goal: Any, today: date) -> bool:

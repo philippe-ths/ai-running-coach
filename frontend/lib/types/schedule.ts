@@ -239,7 +239,14 @@ export interface GoalRaceCreate {
 // must not read as "shape only, not written yet" the way a real sketched week
 // does. With no plan at all, every week is `empty`; there is nothing to be
 // beyond.
-export type HorizonCoverage = "planned" | "sketched" | "empty" | "beyond_plan";
+// `outlined` (#1043) is a week inside a far outline block: its figures are the
+// block's typical week, a lower resolution than a sketched week's own.
+export type HorizonCoverage =
+  | "planned"
+  | "sketched"
+  | "outlined"
+  | "empty"
+  | "beyond_plan";
 
 export interface HorizonWeek {
   week_start: string;
@@ -284,4 +291,7 @@ export interface ScheduleHorizon {
   // it — null (or zero) means there is nothing to scale against and every week
   // draws empty.
   peak_effort_score: number | null;
+  // How many weeks from this week the active plan covers, whatever window was
+  // asked for (#1043). Null with no plan.
+  plan_reach_weeks: number | null;
 }

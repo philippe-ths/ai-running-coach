@@ -110,26 +110,44 @@ def _hours(seconds: float) -> str:
     return f"{seconds / 3600:.1f} h"
 
 
-def committed_duration_s(sessions, race: Optional[tuple] = None) -> float:
-    """A week's committed time across every activity, the race left out.
+def committed_duration_s(sessions, races: Sequence[tuple] = ()) -> float:
+    """A week's committed time across every activity, the races left out.
 
     A session that states no time counts as nothing, the way a session with no
     distance counts as nothing towards running km: the app does not turn a
-    distance into a time with an assumed pace. The race is left out for the
+    distance into a time with an assumed pace. Each race is left out for the
     reason `_validate_volume` gives: it is the runner's fixed commitment.
     """
     committed = [s for s in sessions if s.commitment == "committed"]
     total = float(sum(s.target_duration_s or 0 for s in committed))
-    if race is None:
-        return total
-    # The race is the longest run pinned on its day; a shakeout beside it is
-    # still training.
-    on_race_day = [
-        s.target_duration_s or 0
-        for s in committed
-        if s.discipline == "run" and s.window_start == s.window_end == race[0]
-    ]
-    return total - max(on_race_day, default=0)
+    for race_day in {race[0] for race in races}:
+        # The race is the longest run pinned on its day; a shakeout beside it is
+        # still training.
+        on_race_day = [
+            s.target_duration_s or 0
+            for s in committed
+            if s.discipline == "run" and s.window_start == s.window_end == race_day
+        ]
+        total -= max(on_race_day, default=0)
+    return total
+
+
+def race_distance_in_week(
+    races: Sequence[tuple], week_start_date: date, starts_on: int = MONDAY
+) -> float:
+    """The running the runner's own races put in this week, in metres (#1043).
+
+    Every dated goal counts, not only the one the plan is built for: a B race on
+    the way to the A goal is as much the runner's fixed commitment as the A race
+    is, and counting it as training left its week judged as a normal one.
+    """
+    return float(
+        sum(
+            distance or 0.0
+            for day, distance in races
+            if week_start(day, starts_on) == week_start_date
+        )
+    )
 
 
 @dataclass
@@ -174,19 +192,27 @@ def validate_drafted_plan(
     starts_on: int = MONDAY,
     norm_weekly_running_m: Optional[float] = None,
     horizon_weeks: Optional[int] = None,
-    race: Optional[tuple] = None,
+    races: Sequence[tuple] = (),
     norm_weekly_s: Optional[float] = None,
+    reach_goal: Optional[tuple] = None,
 ) -> PlanCheck:
     """Everything that must hold before a drafted plan reaches the store.
 
-    `race` is `(date, distance_m)` for the goal race, when one falls inside the
-    plan. It exists for the volume ceiling alone: see `_validate_volume`.
+    `races` is every `(date, distance_m)` the runner holds a dated goal on
+    (`goals.validator_races`). It exists for the volume ceiling and for keeping
+    a race out of an outline block.
+
+    `reach_goal` is `(name, ready_by)` for the goal the plan is built towards,
+    when that date falls inside the plan's reach (#1043). A plan that stops
+    before it is a plan that never arrives at the thing it is for.
     """
     check = PlanCheck()
     current_week = week_start(today, starts_on)
     last_allowed_week = current_week + timedelta(
         days=7 * ((horizon_weeks or 0) + HORIZON_SLACK_WEEKS - 1)
     )
+    ceilings = volume_ceilings(norm_weekly_running_m)
+    blocks = list(getattr(plan, "outline_blocks", None) or [])
 
     def _within_horizon(week_start_date: date, label: str) -> None:
         if horizon_weeks and week_start_date > last_allowed_week:
@@ -194,52 +220,56 @@ def validate_drafted_plan(
                 f"{label} {week_start_date} is past the {horizon_weeks}-week horizon"
             )
 
-    if not plan.weeks and not plan.sketch_weeks:
+    def _place(week_start_date: date, label: str) -> None:
+        """The checks every week of any resolution shares: boundary, past, reach."""
+        if week_start_date != week_start(week_start_date, starts_on):
+            check.fail(
+                f"{label} {week_start_date} does not start on the runner's week boundary"
+            )
+        if week_start_date < current_week:
+            check.fail(f"{label} {week_start_date} is in the past")
+        _within_horizon(week_start_date, label)
+
+    if not plan.weeks and not plan.sketch_weeks and not blocks:
         check.fail("the plan contains no weeks at all")
 
     seen_weeks = set()
     for week in plan.weeks:
-        if week.week_start != week_start(week.week_start, starts_on):
-            check.fail(
-                f"week {week.week_start} does not start on the runner's week boundary"
-            )
-        if week.week_start < current_week:
-            check.fail(f"week {week.week_start} is in the past")
+        _place(week.week_start, "week")
         if week.week_start in seen_weeks:
             check.fail(f"week {week.week_start} appears twice")
         seen_weeks.add(week.week_start)
-        _within_horizon(week.week_start, "week")
 
         _validate_sessions(check, week, today, starts_on)
         _validate_rules_are_satisfiable(check, plan, week, starts_on)
-        _validate_volume(check, week, norm_weekly_running_m, race=race, starts_on=starts_on)
+        _validate_volume(
+            check, week, norm_weekly_running_m, races=races, starts_on=starts_on
+        )
         _validate_hours(
-            check, week.week_start, committed_duration_s(week.sessions, race), norm_weekly_s
+            check,
+            week.week_start,
+            committed_duration_s(week.sessions, races),
+            norm_weekly_s,
         )
 
     for sketch in plan.sketch_weeks:
-        if sketch.week_start != week_start(sketch.week_start, starts_on):
-            check.fail(
-                f"sketched week {sketch.week_start} does not start on the runner's "
-                "week boundary"
-            )
-        if sketch.week_start < current_week:
-            check.fail(f"sketched week {sketch.week_start} is in the past")
+        _place(sketch.week_start, "sketched week")
         if sketch.week_start in seen_weeks:
             check.fail(
                 f"week {sketch.week_start} is given as both concrete and sketched"
             )
         seen_weeks.add(sketch.week_start)
-        _within_horizon(sketch.week_start, "sketched week")
-        ceilings = volume_ceilings(norm_weekly_running_m)
-        if (
-            ceilings
-            and sketch.target_running_distance_m
-            and sketch.target_running_distance_m > ceilings[1]
-        ):
+        # A race in a sketched week is the runner's, not the coach's, exactly as
+        # in a concrete one, so it comes off before the ceiling is applied.
+        training_m = max(
+            0.0,
+            (sketch.target_running_distance_m or 0.0)
+            - race_distance_in_week(races, sketch.week_start, starts_on),
+        )
+        if ceilings and training_m > ceilings[1]:
             check.fail(
                 f"sketched week {sketch.week_start} plans "
-                f"{sketch.target_running_distance_m / 1000:.0f} km of running against "
+                f"{training_m / 1000:.0f} km of running against "
                 f"a typical {norm_weekly_running_m / 1000:.0f} km",
                 code=VOLUME_CEILING,
             )
@@ -250,6 +280,48 @@ def validate_drafted_plan(
             norm_weekly_s,
             sketched=True,
         )
+
+    race_weeks = {week_start(day, starts_on): day for day, _ in races}
+    for block in blocks:
+        label = f"outline block {block.phase!r} ({block.week_start}..{block.through_week_start})"
+        _place(block.week_start, label)
+        _within_horizon(block.through_week_start, label)
+        for covered in block.weeks():
+            if covered in seen_weeks:
+                check.fail(f"{label} overlaps week {covered}, which is already given")
+            seen_weeks.add(covered)
+            if covered in race_weeks:
+                # A race inside a block would be averaged into a typical week, so
+                # its taper and its recovery would exist nowhere. A checkpoint is
+                # a week of its own.
+                check.fail(
+                    f"{label} swallows the race on {race_weeks[covered]}; give that "
+                    "race's week as its own sketched week and end the block before it"
+                )
+        # A block states a typical week, so it is held to the sketched bound.
+        if (
+            ceilings
+            and block.target_running_distance_m
+            and block.target_running_distance_m > ceilings[1]
+        ):
+            check.fail(
+                f"{label} plans {block.target_running_distance_m / 1000:.0f} km of "
+                f"running a week against a typical "
+                f"{norm_weekly_running_m / 1000:.0f} km",
+                code=VOLUME_CEILING,
+            )
+        _validate_hours(
+            check, block.week_start, block.target_duration_s, norm_weekly_s, sketched=True
+        )
+
+    if reach_goal is not None and seen_weeks:
+        name, ready_by = reach_goal
+        goal_week = week_start(ready_by, starts_on)
+        if max(seen_weeks) < goal_week:
+            check.fail(
+                f"the plan stops at the week of {max(seen_weeks)}, before {name} "
+                f"({ready_by}); it has to reach that week"
+            )
 
     return check
 
@@ -263,7 +335,7 @@ def validate_amendment(
     starts_on: int = MONDAY,
     norm_weekly_running_m: Optional[float] = None,
     expected_weeks: Optional[Sequence[date]] = None,
-    race: Optional[tuple] = None,
+    races: Sequence[tuple] = (),
     norm_weekly_s: Optional[float] = None,
 ) -> PlanCheck:
     """The same coherence gate, applied to a plan being amended in part (#981).
@@ -366,14 +438,14 @@ def validate_amendment(
                 for row in surviving
                 if row.discipline == "run" and row.commitment == "committed"
             )
-            # The race is excluded here for the same reason it is excluded from
-            # the draft's ceiling: it is the runner's own fixed commitment, not
-            # a training volume this gate has a view on. Two ceilings that
-            # disagreed about the same week would be a switch with two owners.
-            if race is not None:
-                race_date, race_distance_m = race
-                if week_start(race_date, starts_on) == week.week_start:
-                    planned = max(0.0, planned - float(race_distance_m or 0.0))
+            # The races are excluded here for the same reason they are excluded
+            # from the draft's ceiling: each is the runner's own fixed
+            # commitment, not a training volume this gate has a view on. Two
+            # ceilings that disagreed about the same week would be a switch with
+            # two owners.
+            planned = max(
+                0.0, planned - race_distance_in_week(races, week.week_start, starts_on)
+            )
             if planned > ceilings[0]:
                 check.fail(
                     f"week {week.week_start} would hold {planned / 1000:.0f} km of "
@@ -386,7 +458,7 @@ def validate_amendment(
         _validate_hours(
             check,
             week.week_start,
-            committed_duration_s(list(week.sessions) + surviving, race),
+            committed_duration_s(list(week.sessions) + surviving, races),
             norm_weekly_s,
         )
 
@@ -508,7 +580,7 @@ def _validate_volume(
     week,
     norm_weekly_running_m: Optional[float],
     *,
-    race: Optional[tuple] = None,
+    races: Sequence[tuple] = (),
     starts_on: int = MONDAY,
 ) -> None:
     """An absurdity ceiling against the runner's OWN norm, or no check at all.
@@ -516,7 +588,7 @@ def _validate_volume(
     Abstains when there is no norm: a runner with no history is exactly the
     person a population figure would serve worst.
 
-    THE RACE DOES NOT COUNT TOWARDS IT. A goal race is the runner's own decision
+    THE RACES DO NOT COUNT TOWARDS IT. A goal race is the runner's own decision
     and a fixed distance on a fixed day; it is not a coaching choice this gate
     gets a view on. For a half-marathon runner whose typical week is 21 km the
     race alone IS a typical week, so counting it left race week over the ceiling
@@ -537,10 +609,9 @@ def _validate_volume(
         for session in week.sessions
         if session.discipline == "run" and session.commitment == "committed"
     )
-    if race is not None:
-        race_date, race_distance_m = race
-        if week_start(race_date, starts_on) == week.week_start:
-            planned = max(0.0, planned - float(race_distance_m or 0.0))
+    planned = max(
+        0.0, planned - race_distance_in_week(races, week.week_start, starts_on)
+    )
     if planned > ceilings[0]:
         check.fail(
             f"week {week.week_start} plans {planned / 1000:.0f} km of running "

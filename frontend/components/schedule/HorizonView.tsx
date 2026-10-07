@@ -99,6 +99,20 @@ export default function HorizonView({
     load(weeks);
   }, [weeks, load]);
 
+  // #1043: a plan built to a goal months away reaches past the fixed ranges, so
+  // its whole reach is offered as one more range. Read off the payload, so it
+  // appears once the server has said how far the plan goes.
+  const reach = horizon?.plan_reach_weeks ?? null;
+  const longestFixed = RANGES[RANGES.length - 1].weeks;
+  const rangeOptions: { value: number; label: string; name: string }[] = RANGES.map((r) => ({
+    value: r.weeks,
+    label: r.label,
+    name: r.name,
+  }));
+  if (reach !== null && reach > longestFixed) {
+    rangeOptions.push({ value: reach, label: "To goal", name: "The whole plan, to your goal" });
+  }
+
   // Empty is "no week carries any load", not "no plan": a plan whose weeks are
   // all shape-less would otherwise draw twelve blank rows and a scale of zero.
   const isEmpty =
@@ -109,7 +123,7 @@ export default function HorizonView({
       <div className="flex flex-wrap items-center gap-3">
         <SegmentedControl
           label="Horizon range"
-          options={RANGES.map((r) => ({ value: r.weeks, label: r.label, name: r.name }))}
+          options={rangeOptions}
           value={weeks}
           onChange={setWeeks}
         />
@@ -138,7 +152,11 @@ export default function HorizonView({
           </h2>
           <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
             {horizon.has_plan
-              ? "Bar = the week's training load, against your biggest week. Concrete for the next few weeks, sketched beyond."
+              ? `Bar = the week's training load, against your biggest week. Concrete for the next few weeks, sketched beyond${
+                  horizon.weeks.some((w) => w.coverage === "outlined")
+                    ? ", and outlined block by block further out"
+                    : ""
+                }.`
               : "Bar = the week's training load, against your biggest week. You have no plan yet, so this is the shape of the weeks ahead as it stands."}
           </p>
 

@@ -50,6 +50,7 @@ A `TrainingPlan` is the plan container: a nullable `goal_race_id`, a `horizon_en
 Its `status` is `drafting`, `active`, `superseded`, or `failed`, with at most one active plan per user held by the writer rather than a DB constraint.
 A `PlannedWeekShape` also carries `long_run_distance_m` and `quality_focus`, so a sketched week states the progression it was agreed on rather than only a weekly total.
 A `PlannedWeekShape` also carries `target_duration_s` (the week's time across every activity) and `target_walking_distance_m`.
+An outline block is stored as one `PlannedWeekShape` per week carrying `outline_block_start`, read by the horizon as coverage `outlined` and by `get_training_plan` as grouped `outline_blocks`.
 A concrete week's phase is kept as a phase-only `week_shapes` entry, since `PlannedSession` rows have nowhere to hold it.
 `superseded_at` records when a plan stopped being current, written only by `activate_plan` and cleared on the row it activates, so a superseded plan stays reachable and restorable.
 A `PlannedSession` is the schedule's concrete unit, described along three independent axes: PLACEMENT, COMMITMENT (`committed` or `suggested`), and DISCIPLINE (`run`, `walk`, `bike`, `strength`, `row`, `other`).
@@ -131,7 +132,8 @@ A switch that block does not declare runs at its CODE default, which is False fo
 The orthogonal coach-input switch `COACH_SCHEDULE_ENABLED` (default True) drops the `right_now.schedule` pack section while the schedule screen keeps working.
 `SCHEDULE_HORIZON_WEEKS` (default 12) and `SCHEDULE_CONCRETE_WEEKS` (default 3) are inputs to the drafting prompt as well as the horizon read.
 A drafted plan whose goal race falls inside the horizon is written as concrete sessions all the way to the race, bounded by the drafted contract's six-week concrete cap.
-`plan_validator` bounds each week's committed running km and, via `hours_ceilings`, its committed time across every activity, both against the runner's own typical week and with the race left out.
+A drafted plan reaches its target goal's `goals.reach_end`, capped at `draft.MAX_REACH_WEEKS` (40), and past `SCHEDULE_HORIZON_WEEKS` its weeks are `OutlineBlock`s rather than week-by-week sketches.
+`plan_validator` bounds each week's committed running km and, via `hours_ceilings`, its committed time across every activity, both against the runner's own typical week and with every exact-dated goal race left out.
 `COACH_PERIOD_REPORT_ENABLED` (default True) gates every `/api/coach/period-reports` route with 503 and hides the frontend entry point.
 `EXCHANGE_STAGE2_DELAY_SECONDS` (default 10800) is the fuller-turn timer and `EXCHANGE_REPLY_WINDOW_SECONDS` (default 86400) is how long a reply still triggers the fuller turn early; both are inert under a single-shot prompt.
 `RQ_JOB_TIMEOUT_SECONDS` (default 600) is the RQ death-penalty ceiling, applied as the queue `default_timeout` and as explicit `job_timeout=` on `queue.enqueue_in` calls, because a two-stage generation runs past RQ's 180s default.
@@ -263,14 +265,12 @@ Backend unit and policy coverage exists for analysis, intervals, the policy vali
 Structural route sweeps walk the route table through one shared enumeration, `backend/tests/_route_table.py`, because a sweep over an empty enumeration passes silently rather than erroring.
 `assert_enumeration_is_not_vacuous` proves the enumeration against the app's own OpenAPI document plus a hard route-count floor, and `tests/test_route_table.py` is the guard on that guard.
 `tests/test_route_ownership_802.py` fails when any route taking an owned-resource path parameter does not resolve it through `deps.py`.
-`tests/test_anthropic_sdk_binding_1023.py` drives `llm.py` through the real `anthropic` SDK over an `httpx2` mock transport, so a call-site signature break fails CI.
 Frontend regression runs via `npm run test`, which invokes `next lint` then `next build`; there is no Jest or component test runner.
 Frontend smoke runs via `npm run smoke` (`frontend/scripts/smoke.mjs`), booting a mock API and a Next dev server on dynamically chosen free ports and verifying core routes load.
 `make alembic-check` brings a throwaway Postgres to head then runs `alembic check`, catching the model/migration drift `make backend-test` is structurally blind to because the suite builds its schema with `create_all`.
 The eval harness scores each report from its stored `report` and `context_pack` against sixteen rubric assertions, aggregates a scorecard scoped to the current `(prompt_id, schema_version)`, and flags regressions across versions.
 It scores the fuller turn only: opener-only rows are skipped and counted, never scored.
 `make diagram-check` guards both generated diagrams against the declarations they were produced from, covering pack sections, `DerivedMetric` coverage, kill-switch and prompt parity, the nested pack key set, generator call signatures, and the chat turn's tools, skills, action kinds, screen keys, and prompt slots.
-`backend/tests/test_diagram_drift.py` tests that wiring itself, because every comparison is a pure function that would stay green if the guard simply stopped calling it.
 CI runs `.github/workflows/deploy.yml` on push and pull requests to `main`, with `backend-test`, `frontend-test`, `alembic-check`, and a push-only `post-deploy-verify` job.
 Major gap: no automated frontend unit or component tests beyond build-time lint and smoke route checks.
 Major gap: no end-to-end test that exercises a real Strava-to-coach-report flow.

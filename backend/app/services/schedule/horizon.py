@@ -2,7 +2,8 @@
 
 Concrete for about three weeks, shape only beyond — a settled design decision.
 Which is which is DERIVED, never stored: a week with real `planned_sessions` rows
-is `planned`, a week with only a `PlannedWeekShape` is sketched. A stored flag
+is `planned`, a week with only a `PlannedWeekShape` is sketched, or `outlined`
+when that shape is one week of a far outline block (#1043). A stored flag
 could claim a week was planned after its sessions were removed; a derivation
 cannot.
 
@@ -210,7 +211,9 @@ def build_horizon(
                     week_start=current,
                     phase=shape.phase,
                     planned=False,
-                    coverage="sketched",
+                    coverage=(
+                        "outlined" if shape.outline_block_start else "sketched"
+                    ),
                     is_current=current == first_week,
                     running_distance_m=shape.target_running_distance_m,
                     effort_score=shape.target_effort_score,
@@ -259,4 +262,9 @@ def build_horizon(
         ],
         has_plan=plan is not None,
         peak_effort_score=max(loads) if loads else None,
+        plan_reach_weeks=(
+            min(MAX_HORIZON_WEEKS, (last_covered_week - first_week).days // 7 + 1)
+            if last_covered_week is not None and last_covered_week >= first_week
+            else None
+        ),
     )
