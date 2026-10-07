@@ -316,6 +316,18 @@ SCHEDULE_V2 = Clause(
 )
 
 
+# #1032: a race, a best effort, a record — the session the runner will remember. Keyed
+# on PromptFeature.NOTABLE, because it reads the this_run.notable signal. It redefines
+# where the verdict starts rather than adding a rule beside DELIVERY's "lead with your
+# verdict": that verdict, unaided, scored a lifetime-best half marathon against its goal
+# time and opened with the miss.
+NOTABLE = Clause(
+    "notable",
+    """- Some sessions are not like the others, and `this_run.notable` says which and why: a race, an effort Strava ranks among their fastest ever, or a clear record against their own past year. When it is there, it is what the session was, so it is where my verdict starts: what they did against their own history first, against a goal or a guideline second. A race costs what racing costs (effort at the limit, heart rate near max, a spike in load), so I talk about the result and the recovery, not about drift or load as warning signs. "Fastest 10K you have ever run, by Strava's count, and over a minute inside your old best; sub-45 is one more block away" opens a race. "45:52. Target was sub-45." scores it like a missed workout. Where it says a margin is not known, any comparison I make is approximate, and I say so.
+""",
+)
+
+
 # ----------------------------------------------------------------------------
 # The intervals clause. Exactly one variant sits between MISREAD_NUMBERS and
 # PERCEIVED_EFFORT: the two differ only in whether the recorded-laps rule
@@ -504,6 +516,15 @@ PROSE_VARIANTS: dict[str, frozenset[ProseVariant]] = {
             ProseVariant.SCHEDULE_NO_INVENTED_NUMBERS,
         }
     ),
+    # #1032: v12 = v11's prose plus the notable clause, which it gets by carrying
+    # PromptFeature.NOTABLE. Ships INERT.
+    "coach_message_lean_grouped_v12": frozenset(
+        {
+            ProseVariant.PERSONALISATION,
+            ProseVariant.DEPTH_EARNED,
+            ProseVariant.SCHEDULE_NO_INVENTED_NUMBERS,
+        }
+    ),
 }
 
 # The live lineage, oldest first.
@@ -542,6 +563,8 @@ def fuller_clauses(prompt_id: str) -> tuple[Clause, ...]:
             if ProseVariant.SCHEDULE_NO_INVENTED_NUMBERS in variants
             else SCHEDULE
         )
+    if PromptFeature.NOTABLE in features:
+        disposition.append(NOTABLE)
 
     intervals = (
         INTERVALS_ANY_SESSION

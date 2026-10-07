@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, undefer
 
 from app.models import Activity, ActivityStream, StravaAccount
 from app.services.analysis.intervals import merge_preserved_laps
+from app.services.best_efforts import merge_preserved_best_efforts
 from app.services.strava_ingestion.auth import ensure_valid_access_token
 from app.services.strava_ingestion.port import StravaPort
 
@@ -49,6 +50,8 @@ def upsert_activity(db: Session, raw: dict, user_id) -> Activity:
     # Preserve recorded laps across a lap-less re-sync (#170): the interval logic
     # owns which lap source is authoritative, so the rule lives there.
     raw = merge_preserved_laps(existing.raw_summary if existing else None, raw)
+    # The same for Strava's best efforts and their PB ranks (#1032).
+    raw = merge_preserved_best_efforts(existing.raw_summary if existing else None, raw)
 
     activity_data = {
         "user_id": user_id,

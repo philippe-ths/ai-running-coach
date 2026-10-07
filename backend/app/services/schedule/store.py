@@ -417,6 +417,17 @@ def list_goal_races(
     return query.order_by(GoalRace.race_date.asc()).all()
 
 
+def goal_races_on(db: Session, user_id: uuid.UUID, day: date) -> List[GoalRace]:
+    """The runner's goal races on one calendar day: the candidates an activity on
+    that day may BE (#1032; the match itself is the classifier's call)."""
+    return (
+        db.query(GoalRace)
+        .filter(GoalRace.user_id == user_id, GoalRace.race_date == day)
+        .order_by(GoalRace.created_at.asc())
+        .all()
+    )
+
+
 def plan_target_race(
     db: Session, user_id: uuid.UUID, *, on_or_after: date
 ) -> Optional[GoalRace]:

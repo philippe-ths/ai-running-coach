@@ -19,14 +19,24 @@ FLAG_POINTS = {
     "illness_or_extreme_fatigue": 4,
 }
 
+# Flags a race is expected to raise, so they score nothing on one (#1032).
+RACE_EXPECTED_FLAGS = frozenset({"load_spike"})
+
 
 def compute_risk_score(
     flags: List[str],
     check_in: Optional[Dict[str, Any]] = None,
     training_context: Optional[Dict[str, Any]] = None,
+    *,
+    is_race: bool = False,
 ) -> Dict[str, Any]:
     """
     Compute a deterministic risk score from flags, check-in data, and training context.
+
+    On a race (#1032) a `load_spike` scores nothing: racing is the one session where
+    the spike is the plan, so reading it as a warning would turn a race into a red
+    day. The flag itself stays (the load and the recovery it asks for are real) and
+    the reason is kept, marked as a race, so the zero is explained rather than silent.
 
     Returns {"risk_level": "green"|"amber"|"red", "risk_score": int, "risk_reasons": [str]}
     """
@@ -36,6 +46,9 @@ def compute_risk_score(
     # Flag-based points
     for flag in flags:
         if flag in FLAG_POINTS:
+            if is_race and flag in RACE_EXPECTED_FLAGS:
+                reasons.append(f"{flag} (race, expected: +0)")
+                continue
             pts = FLAG_POINTS[flag]
             points += pts
             reasons.append(f"{flag} (+{pts})")

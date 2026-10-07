@@ -324,6 +324,12 @@ class Settings(BaseSettings):
     # plan when it writes. Off => the `right_now.schedule` section drops
     # byte-stably and the runner's schedule keeps working exactly as before.
     COACH_SCHEDULE_ENABLED: bool = True
+    # #1032: the coach input telling it why an activity stands out (a race, a
+    # personal best, a record against the runner's own past year). Off => the
+    # `this_run.notable` section drops byte-stably; race detection itself, and the
+    # rule that a race's load spike is not scored as risk, live in analysis and
+    # are unaffected. No UI surface, so it is not in `coach_feature_flags`.
+    COACH_NOTABLE_ENABLED: bool = True
     SCHEDULE_HORIZON_WEEKS: int = 12
     SCHEDULE_CONCRETE_WEEKS: int = 3
 

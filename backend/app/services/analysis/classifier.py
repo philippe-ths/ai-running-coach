@@ -16,9 +16,10 @@ only `effort` and `is_race`. A human-readable headline (e.g. "Long run (tempo)")
 is composed from the axes at read time by `compose_headline`.
 """
 
+import re
 from dataclasses import dataclass
 from statistics import median
-from typing import List, Optional
+from typing import Any, List, Optional, Sequence
 
 from app.models import Activity
 
@@ -129,10 +130,59 @@ def _compute_duration_class(activity: Activity, run_history_durations: List[int]
     return "standard"
 
 
-def _detect_race(activity: Activity) -> bool:
-    name = (activity.name or "").lower()
-    intent = (activity.user_intent or "").lower()
-    return "race" in name or "race" in intent
+# "race" or "racing" as a word: a race now zeroes the load-spike risk and is coached as
+# a race, so "Embrace the hills", "Terrace loop" and a "race-pace" workout must not be.
+_RACE_WORD = re.compile(r"\brac(e|es|ing)\b(?![\s-]*pace)", re.IGNORECASE)
+
+# Strava's own race marker (`workout_type`): 1 on a run, 11 on a ride.
+_STRAVA_RACE_WORKOUT_TYPES = frozenset({1, 11})
+
+# The coarse Strava types of the run family, trail runs included (they arrive as
+# type "Run" with sport_type "TrailRun"). A goal race is a run, so only these can
+# be one.
+_RUN_FAMILY_TYPES = frozenset({"run", "virtualrun"})
+
+# How far a run's recorded distance may sit from the goal race's distance and still
+# be that race (#1032). Courses run long, GPS reads short, and trail races are
+# approximate; a warm-up or a shakeout jog on race morning falls short of it.
+_GOAL_RACE_DISTANCE_RATIO = (0.9, 1.25)
+
+
+def matching_goal_race(activity: Activity, goal_races: Sequence[Any]) -> Optional[Any]:
+    """The runner's goal race this run IS, or None (#1032).
+
+    ``goal_races`` are the runner's goal races on this activity's local day; the
+    caller resolves them (analysis has no business querying the schedule). A run
+    matches when its distance is within ``_GOAL_RACE_DISTANCE_RATIO`` of the race's.
+    """
+    if (activity.type or "").lower() not in _RUN_FAMILY_TYPES:
+        return None
+    distance = activity.distance_m or 0
+    lo, hi = _GOAL_RACE_DISTANCE_RATIO
+    for race in goal_races or ():
+        race_distance = getattr(race, "distance_m", None) or 0
+        if race_distance > 0 and lo <= distance / race_distance <= hi:
+            return race
+    return None
+
+
+def race_source(activity: Activity, goal_races: Sequence[Any] = ()) -> Optional[str]:
+    """Why this activity counts as a race, or None when it does not (#1032).
+
+    Before #1032 only the word "race" in the name or stated intent counted, so a
+    runner who neither renamed the activity nor tagged it had no race at all: the
+    owner's 662 activities held none, their goal half marathon included. The
+    runner's own schedule is the strongest witness, so it is checked first.
+    """
+    if matching_goal_race(activity, goal_races) is not None:
+        return "goal_race"
+    if _RACE_WORD.search(activity.user_intent or ""):
+        return "stated_intent"
+    if (activity.raw_summary or {}).get("workout_type") in _STRAVA_RACE_WORKOUT_TYPES:
+        return "strava_marked"
+    if _RACE_WORD.search(activity.name or ""):
+        return "activity_name"
+    return None
 
 
 def classify_activity(
@@ -144,6 +194,7 @@ def classify_activity(
     has_interval_structure: bool = False,
     avg_hr: Optional[float] = None,
     max_hr: Optional[int] = None,
+    goal_races: Sequence[Any] = (),
 ) -> Classification:
     """
     Compute the classification axes for an activity.
@@ -156,7 +207,7 @@ def classify_activity(
         avg_hr if avg_hr is not None else activity.avg_hr,
         max_hr if max_hr is not None else activity.max_hr,
     )
-    is_race = _detect_race(activity)
+    is_race = race_source(activity, goal_races) is not None
 
     if not _is_run(activity):
         # Non-run cardio/strength: intensity timeline only for this iteration.

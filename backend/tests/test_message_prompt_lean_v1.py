@@ -93,6 +93,9 @@ def test_lean_v1_has_full_capability_parity_with_v14():
         # same reason as BODY — lean_v1 predates it. Its named guard is
         # tests/test_schedule_pack_section.py.
         _F.SCHEDULE,
+        # #1032: NOTABLE likewise (grouped_v12). Its named guard is
+        # tests/test_notable_pack_section.py.
+        _F.NOTABLE,
     }
     assert features_for(LEAN) == every_additive
 

@@ -214,6 +214,10 @@ INTENSITY_MIX_PROMPT_IDS = ids_with(PromptFeature.INTENSITY_MIX)
 # (`right_now.schedule`) — what this session was FOR and what it sets up.
 SCHEDULE_PROMPT_IDS = ids_with(PromptFeature.SCHEDULE)
 
+# #1032: prompt ids that carry the NOTABLE clause AND the `this_run.notable` signal
+# (why this activity stands out for this runner).
+NOTABLE_PROMPT_IDS = ids_with(PromptFeature.NOTABLE)
+
 # #742: prompt ids that carry the BODY clause AND the nested `profile.body` signal
 # (the runner's stated build). Gates both, so under every prior prompt the profile
 # section keeps its pre-#742 shape byte-for-byte.
@@ -355,6 +359,11 @@ def is_body_prompt(prompt_id: Optional[str]) -> bool:
 def is_schedule_prompt(prompt_id: Optional[str]) -> bool:
     """True when the active prompt reads the runner's plan (#830)."""
     return has_feature(prompt_id, PromptFeature.SCHEDULE)
+
+
+def is_notable_prompt(prompt_id: Optional[str]) -> bool:
+    """True when the active prompt reads why this activity stands out (#1032)."""
+    return has_feature(prompt_id, PromptFeature.NOTABLE)
 
 
 def is_intensity_mix_prompt(prompt_id: Optional[str]) -> bool:

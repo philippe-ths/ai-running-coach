@@ -286,6 +286,14 @@ def drop_recent_weeks_nulls(rw: Dict[str, Any], _data: Dict[str, Any]) -> None:
     strip_nulls_in_place(rw)
 
 
+def drop_notable_nulls(notable: Dict[str, Any], _data: Dict[str, Any]) -> None:
+    """#1032: a notable activity rarely has all three kinds of reason (a race, a best
+    effort, a record), and a best effort without a known previous best carries a note
+    instead of a margin. Drop the absent leaves so the section carries only what
+    applies. Re-parse stays safe: every dropped field defaults to None."""
+    strip_nulls_in_place(notable)
+
+
 def drop_intensity_read_nulls(ir: Dict[str, Any], _data: Dict[str, Any]) -> None:
     """ADR 0026 Slice 3 (#673): make the intensity_read section's sparse fields cost
     nothing when absent. Drop the null leaves (a no-HR run's `band`, a no-zone run's
@@ -717,6 +725,24 @@ COACH_SIGNALS: Tuple[CoachSignal, ...] = (
             ),
         ),
         why="#830",
+    ),
+    CoachSignal(
+        field="notable",
+        group="this_run",
+        gate_feature=_F.NOTABLE,
+        droppable=True,
+        nested_drop=drop_notable_nulls,
+        adapters=(ReadTimeAdapter("notable", _F.NOTABLE, "COACH_NOTABLE_ENABLED"),),
+        kill_switches=(
+            KillSwitch(
+                "COACH_NOTABLE_ENABLED",
+                "drop",
+                "read_time_signals.gather",
+                "the coach stops being told why an activity stands out; race "
+                "detection and the race risk rule in analysis are unaffected",
+            ),
+        ),
+        why="#1032 (parent #1035)",
     ),
     CoachSignal(
         field="safety_rules",

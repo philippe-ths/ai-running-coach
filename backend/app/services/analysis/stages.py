@@ -48,6 +48,9 @@ PRELOADED_INPUTS = frozenset(
         # phase. It is what finally feeds `_extract_planned_workout`, a
         # placeholder that returned None from the beginning of the project.
         "planned_session",
+        # #1032: the runner's goal races on this activity's day, the witness that
+        # a run was a race when the runner neither renamed nor tagged it.
+        "goal_races_on_day",
         "history",
         "streams_dict",
         "check_in",
@@ -122,6 +125,8 @@ class StageContext:
     # and because "no plan" is the honest reading of its absence rather than a
     # missing argument.
     planned_session: Any = None
+    # #1032. Defaulted for the same reason: no goal race on the day is the usual case.
+    goal_races_on_day: Any = ()
     scratch: dict[str, Any] = field(default_factory=dict)
 
     # Set by run_stages for the duration of one stage: the names that stage
@@ -229,6 +234,7 @@ ANALYSIS_STAGES: tuple[Stage, ...] = (
             "time_in_zones",
             "pace_variability",
             "probed_structure",
+            "goal_races_on_day",
         ),
         writes=("effort", "duration_class", "structure", "is_hilly", "is_race"),
     ),
@@ -287,7 +293,7 @@ ANALYSIS_STAGES: tuple[Stage, ...] = (
     Stage(
         name="risk",
         adapter="_stage_risk",
-        reads=("check_in", "flags", "training_context"),
+        reads=("check_in", "flags", "training_context", "is_race"),
         writes=("risk_level", "risk_score", "risk_reasons"),
     ),
     Stage(
