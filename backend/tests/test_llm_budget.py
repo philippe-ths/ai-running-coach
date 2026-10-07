@@ -32,8 +32,15 @@ def test_cost_usd_matches_price_table():
     assert budget.cost_usd("claude-opus-4-8", 0, 1_000_000) == pytest.approx(25.0)
     # Sonnet: $3/$15.
     assert budget.cost_usd("claude-sonnet-4-6", 1_000_000, 1_000_000) == pytest.approx(18.0)
-    # Unknown model prices as Opus (conservative over-count).
-    assert budget.cost_usd("mystery-model", 1_000_000, 0) == pytest.approx(5.0)
+    # Unknown model prices at the most expensive known tier (conservative over-count).
+    assert budget.cost_usd("mystery-model", 1_000_000, 0) == pytest.approx(10.0)
+    # 5.5 prices (platform.claude.com/docs/en/about-claude/pricing, 2026-10-07).
+    assert budget.cost_usd("claude-opus-5-5", 1_000_000, 1_000_000) == pytest.approx(24.0)
+    assert budget.cost_usd("claude-sonnet-5-5", 1_000_000, 1_000_000) == pytest.approx(12.0)
+    # A dated snapshot id prices as its family, not as an unknown model.
+    assert budget.cost_usd("claude-haiku-4-5-20251001", 1_000_000, 1_000_000) == pytest.approx(6.0)
+    # Opus 5.5 reads cache at 0.05x.
+    assert budget.cost_usd("claude-opus-5-5", 0, 0, cache_read_input_tokens=1_000_000) == pytest.approx(0.2)
 
 
 def test_cost_usd_prices_cache_tokens():

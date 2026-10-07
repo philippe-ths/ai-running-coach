@@ -10,6 +10,15 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx2
 
+from app.services.coach.model_capabilities import (
+    accepts_forced_tool_choice,
+    chat_thinking_kwargs,
+    forced_tool_instruction,
+    thinking_headroom,
+    sampling_kwargs,
+    tool_choice_kwargs,
+)
+
 logger = logging.getLogger(__name__)
 
 # Cap any single Anthropic call. The SDK default is 600s; the RQ worker
@@ -47,17 +56,6 @@ _MESSAGE_TIMEOUT_SECONDS = 180.0
 # if per-report cost matters more.
 _COACH_EFFORT = "high"
 
-
-def _sampling(temperature: float) -> Dict[str, Any]:
-    """The request-body field that keeps a call site's sampling temperature.
-
-    `anthropic` 1.0.0 removed `temperature` from `messages.create()` and
-    `.stream()`, and a keyword either one does not accept is a TypeError on every
-    call (#966). The API still honours it on the models these lanes run, so it
-    travels in `extra_body` and each lane keeps the determinism it was tuned at
-    (#1023). A model that rejects it answers 400, the same as before 1.x.
-    """
-    return {"extra_body": {"temperature": temperature}}
 
 # Initial backoff before the single retry on transient failures.
 _RETRY_BACKOFF_SECONDS = 1.0
@@ -310,17 +308,32 @@ class AnthropicClient:
     ) -> tuple[str, Usage]:
         """`generate_json` that also returns token usage for the budget gate (#472)."""
         ladder = RetryLadder("anthropic")
+        # A model that thinks by default spends part of max_tokens before the text.
+        budget_tokens = max_tokens + thinking_headroom(self.model)
         while True:
             try:
                 response = await self.client.messages.create(
                     model=self.model,
-                    max_tokens=max_tokens,
-                    **_sampling(0.2),
+                    max_tokens=budget_tokens,
+                    **sampling_kwargs(self.model, 0.2),
                     system=_cacheable_system(system),  # #629 prompt caching
                     messages=[{"role": "user", "content": user}],
                     timeout=_TIMEOUT_SECONDS,
                 )
-                return response.content[0].text, _usage_from_response(response)
+                # A cut-off rewrite or JSON must not be served as if complete: raising
+                # lets the caller fall back to its baseline.
+                if getattr(response, "stop_reason", None) == "max_tokens":
+                    raise ValueError(
+                        f"text reply truncated at max_tokens={budget_tokens}"
+                    )
+                # A model that thinks by default puts a thinking block first.
+                text = next(
+                    (b.text for b in response.content if getattr(b, "type", "text") == "text"),
+                    None,
+                )
+                if text is None:
+                    raise ValueError("no text block in response")
+                return text, _usage_from_response(response)
             except Exception as exc:  # noqa: BLE001 — the ladder decides; it re-raises
                 if await ladder.should_retry(exc):
                     continue
@@ -381,6 +394,12 @@ class AnthropicClient:
         a call that succeeds slowly, it is one whose result nobody receives.
         """
         tool_name = tool["name"]
+        # A model that rejects a forced tool choice (Opus/Sonnet 5.5) is asked in
+        # the prompt instead; only the tool_use block is read, so any text is dropped.
+        user_turn = user if accepts_forced_tool_choice(self.model) else (
+            user + forced_tool_instruction(tool_name)
+        )
+        budget_tokens = max_tokens + thinking_headroom(self.model)
         ladder = RetryLadder("anthropic_structured")
         # `timeout` is a DEADLINE for the whole call, not a per-attempt budget.
         # The ladder re-issues a timed-out request, and a per-attempt value is
@@ -399,14 +418,14 @@ class AnthropicClient:
             try:
                 response = await self.client.messages.create(
                     model=self.model,
-                    max_tokens=max_tokens,
-                    **_sampling(0),
+                    max_tokens=budget_tokens,
+                    **sampling_kwargs(self.model, 0),
                     system=_cacheable_system(system),  # #629 prompt caching
-                    messages=[{"role": "user", "content": user}],
+                    messages=[{"role": "user", "content": user_turn}],
                     tools=[tool],
-                    tool_choice={"type": "tool", "name": tool_name},
+                    **tool_choice_kwargs(self.model, tool_name),
                     timeout=min(
-                        structured_timeout_for(max_tokens),
+                        structured_timeout_for(budget_tokens),
                         float("inf") if deadline is None else deadline - time.monotonic(),
                     ),
                 )
@@ -417,7 +436,7 @@ class AnthropicClient:
                 )
                 if stop_reason == "max_tokens":
                     raise ValueError(
-                        f"{tool_name} tool call truncated at max_tokens={max_tokens}; "
+                        f"{tool_name} tool call truncated at max_tokens={budget_tokens}; "
                         "the tool input is incomplete and must not be read as an answer"
                     )
                 for block in response.content:
@@ -532,8 +551,9 @@ class AnthropicClient:
         """
         stream_kwargs: Dict[str, Any] = dict(
             model=self.model,
-            max_tokens=max_tokens,
-            **_sampling(0.3),
+            max_tokens=max_tokens + thinking_headroom(self.model),
+            **sampling_kwargs(self.model, 0.3),
+            **chat_thinking_kwargs(self.model),
             # #766: the chat/thread system prefix is byte-identical across the
             # tool rounds of one turn (and often across turns), so the #629
             # cache breakpoint applies here too — tools render before system,
@@ -551,9 +571,15 @@ class AnthropicClient:
             started = False
             try:
                 async with self.client.messages.stream(**stream_kwargs) as stream:
-                    async for text in stream.text_stream:
-                        started = True
-                        yield ChatTurnDelta(text=text)
+                    async for event in stream:
+                        if getattr(event, "type", None) == "text":
+                            started = True
+                            yield ChatTurnDelta(text=event.text)
+                        else:
+                            # Thinking and bookkeeping events carry no text, but
+                            # each one is proof the stream is alive: an empty
+                            # delta lets the caller keep its heartbeat going.
+                            yield ChatTurnDelta()
                     final = await stream.get_final_message()
                 break
             except Exception as exc:  # noqa: BLE001 — the ladder decides; it re-raises
