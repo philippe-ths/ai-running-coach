@@ -58,8 +58,14 @@ def _month(d: date) -> str:
     return d.strftime("%B %Y")
 
 
-def when_text(goal: Any) -> str:
-    """The goal's date, with its precision stated so it cannot be read as more exact."""
+def when_text(goal: Any, today: Optional[date] = None) -> str:
+    """The goal's date, with its precision stated so it cannot be read as more exact.
+
+    A window says nothing about an event: "10h a week, October to December" is a
+    window too, and wording it as an event not yet chosen had a drafted plan taper
+    for a race the runner never stated. A window already open says so, because
+    "-1 weeks away" reads as a date to plan towards rather than one being lived.
+    """
     if goal.race_date is not None:
         booked = "booked" if goal.booked else "not booked yet"
         return f"{goal.race_date.day} {goal.race_date:%B %Y} (exact date, {booked})"
@@ -70,7 +76,9 @@ def when_text(goal: Any) -> str:
             if (start.year, start.month) == (end.year, end.month)
             else f"{_month(start)} to {_month(end)}"
         )
-        return f"around {span} (approximate, no event chosen yet)"
+        if today is not None and start <= today:
+            return f"around {span} (approximate, under way now)"
+        return f"around {span} (approximate, nothing booked)"
     return "no date (a direction, not a deadline)"
 
 
@@ -81,8 +89,11 @@ def format_duration(seconds: int) -> str:
 
 
 def weeks_away(goal: Any, today: date) -> Optional[float]:
+    """Weeks until the ready-by date; None for an undated goal or one already under way."""
     when = ready_by(goal)
-    return None if when is None else round((when - today).days / 7, 1)
+    if when is None or when < today:
+        return None
+    return round((when - today).days / 7, 1)
 
 
 def for_coach(goal: Any, today: date) -> Dict[str, Any]:
@@ -90,7 +101,7 @@ def for_coach(goal: Any, today: date) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "name": goal.name,
         "priority": goal.priority,
-        "when": when_text(goal),
+        "when": when_text(goal, today),
     }
     away = weeks_away(goal, today)
     if away is not None:

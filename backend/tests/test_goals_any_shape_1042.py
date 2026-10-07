@@ -85,11 +85,23 @@ def test_each_kind_of_date_states_its_own_precision(db):
     season = _season(db, _user(db))
 
     assert goals.when_text(season["chatham"]) == "8 November 2026 (exact date, booked)"
-    assert goals.when_text(season["half"]) == "around March 2027 (approximate, no event chosen yet)"
+    assert goals.when_text(season["half"]) == "around March 2027 (approximate, nothing booked)"
     assert goals.when_text(season["marathon"]) == (
-        "around May 2027 to June 2027 (approximate, no event chosen yet)"
+        "around May 2027 to June 2027 (approximate, nothing booked)"
     )
     assert goals.when_text(season["backyard"]) == "no date (a direction, not a deadline)"
+
+
+def test_a_window_already_open_is_under_way_not_weeks_away(db):
+    """A real draft read "-1 weeks away" on an Oct-Dec volume block worded as an
+    event not yet chosen, and tapered for a race the runner never stated."""
+    block = _goal(db, _user(db), "10h a week, any activity", priority="C",
+                  window_start=date(2026, 10, 1), window_end=date(2026, 12, 31))
+
+    facts = goals.for_coach(block, TODAY)
+
+    assert facts["when"] == "around October 2026 to December 2026 (approximate, under way now)"
+    assert "weeks_away" not in facts
 
 
 def test_the_coach_gets_only_the_facts_the_runner_stated(db):
@@ -100,7 +112,7 @@ def test_the_coach_gets_only_the_facts_the_runner_stated(db):
     assert goals.for_coach(season["half"], TODAY) == {
         "name": "Half marathon",
         "priority": "B",
-        "when": "around March 2027 (approximate, no event chosen yet)",
+        "when": "around March 2027 (approximate, nothing booked)",
         "weeks_away": 20.7,
         "distance_km": 21.1,
         "target_time": "1:40:00",
@@ -245,8 +257,8 @@ def test_the_conversation_sees_every_goal_before_any_plan_exists(db):
     assert schedule["has_plan"] is False
     assert [g["when"] for g in schedule["goals"]] == [
         "8 November 2026 (exact date, booked)",
-        "around March 2027 (approximate, no event chosen yet)",
-        "around May 2027 to June 2027 (approximate, no event chosen yet)",
+        "around March 2027 (approximate, nothing booked)",
+        "around May 2027 to June 2027 (approximate, nothing booked)",
         "no date (a direction, not a deadline)",
     ]
 
@@ -259,7 +271,7 @@ def test_the_drafting_context_states_every_goal_and_how_exact_its_date_is(db):
 
     context = build_draft_context(db, user, today=TODAY, weeks=12)
 
-    assert '- Half marathon (priority B): around March 2027 (approximate, no event chosen yet), ' \
+    assert '- Half marathon (priority B): around March 2027 (approximate, nothing booked), ' \
            '21 weeks away, 21.1 km, target 1:40:00. In their words: "somewhere flat"' in context
     assert "- Backyard ultra (priority C): no date (a direction, not a deadline), no fixed distance" in context
     assert "- Chatham 10k (priority B): 8 November 2026 (exact date, booked)" in context

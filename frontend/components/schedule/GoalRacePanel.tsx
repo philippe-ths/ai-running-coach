@@ -107,7 +107,12 @@ function monthLabel(iso: string): string {
 
 /** "8 Nov" / "~ Mar 2027" / "~ May–Jun 2027" / "No date". */
 function describeWhen(goal: GoalRace): string {
-  if (goal.race_date) return formatDateLabel(goal.race_date);
+  if (goal.race_date) {
+    // The year only when it is not this one: "Mar 14" in October means next March.
+    const year = parseIso(goal.race_date).getFullYear();
+    const label = formatDateLabel(goal.race_date);
+    return year === new Date().getFullYear() ? label : `${label} ${year}`;
+  }
   if (goal.window_start && goal.window_end) {
     const a = parseIso(goal.window_start);
     const b = parseIso(goal.window_end);
@@ -260,8 +265,8 @@ export default function GoalRacePanel({
         <div className="mt-2">
           <p className="max-w-prose text-sm text-gray-600 dark:text-gray-400">
             You have not told your coach what you are training for. Without a goal
-            your plan is built for general progression — nothing to peak for, no
-            taper, no phases that mean anything. It does not need to be booked:
+            your plan is built for general progression: nothing to peak for, no
+            taper, no phases that mean anything. It does not need to be booked;
             &ldquo;a half, around March&rdquo; is enough to plan towards.
           </p>
           <button
@@ -282,6 +287,7 @@ export default function GoalRacePanel({
               <GoalForm
                 key={race.id}
                 goal={race}
+                defaultPriority="A"
                 onCancel={() => setEditing(null)}
                 onSaved={saved}
                 busy={busy}
@@ -320,7 +326,15 @@ export default function GoalRacePanel({
       )}
 
       {editing === "new" && (
-        <GoalForm goal={null} onCancel={() => setEditing(null)} onSaved={saved} busy={busy} />
+        <GoalForm
+          goal={null}
+          // A second A would compete with the first for what the block is built
+          // towards, so a goal added beside one starts as B.
+          defaultPriority={races?.some((r) => r.priority === "A") ? "B" : "A"}
+          onCancel={() => setEditing(null)}
+          onSaved={saved}
+          busy={busy}
+        />
       )}
     </section>
   );
@@ -490,11 +504,13 @@ function lastOfMonth(v: { y: number; m: number }): string {
  */
 function GoalForm({
   goal,
+  defaultPriority,
   onCancel,
   onSaved,
   busy,
 }: {
   goal: GoalRace | null;
+  defaultPriority: RacePriority;
   onCancel: () => void;
   onSaved: () => void;
   busy: MutableRefObject<boolean>;
@@ -534,7 +550,7 @@ function GoalForm({
   );
   const [notes, setNotes] = useState(goal?.notes ?? "");
   const [priority, setPriority] = useState<RacePriority>(
-    (goal?.priority as RacePriority) ?? "A",
+    (goal?.priority as RacePriority) ?? defaultPriority,
   );
   const [problem, setProblem] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
