@@ -517,7 +517,12 @@ function GoalForm({
 }) {
   const today = todayIso();
   const now = parseIso(today);
-  const years = [0, 1, 2, 3].map((n) => now.getFullYear() + n);
+  // This year and the next three, plus any earlier year an edited window
+  // already starts in, so editing it does not silently show the wrong year.
+  const storedYear = goal?.window_start ? parseIso(goal.window_start).getFullYear() : null;
+  const years = Array.from(
+    new Set([...(storedYear ? [storedYear] : []), ...[0, 1, 2, 3].map((n) => now.getFullYear() + n)]),
+  ).sort((a, b) => a - b);
   const startOf = (iso: string | null) => {
     const d = iso ? parseIso(iso) : now;
     return { y: d.getFullYear(), m: d.getMonth() };
@@ -556,7 +561,8 @@ function GoalForm({
   const [saving, setSaving] = useState(false);
 
   const customMetres = (() => {
-    const km = Number(customKm);
+    // A comma decimal ("21,1") is how half of Europe writes it.
+    const km = Number(customKm.replace(",", "."));
     if (!customKm.trim() || !Number.isFinite(km) || km <= 0) return null;
     // One decimal of a metre is as fine as any race is measured, and it keeps
     // 21.1 from arriving as 21099.999999999996.
@@ -587,7 +593,9 @@ function GoalForm({
         setProblem("Pick the date, or choose “Around” if you only know roughly when.");
         return;
       }
-      if (raceDate < today) {
+      // An unchanged date on an edit stays allowed: the list keeps a race for a
+      // day after it, and fixing its note should not demand a new date.
+      if (raceDate < today && raceDate !== goal?.race_date) {
         setProblem("That date has already passed. A goal has to be ahead of you.");
         return;
       }
@@ -710,7 +718,7 @@ function GoalForm({
               type="date"
               aria-label="Date"
               value={raceDate}
-              min={today}
+              min={goal?.race_date && goal.race_date < today ? goal.race_date : today}
               onChange={(e) => setRaceDate(e.target.value)}
               className={`${field} font-mono tabular-nums`}
             />
@@ -772,10 +780,8 @@ function GoalForm({
             </label>
             <input
               id="goal-km"
-              type="number"
+              type="text"
               inputMode="decimal"
-              min="0.1"
-              step="0.1"
               value={customKm}
               placeholder="km"
               onChange={(e) => {

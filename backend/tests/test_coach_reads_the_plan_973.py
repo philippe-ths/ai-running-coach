@@ -306,7 +306,7 @@ def test_the_races_the_block_is_aimed_at_come_back_with_it(db):
         {
             "name": "Autumn Half",
             "priority": "A",
-            "when": f"{race_day.day} {race_day:%B %Y} (exact date, not booked yet)",
+            "when": f"{race_day.day} {race_day:%B %Y} (exact date)",
             "weeks_away": round((race_day - TODAY).days / 7, 1),
             "distance_km": 21.1,
         }

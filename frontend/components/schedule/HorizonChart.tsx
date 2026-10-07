@@ -201,11 +201,13 @@ function goalDay(goal: GoalRace): string | null {
   return goal.race_date ?? goal.window_start;
 }
 
-/** "Nov 8" for an exact date, "~Mar" for an approximate one. */
+/** "Nov 8" for an exact date; "~Mar" or "~May–Jun" for an approximate one. */
 function goalDayLabel(goal: GoalRace): string {
   if (goal.race_date) return formatDateLabel(goal.race_date);
-  const day = goalDay(goal);
-  return day ? `~${formatDateLabel(day).split(" ")[0]}` : "";
+  if (!goal.window_start) return "";
+  const start = formatDateLabel(goal.window_start).split(" ")[0];
+  const end = goal.window_end ? formatDateLabel(goal.window_end).split(" ")[0] : start;
+  return start === end ? `~${start}` : `~${start}–${end}`;
 }
 
 export default function HorizonChart({
@@ -235,7 +237,11 @@ export default function HorizonChart({
   const racesByWeek = new Map<string, GoalRace[]>();
   const placed = new Set<string>();
   for (const race of horizon.races) {
-    const day = goalDay(race);
+    // A window that opened before the first week shown is under way, so it
+    // stands in the first week rather than falling off the chart.
+    const first = horizon.weeks[0]?.week_start;
+    const raw = goalDay(race);
+    const day = raw && first && !race.race_date && raw < first ? first : raw;
     const week = day
       ? horizon.weeks.find((w) => day >= w.week_start && day <= addDaysIso(w.week_start, 6))
       : undefined;
@@ -771,7 +777,7 @@ function HorizonTable({
           {horizon.races
             .map(
               (r) =>
-                `${r.name} ${r.race_date ? "on" : "around"} ${goalDayLabel(r)}` +
+                `${r.name} ${r.race_date ? "on " : ""}${goalDayLabel(r)}` +
                 (r.distance_m ? ` (${(r.distance_m / 1000).toFixed(0)} km)` : ""),
             )
             .join("; ")}

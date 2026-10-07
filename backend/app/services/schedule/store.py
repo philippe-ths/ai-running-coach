@@ -451,14 +451,7 @@ def plan_target_race(
     """
     # An undated goal ("someday") is a direction, not something a block can be
     # built backwards from, so it never anchors a plan (#1042).
-    races = [
-        race
-        for race in list_goal_races(db, user_id, on_or_after=on_or_after)
-        if goals.ready_by(race) is not None
-    ]
-    if not races:
-        return None
-    return next((race for race in races if race.priority == "A"), races[0])
+    return goals.target_goal(list_goal_races(db, user_id, on_or_after=on_or_after))
 
 
 GOAL_FIELDS = (

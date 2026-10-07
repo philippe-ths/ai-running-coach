@@ -912,7 +912,7 @@ async def test_the_context_tells_the_coach_to_build_backwards_from_the_race(db):
     assert "7 weeks away" in context
     # The race's own week, so phase placement is not date arithmetic done in prose.
     assert (TODAY + timedelta(days=42)).isoformat() in context
-    assert "The block is built for their A goal" in context
+    assert "The block is built for Autumn Half" in context
     assert "built BACKWARDS from its date" in _SYSTEM_PROMPT
 
 

@@ -8,8 +8,11 @@ for an approximate date, `target_time_s`, the runner's `notes` for the coach, an
 
 Backward-safety (previews share the production DB, so this can run against prod
 while prod still runs the old code): relaxing NOT NULL and adding nullable
-columns are both invisible to the old code until new code writes a row that uses
-them. `booked` carries a server default so existing inserts keep working.
+columns change nothing the old code reads, and only the new API can write a goal
+without a date or distance (the old one's body is `extra="forbid"` and requires
+both). Old code meeting such a row would fail, so the window is the deploy
+itself, when the web and worker services move together. `booked` carries a
+server default so existing inserts keep working.
 
 No backfill beyond that default: every existing row has an exact date and a
 distance, and whether it was booked was never recorded, so it reads as not booked.

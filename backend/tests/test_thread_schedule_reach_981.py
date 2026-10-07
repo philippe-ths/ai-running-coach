@@ -287,7 +287,7 @@ def test_the_race_is_reported_without_a_verdict_on_whether_the_plan_suits_it(db)
         {
             "name": "Autumn Half",
             "priority": "A",
-            "when": f"{race.race_date.day} {race.race_date:%B %Y} (exact date, not booked yet)",
+            "when": f"{race.race_date.day} {race.race_date:%B %Y} (exact date)",
             "weeks_away": 4.4,
             "distance_km": 21.1,
         }

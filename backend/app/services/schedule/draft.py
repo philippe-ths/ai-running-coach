@@ -401,15 +401,24 @@ def build_draft_context(
 
     if races:
         parts.append("\n## THEIR GOALS")
+        target = goals.target_goal(races)
         for race in races:
-            line = goals.prompt_line(race, today)
-            if race.race_date is not None:
-                line += f" (the week beginning {week_start(race.race_date, starts_on).isoformat()})"
-            parts.append(line)
-        parts.append(
-            "- The block is built for their A goal, or the soonest dated one if none "
-            "is A. A goal with no date is a direction, not a deadline."
-        )
+            suffix = (
+                f" (the week beginning {week_start(race.race_date, starts_on).isoformat()})"
+                if race.race_date is not None
+                else ""
+            )
+            parts.append(goals.prompt_line(race, today, suffix=suffix))
+        if target is not None:
+            parts.append(
+                f"- The block is built for {target.name}. A goal with no date is a "
+                "direction, not a deadline."
+            )
+        else:
+            parts.append(
+                "- None of these has a date, so they are directions, not deadlines: "
+                "plan for progression towards them."
+            )
     else:
         parts.append("\n## THEIR GOALS\nNo goal stated. Plan for general progression.")
 

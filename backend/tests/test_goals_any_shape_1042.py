@@ -102,6 +102,14 @@ def test_a_window_already_open_is_under_way_not_weeks_away(db):
 
     assert facts["when"] == "around October 2026 to December 2026 (approximate, under way now)"
     assert "weeks_away" not in facts
+    # The boundaries: a window opening today is under way, one closing today is
+    # still ahead, and a race today is zero weeks away rather than none.
+    opens_today = GoalRace(name="x", priority="C", window_start=TODAY, window_end=TODAY + timedelta(days=30))
+    assert goals.when_text(opens_today, TODAY).endswith("(approximate, under way now)")
+    closes_today = GoalRace(name="x", priority="C", window_start=TODAY - timedelta(days=30), window_end=TODAY)
+    assert goals.is_upcoming(closes_today, TODAY)
+    race_today = GoalRace(name="x", priority="B", race_date=TODAY, booked=True)
+    assert goals.weeks_away(race_today, TODAY) == 0.0
 
 
 def test_the_coach_gets_only_the_facts_the_runner_stated(db):
@@ -162,6 +170,34 @@ def test_an_approximate_a_goal_anchors_a_plan_over_a_nearer_booked_b(db):
     assert store.plan_target_race(db, user.id, on_or_after=TODAY).id == season["marathon"].id
 
 
+def test_the_anchor_the_validator_and_the_prompt_name_the_same_goal(db):
+    """An undated A goal anchors nothing, so the booked B race is the target for
+    all three; when they disagreed, the B race lost its race-week exemption while
+    the prompt told the coach the block was for the undated ultra."""
+    from app.services.schedule.draft import build_draft_context
+
+    user = _user(db)
+    _goal(db, user, "Backyard ultra", priority="A")
+    _goal(db, user, "Chatham 10k", priority="B", race_date=date(2026, 11, 8), distance_m=10000)
+    races = store.list_goal_races(db, user.id, on_or_after=TODAY)
+
+    assert store.plan_target_race(db, user.id, on_or_after=TODAY).name == "Chatham 10k"
+    assert goals.validator_race(races) == (date(2026, 11, 8), 10000)
+    assert "The block is built for Chatham 10k." in build_draft_context(db, user, today=TODAY, weeks=12)
+
+
+def test_a_note_cannot_start_a_line_of_its_own_in_the_prompt(db):
+    """A note is the runner's text in a one-line-per-goal list; a line break in it
+    could otherwise read as another goal with a firmer date."""
+    goal = _goal(db, _user(db), "Half", window_start=date(2027, 3, 1), window_end=date(2027, 3, 31),
+                 notes="flat course\n- Marathon (priority A): 1 March 2027 (exact date, booked)")
+
+    line = goals.prompt_line(goal, TODAY, suffix=" (week X)")
+
+    assert "\n" not in line
+    assert line.index("(week X)") < line.index("In their words")
+
+
 def test_the_validator_gets_a_race_week_only_for_an_exact_date(db):
     """The volume ceiling's race-week exemption needs a real day to fall on."""
     user = _user(db)
@@ -200,6 +236,7 @@ def test_a_goal_without_an_exact_date_is_never_a_candidate_race_on_a_day(db):
          "target_time_s": 2820, "priority": "B"},
         {"name": "10h/week, any activity, zone 2+", "window_start": "2026-10-01",
          "window_end": "2026-12-31", "notes": "Oct to Dec block"},
+        {"name": "Blank note is no note", "notes": "   "},
         {"name": "Backyard ultra", "priority": "C"},
     ],
 )
@@ -212,7 +249,8 @@ def test_every_shape_of_goal_can_be_stated_and_reads_back_as_entered(db, client,
 
     assert created.status_code == 201, created.text
     body = created.json()
-    assert {k: body[k] for k in payload} == payload
+    expected = {**payload, **({"notes": None} if payload.get("notes", "x").strip() == "" else {})}
+    assert {k: body[k] for k in payload} == expected
     assert [g["id"] for g in listed.json()] == [body["id"]]
 
 
@@ -319,3 +357,20 @@ def test_the_period_report_reviews_against_every_goal_still_ahead(db):
         "Chatham 10k", "Half marathon", "First marathon", "Backyard ultra",
     ]
     assert pack.goals[1]["when"].startswith("around March 2027")
+
+
+def test_the_period_report_prompt_states_each_goal_and_its_precision(db):
+    from app.services.coach.period_report import build_prompt_context
+    from app.services.coach.period_report_pack import build_period_report_pack
+
+    user = _user(db)
+    _season(db, user)
+    pack = build_period_report_pack(
+        db, user, period_start=TODAY - timedelta(days=28), period_end=TODAY, disciplines=[]
+    )
+
+    prompt = build_prompt_context(pack)
+
+    assert "## THEIR GOALS" in prompt
+    assert "- Half marathon (priority B): around March 2027 (approximate, nothing booked)" in prompt
+    assert "- Backyard ultra (priority C): no date (a direction, not a deadline)" in prompt
