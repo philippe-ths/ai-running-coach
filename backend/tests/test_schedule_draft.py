@@ -425,7 +425,9 @@ async def test_a_sketched_week_is_stored_as_shares_of_a_load_total(db, monkeypat
 
     assert outcome.ok is True
     db.refresh(plan)
-    shapes = store.plan_week_shapes(plan)
+    # Concrete weeks also leave a phase-only marker (#1046); this test is about
+    # the sketched week's shares, so the markers are set aside.
+    shapes = [s for s in store.plan_week_shapes(plan) if not store.is_phase_only(s)]
     assert [shape.week_start for shape in shapes] == [NEXT_MON]
     shape = shapes[0]
 

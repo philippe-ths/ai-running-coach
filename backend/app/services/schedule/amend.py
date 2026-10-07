@@ -379,6 +379,9 @@ def _shape_lines(
     for shape in store.plan_week_shapes(plan):
         if not (start <= shape.week_start <= end):
             continue
+        if store.is_phase_only(shape):
+            # A concrete week's phase marker, not an agreed shape to honour.
+            continue
         bits = [
             f"- Week of {shape.week_start.isoformat()} "
             f"({describe_week_span(shape.week_start, starts_on)})"
@@ -877,7 +880,7 @@ def _apply(
         shape
         for shape in (plan.week_shapes or [])
         if _shape_week(shape) not in written_weeks
-    ]
+    ] + store.concrete_week_phases(amended.weeks)
     # `horizon_end` is a floor on the plan's reach, so it only ever grows here:
     # an amendment that writes sessions past it has extended the plan, and one
     # that writes inside it has not shortened anything.

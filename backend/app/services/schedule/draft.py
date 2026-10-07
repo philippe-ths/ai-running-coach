@@ -794,7 +794,7 @@ def _persist(
             _shape_for(week, load_model) for week in drafted.sketch_weeks
         )
         if shape is not None
-    ]
+    ] + store.concrete_week_phases(drafted.weeks)
     horizon_ends = [w.week_start for w in drafted.weeks] + [
         s.week_start for s in drafted.sketch_weeks
     ]
