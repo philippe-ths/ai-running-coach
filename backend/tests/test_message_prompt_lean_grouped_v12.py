@@ -56,15 +56,6 @@ def test_v12_keeps_v11s_schema_version():
     assert active_schema_version(V12) == active_schema_version(V11)
 
 
-def test_v12_ships_inert():
-    """Against the prod-parity block, which is what production runs; the test session
-    resolves code defaults, so `settings` could not tell a flip from no flip."""
-    import pathlib, re
-
-    env_example = pathlib.Path(__file__).resolve().parents[1] / ".env.example"
-    declared = re.findall(r"^COACH_PROMPT_ID=(\S+)", env_example.read_text(), re.M)
-    assert declared and V12 not in declared, declared
-
 
 def test_v12_is_registered_as_a_composed_prompt():
     assert V12 in clauses.COMPOSED_PROMPT_IDS

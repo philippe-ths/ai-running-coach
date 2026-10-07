@@ -110,7 +110,7 @@ No production hostname is hardcoded; every seam URL is an env var, so a custom d
 Settings come from `backend/.env` via `pydantic-settings`; `DATABASE_URL` is required and the app will not boot without it.
 Anthropic access requires `ANTHROPIC_API_KEY`, with the coach model and prompt configured by `COACH_MODEL_ID` and `COACH_PROMPT_ID`.
 Three model lanes fall back to `COACH_MODEL_ID` when unset: `COACH_CHAT_MODEL_ID` (conversational turns), `COACH_VOICE_MODEL_ID` (the voice rewrite), and `COACH_PERIOD_MODEL_ID` (a period report).
-The code default prompt is `coach_message_v8`, while `backend/.env.example`'s prod-parity block declares `coach_message_lean_grouped_v11`; every earlier `coach_message_lean_grouped_*` id stays registered, so a rollback is a pure config flip.
+The code default prompt is `coach_message_v8`, while `backend/.env.example`'s prod-parity block declares `coach_message_lean_grouped_v12`; every earlier `coach_message_lean_grouped_*` id stays registered, so a rollback is a pure config flip.
 Selecting a prompt is a pure `COACH_PROMPT_ID` config flip with no code change, and the versioned cache identity retains reports generated under prior prompt ids.
 A prompt whose `PROMPT_FEATURES` entry carries `TWO_STAGE` activates the two-stage Exchange; any single-shot id serves the prior path with zero code change.
 `COACH_RECEIPT_CADENCE` (bool, default off, ADR 0018) is orthogonal to `COACH_PROMPT_ID` and is ON in production.
