@@ -45,12 +45,19 @@ def _client(returns: str):
     return fake
 
 
-async def _revoice(voice, returns: str, *, validate=lambda t: []):
+def _answer(report: str) -> str:
+    """A model answer in the asked-for form: findings, then the report."""
+    return f"<findings>\n- VERDICT: as the report says\n</findings>\n<report>\n{report}\n</report>"
+
+
+async def _revoice(voice, returns: str, *, validate=lambda t: [], baseline=BASELINE, raw=False):
+    """`returns` is the voiced report, wrapped in the answer form unless `raw`."""
+    answer = returns if raw or not returns.strip() else _answer(returns)
     with patch(
-        "app.services.coach.turn.build_client", return_value=_client(returns)
+        "app.services.coach.turn.build_client", return_value=_client(answer)
     ):
         return await revoice_report(
-            baseline=BASELINE, voice=voice, user_id=None, validate=validate
+            baseline=baseline, voice=voice, user_id=None, validate=validate
         )
 
 
@@ -121,8 +128,19 @@ def test_freetext_is_fenced_and_cannot_close_its_own_fence():
 
 def test_rewrite_prompt_forbids_re_deciding():
     system, user = build_rewrite_prompts(_voice(voice_preset="roast"), BASELINE)
-    assert "RE-VOICING, NOT RE-DECIDING" in system
+    assert "the report decides what is said" in system
     assert BASELINE in user
+
+
+def test_a_preset_brief_carries_its_shape_and_none_of_its_example_reports():
+    """#1050: a preset's whole-report examples resurfaced as stock lines in reports
+    about other runs. The report's voice pass carries how the character BUILDS a
+    report instead, which holds no sentence to lift."""
+    preset = PRESETS["cornerman"]
+    brief = render_voice_character(_voice(voice_preset="cornerman"))
+    assert preset.report_shape in brief
+    for example in preset.example_messages:
+        assert example[:40] not in brief
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +251,105 @@ async def test_a_transport_failure_serves_the_baseline():
 async def test_an_empty_rewrite_serves_the_baseline():
     outcome = await _revoice(_voice(voice_preset="roast"), "   ")
     assert outcome.text is None and outcome.reason == "empty_rewrite"
+
+
+# ---------------------------------------------------------------------------
+# #1050: the pass composes from a findings list, so the list must never be served,
+# and what a terse voice may leave out stops short of the question and the referral
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_findings_list_is_never_what_the_runner_reads():
+    report = "Half your normal week, and it reads as detraining. Ramp back deliberately."
+    answer = (
+        "<findings>\n- VERDICT: half the typical week\n- VERDICT: detraining\n</findings>\n"
+        f"<report>\n{report}\n</report>"
+    )
+    outcome = await _revoice(_voice(voice_preset="deadpan"), answer, raw=True)
+    assert outcome.reason == APPLIED
+    assert outcome.text == report
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # no tags at all: a model that copied an untagged findings list
+        "- VERDICT: half the typical week\n- NEXT: ramp back deliberately",
+        # a tag mentioned inside the findings must not open the report early
+        "<findings>- DETAIL: see <report> tag</findings><report>Hi <report>x</report>",
+        # a findings line carried into the report
+        "<findings>\n- VERDICT: detraining\n</findings>\n<report>\nRamp back.\n- ASK: how was it\n</report>",
+        # anything after the report
+        "<findings>\n- VERDICT: detraining\n</findings>\n<report>\nRamp back.\n</report>\n- NEXT: rest",
+    ],
+)
+@pytest.mark.asyncio
+async def test_an_answer_off_the_asked_form_serves_the_baseline(answer):
+    """The findings list is working material; any answer that could put it, or
+    part of it, in front of the runner is refused."""
+    outcome = await _revoice(_voice(voice_preset="deadpan"), answer, raw=True)
+    assert outcome.text is None and outcome.reason == "unparsed_rewrite"
+
+
+@pytest.mark.asyncio
+async def test_an_answer_cut_off_before_its_report_closes_serves_the_baseline():
+    """A truncated answer may have lost its last lines, which is where the next
+    step and the question usually sit."""
+    answer = "<findings>\n- VERDICT: detraining\n</findings>\n<report>\nHalf your normal week, and"
+    outcome = await _revoice(_voice(voice_preset="deadpan"), answer, raw=True)
+    assert outcome.text is None and outcome.reason == "unparsed_rewrite"
+
+
+@pytest.mark.asyncio
+async def test_a_rewrite_that_stops_asking_the_question_serves_the_baseline():
+    baseline = BASELINE + " How did the legs feel today?"
+    outcome = await _revoice(
+        _voice(voice_preset="deadpan"),
+        "Half your week. Detraining. Ramp back deliberately.",
+        baseline=baseline,
+    )
+    assert outcome.text is None and outcome.reason == "dropped:question"
+
+
+@pytest.mark.asyncio
+async def test_a_rewrite_that_asks_fewer_questions_serves_the_baseline():
+    """Keeping one question mark is not keeping the runner's questions."""
+    outcome = await _revoice(
+        _voice(voice_preset="deadpan"),
+        "Rough one, huh? Rest.",
+        baseline=BASELINE + " How did it feel? And did the knee hurt?",
+    )
+    assert outcome.text is None and outcome.reason == "dropped:question"
+
+
+@pytest.mark.asyncio
+async def test_naming_medicine_without_referring_is_dropping_the_clinician():
+    outcome = await _revoice(
+        _voice(voice_preset="deadpan"),
+        "Not a medical emergency. Rest, and ramp back deliberately.",
+        baseline=BASELINE + " Please see a physio about the knee.",
+    )
+    assert outcome.text is None and outcome.reason == "dropped:clinician"
+
+
+def test_the_opener_is_told_to_keep_its_own_length():
+    """A report shape would otherwise grow a two-line opener into a report."""
+    voice = _voice(voice_preset="sage")
+    opener, _ = build_rewrite_prompts(voice, BASELINE, is_opener=True)
+    report, _ = build_rewrite_prompts(voice, BASELINE)
+    assert "not the full report" in opener and "not the full report" not in report
+
+
+@pytest.mark.asyncio
+async def test_a_rewrite_that_drops_the_clinician_serves_the_baseline():
+    baseline = BASELINE + " The knee pain is worth a physio assessment before the ramp."
+    outcome = await _revoice(
+        _voice(voice_preset="deadpan"),
+        "Half your week. Detraining. Mind the knee. Ramp back deliberately.",
+        baseline=baseline,
+    )
+    assert outcome.text is None and outcome.reason == "dropped:clinician"
 
 
 @pytest.mark.asyncio
