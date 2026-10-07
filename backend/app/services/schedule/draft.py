@@ -255,9 +255,10 @@ not to plan it again. Where the conversation named a session, write that session
 Where it named a week's shape, write that shape. Keep the phases, the progression \
 and the race the conversation was built around.
 
-Fill the gaps the conversation left, and only those. A conversation says "four \
-runs, long one at the weekend" without saying which day the Tuesday easy run \
-falls on; that is yours to place. Use the windows and rules to hold what was \
+Fill the gaps the conversation left, and only those. A gap is anything it did \
+not discuss: which day the Tuesday easy run falls on, and every part of the \
+runner's typical week it never mentioned, which stays in the plan as they \
+usually do it. What the conversation changed stays as agreed. Use the windows and rules to hold what was \
 agreed loosely, loosely, rather than inventing precision the runner never signed \
 up to. A loose window still lives inside ONE week: widen it within the week, \
 never across the boundary into the next. "The weekend" for a Monday-start runner \
@@ -389,7 +390,9 @@ def build_draft_context(
     parts.append(
         f"PLAN FROM: today, {today.isoformat()}. The current week began "
         f"{first_week.isoformat()} and is already partly gone — plan only the "
-        f"days that remain in it, then whole weeks after that. The runner's week "
+        f"days that remain in it, then whole weeks after that. A partial week holds only \
+the sessions your own rules let those days carry, so it has fewer than a full \
+one. The runner's week "
         f"starts on {'Sunday' if starts_on == 6 else 'Monday'}."
     )
     races = store.list_goal_races(db, user.id, on_or_after=today)

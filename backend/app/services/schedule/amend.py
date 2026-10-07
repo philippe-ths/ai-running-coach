@@ -180,6 +180,7 @@ RECORD_AMENDMENT_TOOL: Dict[str, Any] = {
                                     "intent",
                                     "discipline",
                                     "title",
+                                    "target_duration_s",
                                 ],
                                 "properties": SESSION_PROPERTIES,
                             },

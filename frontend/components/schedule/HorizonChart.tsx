@@ -15,9 +15,11 @@
 // they are laid out with flex-grow against a zero basis, which cannot overflow
 // however the shares round.
 //
-// TWO BANDS, ONE LENGTH, because they are the same week's load seen two ways: a
-// thick band split by discipline over a thin band split by intent. Nothing is
-// normalised away, so the ramp reads identically down either edge.
+// ONE BAR, split by ACTIVITY (run, walk, bike, ...), each its own hue. The kind
+// of session (easy / long / quality / strength) is the same load seen a second
+// way and was a thin second band; it now lives only in the opened week's detail,
+// so the row answers one question and the reader never has to learn two colour
+// languages.
 //
 // `planned` vs sketched is a TICK, not a fade. Fading sketched rows washes out
 // ten of twelve rows and costs the reader the ramp to say something a 8px mark
@@ -40,8 +42,7 @@
 // tooltip: this is a phone-first app and hover does not exist on touch. One row
 // at a time, and the panel is inset under the bar rather than replacing it — the
 // bars above and below keep their geometry, so the ramp still reads while a week
-// is open. The panel says the same things in every segmentation mode, because it
-// is the week's detail and not a second view of whichever band is drawn.
+// is open. The panel is the week's full detail, including the kind-of-session split.
 //
 // ACCESSIBILITY. The rows used to be `aria-hidden` with the table below as their
 // text alternative. A focusable control cannot live inside an aria-hidden
@@ -57,17 +58,14 @@ import type { GoalRace, HorizonWeek, ScheduleHorizon } from "@/lib/types/schedul
 import { formatDateLabel } from "@/lib/format";
 import { addDaysIso } from "./dates";
 import {
-  DISCIPLINE_FILL,
+  ACTIVITY_FILL,
   DISCIPLINE_LABEL,
   DISCIPLINE_ORDER,
-  INTENT_FILL,
   INTENT_LABEL,
   INTENT_ORDER,
   safeDiscipline,
   safeIntent,
 } from "./palette";
-
-export type Segmentation = "both" | "intent" | "discipline";
 
 interface Segment {
   key: string;
@@ -106,21 +104,21 @@ function buildSegments(
   return out;
 }
 
-function disciplineSegments(mix: Record<string, number>): Segment[] {
+function activitySegments(mix: Record<string, number>): Segment[] {
   return buildSegments(
     mix,
     DISCIPLINE_ORDER,
     (k) => DISCIPLINE_LABEL[safeDiscipline(k)],
-    (k) => DISCIPLINE_FILL[safeDiscipline(k)],
+    (k) => ACTIVITY_FILL[safeDiscipline(k)],
   );
 }
 
-function intentSegments(mix: Record<string, number>): Segment[] {
+function kindSegments(mix: Record<string, number>): Segment[] {
   return buildSegments(
     mix,
     INTENT_ORDER,
     (k) => INTENT_LABEL[safeIntent(k)],
-    (k) => INTENT_FILL[safeIntent(k)],
+    () => "",
   );
 }
 
@@ -128,23 +126,16 @@ function pct(share: number): number {
   return Math.round(share * 100);
 }
 
-/** Running km, exact. A week with no running distance reads as an absence. */
-function km(metres: number | null): string {
+/** Km, exact. A week with no such distance reads as an absence. */
+function km(metres: number | null | undefined): string {
   if (metres == null || metres <= 0) return "—";
   return (metres / 1000).toFixed(1);
 }
 
-/** Hours across every activity, to a tenth. */
-function hours(seconds: number | null): string {
+/** Hours, one decimal. A dash when not every session states a time. */
+function hours(seconds: number | null | undefined): string {
   if (seconds == null || seconds <= 0) return "—";
   return (seconds / 3600).toFixed(1);
-}
-
-/** The row's figure: the week's hours when stated, else its running km, each
- *  with its unit so a plan drafted before hours existed is not misread. */
-function weekFigure(week: HorizonWeek): string {
-  if (week.duration_s) return `${hours(week.duration_s)} h`;
-  return week.running_distance_m ? `${km(week.running_distance_m)} km` : "—";
 }
 
 /** "14.0 km", or "90 min" for a long run given only as a time (#985). */
@@ -152,6 +143,19 @@ function longRun(week: HorizonWeek): string | null {
   if (week.long_run_distance_m) return `${km(week.long_run_distance_m)} km`;
   if (week.long_run_duration_s) return `${Math.round(week.long_run_duration_s / 60)} min`;
   return null;
+}
+
+/** Km for the row: whole numbers, since the row is a glance, not a log. */
+function kmShort(metres: number | null | undefined): string {
+  return String(Math.round((metres ?? 0) / 1000));
+}
+
+/** "run 30 · walk 15 km", leaving out any part that is null or zero. */
+function distanceLine(week: HorizonWeek): string | null {
+  const parts: string[] = [];
+  if ((week.running_distance_m ?? 0) >= 500) parts.push(`run ${kmShort(week.running_distance_m)}`);
+  if ((week.walking_distance_m ?? 0) >= 500) parts.push(`walk ${kmShort(week.walking_distance_m)}`);
+  return parts.length ? `${parts.join(" · ")} km` : null;
 }
 
 function describeMix(segments: Segment[]): string {
@@ -186,17 +190,9 @@ function coverageDetailText(coverage: HorizonWeek["coverage"]): string {
 }
 
 /** One band of the bar: the segments, separated by 2px of the row's surface. */
-function Band({
-  segments,
-  height,
-  surface,
-}: {
-  segments: Segment[];
-  height: string;
-  surface: string;
-}) {
+function Band({ segments, surface }: { segments: Segment[]; surface: string }) {
   return (
-    <span className={`flex ${height} gap-[2px] overflow-hidden rounded-r-[3px] ${surface}`}>
+    <span className={`flex h-3.5 w-full gap-[2px] overflow-hidden rounded-r-[3px] ${surface}`}>
       {segments.map((s) => (
         <span
           key={s.key}
@@ -210,11 +206,10 @@ function Band({
   );
 }
 
-const GRID_STOPS = [25, 50, 75];
-
-// Five columns: date · planned tick · bar · hours (else running km) · the expand chevron.
+// Five columns: date · planned tick · bar · hours and km · the expand chevron.
+// The figures column is wide enough for "run 30 · walk 15 km" at 10px.
 const ROW_GRID =
-  "grid grid-cols-[3.25rem_0.75rem_minmax(0,1fr)_3.25rem_1rem] items-center gap-x-2";
+  "grid grid-cols-[3rem_0.75rem_minmax(0,1fr)_7rem_0.75rem] items-center gap-x-2";
 
 /** The day a goal stands on in the chart: its exact date, else the start of its window. */
 function goalDay(goal: GoalRace): string | null {
@@ -244,11 +239,9 @@ function goalDayLabel(goal: GoalRace): string {
 
 export default function HorizonChart({
   horizon,
-  segmentation,
   showTable,
 }: {
   horizon: ScheduleHorizon;
-  segmentation: Segmentation;
   showTable: boolean;
 }) {
   // One week open at a time. Keyed by `week_start`, which is the row's identity
@@ -256,9 +249,6 @@ export default function HorizonChart({
   const [openWeek, setOpenWeek] = useState<string | null>(null);
 
   const peak = horizon.peak_effort_score ?? 0;
-  const showDiscipline = segmentation !== "intent";
-  const showIntent = segmentation !== "discipline";
-  const both = segmentation === "both";
 
   // A race lands in the week whose seven days contain it. Weeks are contiguous
   // and the API only returns races inside the span, so a race that matches no
@@ -301,8 +291,8 @@ export default function HorizonChart({
   let boundaryDrawn = false;
 
   for (const week of horizon.weeks) {
-    const disc = disciplineSegments(week.discipline_mix);
-    const intent = intentSegments(week.intent_mix);
+    const activity = activitySegments(week.discipline_mix);
+    const kinds = kindSegments(week.intent_mix);
     const load = week.effort_score ?? 0;
     const length = peak > 0 && load > 0 ? Math.min(100, (load / peak) * 100) : 0;
     const open = openWeek === week.week_start;
@@ -369,8 +359,7 @@ export default function HorizonChart({
       week.walking_distance_m ? `${km(week.walking_distance_m)} km walking` : null,
       longRun(week) ? `${longRun(week)} long run` : null,
       week.quality_focus ? `focus: ${week.quality_focus}` : null,
-      disc.length ? `discipline: ${describeMix(disc)}` : null,
-      intent.length ? `intent: ${describeMix(intent)}` : null,
+      activity.length ? `activity: ${describeMix(activity)}` : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -421,48 +410,33 @@ export default function HorizonChart({
               ) : null}
             </span>
 
-            <span
-              className={`relative block ${both ? "h-5" : "h-3.5"} ${surface}`}
-              aria-hidden="true"
-            >
-              {GRID_STOPS.map((stop) => (
-                <span
-                  key={stop}
-                  className="absolute inset-y-0 w-px bg-gray-200 dark:bg-gray-700"
-                  style={{ left: `${stop}%` }}
-                />
-              ))}
+            <span className={`relative block h-3.5 ${surface}`} aria-hidden="true">
               {length > 0 && (
                 <span
-                  className={`absolute inset-y-0 left-0 flex flex-col justify-center gap-[2px] ${surface}`}
+                  className={`absolute inset-y-0 left-0 flex ${surface}`}
                   style={{ width: `${length}%` }}
                 >
-                  {showDiscipline && (
-                    <Band
-                      segments={disc}
-                      height={both ? "h-3" : "h-3.5"}
-                      surface={surface}
-                    />
-                  )}
-                  {showIntent && (
-                    <Band
-                      segments={intent}
-                      height={both ? "h-1.5" : "h-3.5"}
-                      surface={surface}
-                    />
-                  )}
+                  <Band segments={activity} surface={surface} />
                 </span>
               )}
             </span>
 
             <span
-              className={`text-right font-mono text-[11px] tabular-nums ${
+              className={`flex flex-col items-end leading-tight tabular-nums ${
                 week.is_current
                   ? "font-semibold text-blue-800 dark:text-blue-300"
                   : "text-gray-600 dark:text-gray-300"
               }`}
             >
-              {weekFigure(week)}
+              <span className="font-mono text-[11px]">
+                {hours(week.duration_s)}
+                {week.duration_s ? " h" : ""}
+              </span>
+              {distanceLine(week) && (
+                <span className="whitespace-nowrap font-mono text-[10px] font-normal text-gray-500 dark:text-gray-400">
+                  {distanceLine(week)}
+                </span>
+              )}
             </span>
 
             <span className="flex justify-end" aria-hidden="true">
@@ -481,8 +455,8 @@ export default function HorizonChart({
             id={panelId}
             week={week}
             peak={peak}
-            disciplines={disc}
-            intents={intent}
+            activities={activity}
+            kinds={kinds}
           />
         )}
       </div>,
@@ -516,19 +490,27 @@ export default function HorizonChart({
     }
   }
 
-  // The legend covers exactly the series actually on the chart. Identity never
-  // rests on colour alone: every swatch is named here and again in the table.
-  const legendDisciplines = new Map<string, Segment>();
-  const legendIntents = new Map<string, Segment>();
+  // The legend covers exactly the activities actually on the chart. Identity
+  // never rests on colour alone: every swatch is named here and in the table.
+  const legendActivities = new Map<string, Segment>();
   for (const week of horizon.weeks) {
-    for (const s of disciplineSegments(week.discipline_mix)) legendDisciplines.set(s.key, s);
-    for (const s of intentSegments(week.intent_mix)) legendIntents.set(s.key, s);
+    for (const s of activitySegments(week.discipline_mix)) legendActivities.set(s.key, s);
   }
 
   const hasAnyLoad = peak > 0;
 
   return (
     <div>
+      <div
+        className={`${ROW_GRID} pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400`}
+      >
+        <span>Week</span>
+        <span />
+        <span>Training load per week</span>
+        <span className="text-right normal-case tracking-normal">hours · km</span>
+        <span />
+      </div>
+
       <div className="space-y-0.5">{rows}</div>
 
       {/* The scale. Bars are true proportions of the peak week, so the reader
@@ -536,11 +518,12 @@ export default function HorizonChart({
       <div className={`${ROW_GRID} mt-2 border-t border-gray-100 pt-1.5 dark:border-gray-700`}>
         <span />
         <span />
-        <span className="flex justify-between text-[10px] text-gray-400 dark:text-gray-500">
+        <span className="flex justify-between text-[10px] text-gray-500 dark:text-gray-400">
           <span className="font-mono tabular-nums">0</span>
           <span>
             {hasAnyLoad ? (
               <>
+                your biggest week:{" "}
                 <span className="font-mono tabular-nums">{Math.round(peak)}</span> load
               </>
             ) : (
@@ -555,25 +538,14 @@ export default function HorizonChart({
       </div>
 
       <div className="mt-3 space-y-1.5">
-        {showDiscipline && legendDisciplines.size > 0 && (
-          <LegendRow
-            title={both ? "Discipline" : "Discipline · thick band"}
-            items={Array.from(legendDisciplines.values())}
-          />
+        {legendActivities.size > 0 && (
+          <LegendRow title="Activity" items={Array.from(legendActivities.values())} />
         )}
-        {showIntent && legendIntents.size > 0 && (
-          <LegendRow
-            title={both ? "Intent" : "Intent · thick band"}
-            items={Array.from(legendIntents.values())}
-          />
-        )}
-        <p className="pt-1 text-[11px] text-gray-400 dark:text-gray-500">
-          Bar length is the week&rsquo;s load against your biggest week. Solid tick =
-          real sessions, hollow tick = shape only, faint dot = nothing planned.
-          Rows past a &ldquo;Plan ends here&rdquo; line carry no tick at all — your
-          coach has not reached that far yet. The number on the right is the
-          week&rsquo;s hours, every activity together (running km on a plan written
-          before hours). Tap any week for its running and walking km.
+        <p className="pt-1 text-[11px] text-gray-500 dark:text-gray-400">
+          Each bar is the week&rsquo;s training load against your biggest week,
+          coloured by activity; the figures on the right are the week&rsquo;s hours
+          and km. A solid dot means real sessions, a hollow one shape only, and a
+          faint one nothing planned. Tap any week for its detail.
         </p>
       </div>
 
@@ -594,21 +566,20 @@ export default function HorizonChart({
  *
  * Inset under the bar rather than replacing it, and deliberately short: rows
  * below shift down, but no bar changes length, so the ramp survives being read
- * with a week open. It carries the same four facts in every segmentation mode —
- * this is the week, not a second view of whichever band happens to be drawn.
+ * with a week open. It is also the only home of the kind-of-session split.
  */
 function WeekDetail({
   id,
   week,
   peak,
-  disciplines,
-  intents,
+  activities,
+  kinds,
 }: {
   id: string;
   week: HorizonWeek;
   peak: number;
-  disciplines: Segment[];
-  intents: Segment[];
+  activities: Segment[];
+  kinds: Segment[];
 }) {
   const load = week.effort_score ?? 0;
   const share = peak > 0 && load > 0 ? Math.round((load / peak) * 100) : 0;
@@ -639,13 +610,12 @@ function WeekDetail({
       className="ml-[4rem] mr-[1rem] mt-1 rounded-md border-l-2 border-gray-300 bg-gray-50 px-3 py-2.5 text-[11px] dark:border-gray-600 dark:bg-gray-900/50"
     >
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-        <span className="font-medium text-gray-700 dark:text-gray-200">
-          {week.phase ?? "No phase"}
-        </span>
+        {week.phase && (
+          <span className="font-medium text-gray-700 dark:text-gray-200">{week.phase}</span>
+        )}
         {week.duration_s != null && week.duration_s > 0 && (
           <span className="text-gray-600 dark:text-gray-300">
-            <span className="font-mono tabular-nums">{hours(week.duration_s)}</span> h, every
-            activity
+            <span className="font-mono tabular-nums">{hours(week.duration_s)}</span> hours
           </span>
         )}
         <span className="text-gray-600 dark:text-gray-300">
@@ -687,18 +657,26 @@ function WeekDetail({
       </div>
 
       <dl className="mt-2 space-y-1">
-        <SplitRow label="Discipline" segments={disciplines} />
-        <SplitRow label="Intent" segments={intents} />
+        <SplitRow label="Activity" segments={activities} />
+        <SplitRow label="Kind of session" segments={kinds} swatch={false} />
       </dl>
     </div>
   );
 }
 
 /** A mix written out as named percentages, each beside its own swatch. */
-function SplitRow({ label, segments }: { label: string; segments: Segment[] }) {
+function SplitRow({
+  label,
+  segments,
+  swatch = true,
+}: {
+  label: string;
+  segments: Segment[];
+  swatch?: boolean;
+}) {
   return (
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-      <dt className="w-[4.5rem] shrink-0 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+      <dt className="w-[6rem] shrink-0 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
         {label}
       </dt>
       {segments.length === 0 ? (
@@ -709,7 +687,9 @@ function SplitRow({ label, segments }: { label: string; segments: Segment[] }) {
             key={s.key}
             className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300"
           >
-            <span className={`h-2 w-2 shrink-0 rounded-sm ${s.fill}`} aria-hidden="true" />
+            {swatch && (
+              <span className={`h-2 w-2 shrink-0 rounded-sm ${s.fill}`} aria-hidden="true" />
+            )}
             {s.label} <span className="font-mono tabular-nums">{pct(s.share)}%</span>
           </dd>
         ))
@@ -762,7 +742,7 @@ function HorizonTable({
   return (
     <div className={className} id="horizon-numbers">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[34rem] border-collapse text-[11px] text-gray-600 dark:text-gray-300">
+        <table className="w-full min-w-[44rem] border-collapse text-[11px] text-gray-600 dark:text-gray-300">
           <caption className="pb-2 text-left text-[11px] text-gray-500 dark:text-gray-400">
             Every week in the horizon, in words. Load is shown as a share of the
             biggest week ({peak > 0 ? `${Math.round(peak)} load` : "no load planned"}),
@@ -786,10 +766,10 @@ function HorizonTable({
                 Hours
               </th>
               <th scope="col" className={head}>
-                Running
+                Running km
               </th>
               <th scope="col" className={head}>
-                Walking
+                Walking km
               </th>
               <th scope="col" className={head}>
                 Long run
@@ -798,10 +778,10 @@ function HorizonTable({
                 Focus
               </th>
               <th scope="col" className={head}>
-                Discipline
+                Activity
               </th>
               <th scope="col" className={head}>
-                Intent
+                Kind of session
               </th>
             </tr>
           </thead>
@@ -839,8 +819,8 @@ function HorizonTable({
                     {longRun(week) ?? "—"}
                   </td>
                   <td className={cell}>{week.quality_focus ?? "—"}</td>
-                  <td className={cell}>{describeMix(disciplineSegments(week.discipline_mix))}</td>
-                  <td className={cell}>{describeMix(intentSegments(week.intent_mix))}</td>
+                  <td className={cell}>{describeMix(activitySegments(week.discipline_mix))}</td>
+                  <td className={cell}>{describeMix(kindSegments(week.intent_mix))}</td>
                 </tr>
               );
             })}

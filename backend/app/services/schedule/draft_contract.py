@@ -323,7 +323,13 @@ SESSION_PROPERTIES: Dict[str, Any] = {
             "the session."
         ),
     },
-    "target_duration_s": {"type": "integer"},
+    "target_duration_s": {
+        "type": "integer",
+        "description": (
+            "The session's time in seconds. Every session states it, 0 on a "
+            "rest day."
+        ),
+    },
     "reps_planned": {"type": "integer"},
     "rep_distance_m": {"type": "number"},
     "rest_s": {"type": "number"},
@@ -443,6 +449,7 @@ RECORD_TRAINING_PLAN_TOOL = {
                                     "intent",
                                     "discipline",
                                     "title",
+                                    "target_duration_s",
                                 ],
                                 "properties": SESSION_PROPERTIES,
                             },
@@ -465,7 +472,11 @@ RECORD_TRAINING_PLAN_TOOL = {
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["week_start"],
+                    "required": [
+                        "week_start",
+                        "target_duration_s",
+                        "target_walking_distance_m",
+                    ],
                     "properties": {
                         "week_start": {"type": "string"},
                         "phase": {
@@ -509,7 +520,13 @@ RECORD_TRAINING_PLAN_TOOL = {
                                 "activity together: runs, walks, bike, strength."
                             ),
                         },
-                        "target_walking_distance_m": {"type": "number"},
+                        "target_walking_distance_m": {
+                            "type": "number",
+                            "description": (
+                                "The week's walking in metres, 0 for a runner "
+                                "who does not walk."
+                            ),
+                        },
                         "sessions_by_discipline": {
                             "type": "object",
                             "additionalProperties": {"type": "integer"},

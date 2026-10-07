@@ -70,7 +70,10 @@ def _week_from_sessions(sessions: List[Any]) -> Dict[str, Any]:
         if session.commitment != "committed":
             continue
         duration += session.target_duration_s or 0
-        untimed = untimed or not session.target_duration_s
+        # A rest day has no time to state, so it never blanks the week.
+        untimed = untimed or (
+            not session.target_duration_s and session.intent != "rest"
+        )
         if session.discipline == "walk":
             walking_distance += session.target_distance_m or 0.0
         effort = session.target_effort_score or 0.0

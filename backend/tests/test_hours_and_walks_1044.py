@@ -421,3 +421,20 @@ def test_the_coachs_week_view_states_both_distance_and_time():
 
     walk = SimpleNamespace(structure=None, target_distance_m=6000, target_duration_s=4200)
     assert _target(walk) == "6.0 km, 70 min"
+
+
+def test_a_committed_rest_day_does_not_blank_the_weeks_hours(db):
+    """A rest day has no time to state, and the contract asks for 0 there."""
+    user = _seed_user(db)
+    plan = TrainingPlan(user_id=user.id, status="active", rules=[], week_shapes=[])
+    db.add(plan)
+    db.commit()
+    for day, kw in (
+        (TUE, {"discipline": "run", "intent": "easy", "target_duration_s": 3600}),
+        (THU, {"discipline": "other", "intent": "rest", "target_duration_s": 0}),
+    ):
+        db.add(PlannedSession(plan_id=plan.id, user_id=user.id, window_start=day,
+                              window_end=day, commitment="committed", title="s", **kw))
+    db.commit()
+
+    assert build_horizon(db, user, weeks=1, today=TODAY).weeks[0].duration_s == 3600
