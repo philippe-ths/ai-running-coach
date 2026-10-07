@@ -116,18 +116,32 @@ def test_a_runner_with_too_little_history_has_no_typical_week():
 def test_the_drafting_context_states_the_hours_limit_the_gate_enforces(db):
     user = _seed_user(db)
     _seed_history(db, user)
+    # Three minutes a week of rowing is noise, not a habit, and is not listed.
+    for offset in range(10, 90, 7):
+        _seed_activity(
+            db, user, day=TODAY - timedelta(days=offset), activity_type="Rowing",
+            distance_m=0, moving_time_s=180,
+        )
 
     context = build_draft_context(db, user, today=TODAY, weeks=12)
 
-    assert "Typical week, by activity (3.3 h moving in all):" in context
+    assert "Typical week, by activity (3.4 h moving in all):" in context
     assert "  - run: 2.3 h over 3.5 sessions, 28.0 km" in context
     # Strength states no km: it is not measured in km.
     assert "  - strength: 1.0 h over 1.0 sessions\n" in context
-    concrete, sketched = hours_ceilings(weekly_hours_norm_s(_facts(db, user), TODAY))
+    assert "  - row:" not in context
+    # 3.4 h typical: the gate rejects above 6.77 h and 10.15 h. Stated ROUNDED
+    # DOWN, so a week the coach writes under the stated limit always passes.
+    norm = weekly_hours_norm_s(_facts(db, user), TODAY)
+    assert hours_ceilings(norm)[0] / 3600 > 6.7
     assert (
-        f"above {concrete / 3600:.0f} h of committed time, every activity together, "
-        f"is rejected outright; a sketched week may reach {sketched / 3600:.0f} h"
+        "above 6.7 h of committed time, every activity together, is rejected "
+        "outright; a sketched week may reach 10.1 h"
     ) in context
+    at_stated = DraftedPlan(
+        rules=[], weeks=[_week(_timed(TUE, int(6.7 * 3600)))], sketch_weeks=[]
+    )
+    assert validate_drafted_plan(at_stated, today=TODAY, norm_weekly_s=norm).ok
 
 
 # --- the hours ceiling -------------------------------------------------------
@@ -171,6 +185,19 @@ def test_the_race_is_not_training_time():
 
     assert with_race.ok, with_race.failures
     assert not without.ok
+
+
+def test_a_shakeout_on_race_day_is_still_training():
+    race = _timed(SAT, 3600 * 4, discipline="run", intent="long", target_distance_m=42195)
+    shakeout = _timed(SAT, 3600, discipline="run", intent="easy", target_distance_m=3000)
+    plan = DraftedPlan(rules=[], weeks=[_week(_timed(TUE, 3600), race, shakeout)],
+                       sketch_weeks=[])
+
+    check = validate_drafted_plan(
+        plan, today=TODAY, norm_weekly_s=1800, race=(SAT, 42195)
+    )
+
+    assert not check.ok  # 2 h of training against a 1 h ceiling
 
 
 def test_a_sketched_week_may_reach_three_times_but_not_beyond():
@@ -338,7 +365,7 @@ def test_the_horizon_and_the_coach_read_hours_walking_and_a_timed_long_run(db):
         )
 
     add(TUE, "walk", "easy", target_distance_m=5000, target_duration_s=3600)
-    add(WED, "bike", "easy", target_duration_s=2700)
+    add(WED, "bike", "easy", target_distance_m=20000, target_duration_s=2700)
     add(SAT, "run", "long", target_duration_s=5400)  # "90 minutes easy" (#985)
     add(THU, "walk", "easy", commitment="suggested", target_distance_m=9000,
         target_duration_s=7200)
@@ -360,3 +387,37 @@ def test_the_horizon_and_the_coach_read_hours_walking_and_a_timed_long_run(db):
     assert tool_weeks[0]["long_run_minutes"] == 90
     assert "long_run_km" not in tool_weeks[0]
     assert tool_weeks[1]["hours_all_activities"] == 10.0
+
+
+def test_a_week_with_an_untimed_session_states_no_hours_rather_than_a_fraction(db):
+    """A plan written before sessions carried both: runs by km, gym by time.
+    Headlining the 45 minutes of gym as the week's hours would undercount it
+    roughly fivefold, so the week falls back to its running km."""
+    user = _seed_user(db)
+    plan = TrainingPlan(user_id=user.id, status="active", rules=[], week_shapes=[])
+    db.add(plan)
+    db.commit()
+    for day, kw in (
+        (TUE, {"discipline": "run", "intent": "easy", "target_distance_m": 10000}),
+        (THU, {"discipline": "strength", "intent": "strength", "target_duration_s": 2700}),
+    ):
+        db.add(PlannedSession(plan_id=plan.id, user_id=user.id, window_start=day,
+                              window_end=day, commitment="committed", title="s", **kw))
+    db.commit()
+
+    week = build_horizon(db, user, weeks=1, today=TODAY).weeks[0]
+
+    assert week.duration_s is None
+    assert week.running_distance_m == 10000
+    assert "hours_all_activities" not in (
+        query_tools.get_training_plan(db, user.id, today=TODAY)["weeks"][0]
+    )
+
+
+def test_the_coachs_week_view_states_both_distance_and_time():
+    from types import SimpleNamespace
+
+    from app.services.schedule.coach_view import _target
+
+    walk = SimpleNamespace(structure=None, target_distance_m=6000, target_duration_s=4200)
+    assert _target(walk) == "6.0 km, 70 min"

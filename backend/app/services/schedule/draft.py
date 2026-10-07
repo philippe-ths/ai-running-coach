@@ -26,6 +26,7 @@ Three decisions worth knowing before reading
 """
 
 import logging
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -474,11 +475,14 @@ def build_draft_context(
                 )
             # Said from `hours_ceilings`, the function the gate calls, so the
             # limit stated is the limit enforced (the #859 rule for km below).
-            hours_limit = hours_ceilings(total_h * 3600)
+            # Rounded DOWN to a tenth: a week under the stated limit must pass.
+            concrete_h, sketched_h = (
+                math.floor(limit / 360) / 10 for limit in hours_ceilings(total_h * 3600)
+            )
             parts.append(
-                f"- A concrete week above {hours_limit[0] / 3600:.0f} h of committed "
-                f"time, every activity together, is rejected outright; a sketched "
-                f"week may reach {hours_limit[1] / 3600:.0f} h. A limit, not a target."
+                f"- A concrete week above {concrete_h:.1f} h of committed time, every "
+                f"activity together, is rejected outright; a sketched week may reach "
+                f"{sketched_h:.1f} h. A limit, not a target."
             )
         # The number that actually bounds a running plan, given explicitly. The
         # all-activity figure above is the one a coach is most likely to misread

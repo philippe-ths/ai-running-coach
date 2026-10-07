@@ -118,19 +118,18 @@ def committed_duration_s(sessions, race: Optional[tuple] = None) -> float:
     distance into a time with an assumed pace. The race is left out for the
     reason `_validate_volume` gives: it is the runner's fixed commitment.
     """
-    race_date = race[0] if race is not None else None
-    return float(
-        sum(
-            session.target_duration_s or 0
-            for session in sessions
-            if session.commitment == "committed"
-            and not (
-                race_date is not None
-                and session.discipline == "run"
-                and session.window_start == session.window_end == race_date
-            )
-        )
-    )
+    committed = [s for s in sessions if s.commitment == "committed"]
+    total = float(sum(s.target_duration_s or 0 for s in committed))
+    if race is None:
+        return total
+    # The race is the longest run pinned on its day; a shakeout beside it is
+    # still training.
+    on_race_day = [
+        s.target_duration_s or 0
+        for s in committed
+        if s.discipline == "run" and s.window_start == s.window_end == race[0]
+    ]
+    return total - max(on_race_day, default=0)
 
 
 @dataclass

@@ -61,11 +61,16 @@ def _week_from_sessions(sessions: List[Any]) -> Dict[str, Any]:
     # kept beside the distance, so "90 minutes easy" does not read as no long run.
     long_run_time = 0.0
     duration = 0.0
+    # A week's hours are stated only when every committed session states its
+    # time: a plan written before sessions carried both (or a session since
+    # adjusted to a distance) would otherwise headline a fraction of the week.
+    untimed = False
     walking_distance = 0.0
     for session in sessions:
         if session.commitment != "committed":
             continue
         duration += session.target_duration_s or 0
+        untimed = untimed or not session.target_duration_s
         if session.discipline == "walk":
             walking_distance += session.target_distance_m or 0.0
         effort = session.target_effort_score or 0.0
@@ -88,7 +93,7 @@ def _week_from_sessions(sessions: List[Any]) -> Dict[str, Any]:
         "effort_score": load,
         "long_run_distance_m": long_run or None,
         "long_run_duration_s": long_run_time or None,
-        "duration_s": duration or None,
+        "duration_s": None if untimed else duration or None,
         "walking_distance_m": walking_distance or None,
         # A written week states its quality work in the sessions themselves, so
         # there is no summary to add on top: the horizon's job here is to carry
