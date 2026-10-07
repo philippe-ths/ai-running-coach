@@ -51,7 +51,12 @@ dependencies = [
     # `httpx`'s, and which a mid-stream disconnect raises unwrapped (#302).
     # Matches the range `anthropic` itself requires.
     "httpx2>=2.0.0,<3",
-    "pyjwt[crypto]>=2.8.0"
+    "pyjwt[crypto]>=2.8.0",
+    # #555: unofficial Garmin Connect client for the owner-only recovery sync
+    # (Garmin's official Health API is closed to new applicants). Minor-pinned
+    # because an unofficial client breaks on Garmin's side without notice; it is
+    # imported lazily by `services/recovery/garmin_adapter.py` only. MIT.
+    "garminconnect>=0.3.2,<0.4"
 ]
 
 [project.optional-dependencies]

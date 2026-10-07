@@ -56,6 +56,7 @@ The EFFECTIVE window is `max(window_start, today)..window_end`, computed at read
 `PlannedSession.structure` is `{reps_planned, rep_distance_m, rest_s}`, and completion columns are `completed_at`, `completed_activity_id`, `completion_source`, and `dismissed_at`.
 `intent` carries the session's reading and is orthogonal to discipline, since an easy bike and an easy run are the same stimulus.
 A `PeriodReport` is a runner-requested review over a chosen `period_start`/`period_end` and discipline set, with a `generating`/`ready`/`failed` status.
+A `RecoveryDay` is one runner-night from a device, unique per `(user_id, day, source)`, with nullable sleep duration and score, overnight HRV with the device's status and baseline band, and resting HR, where null means NOT MEASURED.
 
 ## Scope
 The backend exposes JSON endpoints under `/api` for health, Strava OAuth, profile read and update, activity listing and detail, sync, deep processing, stream backfill, bulk re-analysis, intent labelling, check-ins, trends, and account deletion.
@@ -72,6 +73,9 @@ Coach materials add `POST`/`GET /api/coach/materials`, `GET /api/coach/materials
 `POST /api/strava/import` starts a resumable walk of Strava history from a chosen `since_date`, and `GET /api/strava/import/status` is the progress poll.
 The import takes raw data only: activity summaries plus deterministic analysis, never streams, never a coach report, and never a notification.
 `DELETE /api/account` removes the Clerk user first, then deletes every row the user owns; a failed Clerk removal touches nothing locally and returns 502.
+`GET /api/recovery?days=N` returns the caller's own recovery nights newest first; nothing in the coach pack reads them yet.
+`GARMIN_SYNC_ENABLED` (default off) makes the worker run `jobs/garmin_sync.py` daily at `GARMIN_SYNC_HOUR_UTC` for the deployment owner only, backfilling `GARMIN_BACKFILL_DAYS` on the first run.
+The Garmin source is the unofficial `garminconnect` client behind `services/recovery/garmin_adapter.py`, authenticated by the worker secret `GARMIN_TOKENS` minted by `scripts/garmin_login.py`, with refreshed tokens held in Redis only.
 The schedule exposes `GET /api/schedule/week`, `GET /api/schedule/horizon`, `GET`/`POST /api/schedule/races`, and `PUT`/`DELETE /api/schedule/races/{race_id}`.
 `POST /api/schedule/draft` asks the coach to draft a plan, creating a `drafting` row and enqueueing `generate_schedule_job`; `GET /api/schedule/draft` is the status poll.
 `GET /api/schedule/plans/previous` reports the plan the runner trained to before this one, and `POST /api/schedule/plans/{plan_id}/restore` brings it back.
@@ -205,16 +209,13 @@ Data flow: Strava API, `strava_ingestion`, `Activity`/`ActivityStream` rows, the
 `pyjwt`: verifies the Clerk session JWT against Clerk's JWKS.
 `httpx`: outbound HTTP client for the Strava API, the Telegram Bot API, and the Clerk JWKS fetch.
 `redis`, `rq`: job queue for sync and processing background work.
-`numpy`: numerical computation in the processing pipeline.
+`garminconnect`: unofficial Garmin Connect client for the owner-only recovery sync, imported lazily by the Garmin adapter.
 `anthropic`: Claude API client used by the coach service, pinned below its next major so a new major is adopted deliberately.
 `httpx2`: the `anthropic` SDK's HTTP layer, declared because `RetryLadder` matches its `RemoteProtocolError` to retry a mid-stream disconnect.
 `sentry-sdk[fastapi]` (optional `observability` extra): error tracking, installed only when Sentry capture is enabled.
 `next`, `react`, `react-dom`: frontend framework and renderer.
 `@clerk/nextjs`: social-login authentication and the frontend session gate.
-`recharts`: charting library for stream and trend views.
 `react-markdown`, `remark-gfm`: render the coach report body as GitHub-flavoured markdown.
-`tailwindcss`, `@tailwindcss/typography`, `autoprefixer`, `postcss`: styling pipeline.
-`typescript`, `eslint`, `eslint-config-next`: type checking and lint baseline.
 
 ## Project Structure
 `backend/app/main.py` boots the FastAPI app and registers routers.
@@ -272,7 +273,6 @@ It scores the fuller turn only: opener-only rows are skipped and counted, never 
 `make diagram-check` guards both generated diagrams against the declarations they were produced from, covering pack sections, `DerivedMetric` coverage, kill-switch and prompt parity, the nested pack key set, generator call signatures, and the chat turn's tools, skills, action kinds, screen keys, and prompt slots.
 `backend/tests/test_diagram_drift.py` tests that wiring itself, because every comparison is a pure function that would stay green if the guard simply stopped calling it.
 CI runs `.github/workflows/deploy.yml` on push and pull requests to `main`, with `backend-test`, `frontend-test`, `alembic-check`, and a push-only `post-deploy-verify` job.
-Major gap: no automated frontend unit or component tests beyond build-time lint and smoke route checks.
 Major gap: no end-to-end test that exercises a real Strava-to-coach-report flow.
 
 ## Real-Data Verification
