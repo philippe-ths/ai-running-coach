@@ -163,6 +163,58 @@ def _guard_local() -> None:
         sys.exit(f"refusing non-local DB target: {url!r}")
 
 
+def migration_gap(current: set[str], heads: set[str]) -> str | None:
+    """Why a database at revisions `current` cannot be captured, or None (#918).
+
+    A database behind head fails its first read of a newer column, which aborts
+    the Postgres transaction, and every later query in the capture fails with
+    it. The per-thread guard swallows each failure, so the run writes a capture
+    with most turns' screen context empty that the drift guard passes. Refusing
+    up front turns that into the no-capture path `plan_capture` already handles.
+    """
+    if current == heads:
+        return None
+    return (
+        f"local database is at {', '.join(sorted(current)) or 'no revision'}, "
+        f"not the migration head {', '.join(sorted(heads))}; a capture against it "
+        f"would degrade silently. Run: cd backend && alembic upgrade head"
+    )
+
+
+def _schema_gap(db) -> str | None:
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(BACKEND / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND / "alembic"))
+    heads = set(ScriptDirectory.from_config(cfg).get_heads())
+    current = set(MigrationContext.configure(db.connection()).get_current_heads())
+    return migration_gap(current, heads)
+
+
+def screen_resolution(conversations: list[dict]) -> dict:
+    """How many runner turns asked from a screen resolved a view (#918).
+
+    A turn asked from no screen legitimately has nothing to resolve, and the
+    assistant row carries no `asked_from` of its own, so only runner turns that
+    name a screen are counted. A wholesale collapse in resolution is otherwise
+    visible only by counting nulls in the written blob.
+    """
+    asked = resolved = 0
+    unresolved: dict[str, int] = {}
+    for conv in conversations:
+        for turn in conv["turns"]:
+            if turn["role"] != "user" or not turn["asked_from"]:
+                continue
+            asked += 1
+            if turn["screen_view"] is not None:
+                resolved += 1
+            else:
+                unresolved[turn["asked_from"]] = unresolved.get(turn["asked_from"], 0) + 1
+    return {"asked": asked, "resolved": resolved, "unresolved_by_screen": unresolved}
+
+
 # --- the real-turn capture (needs a seeded local DB) ----------------------------
 
 # The trace's short window label back to the window enum, so the tools can be
@@ -704,6 +756,9 @@ def _capture_assembled() -> dict:
 
         db = SessionLocal()
         try:
+            gap = _schema_gap(db)
+            if gap is not None:
+                return {"ok": False, "reason": gap}
             # The runner to trace: the one with the most conversation, i.e. the
             # deployment owner on a seeded snapshot. Picking by "richest single
             # turn" instead would land on whichever user happened to have one good
@@ -1125,6 +1180,11 @@ def main() -> None:
               f"{conv['turn_count']:>2} turns · {conv['tool_calls']:>2} tool calls · "
               f"{conv['skill_loads']} skills · from {conv['started_from'] or '—'} · "
               f"prompt {conv['prompt_chars']}")
+    if cap.get("ok"):
+        res = screen_resolution(cap.get("conversations") or [])
+        missing = ", ".join(f"{k} {v}" for k, v in sorted(res["unresolved_by_screen"].items()))
+        print(f"  screen resolution {res['resolved']} of {res['asked']} screen-asked turns resolved a view"
+              f"{' · UNRESOLVED: ' + missing if missing else ''}")
     print(f"wrote {TARGET.relative_to(Path.cwd()) if TARGET.is_relative_to(Path.cwd()) else TARGET}")
     print(f"  prompt template   {len(data['template'])} chars, slots: {', '.join(data['slot_order'])}")
     print(f"  tools             {len(data['tools']['data'])} data + action + skill")
