@@ -86,6 +86,15 @@ class TrainingPlan(Base):
     # would make adding a category a migration rather than a line.
     failure_kind: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
+    # The season this plan was written under (#1064). SET NULL on delete: a plan
+    # outlives the season row it was drafted from, it just loses the pointer.
+    season_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("seasons.id", ondelete="SET NULL"), nullable=True
+    )
+    # `DraftLog` as JSON: what drafting this plan cost and how it fared against
+    # the checks. Null on every plan written before the run log existed.
+    draft_log: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
     # When this plan STOPPED being the runner's plan; null while it is active or
     # has never been active (#857). Written only by `store.activate_plan`, on the
     # rows it supersedes, and cleared on the row it activates.

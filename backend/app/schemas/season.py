@@ -29,6 +29,12 @@ PhaseKind = Literal["base", "build", "sharpen", "taper", "race", "recover"]
 ChallengeMetric = Literal["zone_time_s", "time_s", "distance_m", "sessions"]
 SeasonStatus = Literal["drafting", "active", "superseded", "failed"]
 
+# `SuggestedEvent` and `GoalView` have a field NAMED `date`. Inside the class
+# body that name is the field's default (None) from its own line on, so a later
+# annotation written `Optional[date]` resolves to `Optional[None]` and refuses
+# every real date. Annotations in those two classes use this alias instead.
+Day = date
+
 
 def _single_line(value: Optional[str]) -> Optional[str]:
     # Event names and links can come from web pages: a line break in one could
@@ -79,9 +85,9 @@ class SuggestedEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=200)
-    date: Optional[date] = None
-    window_start: Optional[date] = None
-    window_end: Optional[date] = None
+    date: Optional[Day] = None
+    window_start: Optional[Day] = None
+    window_end: Optional[Day] = None
     distance_m: Optional[float] = Field(default=None, gt=0, le=1_000_000)
     url: str = Field(max_length=500)
     why: str = Field(default="", max_length=300)
@@ -109,9 +115,9 @@ class GoalView(BaseModel):
     success: str = Field(min_length=1, max_length=300)
     # The day it happens (a race, a completion attempt), or a window when a day
     # is premature. A booked goal's day is the runner's and must not move.
-    date: Optional[date] = None
-    window_start: Optional[date] = None
-    window_end: Optional[date] = None
+    date: Optional[Day] = None
+    window_start: Optional[Day] = None
+    window_end: Optional[Day] = None
     approach: str = Field(min_length=1, max_length=800)
     events: List[SuggestedEvent] = Field(default_factory=list, max_length=3)
     challenge: Optional[ChallengeRule] = None
@@ -239,5 +245,8 @@ class SeasonRead(BaseModel):
     challenges: List[ChallengeStatus] = Field(default_factory=list)
     # True when the runner's goals changed since this season was written.
     stale: bool = False
+    # True while a newer season is being written behind an active one, so the
+    # screen can keep showing the current season and say a rewrite is under way.
+    regenerating: bool = False
     shortfalls: List[str] = Field(default_factory=list)
     message: Optional[str] = None
