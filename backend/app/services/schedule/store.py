@@ -391,6 +391,45 @@ def plan_rules(plan: Optional[TrainingPlan]) -> List[SpacingRule]:
     return coerced
 
 
+def concrete_week_phases(weeks) -> List[dict]:
+    """Phase-only `week_shapes` entries for weeks written as real sessions.
+
+    The drafting tool names a phase on every concrete week, but concrete weeks
+    are stored as `PlannedSession` rows, which have nowhere to keep it. The
+    horizon already reads a planned week's phase from its shape, so the phase
+    rides there: `week_start` and `phase` only, every total left None so nothing
+    is counted twice. Only a week holding a COMMITTED session gets one, because
+    that is what makes the horizon read the week as planned; a week of
+    suggestions alone must stay empty rather than become an empty sketch.
+    """
+    out: List[dict] = []
+    for week in weeks:
+        if not week.phase:
+            continue
+        if not any(s.commitment == "committed" for s in week.sessions):
+            continue
+        out.append(
+            PlannedWeekShape(week_start=week.week_start, phase=week.phase).model_dump(
+                mode="json"
+            )
+        )
+    return out
+
+
+def is_phase_only(shape: PlannedWeekShape) -> bool:
+    """A shape that names a phase and states nothing else about the week."""
+    return (
+        shape.target_running_distance_m is None
+        and shape.target_effort_score is None
+        and shape.long_run_distance_m is None
+        and shape.target_duration_s is None
+        and shape.target_walking_distance_m is None
+        and not shape.quality_focus
+        and not shape.discipline_mix
+        and not shape.intent_mix
+    )
+
+
 def plan_week_shapes(plan: Optional[TrainingPlan]) -> List[PlannedWeekShape]:
     """The horizon's week shapes, strict-coerced; anything off-shape is dropped."""
     if plan is None or not plan.week_shapes:

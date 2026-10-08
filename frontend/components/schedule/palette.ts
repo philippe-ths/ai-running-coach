@@ -96,6 +96,18 @@ export const DISCIPLINE_FILL: Record<Discipline, string> = {
   other: "bg-gray-500 dark:bg-gray-400",
 };
 
+// The horizon bar's own fills: one hue per activity, read with the legend.
+// Not DISCIPLINE_FILL, whose single-hue ramp serves the small mix bar elsewhere.
+// Rose is the goal colour and is avoided. Dark twins sit lighter, as elsewhere.
+export const ACTIVITY_FILL: Record<Discipline, string> = {
+  run: "bg-blue-700 dark:bg-blue-400",
+  walk: "bg-emerald-600 dark:bg-emerald-500",
+  bike: "bg-amber-600 dark:bg-amber-500",
+  strength: "bg-violet-600 dark:bg-violet-400",
+  row: "bg-cyan-600 dark:bg-cyan-500",
+  other: "bg-gray-500 dark:bg-gray-400",
+};
+
 /** Stable draw order for a stacked mix: the ramp, darkest first, residual last. */
 export const DISCIPLINE_ORDER: Discipline[] = [
   "run",

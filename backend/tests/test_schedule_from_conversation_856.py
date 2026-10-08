@@ -835,3 +835,12 @@ def test_no_instruction_sends_the_runner_out_of_the_product(phrase):
             assert occurrences == text.count("never point them at another app")
         else:
             assert phrase not in text
+
+
+def test_the_conversation_addendum_keeps_what_it_never_discussed():
+    """Silence is a gap to fill from the typical week, not agreement to drop."""
+    from app.services.schedule import draft
+
+    text = " ".join(draft._FROM_CONVERSATION.split())
+    assert "typical week it never mentioned" in text
+    assert "What the conversation changed stays as agreed" in text

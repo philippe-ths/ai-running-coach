@@ -908,7 +908,7 @@ def _recorded_chat_surface(blob: dict) -> dict[str, list[str]]:
         return sorted(prop.get("enum") or [])
 
     named = [t.get("name") for t in (tools.get("data") or []) if isinstance(t, dict)]
-    for key in ("action", "skill"):
+    for key in ("action", "search", "skill"):
         entry = tools.get(key)
         if isinstance(entry, dict) and entry.get("name"):
             named.append(entry["name"])
@@ -992,7 +992,7 @@ def _declared_chat_content() -> dict[str, object]:
 def _recorded_chat_content(blob: dict) -> dict[str, object]:
     tools = blob.get("tools") or {}
     recorded_tools = list(tools.get("data") or [])
-    for key in ("action", "skill"):
+    for key in ("action", "search", "skill"):
         if isinstance(tools.get(key), dict):
             recorded_tools.append(tools[key])
     return {

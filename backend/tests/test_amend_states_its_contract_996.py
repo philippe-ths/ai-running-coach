@@ -48,7 +48,7 @@ def test_the_blocks_carry_the_rules_that_actually_failed():
     both = draft.PLACING_AND_COMMITTING + draft.WRITING_A_SESSION
     assert "stay INSIDE one week" in both        # the Sunday-into-Monday window
     assert "A rest day is REST" in both          # 'Rest or easy walk' with no target
-    assert "needs enough to size it" in both     # the sizing gate
+    assert "no time, distance or rep structure is rejected" in both  # the sizing gate
     assert "ADD UP" in both                      # warm-up and cool-down in metres
 
 

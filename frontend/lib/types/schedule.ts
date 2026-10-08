@@ -260,7 +260,15 @@ export interface HorizonWeek {
   // on a sketched week; a written week states its quality work in the sessions
   // themselves, so it stays null there.
   long_run_distance_m: number | null;
+  // The long run's time, so one given only in minutes still reads as a long
+  // run (#985). Planned weeks only.
+  long_run_duration_s: number | null;
   quality_focus: string | null;
+  // The week's time across every activity and its walking distance (#1044):
+  // summed from a planned week's sessions, as stated for a sketched one. Null
+  // when nothing states it, as on a plan drafted before either existed.
+  duration_s: number | null;
+  walking_distance_m: number | null;
   // discipline/intent -> share of the week's load, 0..1. Shares, not absolutes,
   // so a mix can never contradict the total it is a mix of. An all-zero week
   // yields an empty map rather than a fake even split.

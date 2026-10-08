@@ -15,7 +15,14 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -230,6 +237,7 @@ class ProposedActionFrame(BaseModel):
         "adjust_session",
         "revise_max_hr",
         "amend_plan",
+        "add_goal",
     ]
     token: str
     description: str
@@ -262,6 +270,42 @@ class ProposedSessionRow(BaseModel):
     changed: bool = False
 
 
+class OfferedGoal(BaseModel):
+    """A goal as the coach may PROPOSE it (#1051): the races API's fields minus the
+    two only the runner can state. `booked` is theirs to say, since a search result
+    cannot know they entered, and a target time is theirs to set. Priority defaults
+    to C, the lowest, because a found event has not yet been chosen as the goal.
+
+    Not trusted on its own: `_validated_goal` runs the result through the races
+    API's own `GoalRaceCreate`, so the offer and `POST /api/schedule/races` can
+    never disagree about what a goal is."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    race_date: Optional[date] = None
+    window_start: Optional[date] = None
+    window_end: Optional[date] = None
+    distance_m: Optional[float] = Field(default=None, gt=0, le=1_000_000)
+    priority: Literal["A", "B", "C"] = "C"
+    # Short on purpose: the source link and one line. The card shows it in full,
+    # so the runner confirms exactly the words that will be stored, and those
+    # words later reach the drafting and report prompts as "in their words".
+    notes: Optional[str] = Field(default=None, max_length=300)
+
+    @field_validator("name", "notes")
+    @classmethod
+    def _single_line_text(cls, value):
+        # Web-sourced text. A line break in a name or note could start a line in a
+        # later prompt that reads as another goal or another instruction.
+        if value is not None and any(
+            ord(ch) < 32 or 0x7F <= ord(ch) <= 0x9F or ch in "\u2028\u2029"
+            for ch in value
+        ):
+            raise ValueError("must be a single line of plain text")
+        return value
+
+
 class ProposedActionRequest(BaseModel):
     """The model-facing offer contract.
 
@@ -278,6 +322,7 @@ class ProposedActionRequest(BaseModel):
         "adjust_session",
         "revise_max_hr",
         "amend_plan",
+        "add_goal",
     ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = Field(default=None, ge=1, le=10)
@@ -306,6 +351,8 @@ class ProposedActionRequest(BaseModel):
     # change the runner agrees to and the change that gets made are described by
     # one sentence rather than two that could differ.
     amend_reason: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    # #1051: the event to add as a goal, for `add_goal` only.
+    goal: Optional[OfferedGoal] = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -345,6 +392,9 @@ class ProposedActionRequest(BaseModel):
                     "adjust_session requires target_distance_m or target_duration_s, "
                     "not both"
                 )
+        elif self.action_type == "add_goal":
+            if self.goal is None:
+                raise ValueError("add_goal requires goal")
         elif self.action_type == "amend_plan":
             if self.weeks_from is None or self.weeks_through is None:
                 raise ValueError(
@@ -377,6 +427,8 @@ class ProposedActionRequest(BaseModel):
             or self.amend_reason is not None
         ):
             raise ValueError("only amend_plan takes a window and a reason")
+        if self.action_type != "add_goal" and self.goal is not None:
+            raise ValueError("only add_goal takes a goal")
         # `revise_max_hr` (#945) deliberately takes NO arguments, the
         # `draft_plan` precedent: the evidence and the proposed number are
         # deterministic facts already in front of the coach in THE RUNNER
@@ -398,6 +450,7 @@ class StoredProposedAction(BaseModel):
         "adjust_session",
         "revise_max_hr",
         "amend_plan",
+        "add_goal",
     ]
     activity_id: Optional[UUID] = None
     rpe: Optional[int] = None
@@ -446,6 +499,10 @@ class StoredProposedAction(BaseModel):
     # whether the profile is STILL the exact number this offer was built
     # against; that requires remembering what it was.
     stated_max_hr_at_offer: Optional[int] = None
+    # #1051: the goal an `add_goal` card will write, as the validated
+    # `GoalRaceCreate` dump. Re-validated at confirm, so what is written is what
+    # the races API would have accepted, not what the token happens to hold.
+    goal: Optional[Dict[str, Any]] = None
     # #856: the conversation the plan was settled in. Server-supplied at mint
     # time, never model-supplied. Carried by EVERY action since #778, because a
     # confirmed change leaves its trace in the conversation that reached it.
@@ -479,6 +536,12 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
         "shape you already agreed. Prefer it over draft_plan every time: "
         "draft_plan throws away the block they agreed to and writes a different "
         "one, so it is for starting over, not for changing your mind), "
+        "or adding a race or event as one of their goals (add_goal - after "
+        "you have searched for events and they have chosen one; give the "
+        "event's name, its exact race_date only when a source states it, "
+        "otherwise a window_start and window_end, its distance, and its web "
+        "address in notes; never invent a date, and a goal is never booked "
+        "by you), "
         "or updating their stated max heart rate when their own recent "
         "training has clearly overtaken it (revise_max_hr — takes no arguments; "
         "the evidence and the proposed number are already in front of you in "
@@ -506,7 +569,28 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
                     "adjust_session",
                     "revise_max_hr",
                     "amend_plan",
+                    "add_goal",
                 ],
+            },
+            "goal": {
+                "type": "object",
+                "description": "add_goal only: the event, as the sources state it.",
+                "properties": {
+                    "name": {"type": "string"},
+                    "race_date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD, only when a source states the exact day.",
+                    },
+                    "window_start": {"type": "string", "description": "YYYY-MM-DD"},
+                    "window_end": {"type": "string", "description": "YYYY-MM-DD"},
+                    "distance_m": {"type": "number"},
+                    "priority": {"type": "string", "enum": ["A", "B", "C"]},
+                    "notes": {
+                        "type": "string",
+                        "description": "The event's web address and one short line, 300 characters at most.",
+                    },
+                },
+                "required": ["name"],
             },
             "activity_id": {"type": "string"},
             "rpe": {"type": "integer", "minimum": 1, "maximum": 10},
@@ -581,8 +665,11 @@ PROPOSED_ACTION_TOOL: Dict[str, Any] = {
 
 
 def thread_tools(base_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Thread turns may offer an action; the activity chat box may not."""
-    return [*base_tools, PROPOSED_ACTION_TOOL]
+    """Thread turns may offer an action, and search the web for events (#1051,
+    behind its kill switch); the activity chat box may do neither."""
+    from app.services.coach.event_search import event_search_tools
+
+    return [*base_tools, PROPOSED_ACTION_TOOL, *event_search_tools()]
 
 
 def mint_proposed_action(
@@ -860,6 +947,22 @@ def _execute(db: Session, owner_user_id: UUID, stored: StoredProposedAction) -> 
             "planned_session_id": str(session.id),
         }
 
+    if stored.action_type == "add_goal":
+        from app.services.schedule import store as schedule_store
+
+        if not settings.SCHEDULE_ENABLED or not settings.COACH_EVENT_SEARCH_ENABLED:
+            raise ValueError("adding an event is unavailable")
+        # The races API's own write, on the races API's own envelope.
+        goal = _validated_goal(stored.goal or {})
+        race = schedule_store.create_goal_race(
+            db, owner_user_id, **goal.model_dump()
+        )
+        return {
+            "action_type": "add_goal",
+            "goal_race_id": str(race.id),
+            "message": "Added to your goals.",
+        }
+
     if stored.action_type == "complete_session":
         from app.services.schedule.completion import (
             CONVERSATION,
@@ -996,6 +1099,39 @@ def _describe_amendment(start: date, end: date, reason: Optional[str]) -> str:
     return (
         f"{reason_text[0].upper()}{reason_text[1:]} ({window}). "
         f"The rest of your plan, its rules and your race stay as they are."
+    )
+
+
+def _validated_goal(fields: Dict[str, Any]):
+    """The races API's envelope applied to a proposed goal, plus the one rule a
+    found event adds: it must still be ahead. Raises ValueError, which the offer
+    path hands back to the model as a refusal it can act on."""
+    from pydantic import ValidationError as _ValidationError
+
+    from app.schemas.schedule import GoalRaceCreate
+
+    try:
+        goal = GoalRaceCreate.model_validate(fields)
+    except _ValidationError as exc:
+        raise ValueError(
+            f"that is not a goal the app can hold: {exc.errors()[0]['msg']}"
+        )
+    ends = goal.race_date or goal.window_end
+    if ends is not None and ends < date.today():
+        raise ValueError("that event is already in the past")
+    return goal
+
+
+def _describe_goal(goal, when: str) -> str:
+    distance = (
+        f", {round(goal.distance_m / 1000, 1):g} km"
+        if goal.distance_m is not None
+        else ""
+    )
+    note = f' Notes saved with it: "{goal.notes}"' if goal.notes else ""
+    return (
+        f"Add {goal.name} to your goals: {when}{distance}, "
+        f"priority {goal.priority}.{note}"
     )
 
 
@@ -1176,6 +1312,25 @@ def _build_offer(
         from app.services.coach.max_hr_calibration import record_surfaced
 
         record_surfaced(db, owner_user_id, finding.suggested_max)
+        return frame, stored
+
+    if request.action_type == "add_goal":
+        from app.services.schedule import goals as goals_service
+
+        if not settings.SCHEDULE_ENABLED or not settings.COACH_EVENT_SEARCH_ENABLED:
+            raise ValueError("adding an event is unavailable")
+        goal = _validated_goal(request.goal.model_dump())
+        frame = ProposedActionFrame(
+            action_type="add_goal",
+            token="",
+            description=_describe_goal(goal, goals_service.when_text(goal, date.today())),
+            confirm_label="Add to my goals",
+        )
+        stored = StoredProposedAction(
+            owner_user_id=owner_user_id,
+            action_type="add_goal",
+            goal=goal.model_dump(mode="json"),
+        )
         return frame, stored
 
     if request.action_type == "complete_session":
