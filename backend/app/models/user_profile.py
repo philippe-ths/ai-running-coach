@@ -53,6 +53,11 @@ class UserProfile(Base):
     hr_zones: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # List[int], len 5
     hr_zones_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # "strava"
     upcoming_races: Mapped[list] = mapped_column(JSON, default=[])  # List[dict]
+    # PBs the runner has told us (#1068), for the ones our Strava records cannot
+    # see: [{"distance": "5K", "time_s": 1234, "on": "2024-05-01" | null}]. Null
+    # means none stated. The coach sees the faster of these and the derived PB;
+    # see app/services/personal_bests.py.
+    stated_pbs: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     injury_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Opt-in medication/physiology flag (N4 confounder stage reads it). Nullable:
     # unset means "unknown", not "no stimulant use".

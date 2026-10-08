@@ -38,6 +38,12 @@ function buildValue(form: ProfileForm): string {
   return parts.length ? parts.join(' · ') : 'Not stated';
 }
 
+// #1068: a count, not the times. Five times do not fit a row at phone width.
+function pbsValue(form: ProfileForm): string {
+  const n = (form.stated_pbs ?? []).length;
+  return n ? `${n} added` : 'None added';
+}
+
 // One chip per external account, stating linked/not rather than offering the
 // control. The controls live on the connections screen this links to.
 function ConnectionChip({
@@ -150,6 +156,12 @@ export default function ProfileHub({ form }: { form: ProfileForm }) {
           value={buildValue(form)}
           valueTone={form.weight_kg == null && form.height_cm == null ? 'muted' : 'default'}
           mono={form.weight_kg != null || form.height_cm != null}
+        />
+        <SettingRow
+          href="/profile?s=pbs"
+          name="Personal bests"
+          value={pbsValue(form)}
+          valueTone={form.stated_pbs?.length ? 'default' : 'muted'}
         />
         <SettingRow
           href="/profile?s=health"

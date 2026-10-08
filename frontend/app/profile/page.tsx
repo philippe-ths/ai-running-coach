@@ -17,6 +17,7 @@ import {
   AppSection,
   BodySection,
   HealthSection,
+  PersonalBestsSection,
   TrainingSection,
 } from '@/components/profile/EditSections';
 import {
@@ -24,6 +25,7 @@ import {
   EMPTY_PROFILE_FORM,
   ProfileForm,
   profileFromApi,
+  StatedPb,
 } from '@/components/profile/profileForm';
 import { useCoachFeatureFlags } from '@/lib/useCoachFeatureFlags';
 import { fetchFromAPI } from '@/lib/api';
@@ -62,6 +64,8 @@ function ProfileScreens() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
+  // #1068: a PB row that does not parse holds the save rather than dropping it.
+  const [pbsValid, setPbsValid] = useState(true);
 
   useEffect(() => {
     fetchFromAPI('/api/profile')
@@ -82,10 +86,16 @@ function ProfileScreens() {
   useEffect(() => {
     setDraft(profile);
     setError(null);
+    setPbsValid(true);
   }, [section, profile]);
 
   const set = useCallback((name: keyof ProfileForm, value: string) => {
     setDraft((prev) => ({ ...prev, [name]: coerceField(name, value) }));
+  }, []);
+
+  const setPbs = useCallback((pbs: StatedPb[] | null, valid: boolean) => {
+    setDraft((prev) => ({ ...prev, stated_pbs: pbs }));
+    setPbsValid(valid);
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -154,6 +164,20 @@ function ProfileScreens() {
         >
           {errorBanner}
           <BodySection form={draft} onChange={set} />
+        </SectionScreen>
+      );
+
+    case 'pbs':
+      return (
+        <SectionScreen
+          title="Personal bests"
+          description="So the coach can pace races and judge goal times from what you have actually run."
+          onSave={handleSave}
+          saving={saving}
+          saveDisabled={!pbsValid}
+        >
+          {errorBanner}
+          <PersonalBestsSection form={draft} onChange={setPbs} />
         </SectionScreen>
       );
 

@@ -5,6 +5,10 @@
 // request -- a per-section partial body would be rejected before
 // `exclude_unset` ever ran.
 
+// #1068: a PB the runner tells us. `distance` uses Strava's best-effort labels so
+// the backend can set it against the PBs it derives from their runs.
+export type StatedPb = { distance: string; time_s: number; on: string | null };
+
 export type ProfileForm = {
   goal_type: string;
   experience_level: string;
@@ -20,6 +24,7 @@ export type ProfileForm = {
   weight_kg: number | null;
   height_cm: number | null;
   week_starts_on: number; // 0=Monday (default), 6=Sunday (#676)
+  stated_pbs: StatedPb[] | null; // #1068: null = none stated
 };
 
 export const EMPTY_PROFILE_FORM: ProfileForm = {
@@ -36,6 +41,7 @@ export const EMPTY_PROFILE_FORM: ProfileForm = {
   weight_kg: null,
   height_cm: null,
   week_starts_on: 0,
+  stated_pbs: null,
 };
 
 // #742: clearing a body field must send null ("not stated"), never 0 -- the
@@ -69,6 +75,7 @@ export function profileFromApi(data: Record<string, unknown> | null): ProfileFor
     weight_kg: (data.weight_kg as number | null) ?? null,
     height_cm: (data.height_cm as number | null) ?? null,
     week_starts_on: (data.week_starts_on as number) ?? 0,
+    stated_pbs: (data.stated_pbs as StatedPb[] | null) ?? null,
   };
 }
 
@@ -85,3 +92,32 @@ export const EXPERIENCE_LABELS: Record<string, string> = {
   intermediate: 'Intermediate',
   advanced: 'Advanced',
 };
+
+// #1068: the distances a PB can be stated at, keyed by Strava's best-effort label.
+// The bounds mirror the backend envelope (app/services/personal_bests.py): just
+// under the world record to about 15 min/km. Outside them is a typo, not a PB.
+export const PB_DISTANCES: { key: string; label: string; min: number; max: number }[] = [
+  { key: '1 mile', label: '1 mile', min: 220, max: 1500 },
+  { key: '5K', label: '5K', min: 750, max: 4500 },
+  { key: '10K', label: '10K', min: 1570, max: 9000 },
+  { key: 'Half-Marathon', label: 'Half marathon', min: 3450, max: 19000 },
+  { key: 'Marathon', label: 'Marathon', min: 7200, max: 38000 },
+];
+
+// "22:30" or "1:42:10" -> seconds; null for anything else.
+export function parseDuration(text: string): number | null {
+  const parts = text.trim().split(':');
+  if (parts.length < 2 || parts.length > 3) return null;
+  if (!parts.every((p) => /^\d+$/.test(p))) return null;
+  const nums = parts.map(Number);
+  if (nums.slice(1).some((n) => n >= 60)) return null;
+  return nums.reduce((total, n) => total * 60 + n, 0);
+}
+
+export function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}

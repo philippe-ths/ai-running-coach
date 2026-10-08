@@ -1,8 +1,14 @@
 'use client';
 
-import { ReactNode } from 'react';
+import { ReactNode, useState } from 'react';
 import { ChipGroup, CountPicker, FieldHint, NumberField, SegmentedControl } from './controls';
-import { ProfileForm } from './profileForm';
+import {
+  formatDuration,
+  parseDuration,
+  PB_DISTANCES,
+  ProfileForm,
+  StatedPb,
+} from './profileForm';
 
 // The screens that edit profile fields (#941). Each renders a slice of the one
 // ProfileForm the page owns; none of them saves -- the page does, with the
@@ -196,6 +202,116 @@ export function AppSection({
         <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
           Applies to this device straight away.
         </p>
+      </div>
+    </div>
+  );
+}
+
+// #1068: PBs the runner tells us. The coach already reads the PBs Strava measured
+// on runs we hold in detail; these cover the ones it cannot see. Each row is a
+// time and an optional date; clearing the time removes the PB.
+type PbRow = { time: string; on: string };
+
+function rowError(key: string, row: PbRow): string | null {
+  if (!row.time.trim()) return row.on ? 'Add a time, or clear the date.' : null;
+  const seconds = parseDuration(row.time);
+  if (seconds == null) return 'Use minutes:seconds, or hours:minutes:seconds.';
+  const bounds = PB_DISTANCES.find((d) => d.key === key)!;
+  // The likely slip is 1:42 meaning an hour and 42, so say how it was read.
+  if (seconds < bounds.min) {
+    return `That reads as ${formatDuration(seconds)}, faster than the world record. For hours, use h:mm:ss.`;
+  }
+  if (seconds > bounds.max) {
+    return `That reads as ${formatDuration(seconds)}, slower than we accept here. Check the format.`;
+  }
+  return null;
+}
+
+export function PersonalBestsSection({
+  form,
+  onChange,
+}: {
+  form: ProfileForm;
+  // null when any row is invalid, so the page can hold the save.
+  onChange: (pbs: StatedPb[] | null, valid: boolean) => void;
+}) {
+  const [rows, setRows] = useState<Record<string, PbRow>>(() => {
+    const byKey: Record<string, PbRow> = {};
+    for (const d of PB_DISTANCES) {
+      const pb = (form.stated_pbs ?? []).find((p) => p.distance === d.key);
+      byKey[d.key] = { time: pb ? formatDuration(pb.time_s) : '', on: pb?.on ?? '' };
+    }
+    return byKey;
+  });
+
+  const update = (key: string, patch: Partial<PbRow>) => {
+    const next = { ...rows, [key]: { ...rows[key], ...patch } };
+    setRows(next);
+    const valid = PB_DISTANCES.every((d) => rowError(d.key, next[d.key]) == null);
+    const pbs = PB_DISTANCES.filter((d) => next[d.key].time.trim()).map((d) => ({
+      distance: d.key,
+      time_s: parseDuration(next[d.key].time) ?? 0,
+      on: next[d.key].on || null,
+    }));
+    onChange(pbs.length ? pbs : null, valid);
+  };
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  return (
+    <div className={`${CARD} space-y-5`}>
+      {PB_DISTANCES.map((d) => {
+        const row = rows[d.key];
+        const error = rowError(d.key, row);
+        const id = `pb-${d.key.replace(/\W+/g, '-').toLowerCase()}`;
+        return (
+          <fieldset key={d.key} aria-describedby={error ? `${id}-error` : 'pbs-hint'}>
+            <legend className="mb-2 text-sm font-medium">{d.label}</legend>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor={`${id}-time`} className="mb-1 block text-xs text-gray-500 dark:text-gray-400">
+                  Time
+                </label>
+                <input
+                  id={`${id}-time`}
+                  type="text"
+                  autoComplete="off"
+                  placeholder={d.key === 'Marathon' || d.key === 'Half-Marathon' ? 'h:mm:ss' : 'mm:ss'}
+                  value={row.time}
+                  onChange={(e) => update(d.key, { time: e.target.value })}
+                  aria-invalid={Boolean(error)}
+                  className="min-h-[46px] w-full rounded-lg border border-gray-300 bg-white px-3 font-mono text-base text-gray-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                />
+              </div>
+              <div>
+                <label htmlFor={`${id}-on`} className="mb-1 block text-xs text-gray-500 dark:text-gray-400">
+                  When (optional)
+                </label>
+                <input
+                  id={`${id}-on`}
+                  type="date"
+                  max={today}
+                  value={row.on}
+                  onChange={(e) => update(d.key, { on: e.target.value })}
+                  className="min-h-[46px] w-full rounded-lg border border-gray-300 bg-white px-3 text-base text-gray-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                />
+              </div>
+            </div>
+            {error && (
+              <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red-700 dark:text-red-300">
+                {error}
+              </p>
+            )}
+          </fieldset>
+        );
+      })}
+
+      <div className="rounded-lg border bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900">
+        <FieldHint id="pbs-hint">
+          The coach already sees PBs Strava measured on your runs here. Add the ones it
+          might miss, like a race from before you connected Strava. If Strava has a
+          faster time, the coach uses that one.
+        </FieldHint>
       </div>
     </div>
   );
