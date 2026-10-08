@@ -80,6 +80,7 @@ def _seed_race(db, user: User, *, race_date: date, name: str = "Autumn half") ->
         ("get", "/api/schedule/horizon"),
         ("get", "/api/schedule/races"),
         ("post", "/api/schedule/races"),
+        ("put", f"/api/schedule/races/{uuid4()}"),
         ("delete", f"/api/schedule/races/{uuid4()}"),
     ],
 )
@@ -94,7 +95,7 @@ def test_every_route_refuses_while_the_schedule_is_switched_off(
     resp = getattr(client, method)(
         path,
         **({"json": {"name": "x", "race_date": FUTURE.isoformat(), "distance_m": 10000}}
-           if method == "post" else {}),
+           if method in ("post", "put") else {}),
     )
 
     assert resp.status_code == 503
@@ -293,6 +294,17 @@ def test_another_runners_races_never_appear_in_the_list(db, client):
             "distance_m": 10000,
             "goal_time_s": 5400,
         },
+        # #1042: a goal's date is exact, a window, or absent, never a mix.
+        {
+            "name": "Date and window",
+            "race_date": "2026-12-01",
+            "window_start": "2026-12-01",
+            "window_end": "2026-12-31",
+        },
+        {"name": "Half a window", "window_start": "2027-03-01"},
+        {"name": "Window backwards", "window_start": "2027-06-01", "window_end": "2027-05-01"},
+        {"name": "Booked with no date", "window_start": "2027-03-01", "window_end": "2027-03-31", "booked": True},
+        {"name": "Zero target", "race_date": "2026-12-01", "target_time_s": 0},
     ],
 )
 def test_an_off_contract_race_is_rejected_at_the_boundary(db, client, payload):

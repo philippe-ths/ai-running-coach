@@ -33,6 +33,7 @@ from app.services.coach.coach_units import pace as _pace
 from app.services.coach.context import zones_calibration
 from app.services.coach.query_tools import _by_type, _totals
 from app.services.coach.thread_turn import _build_baseline_sections, _profile_dict
+from app.services.schedule import goals as schedule_goals
 from app.services.schedule import store as schedule_store
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,9 @@ class PeriodReportPack(BaseModel):
     zones_calibrated: bool
 
     profile: Dict[str, Any] = Field(default_factory=dict)
-    goal_race: Optional[Dict[str, Any]] = None
+    # Every goal still ahead at the end of the period, as `goals.for_coach`
+    # states it (#1042), so the review can talk about what the stretch was for.
+    goals: List[Dict[str, Any]] = Field(default_factory=list)
     memory: Optional[Dict[str, Any]] = None
     readiness: Optional[Dict[str, Any]] = None
     schedule: Optional[Dict[str, Any]] = None
@@ -125,19 +128,12 @@ def build_period_report_pack(
         logger.exception("period report: baseline sections failed for user %s", user.id)
         baseline = {}
 
-    goal_race = None
     try:
         races = schedule_store.list_goal_races(db, user.id, on_or_after=period_end)
     except Exception:  # noqa: BLE001
         races = []
-    if races:
-        race = races[0]
-        goal_race = {
-            "name": race.name,
-            "race_date": race.race_date.isoformat(),
-            "distance_m": race.distance_m,
-            "priority": race.priority,
-        }
+    # Weeks away from the end of the period, which is the "now" this review speaks from.
+    goal_list = [schedule_goals.for_coach(race, period_end) for race in races]
 
     ordered = sorted(facts, key=lambda f: f.local_date)
     sessions = [
@@ -160,7 +156,7 @@ def build_period_report_pack(
         disciplines=list(disciplines or []),
         zones_calibrated=zones_calibrated,
         profile=_profile_dict(profile),
-        goal_race=goal_race,
+        goals=goal_list,
         memory=baseline.get("memory"),
         readiness=baseline.get("readiness"),
         schedule=baseline.get("schedule"),

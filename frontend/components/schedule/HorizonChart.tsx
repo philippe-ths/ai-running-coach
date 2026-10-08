@@ -196,6 +196,32 @@ const GRID_STOPS = [25, 50, 75];
 const ROW_GRID =
   "grid grid-cols-[3.25rem_0.75rem_minmax(0,1fr)_3rem_1rem] items-center gap-x-2";
 
+/** The day a goal stands on in the chart: its exact date, else the start of its window. */
+function goalDay(goal: GoalRace): string | null {
+  return goal.race_date ?? goal.window_start;
+}
+
+/** The date column's short label: "Nov 8", or "~Oct" for a window (its start). */
+function goalColumnLabel(goal: GoalRace): string {
+  if (goal.race_date) return formatDateLabel(goal.race_date);
+  return goal.window_start ? `~${formatDateLabel(goal.window_start).split(" ")[0]}` : "";
+}
+
+/** Whether a week overlaps a goal's window: the weeks a range goal runs through. */
+function weekInWindow(weekStart: string, goal: GoalRace): boolean {
+  if (goal.race_date || !goal.window_start || !goal.window_end) return false;
+  return weekStart <= goal.window_end && addDaysIso(weekStart, 6) >= goal.window_start;
+}
+
+/** "Nov 8" for an exact date; "~Mar" or "~May–Jun" for an approximate one. */
+function goalDayLabel(goal: GoalRace): string {
+  if (goal.race_date) return formatDateLabel(goal.race_date);
+  if (!goal.window_start) return "";
+  const start = formatDateLabel(goal.window_start).split(" ")[0];
+  const end = goal.window_end ? formatDateLabel(goal.window_end).split(" ")[0] : start;
+  return start === end ? `~${start}` : `~${start}–${end}`;
+}
+
 export default function HorizonChart({
   horizon,
   segmentation,
@@ -217,12 +243,20 @@ export default function HorizonChart({
   // A race lands in the week whose seven days contain it. Weeks are contiguous
   // and the API only returns races inside the span, so a race that matches no
   // week is a mismatch worth not silently dropping — it falls to the tail.
+  // A goal with only an approximate date ("~March") stands at the start of its
+  // window, which is the date the plan works to (#1042). The API leaves out goals
+  // with no date at all; the goals panel lists those.
   const racesByWeek = new Map<string, GoalRace[]>();
   const placed = new Set<string>();
   for (const race of horizon.races) {
-    const week = horizon.weeks.find(
-      (w) => race.race_date >= w.week_start && race.race_date <= addDaysIso(w.week_start, 6),
-    );
+    // A window that opened before the first week shown is under way, so it
+    // stands in the first week rather than falling off the chart.
+    const first = horizon.weeks[0]?.week_start;
+    const raw = goalDay(race);
+    const day = raw && first && !race.race_date && raw < first ? first : raw;
+    const week = day
+      ? horizon.weeks.find((w) => day >= w.week_start && day <= addDaysIso(w.week_start, 6))
+      : undefined;
     if (!week) continue;
     placed.add(race.id);
     const list = racesByWeek.get(week.week_start) ?? [];
@@ -230,6 +264,17 @@ export default function HorizonChart({
     racesByWeek.set(week.week_start, list);
   }
   const unplacedRaces = horizon.races.filter((r) => !placed.has(r.id));
+
+  // A range goal ("10h a week, Oct–Dec") runs THROUGH weeks rather than landing
+  // on one, so every week it covers carries a thin rail down the left edge.
+  const windowGoals = horizon.races.filter((r) => !r.race_date && r.window_start && r.window_end);
+  const railFor = (weekStart: string) =>
+    windowGoals.some((g) => weekInWindow(weekStart, g)) ? (
+      <span
+        className="pointer-events-none absolute -left-2 inset-y-0 w-0.5 rounded bg-rose-500/70 dark:bg-rose-400/70"
+        aria-hidden="true"
+      />
+    ) : null;
 
   const rows: ReactNode[] = [];
   let lastPhase: string | null = null;
@@ -309,7 +354,8 @@ export default function HorizonChart({
       .join(" · ");
 
     rows.push(
-      <div key={week.week_start}>
+      <div key={week.week_start} className="relative">
+        {railFor(week.week_start)}
         <button
           type="button"
           aria-expanded={open}
@@ -422,19 +468,25 @@ export default function HorizonChart({
 
     for (const race of racesByWeek.get(week.week_start) ?? []) {
       rows.push(
-        <div key={race.id} className={`${ROW_GRID} py-0.5`}>
+        <div key={race.id} className={`relative ${ROW_GRID} py-0.5`}>
+          {railFor(week.week_start)}
           <span className="font-mono text-[11px] tabular-nums text-rose-700 dark:text-rose-400">
-            {formatDateLabel(race.race_date)}
+            {goalColumnLabel(race)}
           </span>
           <span className="flex justify-center" aria-hidden="true">
             <span className="h-2 w-0.5 bg-rose-700 dark:bg-rose-400" />
           </span>
           <span className="flex items-center gap-2 truncate text-[11px] font-medium text-rose-700 dark:text-rose-400">
             <span className="h-px w-3 shrink-0 bg-rose-700 dark:bg-rose-400" aria-hidden="true" />
-            <span className="truncate">{race.name}</span>
+            <span className="truncate">
+              {race.name}
+              {!race.race_date && (
+                <span className="font-normal opacity-80"> · {goalDayLabel(race).slice(1)}</span>
+              )}
+            </span>
           </span>
           <span className="text-right font-mono text-[11px] tabular-nums text-rose-700 dark:text-rose-400">
-            {(race.distance_m / 1000).toFixed(0)}k
+            {race.distance_m ? `${(race.distance_m / 1000).toFixed(0)}k` : ""}
           </span>
           <span />
         </div>,
@@ -751,11 +803,12 @@ function HorizonTable({
 
       {horizon.races.length > 0 && (
         <p className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
-          Races in this window:{" "}
+          Goals in this window:{" "}
           {horizon.races
             .map(
               (r) =>
-                `${r.name} on ${formatDateLabel(r.race_date)} (${(r.distance_m / 1000).toFixed(0)} km)`,
+                `${r.name} ${r.race_date ? "on " : ""}${goalDayLabel(r)}` +
+                (r.distance_m ? ` (${(r.distance_m / 1000).toFixed(0)} km)` : ""),
             )
             .join("; ")}
           .
