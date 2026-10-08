@@ -81,6 +81,11 @@ def main() -> None:
     # missing HERE — the config that produced the #795 cross-user leak — booted
     # silently. Worker-scoped: TELEGRAM_BOT_USERNAME is a web-only concern.
     warn_notification_config("worker")
+    # #555: begin the owner-only daily Garmin recovery sync chain (no-op unless
+    # GARMIN_SYNC_ENABLED; a Redis marker stops a restart starting a second chain).
+    from app.jobs.garmin_sync import start_chain_if_needed
+
+    start_chain_if_needed()
     logger.info(
         "Worker booting; listening on %s (WORKER_POOL_SIZE=%d)",
         ",".join(LISTEN),

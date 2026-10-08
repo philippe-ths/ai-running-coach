@@ -29,6 +29,7 @@ from app.models import (
     DerivedMetric,
     Exchange,
     RunnerBaseline,
+    RecoveryDay,
     RunnerMemory,
     StravaAccount,
     StravaImport,
@@ -48,6 +49,7 @@ _ACTIVITY_CHILDREN = (ActivityStream, CheckIn, CoachChatMessage, CoachReport, De
 # rows referencing THEM. Deleted after activities/blocks, before the user row.
 _USER_OWNED = (
     CoachingRelationship,
+    RecoveryDay,
     RunnerBaseline,
     RunnerMemory,
     StravaAccount,

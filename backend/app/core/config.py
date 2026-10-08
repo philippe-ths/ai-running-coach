@@ -1,6 +1,6 @@
 import os
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The test session opts out of the env file (#752). `Settings` is a module-level
@@ -467,6 +467,18 @@ class Settings(BaseSettings):
     # existing data is not orphaned behind a fresh empty account. Empty disables
     # reconciliation (every verified email gets/creates its own user).
     OWNER_EMAIL: str = ""
+
+    # #555: owner-only Garmin recovery sync (sleep, overnight HRV, resting HR),
+    # through the unofficial `garminconnect` library because Garmin's official
+    # Health API is closed to new applicants. Default OFF: off, nothing is
+    # scheduled and nothing calls Garmin. `GARMIN_TOKENS` is the token dump from
+    # `scripts/garmin_login.py`, a secret set on the WORKER only (never a Garmin
+    # password, never stored in the DB, never logged). The sync runs once a day at
+    # `GARMIN_SYNC_HOUR_UTC`, after the runner's night has been processed.
+    GARMIN_SYNC_ENABLED: bool = False
+    GARMIN_TOKENS: SecretStr = SecretStr("")
+    GARMIN_SYNC_HOUR_UTC: int = 7
+    GARMIN_BACKFILL_DAYS: int = 30
 
     # Dev-only ungated mode for local browser verification (#488). Setting this
     # True forces the Clerk degrade path (the single seeded local user) so the
