@@ -61,6 +61,13 @@ export function coerceField(name: string, value: string): string | number | null
   return value;
 }
 
+// Only the distances the PB screen can show: a row it cannot show is one the
+// runner could neither see nor fix there.
+function shownPbs(pbs: StatedPb[] | null): StatedPb[] | null {
+  const shown = (pbs ?? []).filter((pb) => PB_DISTANCES.some((d) => d.key === pb.distance));
+  return shown.length ? shown : null;
+}
+
 export function profileFromApi(data: Record<string, unknown> | null): ProfileForm {
   if (!data) return EMPTY_PROFILE_FORM;
   return {
@@ -75,7 +82,7 @@ export function profileFromApi(data: Record<string, unknown> | null): ProfileFor
     weight_kg: (data.weight_kg as number | null) ?? null,
     height_cm: (data.height_cm as number | null) ?? null,
     week_starts_on: (data.week_starts_on as number) ?? 0,
-    stated_pbs: (data.stated_pbs as StatedPb[] | null) ?? null,
+    stated_pbs: shownPbs(data.stated_pbs as StatedPb[] | null),
   };
 }
 
@@ -120,4 +127,13 @@ export function formatDuration(seconds: number): string {
   const s = seconds % 60;
   const pad = (n: number) => String(n).padStart(2, '0');
   return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+// #1068: whether stored PBs would pass the backend's checks, so their screen
+// can hold Save from the moment it opens rather than only after an edit.
+export function storedPbsValid(pbs: StatedPb[] | null, today: string): boolean {
+  return (pbs ?? []).every((pb) => {
+    const d = PB_DISTANCES.find((x) => x.key === pb.distance);
+    return Boolean(d) && pb.time_s >= d!.min && pb.time_s <= d!.max && !(pb.on && pb.on > today);
+  });
 }

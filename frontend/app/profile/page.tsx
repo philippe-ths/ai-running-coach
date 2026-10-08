@@ -26,6 +26,7 @@ import {
   ProfileForm,
   profileFromApi,
   StatedPb,
+  storedPbsValid,
 } from '@/components/profile/profileForm';
 import { useCoachFeatureFlags } from '@/lib/useCoachFeatureFlags';
 import { fetchFromAPI } from '@/lib/api';
@@ -86,7 +87,7 @@ function ProfileScreens() {
   useEffect(() => {
     setDraft(profile);
     setError(null);
-    setPbsValid(true);
+    setPbsValid(storedPbsValid(profile.stated_pbs, new Date().toLocaleDateString('en-CA')));
   }, [section, profile]);
 
   const set = useCallback((name: keyof ProfileForm, value: string) => {
@@ -105,9 +106,14 @@ function ProfileScreens() {
       // The whole object, exactly as the flat form posted it: PUT /api/profile
       // validates against UserProfileCreate, which requires goal_type,
       // experience_level and weekly_days_available on every request.
+      // Except the stated PBs (#1068): only their own screen sends them, so a
+      // stored PB the rules now refuse blocks that screen alone, where its row
+      // says why. Left out, the backend keeps what is stored.
+      // (JSON.stringify drops an undefined key.)
+      const body = section === 'pbs' ? draft : { ...draft, stated_pbs: undefined };
       const updated = await fetchFromAPI('/api/profile', {
         method: 'PUT',
-        body: JSON.stringify(draft),
+        body: JSON.stringify(body),
       });
       setProfile(updated ? profileFromApi(updated) : draft);
       setJustSaved(true);
@@ -120,7 +126,7 @@ function ProfileScreens() {
     } finally {
       setSaving(false);
     }
-  }, [draft, router]);
+  }, [draft, router, section]);
 
   useEffect(() => {
     if (!justSaved) return;

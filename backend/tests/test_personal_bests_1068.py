@@ -227,9 +227,13 @@ def test_stated_pbs_are_cleared_with_null(client, db):
     assert client.get("/api/profile").json()["stated_pbs"] is None
 
 
-def test_a_stored_row_the_envelope_would_refuse_does_not_break_the_profile(client, db):
+def test_a_stored_row_the_envelope_would_refuse_blocks_neither_reads_nor_other_saves(client, db):
     client.get("/api/profile")  # creates the single local profile
     profile = db.query(UserProfile).one()
     profile.stated_pbs = [{"distance": "15K", "time_s": 10}]
     db.commit()
+
     assert client.get("/api/profile").status_code == 200
+    # Another screen's save leaves stated_pbs out, as the profile page does.
+    assert client.put("/api/profile", json={**_PROFILE, "weight_kg": 68}).status_code == 200
+    assert client.get("/api/profile").json()["stated_pbs"] == [{"distance": "15K", "time_s": 10}]

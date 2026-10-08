@@ -185,7 +185,7 @@ def personal_bests(runs: Sequence[HeldRun], stated: Sequence[StatedPB]) -> List[
     return out
 
 
-# Strava's run family, as the coach's other tools count it.
+# Strava's run family, as `query_tools` counts it for the runner's own lookups.
 RUN_TYPES = ("run", "virtualrun", "trailrun")
 
 
