@@ -1460,7 +1460,11 @@ async def _apply_voice(
         return [v for v in validate_message_policy(probe, pack) if v.rule not in inherited]
 
     outcome = await revoice_report(
-        baseline=baseline, voice=voice, user_id=user_id, validate=_introduced
+        baseline=baseline,
+        voice=voice,
+        user_id=user_id,
+        validate=_introduced,
+        is_opener=is_opener,
     )
     # The wall-clock cost rides the stored reason when a call was actually made,
     # so "what does a rewrite cost?" is answerable from the reports themselves.
