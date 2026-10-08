@@ -7,6 +7,7 @@
 // no CSS variables.
 
 import type { Discipline, SessionIntent } from "@/lib/types/schedule";
+import type { PhaseKind } from "@/lib/types/season";
 
 export const INTENT_LABEL: Record<SessionIntent, string> = {
   rest: "Rest",
@@ -145,4 +146,42 @@ export function safeIntent(value: string): SessionIntent {
 
 export function safeDiscipline(value: string): Discipline {
   return (value in DISCIPLINE_LABEL ? value : "other") as Discipline;
+}
+
+// #1064: the season's phase timeline. One hue per phase kind, so the strip reads
+// as a sequence at a glance; the kind is also written beside every swatch, so
+// identity never rests on colour alone. Rose is the goal colour (race, goal
+// markers) and the race phase takes it deliberately. Dark twins sit lighter, as
+// elsewhere in this file.
+export const PHASE_LABEL: Record<PhaseKind, string> = {
+  base: "Base",
+  build: "Build",
+  sharpen: "Sharpen",
+  taper: "Taper",
+  race: "Race",
+  recover: "Recover",
+};
+
+export const PHASE_FILL: Record<PhaseKind, string> = {
+  base: "bg-sky-600 dark:bg-sky-500",
+  build: "bg-indigo-700 dark:bg-indigo-400",
+  sharpen: "bg-orange-700 dark:bg-orange-600",
+  taper: "bg-teal-600 dark:bg-teal-500",
+  race: "bg-rose-700 dark:bg-rose-400",
+  recover: "bg-stone-400 dark:bg-stone-500",
+};
+
+/** The order phases normally run in, for the legend. */
+export const PHASE_ORDER: PhaseKind[] = [
+  "base",
+  "build",
+  "sharpen",
+  "taper",
+  "race",
+  "recover",
+];
+
+/** An unknown phase kind from a stored season degrades rather than crashing. */
+export function safePhase(value: string): PhaseKind {
+  return (value in PHASE_LABEL ? value : "base") as PhaseKind;
 }

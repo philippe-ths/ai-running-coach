@@ -606,6 +606,22 @@ const mockScheduleHorizon = {
       effort_score: 210,
       discipline_mix: { run: 0.72, strength: 0.18, bike: 0.1 },
       intent_mix: { easy: 0.55, long: 0.3, quality: 0.15 },
+      // #1064: the challenge line for a covered week. A past week is judged on
+      // what was done (`actual`/`met`), a week ahead on what the plan holds.
+      challenges: [
+        {
+          goal_id: "55555555-5555-5555-5555-555555555555",
+          name: "10h a week, zone 2+",
+          index: 1,
+          weeks: 10,
+          metric: "zone_time_s",
+          min_zone: 2,
+          threshold: 36000,
+          planned: 37100,
+          actual: 37100,
+          met: true,
+        },
+      ],
     },
     {
       week_start: "2026-03-30",
@@ -617,6 +633,22 @@ const mockScheduleHorizon = {
       effort_score: 232,
       discipline_mix: { run: 0.7, strength: 0.2, bike: 0.1 },
       intent_mix: { easy: 0.5, long: 0.32, quality: 0.18 },
+      // #1064: the challenge line for a covered week. A past week is judged on
+      // what was done (`actual`/`met`), a week ahead on what the plan holds.
+      challenges: [
+        {
+          goal_id: "55555555-5555-5555-5555-555555555555",
+          name: "10h a week, zone 2+",
+          index: 2,
+          weeks: 10,
+          metric: "zone_time_s",
+          min_zone: 2,
+          threshold: 36000,
+          planned: 36000,
+          actual: 33100,
+          met: false,
+        },
+      ],
     },
     {
       week_start: "2026-04-06",
@@ -628,6 +660,22 @@ const mockScheduleHorizon = {
       effort_score: 168,
       discipline_mix: { run: 0.64, strength: 0.24, walk: 0.12 },
       intent_mix: { easy: 0.7, long: 0.3 },
+      // #1064: the challenge line for a covered week. A past week is judged on
+      // what was done (`actual`/`met`), a week ahead on what the plan holds.
+      challenges: [
+        {
+          goal_id: "55555555-5555-5555-5555-555555555555",
+          name: "10h a week, zone 2+",
+          index: 3,
+          weeks: 10,
+          metric: "zone_time_s",
+          min_zone: 2,
+          threshold: 36000,
+          planned: 32400,
+          actual: null,
+          met: null,
+        },
+      ],
     },
     {
       week_start: "2026-04-13",
@@ -761,6 +809,10 @@ const mockScheduleHorizon = {
   ],
   has_plan: true,
   peak_effort_score: 340,
+  // #1064: what the plan cannot do, stated rather than left out.
+  shortfalls: [
+    "Week of 6 Apr: the plan holds 9 h of zone 2+ against the 10 h the challenge needs; the 4 days left cannot carry more.",
+  ],
 };
 
 // #830: the runner's goal races. Mutable, because the panel POSTs and DELETEs
@@ -775,6 +827,116 @@ const mockGoalRaces = [
     priority: "A",
   },
 ];
+
+// #1064: the season, the coach's read of every goal together. Dates hang off
+// today so the card's "week n of N", today marker and ahead/past weeks are
+// exercised whatever day the smoke runs.
+function buildSeason() {
+  const today = todayISO();
+  const raceDay = addDaysISO(today, 120);
+  const challengeStart = addDaysISO(today, -21);
+  const weeks = Array.from({ length: 10 }, (_, i) => ({
+    week_start: addDaysISO(challengeStart, i * 7),
+    index: i + 1,
+    threshold: 36000,
+    planned: i === 5 ? 33000 : 37000,
+    actual: i < 3 ? (i === 1 ? 31000 : 37500) : null,
+    met: i < 3 ? i !== 1 : null,
+  }));
+  return {
+    id: "66666666-6666-6666-6666-666666666666",
+    status: "active",
+    generated_at: `${today}T08:00:00Z`,
+    model_id: "claude-opus-5-5",
+    plan: {
+      summary:
+        "Hold ten hours of zone 2 a week first; it is the harder constraint and the base the half needs anyway. Race the 10K as a rehearsal, not a target.",
+      goals: [
+        {
+          goal_id: "22222222-2222-2222-2222-222222222222",
+          kind: "race",
+          success: "Run a half marathon PB without the last 5 km fading.",
+          date: raceDay,
+          window_start: null,
+          window_end: null,
+          approach: "Two quality days a week from week 6, one of them race-pace work.",
+          events: [
+            {
+              name: "<b>Paddock Wood Half</b> [bold](x)",
+              date: raceDay,
+              window_start: null,
+              window_end: null,
+              distance_m: 21097.5,
+              url: "https://example.org/paddock-wood-half",
+              why: "Flat and local, <i>no</i> travel needed.",
+            },
+          ],
+          challenge: null,
+        },
+        {
+          goal_id: "55555555-5555-5555-5555-555555555555",
+          kind: "challenge",
+          success: "Ten straight weeks at or above ten hours of zone 2+.",
+          date: null,
+          window_start: null,
+          window_end: null,
+          approach: "Walk and ride the hours up; the runs stay easy.",
+          events: [],
+          challenge: {
+            metric: "zone_time_s",
+            disciplines: [],
+            min_zone: 2,
+            at_least: 36000,
+            weeks: 10,
+            start: challengeStart,
+          },
+        },
+        {
+          goal_id: "77777777-7777-7777-7777-777777777777",
+          kind: "someday",
+          success: "Last man standing at a backyard ultra, when the base is there.",
+          date: null,
+          window_start: null,
+          window_end: null,
+          approach: "Not this season.",
+          events: [],
+          challenge: null,
+        },
+      ],
+      phases: [
+        { kind: "base", start: addDaysISO(today, -21), end: addDaysISO(today, 48), goal_id: null, focus: "Hours first", weekly_hours: 10, run_km: 30, long_run_km: 14 },
+        { kind: "build", start: addDaysISO(today, 49), end: addDaysISO(today, 98), goal_id: "22222222-2222-2222-2222-222222222222", focus: "Race pace", weekly_hours: 11, run_km: 42, long_run_km: 18 },
+        { kind: "taper", start: addDaysISO(today, 99), end: addDaysISO(today, 119), goal_id: "22222222-2222-2222-2222-222222222222", focus: "", weekly_hours: 7, run_km: 25, long_run_km: 10 },
+        { kind: "race", start: raceDay, end: raceDay, goal_id: "22222222-2222-2222-2222-222222222222", focus: "", weekly_hours: null, run_km: null, long_run_km: null },
+        { kind: "recover", start: addDaysISO(today, 121), end: addDaysISO(today, 134), goal_id: null, focus: "", weekly_hours: 5, run_km: 12, long_run_km: null },
+      ],
+    },
+    goals: [
+      { id: "22222222-2222-2222-2222-222222222222", name: "Paddock Wood Half", race_date: raceDay, window_start: null, window_end: null, distance_m: 21097.5, target_time_s: null, notes: null, booked: true, priority: "A" },
+      { id: "55555555-5555-5555-5555-555555555555", name: "10h a week, any activity, zone 2+", race_date: null, window_start: null, window_end: null, distance_m: null, target_time_s: null, notes: null, booked: false, priority: "B" },
+      { id: "77777777-7777-7777-7777-777777777777", name: "Backyard ultra", race_date: null, window_start: null, window_end: null, distance_m: null, target_time_s: null, notes: null, booked: false, priority: "C" },
+    ],
+    challenges: [
+      {
+        goal_id: "55555555-5555-5555-5555-555555555555",
+        name: "10h a week, any activity, zone 2+",
+        rule: {
+          metric: "zone_time_s",
+          disciplines: [],
+          min_zone: 2,
+          at_least: 36000,
+          weeks: 10,
+          start: challengeStart,
+        },
+        weeks,
+        streak: 1,
+      },
+    ],
+    stale: false,
+    shortfalls: [],
+    message: null,
+  };
+}
 
 const mockScheduleDraft = {
   status: "active",
@@ -867,7 +1029,10 @@ const routesToCheck = [
   // The goal-race panel belongs to the whole schedule, so it is server-rendered
   // above the tabs in both views. Its races arrive client-side; the heading is
   // what proves the surface is there at all.
-  { path: "/schedule", expectedText: "Goal race" },
+  // (The heading has read "Goals" since #1042 made a goal more than a race.)
+  { path: "/schedule", expectedText: "Goals" },
+  // #1064: the season card sits under the goals, above the tabs.
+  { path: "/schedule", expectedText: "Your season" },
   // #964: the legal pages. These prove the routes BOOT and render their content.
   // They do NOT prove the pages are publicly reachable, which is the property
   // that actually matters for them: the smoke harness runs with no Clerk
@@ -997,6 +1162,13 @@ function createMockApiServer() {
         races: mockScheduleHorizon.races.filter((r) => r.race_date <= spanEnd),
         peak_effort_score: loads.length ? Math.max(...loads) : null,
       });
+    }
+
+    // #1064: the season. GET is the card's read; POST answers 202 like the real
+    // endpoint, which starts planning on the worker.
+    if (pathname === "/api/schedule/season") {
+      if (req.method === "POST") return sendJson(res, 202, { status: "drafting" });
+      return sendJson(res, 200, buildSeason());
     }
 
     // The empty-state CTA polls this on mount to pick up an in-flight draft, so
@@ -1246,10 +1418,36 @@ async function main() {
   if (typeof horizon.peak_effort_score !== "number" || horizon.peak_effort_score <= 0) {
     throw new Error("/api/schedule/horizon returned no peak to scale the bars against");
   }
+  // #1064: the challenge line and the plan's shortfalls ride the horizon read.
+  const challengeLine = horizon.weeks[1]?.challenges?.[0];
+  if (!challengeLine || challengeLine.met !== false) {
+    throw new Error("/api/schedule/horizon returned no missed challenge week to mark");
+  }
+  if (!Array.isArray(horizon.shortfalls) || horizon.shortfalls.length === 0) {
+    throw new Error("/api/schedule/horizon returned no shortfalls to state");
+  }
   // The race marker is drawn from this list, so a horizon that returns no race
   // inside a narrow window would silently lose it.
   if (!Array.isArray(horizon.races) || horizon.races.length === 0) {
     throw new Error("/api/schedule/horizon?weeks=4 returned no race to mark");
+  }
+
+  // #1064: the season is client-fetched too, so the endpoint is driven through
+  // the proxy: the shape the card reads, and the 202 the start button expects.
+  const seasonResponse = await fetch(`${FRONTEND_BASE_URL}/api/schedule/season`);
+  if (!seasonResponse.ok) {
+    throw new Error(`Expected 200 for /api/schedule/season, received ${seasonResponse.status}`);
+  }
+  const season = await seasonResponse.json();
+  if (season.status !== "active" || !season.plan?.goals?.length || !season.plan?.phases?.length) {
+    throw new Error("/api/schedule/season returned no active season to draw");
+  }
+  if (!season.challenges?.[0]?.weeks?.length) {
+    throw new Error("/api/schedule/season returned a challenge goal with no weeks");
+  }
+  const seasonStart = await fetch(`${FRONTEND_BASE_URL}/api/schedule/season`, { method: "POST" });
+  if (seasonStart.status !== 202) {
+    throw new Error(`Expected 202 from POST /api/schedule/season, received ${seasonStart.status}`);
   }
 
   // #830: goal-race capture. Also client-side only, so the same proxy path is
