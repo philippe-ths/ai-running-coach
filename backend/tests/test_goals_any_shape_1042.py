@@ -172,8 +172,8 @@ def test_an_approximate_a_goal_anchors_a_plan_over_a_nearer_booked_b(db):
 
 def test_the_anchor_the_validator_and_the_prompt_name_the_same_goal(db):
     """An undated A goal anchors nothing, so the booked B race is the target for
-    all three; when they disagreed, the B race lost its race-week exemption while
-    the prompt told the coach the block was for the undated ultra."""
+    both the plan's anchor and the validator's race week; when they disagreed, the
+    B race lost its race-week exemption."""
     from app.services.schedule.draft import build_draft_context
 
     user = _user(db)
@@ -183,7 +183,8 @@ def test_the_anchor_the_validator_and_the_prompt_name_the_same_goal(db):
 
     assert store.plan_target_race(db, user.id, on_or_after=TODAY).name == "Chatham 10k"
     assert goals.validator_race(races) == (date(2026, 11, 8), 10000)
-    assert "The block is built for Chatham 10k." in build_draft_context(db, user, today=TODAY, weeks=12)
+    # The prompt no longer names a target: the season does, from the same goals.
+    assert "The block is built for" not in build_draft_context(db, user, today=TODAY)
 
 
 def test_a_note_cannot_start_a_line_of_its_own_in_the_prompt(db):
@@ -307,7 +308,7 @@ def test_the_drafting_context_states_every_goal_and_how_exact_its_date_is(db):
     user = _user(db)
     _season(db, user)
 
-    context = build_draft_context(db, user, today=TODAY, weeks=12)
+    context = build_draft_context(db, user, today=TODAY)
 
     assert '- Half marathon (priority B): around March 2027 (approximate, nothing booked), ' \
            '21 weeks away, 21.1 km, target 1:40:00. In their words: "somewhere flat"' in context

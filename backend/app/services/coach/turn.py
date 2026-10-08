@@ -13,8 +13,9 @@ convention rather than a module.
 This module owns the parts of a turn that are not the coaching:
 
 - WHICH MODEL a turn runs on. Conversational turns take `COACH_CHAT_MODEL_ID`
-  when set, everything else `COACH_MODEL_ID`; that resolution lives here and
-  nowhere else.
+  when set, the voice rewrite `COACH_VOICE_MODEL_ID`, a period report
+  `COACH_PERIOD_MODEL_ID`, a plan draft `COACH_SCHEDULE_MODEL_ID`, everything
+  else `COACH_MODEL_ID`; that resolution lives here and nowhere else.
 - THE CLIENT a turn is handed, which is a `MeteredClient`: it records every
   call's spend on the per-user budget counter. Recording is a property of the
   client rather than of each call site, so a surface built on it later cannot
@@ -63,7 +64,13 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.coaching_relationship import CoachingRelationship
 from app.services.coach import budget
-from app.services.coach.llm import AnthropicClient, ChatTurnDelta, MessageResult, Usage
+from app.services.coach.llm import (
+    AnthropicClient,
+    ChatTurnDelta,
+    MessageResult,
+    ReasonedCallFailed,
+    Usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,12 +131,15 @@ class TurnKind(str, Enum):
 # turn can run on a cheaper/faster model than the report; `COACH_VOICE_MODEL_ID`
 # so the rewrite can be steered independently; `COACH_PERIOD_MODEL_ID` so a
 # runner-requested, far-less-frequent period report can run on a stronger model
-# than the per-run report (#946). All fall back to COACH_MODEL_ID when unset, so
+# than the per-run report (#946); `COACH_SCHEDULE_MODEL_ID` so drafting a plan,
+# the one lane that thinks at length and searches the web, can run on the
+# strongest model (#1064). All fall back to COACH_MODEL_ID when unset, so
 # day-one behaviour is byte-identical.
 _MODEL_LANES = {
     TurnKind.THREAD: lambda: settings.chat_model_id,
     TurnKind.VOICE: lambda: settings.voice_model_id,
     TurnKind.PERIOD: lambda: settings.period_model_id,
+    TurnKind.SCHEDULE: lambda: settings.schedule_model_id,
 }
 
 
@@ -236,6 +246,34 @@ class MeteredClient:
             system=system, user=user, tool=tool, max_tokens=max_tokens,
             timeout=timeout,
         )
+        self._record(usage)
+        return result, usage
+
+    async def generate_structured_reasoned(
+        self,
+        *,
+        system: str,
+        user: str,
+        tool: Dict[str, Any],
+        max_tokens: int,
+        effort: str = "high",
+        web_search_max_uses: int = 0,
+        timeout: Optional[float] = None,
+    ) -> tuple[Dict[str, Any], Usage]:
+        """The thinking, web-searching structured call, metered with its searches
+        (`_record` reads `web_search_requests`, so each query is priced)."""
+        try:
+            result, usage = await self._inner.generate_structured_reasoned(
+                system=system, user=user, tool=tool, max_tokens=max_tokens,
+                effort=effort, web_search_max_uses=web_search_max_uses,
+                timeout=timeout,
+            )
+        except ReasonedCallFailed as exc:
+            # The call ran and was billed even though it returned no answer: a
+            # cap that only counted answers would not count the expensive
+            # failures (a long think cut off at max_tokens).
+            self._record(exc.usage)
+            raise
         self._record(usage)
         return result, usage
 

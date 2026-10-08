@@ -19,6 +19,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.goal_race import GoalRace
 from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
@@ -33,10 +34,13 @@ DRAFTING = "drafting"
 FAILED = "failed"
 
 
-# How long a draft may sit in `drafting` before it is treated as abandoned.
-# Generous next to a generation that takes about a minute: the cost of waiting is
-# a slow retry, the cost of being too eager is two concurrently-billed drafts.
-DRAFT_STALE_AFTER = timedelta(minutes=15)
+# How long a draft may sit in `drafting` before it is treated as abandoned: the
+# longest the drafting job may run, plus a margin for the queue. Past that no
+# worker is still writing it, and the generate job refuses a plan no longer
+# drafting, so a late pickup cannot activate a plan the runner was told had failed.
+DRAFT_STALE_AFTER = timedelta(seconds=settings.SCHEDULE_JOB_TIMEOUT_SECONDS) + timedelta(
+    minutes=3
+)
 
 
 def latest_plan(db: Session, user_id: uuid.UUID) -> Optional[TrainingPlan]:
@@ -174,6 +178,7 @@ def activate_plan(
 FAILURE_TOO_BIG_A_JUMP = "too_big_a_jump"
 FAILURE_UNREACHABLE = "unreachable"
 FAILURE_OVER_BUDGET = "over_budget"
+FAILURE_SEASON = "season"
 FAILURE_UNKNOWN = "unknown"
 
 FAILURE_KINDS = frozenset(
@@ -181,6 +186,7 @@ FAILURE_KINDS = frozenset(
         FAILURE_TOO_BIG_A_JUMP,
         FAILURE_UNREACHABLE,
         FAILURE_OVER_BUDGET,
+        FAILURE_SEASON,
         FAILURE_UNKNOWN,
     }
 )
@@ -426,6 +432,7 @@ def is_phase_only(shape: PlannedWeekShape) -> bool:
         and shape.target_walking_distance_m is None
         and not shape.quality_focus
         and not shape.discipline_mix
+        and not shape.duration_by_discipline_s
         and not shape.intent_mix
     )
 

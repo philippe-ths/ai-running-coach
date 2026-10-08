@@ -29,6 +29,7 @@ import { useAmendmentStatus } from "@/lib/useAmendmentStatus";
 import PreviousPlanBanner from "@/components/schedule/PreviousPlanBanner";
 import HorizonView from "@/components/schedule/HorizonView";
 import GoalRacePanel from "@/components/schedule/GoalRacePanel";
+import SeasonPanel from "@/components/schedule/SeasonPanel";
 import { addDaysIso, todayIso } from "@/components/schedule/dates";
 
 type View = "week" | "horizon";
@@ -264,6 +265,12 @@ export default function SchedulePage() {
         onChanged={onRaceChanged}
         onAskCoach={coach.enabled ? coach.openWith : undefined}
       />
+
+      {/* #1064: the coach's read of those goals together. Under the goals it is
+          about and above the tabs, because it frames both views: the week and the
+          horizon follow from it. A season landing changes the plan under both,
+          so it is told the way a draft landing is. */}
+      <SeasonPanel refreshToken={raceToken} onSeasonReady={onPlanChanged} />
 
       <ViewTabs view={view} onChange={setView} />
 

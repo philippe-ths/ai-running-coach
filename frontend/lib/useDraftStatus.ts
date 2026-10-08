@@ -21,9 +21,11 @@ import type { DraftStatus } from "@/lib/types/schedule";
 const POLL_INTERVAL_MS = 3000;
 
 // A draft that has run far longer than one ever takes is not worth polling for
-// ever: a browser tab left open would ask until it was closed. The server has
-// its own staleness rule for the same event; this only stops the asking.
-const MAX_POLLS = 60;
+// ever: a browser tab left open would ask until it was closed. The cap outlasts
+// the server's staleness rule (the drafting job's timeout plus three minutes, 28
+// minutes by default), so an abandoned draft is seen to fail rather than left
+// spinning.
+const MAX_POLLS = 600;
 
 // A blip mid-draft should not abandon the watch, but a poll that keeps failing
 // is not a blip. The schedule surface has a kill switch, and behind it every

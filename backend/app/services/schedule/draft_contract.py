@@ -14,9 +14,10 @@ long, how far — and `effort.py` computes what that costs from the runner's own
 history. See that module for why; in short, a load number an LLM estimated would
 be a guess drawn as a bar the runner reads as fact.
 
-It also does not ask for `discipline_mix`/`intent_mix` on the sketched weeks.
-Those are shares of a load total, so they are derived from the session counts the
-model DOES give and the same load model. One number, one owner.
+It does not ask for the weeks beyond the concrete ones either. The model writes
+real sessions for the weeks it is given a frame for; the later weeks are written by
+code from the season's phases (`frames.py`, `draft.write_shapes`), so no sum in the
+plan is a number a model typed.
 """
 
 from datetime import date
@@ -27,8 +28,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.schemas.schedule import SpacingRule
 
 MAX_CONCRETE_WEEKS = 6
-MAX_SKETCH_WEEKS = 26
-MAX_SESSIONS_PER_WEEK = 14
+# Three a day: a walk, a run and a gym session is a real day for some runners,
+# and a high-volume week of everything they do can pass fourteen.
+MAX_SESSIONS_PER_WEEK = 21
 MAX_RULES = 8
 SUMMARY_MAX_CHARS = 2000
 
@@ -167,75 +169,11 @@ class DraftedWeek(BaseModel):
     )
 
 
-class SketchedWeek(BaseModel):
-    """A week of the horizon given as shape rather than sessions.
-
-    Counts, not shares: "four runs and two gym sessions" is something a coach
-    decides, whereas "run is 71% of the week's load" is an arithmetic consequence
-    the app works out.
-
-    A shape has to say enough to be BUILT FROM later, not merely drawn (#981).
-    The runner arrives at these weeks, and when they do the sketch is what the
-    concrete sessions are written from; a week that recorded only a total and a
-    phase name gives that later pass nothing to honour, so it plans afresh and
-    the block the runner agreed quietly becomes a different one.
-
-    Two fields carry that, and only two, because two are what a runner and a
-    coach actually settle about a week that is still weeks away (#980). A live
-    block agreed "13.5 -> 15.5 -> 18 -> 20 km, peak on 6 Sep" stored as four
-    weekly totals, and the 20 km, the whole point of the build, was not
-    recoverable from what was written down.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    week_start: date
-    phase: Optional[str] = Field(default=None, max_length=60)
-    target_running_distance_m: Optional[float] = Field(default=None, ge=0, le=500_000)
-    # The backbone of a distance build. Stated separately from the week's total
-    # because the two say different things: 37 km built around a 20 km long run
-    # and 37 km built around four 9 km runs are the same total and different
-    # weeks, and for a runner building towards a race distance that difference is
-    # the one that matters most.
-    long_run_distance_m: Optional[float] = Field(default=None, ge=0, le=200_000)
-    # What the week's hard session is FOR, in a coach's words ("race-pace tempo",
-    # "cruise intervals"), never a prescription. A sketch that named reps and
-    # paces would be a concrete session wearing a sketch's clothes, and the
-    # runner would read a promise into a week nobody has written yet.
-    quality_focus: Optional[str] = Field(default=None, max_length=80)
-    # The whole week's time across every activity, and its walking distance
-    # (#1044). A runner whose training is mostly walking has a week the running
-    # total does not describe, and the time is what the hours ceiling bounds.
-    target_duration_s: Optional[float] = Field(default=None, ge=0, le=7 * 86_400)
-    target_walking_distance_m: Optional[float] = Field(default=None, ge=0, le=500_000)
-    sessions_by_discipline: Dict[str, int] = Field(default_factory=dict)
-    intent_counts: Dict[str, int] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _validate_counts(self) -> "SketchedWeek":
-        allowed = {"run", "walk", "bike", "strength", "row", "other"}
-        for key, value in self.sessions_by_discipline.items():
-            if key not in allowed:
-                raise ValueError(f"unknown discipline {key!r}")
-            if value < 0 or value > MAX_SESSIONS_PER_WEEK:
-                raise ValueError(f"implausible session count for {key!r}")
-        intents = {"rest", "easy", "long", "quality", "strength"}
-        for key, value in self.intent_counts.items():
-            if key not in intents:
-                raise ValueError(f"unknown intent {key!r}")
-            if value < 0 or value > MAX_SESSIONS_PER_WEEK:
-                raise ValueError(f"implausible session count for {key!r}")
-        return self
-
-
 class DraftedPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rules: List[SpacingRule] = Field(default_factory=list, max_length=MAX_RULES)
     weeks: List[DraftedWeek] = Field(default_factory=list, max_length=MAX_CONCRETE_WEEKS)
-    sketch_weeks: List[SketchedWeek] = Field(
-        default_factory=list, max_length=MAX_SKETCH_WEEKS
-    )
     # Generous, and TRUNCATED rather than rejected (see `normalise`). A live run
     # threw an entire valid twelve-week plan away because the blurb explaining it
     # ran past 600 characters — the substance was fine and the prose was long.
@@ -357,15 +295,15 @@ RECORD_TRAINING_PLAN_TOOL = {
     "name": "record_training_plan",
     "description": (
         "Record the training plan you have decided on. This is the only way to "
-        "return your answer. Give concrete sessions for the near weeks and shape "
-        "only for the weeks beyond. Do not estimate training load for a session — "
+        "return your answer. Give concrete sessions for every week the context "
+        "lists under THE WEEKS. Do not estimate training load for a session: "
         "say what the session IS (discipline, intent, how long or how far) and the "
         "app computes what it costs from this runner's own history."
     ),
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["rules", "weeks", "sketch_weeks"],
+        "required": ["rules", "weeks"],
         "properties": {
             "rules": {
                 "type": "array",
@@ -430,16 +368,21 @@ RECORD_TRAINING_PLAN_TOOL = {
             },
             "weeks": {
                 "type": "array",
-                "description": "The near weeks, as concrete sessions.",
+                "description": "The weeks listed under THE WEEKS, as concrete sessions.",
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["week_start", "sessions"],
                     "properties": {
                         "week_start": {"type": "string"},
-                        "phase": {"type": "string"},
                         "sessions": {
                             "type": "array",
+                            "description": (
+                                f"At most {MAX_SESSIONS_PER_WEEK} sessions in a week: "
+                                "a longer session beats a second short one on the "
+                                "same day."
+                            ),
+                            "maxItems": MAX_SESSIONS_PER_WEEK,
                             "items": {
                                 "type": "object",
                                 "additionalProperties": False,
@@ -453,87 +396,6 @@ RECORD_TRAINING_PLAN_TOOL = {
                                 ],
                                 "properties": SESSION_PROPERTIES,
                             },
-                        },
-                    },
-                },
-            },
-            "sketch_weeks": {
-                "type": "array",
-                "description": (
-                    "The weeks beyond, as shape only: the phase, the running "
-                    "distance you are aiming at, how far the long run goes, what "
-                    "the week's hard session is for, and how many sessions of "
-                    "each kind. The runner reaches these weeks and they are then "
-                    "written into real sessions from what you say here, so say "
-                    "enough that the build you intend survives: a weekly total "
-                    "alone cannot tell anyone whether the week was built around a "
-                    "20 km long run or four 9 km ones."
-                ),
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": [
-                        "week_start",
-                        "target_duration_s",
-                        "target_walking_distance_m",
-                    ],
-                    "properties": {
-                        "week_start": {"type": "string"},
-                        "phase": {
-                            "type": "string",
-                            "description": (
-                                "The BLOCK this week belongs to — Base, Build, "
-                                "Peak, Taper, Recovery. Weeks in the same block "
-                                "share the SAME name, so the horizon can group "
-                                "them under one heading. Do not number them "
-                                "individually ('Base — Week 3'): a name unique to "
-                                "one week groups nothing and turns the horizon "
-                                "into a label per row."
-                            ),
-                        },
-                        "target_running_distance_m": {"type": "number"},
-                        "long_run_distance_m": {
-                            "type": "number",
-                            "description": (
-                                "How far the long run goes in this week, in "
-                                "metres. The backbone of a distance build, and "
-                                "the one number a runner remembers about a week "
-                                "that is still weeks away. Leave it out only for "
-                                "a week that genuinely holds no long run."
-                            ),
-                        },
-                        "quality_focus": {
-                            "type": "string",
-                            "description": (
-                                "What the week's hard session is FOR, in a few "
-                                "words: 'race-pace tempo', 'cruise intervals', "
-                                "'hill strength'. Not a prescription. Reps, "
-                                "paces and rest belong to a concrete session, and "
-                                "stating them here would promise a week nobody "
-                                "has written yet."
-                            ),
-                        },
-                        "target_duration_s": {
-                            "type": "number",
-                            "description": (
-                                "The week's total time in seconds, every "
-                                "activity together: runs, walks, bike, strength."
-                            ),
-                        },
-                        "target_walking_distance_m": {
-                            "type": "number",
-                            "description": (
-                                "The week's walking in metres, 0 for a runner "
-                                "who does not walk."
-                            ),
-                        },
-                        "sessions_by_discipline": {
-                            "type": "object",
-                            "additionalProperties": {"type": "integer"},
-                        },
-                        "intent_counts": {
-                            "type": "object",
-                            "additionalProperties": {"type": "integer"},
                         },
                     },
                 },

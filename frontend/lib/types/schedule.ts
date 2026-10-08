@@ -241,6 +241,23 @@ export interface GoalRaceCreate {
 // beyond.
 export type HorizonCoverage = "planned" | "sketched" | "empty" | "beyond_plan";
 
+// #1064: one challenge's line for one covered week. `planned` is what the plan
+// holds, `actual` what the runner did once the week is past, and `met` is null
+// until then. Units follow `metric`: seconds, metres, or a count.
+export interface HorizonChallenge {
+  goal_id: string;
+  name: string;
+  // 1-based: "week 4 of 10".
+  index: number;
+  weeks: number;
+  metric: "zone_time_s" | "time_s" | "distance_m" | "sessions";
+  min_zone: number | null;
+  threshold: number;
+  planned: number | null;
+  actual: number | null;
+  met: boolean | null;
+}
+
 export interface HorizonWeek {
   week_start: string;
   phase: string | null;
@@ -274,6 +291,9 @@ export interface HorizonWeek {
   // yields an empty map rather than a fake even split.
   discipline_mix: Record<string, number>;
   intent_mix: Record<string, number>;
+  // Optional so the screen still works against a backend that predates the
+  // season: absent reads as no challenge covers this week.
+  challenges?: HorizonChallenge[];
 }
 
 export interface ScheduleHorizon {
@@ -284,4 +304,7 @@ export interface ScheduleHorizon {
   // it — null (or zero) means there is nothing to scale against and every week
   // draws empty.
   peak_effort_score: number | null;
+  // What the plan cannot do, stated plainly (#1064). Optional for the same
+  // reason as `HorizonWeek.challenges`.
+  shortfalls?: string[];
 }

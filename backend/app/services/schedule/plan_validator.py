@@ -29,12 +29,16 @@ with the failures fed back, and then abandoned visibly.
 
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from app.services.schedule.placement import validate_session_window
 from app.services.schedule.planned_distance import planned_distance_m
 from app.services.schedule.rules import check_rules
+from app.services.schedule.week_check import NUMERIC_CODES, WeekFailure, check_week
 from app.services.weeks import MONDAY, week_start
+
+if TYPE_CHECKING:  # frames imports this module for the ceilings
+    from app.services.schedule.frames import WeekFrame
 
 # The absurdity ceiling, as a multiple of the runner's own recent weekly norm.
 # Deliberately loose: a real build week can be well above typical, and a taper
@@ -50,7 +54,7 @@ MAX_WEEKLY_MULTIPLE = 2.0
 MAX_SKETCH_MULTIPLE = 3.0
 
 # An absurdity floor on how many sessions may land on one day. Every other
-# nonsense has a floor; without this one a week could pin all fourteen permitted
+# nonsense has a floor; without this one a week could pin all twenty-one permitted
 # sessions to a Tuesday unless the coach happened to write a rule against it, and
 # "the model polices itself" is not a check. Deliberately high: three sessions in
 # a day is a real thing this runner does (a walk, a run and a gym session), so
@@ -140,12 +144,44 @@ class PlanCheck:
     # failures a caller acts on differently. Everything else stays prose: a code
     # nothing reads is a vocabulary to maintain for nothing.
     codes: List[str] = field(default_factory=list)
+    # The weeks a failure was about, so a run log can count the weeks that
+    # passed first time. A failure about the plan as a whole names no week.
+    failed_weeks: set = field(default_factory=set)
+    plan_level_failure: bool = False
+    # The week-by-week failures from `week_check`, structured, for the repair.
+    week_failures: List[WeekFailure] = field(default_factory=list)
 
-    def fail(self, message: str, *, code: Optional[str] = None) -> None:
+    def fail(
+        self,
+        message: str,
+        *,
+        code: Optional[str] = None,
+        week: Optional[date] = None,
+    ) -> None:
         self.ok = False
         self.failures.append(message)
         if code is not None:
             self.codes.append(code)
+        if week is not None:
+            self.failed_weeks.add(week)
+        else:
+            self.plan_level_failure = True
+
+    def add_week_failures(self, failures: Sequence[WeekFailure]) -> None:
+        for failure in failures:
+            self.fail(failure.message, code=failure.code, week=failure.week_start)
+            self.week_failures.append(failure)
+
+    @property
+    def only_numeric(self) -> bool:
+        """Every failure is a numeric shortfall (the challenge or the walking
+        floor): the plan is coherent and only short, which repair can close."""
+        return (
+            not self.ok
+            and not self.plan_level_failure
+            and len(self.week_failures) == len(self.failures)
+            and all(f.code in NUMERIC_CODES for f in self.week_failures)
+        )
 
 
 @dataclass(frozen=True)
@@ -176,37 +212,52 @@ def validate_drafted_plan(
     horizon_weeks: Optional[int] = None,
     race: Optional[tuple] = None,
     norm_weekly_s: Optional[float] = None,
+    frames: Sequence["WeekFrame"] = (),
+    expected_weeks: Optional[Sequence[date]] = None,
 ) -> PlanCheck:
     """Everything that must hold before a drafted plan reaches the store.
 
     `race` is `(date, distance_m)` for the goal race, when one falls inside the
     plan. It exists for the volume ceiling alone: see `_validate_volume`.
+
+    `frames` are the weeks' frames (`frames.build_frames`). Each concrete week is
+    also held to its frame by `week_check`: the challenge threshold, the usual
+    walking and the day of each dated goal. They are collected into the SAME
+    result as the structural, rule and ceiling failures, so one call returns every
+    failure of every kind and the retry can fix them all.
+
+    `expected_weeks` are the weeks that must be written as real sessions (the
+    drafting prompt asked for them); one the plan leaves out is a failure, since
+    a challenge or a race week cannot be held by a week that is not there.
     """
     check = PlanCheck()
     current_week = week_start(today, starts_on)
     last_allowed_week = current_week + timedelta(
         days=7 * ((horizon_weeks or 0) + HORIZON_SLACK_WEEKS - 1)
     )
+    frame_for = {frame.week_start: frame for frame in frames}
 
     def _within_horizon(week_start_date: date, label: str) -> None:
         if horizon_weeks and week_start_date > last_allowed_week:
             check.fail(
-                f"{label} {week_start_date} is past the {horizon_weeks}-week horizon"
+                f"{label} {week_start_date} is past the {horizon_weeks}-week horizon",
+                week=week_start_date,
             )
 
-    if not plan.weeks and not plan.sketch_weeks:
+    if not plan.weeks:
         check.fail("the plan contains no weeks at all")
 
     seen_weeks = set()
     for week in plan.weeks:
         if week.week_start != week_start(week.week_start, starts_on):
             check.fail(
-                f"week {week.week_start} does not start on the runner's week boundary"
+                f"week {week.week_start} does not start on the runner's week boundary",
+                week=week.week_start,
             )
         if week.week_start < current_week:
-            check.fail(f"week {week.week_start} is in the past")
+            check.fail(f"week {week.week_start} is in the past", week=week.week_start)
         if week.week_start in seen_weeks:
-            check.fail(f"week {week.week_start} appears twice")
+            check.fail(f"week {week.week_start} appears twice", week=week.week_start)
         seen_weeks.add(week.week_start)
         _within_horizon(week.week_start, "week")
 
@@ -216,39 +267,15 @@ def validate_drafted_plan(
         _validate_hours(
             check, week.week_start, committed_duration_s(week.sessions, race), norm_weekly_s
         )
+        frame = frame_for.get(week.week_start)
+        if frame is not None:
+            check.add_week_failures(check_week(frame, week.sessions))
 
-    for sketch in plan.sketch_weeks:
-        if sketch.week_start != week_start(sketch.week_start, starts_on):
-            check.fail(
-                f"sketched week {sketch.week_start} does not start on the runner's "
-                "week boundary"
-            )
-        if sketch.week_start < current_week:
-            check.fail(f"sketched week {sketch.week_start} is in the past")
-        if sketch.week_start in seen_weeks:
-            check.fail(
-                f"week {sketch.week_start} is given as both concrete and sketched"
-            )
-        seen_weeks.add(sketch.week_start)
-        _within_horizon(sketch.week_start, "sketched week")
-        ceilings = volume_ceilings(norm_weekly_running_m)
-        if (
-            ceilings
-            and sketch.target_running_distance_m
-            and sketch.target_running_distance_m > ceilings[1]
-        ):
-            check.fail(
-                f"sketched week {sketch.week_start} plans "
-                f"{sketch.target_running_distance_m / 1000:.0f} km of running against "
-                f"a typical {norm_weekly_running_m / 1000:.0f} km",
-                code=VOLUME_CEILING,
-            )
-        _validate_hours(
-            check,
-            sketch.week_start,
-            sketch.target_duration_s or 0,
-            norm_weekly_s,
-            sketched=True,
+    for expected in sorted(set(expected_weeks or ()) - seen_weeks):
+        check.fail(
+            f"week {expected} is one of the weeks to write as real sessions but the "
+            f"plan says nothing about it",
+            week=expected,
         )
 
     return check
@@ -265,6 +292,7 @@ def validate_amendment(
     expected_weeks: Optional[Sequence[date]] = None,
     race: Optional[tuple] = None,
     norm_weekly_s: Optional[float] = None,
+    frames: Sequence["WeekFrame"] = (),
 ) -> PlanCheck:
     """The same coherence gate, applied to a plan being amended in part (#981).
 
@@ -281,9 +309,14 @@ def validate_amendment(
     amendment is a change to the sessions, never to the constraints they are
     held to, because rules are the plan's identity and rewriting them silently
     is a redraft wearing an amendment's clothes.
+
+    `frames` hold each touched week to the same challenge, walking and goal-day
+    checks a draft is held to, with the surviving sessions counted beside the new
+    ones, so an amendment cannot quietly break a challenge the plan was keeping.
     """
     check = PlanCheck()
     ceilings_norm = norm_weekly_running_m
+    frame_for = {frame.week_start: frame for frame in frames}
 
     if not weeks:
         check.fail("the amendment contains no weeks at all")
@@ -303,19 +336,21 @@ def validate_amendment(
         for expected in sorted(set(expected_weeks) - answered):
             check.fail(
                 f"week {expected} is inside the window but the amendment says "
-                f"nothing about it, which would leave it empty"
+                f"nothing about it, which would leave it empty",
+                week=expected,
             )
 
     seen = set()
     for week in weeks:
         if week.week_start != week_start(week.week_start, starts_on):
             check.fail(
-                f"week {week.week_start} does not start on the runner's week boundary"
+                f"week {week.week_start} does not start on the runner's week boundary",
+                week=week.week_start,
             )
         if week.week_start < current_week:
-            check.fail(f"week {week.week_start} is in the past")
+            check.fail(f"week {week.week_start} is in the past", week=week.week_start)
         if week.week_start in seen:
-            check.fail(f"week {week.week_start} appears twice")
+            check.fail(f"week {week.week_start} appears twice", week=week.week_start)
         seen.add(week.week_start)
 
         _validate_sessions(check, week, today, starts_on)
@@ -349,7 +384,8 @@ def validate_amendment(
                     check.fail(
                         f"week {week.week_start} cannot satisfy the plan's rule "
                         f"{violation['label']!r} ({violation['statement']}): "
-                        f"{violation['detail']}"
+                        f"{violation['detail']}",
+                        week=week.week_start,
                     )
 
         # The ceiling counts the whole week, kept sessions included. An amendment
@@ -380,6 +416,7 @@ def validate_amendment(
                     f"running against a typical "
                     f"{ceilings_norm / 1000:.0f} km",
                     code=VOLUME_CEILING,
+                    week=week.week_start,
                 )
 
         # Kept sessions count here too, for the same reason they do above.
@@ -389,6 +426,9 @@ def validate_amendment(
             committed_duration_s(list(week.sessions) + surviving, race),
             norm_weekly_s,
         )
+        frame = frame_for.get(week.week_start)
+        if frame is not None:
+            check.add_week_failures(check_week(frame, list(week.sessions) + surviving))
 
     return check
 
@@ -398,19 +438,17 @@ def _validate_hours(
     week_start_date: date,
     planned_s: float,
     norm_weekly_s: Optional[float],
-    *,
-    sketched: bool = False,
 ) -> None:
     """The time ceiling, or no check when the runner has no typical week yet."""
     ceilings = hours_ceilings(norm_weekly_s)
     if ceilings is None:
         return
-    if planned_s > ceilings[1 if sketched else 0]:
-        label = "sketched week" if sketched else "week"
+    if planned_s > ceilings[0]:
         check.fail(
-            f"{label} {week_start_date} plans {_hours(planned_s)} of training, "
+            f"week {week_start_date} plans {_hours(planned_s)} of training, "
             f"every activity together, against a typical {_hours(norm_weekly_s)}",
             code=VOLUME_CEILING,
+            week=week_start_date,
         )
 
 
@@ -421,23 +459,28 @@ def _validate_sessions(check: PlanCheck, week, today: date, starts_on: int) -> N
                 session.window_start, session.window_end, starts_on
             )
         except ValueError as exc:
-            check.fail(f"session {session.title!r}: {exc}")
+            check.fail(f"session {session.title!r}: {exc}", week=week.week_start)
             continue
 
         if week_start(session.window_start, starts_on) != week.week_start:
             check.fail(
                 f"session {session.title!r} sits in week "
-                f"{week_start(session.window_start, starts_on)}, not {week.week_start}"
+                f"{week_start(session.window_start, starts_on)}, not {week.week_start}",
+                week=week.week_start,
             )
         if session.window_end < today:
             check.fail(
                 f"session {session.title!r} is entirely in the past "
-                f"({session.window_start}..{session.window_end})"
+                f"({session.window_start}..{session.window_end})",
+                week=week.week_start,
             )
         if session.intent == "rest" and (
             session.target_distance_m or session.target_duration_s
         ):
-            check.fail(f"rest session {session.title!r} carries a training target")
+            check.fail(
+                f"rest session {session.title!r} carries a training target",
+                week=week.week_start,
+            )
         if session.intent != "rest" and not (
             session.target_distance_m
             or session.target_duration_s
@@ -455,7 +498,8 @@ def _validate_sessions(check: PlanCheck, week, today: date, starts_on: int) -> N
             # invented from a warm-up multiplier nobody stated.
             check.fail(
                 f"session {session.title!r} gives no distance, duration or rep "
-                f"structure, so nothing can size it"
+                f"structure, so nothing can size it",
+                week=week.week_start,
             )
 
 
@@ -499,7 +543,8 @@ def _validate_rules_are_satisfiable(
             check.fail(
                 f"week {week.week_start} cannot satisfy its own rule "
                 f"{violation['label']!r} ({violation['statement']}): "
-                f"{violation['detail']}"
+                f"{violation['detail']}",
+                week=week.week_start,
             )
 
 
@@ -546,4 +591,5 @@ def _validate_volume(
             f"week {week.week_start} plans {planned / 1000:.0f} km of running "
             f"against a typical {norm_weekly_running_m / 1000:.0f} km",
             code=VOLUME_CEILING,
+            week=week.week_start,
         )

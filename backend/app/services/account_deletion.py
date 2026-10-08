@@ -28,12 +28,17 @@ from app.models import (
     CoachingRelationship,
     DerivedMetric,
     Exchange,
+    GoalRace,
+    PeriodReport,
+    PlannedSession,
     RunnerBaseline,
     RecoveryDay,
     RunnerMemory,
+    Season,
     StravaAccount,
     StravaImport,
     Thread,
+    TrainingPlan,
     User,
     UserMaterial,
     UserProfile,
@@ -89,6 +94,17 @@ def delete_user_account(db: Session, user_id) -> dict:
         db.query(Thread).filter(Thread.user_id == user_id)
         .delete(synchronize_session=False)
     )
+
+    # 1c. The schedule (#830, #1064). Sessions FK -> plans and -> activities
+    # (`completed_activity_id`), so they go first and before the activities; plans
+    # FK -> goal_races and -> seasons, so plans go before both. `training_plans.
+    # season_id` is ON DELETE SET NULL, but plans are deleted first here anyway:
+    # the cascade is explicit rather than leaning on a database action.
+    for model in (PlannedSession, TrainingPlan, Season, GoalRace, PeriodReport):
+        counts[model.__tablename__] = (
+            db.query(model).filter(model.user_id == user_id)
+            .delete(synchronize_session=False)
+        )
 
     # 2. Activity-children (FK -> activities) for this user's activities.
     for model in _ACTIVITY_CHILDREN:

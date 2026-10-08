@@ -44,6 +44,13 @@
 // bars above and below keep their geometry, so the ramp still reads while a week
 // is open. The panel is the week's full detail, including the kind-of-session split.
 //
+// CHALLENGE LINES (#1064). A week a challenge covers ("10 h of zone 2+ every week
+// for 10 weeks") carries one line under its bar: what the week holds against
+// what it needs, and once the week is past, what the runner actually did. The
+// mark is a symbol AND a word, never colour alone: a tick for met (or a plan
+// that meets it), a cross for a missed week, a triangle for a plan that falls
+// short. The plan's own shortfalls are stated above the chart, never left out.
+//
 // ACCESSIBILITY. The rows used to be `aria-hidden` with the table below as their
 // text alternative. A focusable control cannot live inside an aria-hidden
 // subtree, so making the rows tappable moved that boundary: each row is now a
@@ -54,9 +61,22 @@
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { ReactNode } from "react";
-import type { GoalRace, HorizonWeek, ScheduleHorizon } from "@/lib/types/schedule";
+import type {
+  GoalRace,
+  HorizonChallenge,
+  HorizonWeek,
+  ScheduleHorizon,
+} from "@/lib/types/schedule";
 import { formatDateLabel } from "@/lib/format";
 import { addDaysIso } from "./dates";
+import {
+  formatHeld,
+  formatNeeded,
+  metricLabel,
+  metricUnit,
+  planMeetsThreshold,
+  weekFigure,
+} from "./challenge";
 import {
   ACTIVITY_FILL,
   DISCIPLINE_LABEL,
@@ -211,6 +231,98 @@ function Band({ segments, surface }: { segments: Segment[]; surface: string }) {
 const ROW_GRID =
   "grid grid-cols-[3rem_0.75rem_minmax(0,1fr)_7rem_0.75rem] items-center gap-x-2";
 
+
+// --- challenge lines (#1064) -------------------------------------------------
+
+type ChallengeState = "met" | "missed" | "plan-ok" | "plan-short" | "unplanned";
+
+interface ChallengeReading {
+  state: ChallengeState;
+  /** "Z2+ 10.3 / 10 h" */
+  figures: string;
+  /** The symbol drawn beside the figures; the word carries it for a reader. */
+  symbol: string;
+  /** "met", "missed", "plan falls short", ... */
+  word: string;
+  /** "wk 4/10" */
+  position: string;
+}
+
+const CHALLENGE_TONE: Record<ChallengeState, string> = {
+  met: "text-emerald-700 dark:text-emerald-400",
+  missed: "text-red-700 dark:text-red-400",
+  "plan-ok": "text-gray-600 dark:text-gray-300",
+  "plan-short": "text-amber-700 dark:text-amber-400",
+  unplanned: "text-gray-500 dark:text-gray-400",
+};
+
+/**
+ * One challenge week, read. A past week is judged on what was DONE (`met`); a
+ * week still ahead is judged on what the plan HOLDS, and a plan that falls short
+ * says so rather than drawing the same tick as one that does not.
+ */
+function readChallenge(c: HorizonChallenge, withName: boolean): ChallengeReading {
+  const value = weekFigure(c);
+  const label = metricLabel(c.metric, c.min_zone);
+  const name = withName ? `${c.name}: ` : "";
+  const figures =
+    value == null
+      ? `${name}${label} - / ${formatNeeded(c.metric, c.threshold)} ${metricUnit(c.metric, c.threshold)}`
+      : `${name}${label} ${formatHeld(c.metric, value)} / ${formatNeeded(c.metric, c.threshold)} ${metricUnit(c.metric, c.threshold)}`;
+  const position = `wk ${c.index}/${c.weeks}`;
+  if (c.met === true) return { state: "met", figures, symbol: "\u2713", word: "met", position };
+  if (c.met === false) {
+    return { state: "missed", figures, symbol: "\u2717", word: "missed", position };
+  }
+  if (c.planned == null) {
+    return { state: "unplanned", figures, symbol: "\u2013", word: "not planned yet", position };
+  }
+  return planMeetsThreshold(c.metric, c.planned, c.threshold)
+    ? { state: "plan-ok", figures, symbol: "\u2713", word: "planned", position }
+    : { state: "plan-short", figures, symbol: "\u25B2", word: "plan falls short", position };
+}
+
+function ChallengeLines({
+  challenges,
+  className = "",
+}: {
+  challenges: HorizonChallenge[];
+  className?: string;
+}) {
+  const withName = challenges.length > 1;
+  return (
+    <span className={`flex flex-col gap-0.5 ${className}`}>
+      {challenges.map((c) => {
+        const r = readChallenge(c, withName);
+        return (
+          <span
+            key={c.goal_id}
+            className={`flex flex-wrap items-baseline gap-x-2 text-[11px] ${CHALLENGE_TONE[r.state]}`}
+          >
+            <span className="font-mono tabular-nums">{r.figures}</span>
+            <span className="font-semibold">
+              <span aria-hidden="true">{r.symbol}</span> {r.word}
+            </span>
+            <span className="font-mono text-[10px] tabular-nums text-gray-500 dark:text-gray-400">
+              {r.position}
+            </span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+function describeChallenges(challenges: HorizonChallenge[]): string {
+  const withName = challenges.length > 1;
+  return challenges
+    .map((c) => {
+      const r = readChallenge(c, withName);
+      return `challenge ${r.figures}, ${r.word}, week ${c.index} of ${c.weeks}`;
+    })
+    .join(", ");
+}
+
 /** The day a goal stands on in the chart: its exact date, else the start of its window. */
 function goalDay(goal: GoalRace): string | null {
   return goal.race_date ?? goal.window_start;
@@ -298,6 +410,7 @@ export default function HorizonChart({
     const open = openWeek === week.week_start;
     const panelId = `horizon-detail-${week.week_start}`;
     const beyondPlan = week.coverage === "beyond_plan";
+    const challenges = week.challenges ?? [];
 
     if (week.phase && week.phase !== lastPhase) {
       rows.push(
@@ -360,6 +473,7 @@ export default function HorizonChart({
       longRun(week) ? `${longRun(week)} long run` : null,
       week.quality_focus ? `focus: ${week.quality_focus}` : null,
       activity.length ? `activity: ${describeMix(activity)}` : null,
+      challenges.length ? describeChallenges(challenges) : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -450,6 +564,15 @@ export default function HorizonChart({
           </span>
         </button>
 
+        {/* The challenge line sits under its week's bar, aligned with the bar. It
+            is hidden from a screen reader because the row's label already says
+            it; the opened detail repeats it in full for everyone. */}
+        {challenges.length > 0 && (
+          <div className={`pb-1 pl-[4.75rem] pr-1 ${surface}`} aria-hidden="true">
+            <ChallengeLines challenges={challenges} />
+          </div>
+        )}
+
         {open && (
           <WeekDetail
             id={panelId}
@@ -499,8 +622,31 @@ export default function HorizonChart({
 
   const hasAnyLoad = peak > 0;
 
+  const shortfalls = horizon.shortfalls ?? [];
+  const hasChallenge = horizon.weeks.some((w) => (w.challenges ?? []).length > 0);
+
   return (
     <div>
+      {/* #1064: what the plan cannot do, said above the weeks it concerns. Never
+          folded into the chart or left to the numbers table. */}
+      {shortfalls.length > 0 && (
+        <div
+          role="note"
+          className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200"
+        >
+          <p className="font-semibold">
+            {shortfalls.length === 1
+              ? "One thing your plan cannot do yet"
+              : "Things your plan cannot do yet"}
+          </p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {shortfalls.map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div
         className={`${ROW_GRID} pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400`}
       >
@@ -546,6 +692,8 @@ export default function HorizonChart({
           coloured by activity; the figures on the right are the week&rsquo;s hours
           and km. A solid dot means real sessions, a hollow one shape only, and a
           faint one nothing planned. Tap any week for its detail.
+          {hasChallenge &&
+            " Under a week, the challenge line shows what the week holds against what it needs, or what you did once it is over: a tick is met, a cross is missed, a triangle is a plan that falls short."}
         </p>
       </div>
 
@@ -655,6 +803,15 @@ function WeekDetail({
           </span>
         )}
       </div>
+
+      {(week.challenges ?? []).length > 0 && (
+        <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="w-[6rem] shrink-0 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+            Challenge
+          </span>
+          <ChallengeLines challenges={week.challenges ?? []} />
+        </div>
+      )}
 
       <dl className="mt-2 space-y-1">
         <SplitRow label="Activity" segments={activities} />

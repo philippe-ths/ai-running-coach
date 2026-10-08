@@ -54,3 +54,43 @@ export function formatDayChip(iso: string): string {
 export function weekDays(weekStart: string): string[] {
   return Array.from({ length: 7 }, (_, i) => addDaysIso(weekStart, i));
 }
+
+const MONTH_SHORT = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** Whole days from `a` to `b`, by local calendar day so DST never shifts one. */
+export function daysBetween(a: string, b: string): number {
+  return Math.round((parseIso(b).getTime() - parseIso(a).getTime()) / 86400000);
+}
+
+/** "26 Oct", with the year when it is not this one: "14 Mar 2027". */
+export function formatDayMonth(iso: string): string {
+  const d = parseIso(iso);
+  const label = `${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
+  return d.getFullYear() === new Date().getFullYear() ? label : `${label} ${d.getFullYear()}`;
+}
+
+/**
+ * A goal's or event's date as it is held: "8 Nov", "~ Mar 2027" for a window
+ * inside one month, "~ May to Jun 2027" across months, or null when undated.
+ */
+export function formatWhen(
+  date: string | null | undefined,
+  windowStart: string | null | undefined,
+  windowEnd: string | null | undefined,
+): string | null {
+  if (date) return formatDayMonth(date);
+  if (!windowStart || !windowEnd) return null;
+  const a = parseIso(windowStart);
+  const b = parseIso(windowEnd);
+  const year = (d: Date) => (d.getFullYear() === new Date().getFullYear() ? "" : ` ${d.getFullYear()}`);
+  if (a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth()) {
+    return `~ ${MONTH_SHORT[a.getMonth()]}${year(b)}`;
+  }
+  if (a.getFullYear() === b.getFullYear()) {
+    return `~ ${MONTH_SHORT[a.getMonth()]} to ${MONTH_SHORT[b.getMonth()]}${year(b)}`;
+  }
+  return `~ ${MONTH_SHORT[a.getMonth()]}${year(a)} to ${MONTH_SHORT[b.getMonth()]}${year(b)}`;
+}

@@ -27,6 +27,7 @@ from app.models.thread import Thread  # noqa: F401
 from app.models.goal_race import GoalRace  # noqa: F401
 from app.models.training_plan import TrainingPlan  # noqa: F401
 from app.models.planned_session import PlannedSession  # noqa: F401
+from app.models.season import Season  # noqa: F401
 from app.models.period_report import PeriodReport  # noqa: F401
 from app.models.recovery_day import RecoveryDay  # noqa: F401
 
@@ -52,6 +53,7 @@ __all__ = [
     "GoalRace",
     "TrainingPlan",
     "PlannedSession",
+    "Season",
     "PeriodReport",
     "RecoveryDay",
 ]

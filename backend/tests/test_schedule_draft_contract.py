@@ -25,7 +25,6 @@ from app.services.schedule.draft_contract import (
     DraftedPlan,
     DraftedSession,
     DraftedWeek,
-    SketchedWeek,
 )
 
 MON = date(2026, 8, 10)
@@ -59,7 +58,7 @@ def test_a_key_the_contract_does_not_name_is_refused_rather_than_ignored():
         DraftedWeek(week_start=MON, sessions=[], notes="a field nobody declared")
 
     with pytest.raises(ValidationError):
-        DraftedPlan(weeks=[], sketch_weeks=[], philosophy="improvised")
+        DraftedPlan(weeks=[], philosophy="improvised")
 
 
 def test_the_model_cannot_smuggle_a_load_number_in_through_the_session_schema():
@@ -283,43 +282,6 @@ def test_a_rep_count_with_no_distance_or_rest_still_yields_only_what_was_said():
     assert session.structure() == {"reps_planned": 6}
 
 
-# --- the sketched week ------------------------------------------------------
-
-
-def test_a_sketched_week_refuses_a_discipline_outside_the_vocabulary():
-    with pytest.raises(ValidationError) as exc:
-        SketchedWeek(week_start=MON, sessions_by_discipline={"swim": 2})
-    assert "unknown discipline" in str(exc.value)
-
-
-def test_a_sketched_week_refuses_an_intent_outside_the_vocabulary():
-    with pytest.raises(ValidationError) as exc:
-        SketchedWeek(week_start=MON, intent_counts={"recovery": 2})
-    assert "unknown intent" in str(exc.value)
-
-
-@pytest.mark.parametrize(
-    "counts", [{"run": MAX_SESSIONS_PER_WEEK + 1}, {"run": -1}, {"run": 40}]
-)
-def test_a_sketched_week_refuses_an_implausible_session_count(counts):
-    with pytest.raises(ValidationError) as exc:
-        SketchedWeek(week_start=MON, sessions_by_discipline=counts)
-    assert "implausible session count" in str(exc.value)
-
-
-def test_a_plausible_sketch_coerces():
-    sketch = SketchedWeek(
-        week_start=MON,
-        phase="build",
-        target_running_distance_m=45000,
-        sessions_by_discipline={"run": 4, "strength": 2},
-        intent_counts={"easy": 3, "long": 1, "quality": 1, "strength": 2},
-    )
-
-    assert sketch.sessions_by_discipline["run"] == 4
-    assert sketch.phase == "build"
-
-
 # --- the design pin: no load field is OFFERED ------------------------------
 
 
@@ -423,7 +385,6 @@ def test_a_zero_rep_distance_is_read_as_absent_not_rejected():
 
     raw = {
         "rules": [],
-        "sketch_weeks": [],
         "weeks": [
             {
                 "week_start": MON.isoformat(),
@@ -472,7 +433,6 @@ def test_zero_rest_is_left_alone_because_it_is_a_real_instruction():
             }
         ],
         "rules": [],
-        "sketch_weeks": [],
     }
 
     plan = DraftedPlan.model_validate(normalise(raw))
@@ -480,19 +440,30 @@ def test_zero_rest_is_left_alone_because_it_is_a_real_instruction():
     assert plan.weeks[0].sessions[0].structure() == {"reps_planned": 4, "rest_s": 0}
 
 
-def test_the_tool_requires_the_time_of_every_session_and_every_sketched_week():
+def test_the_tool_requires_the_time_of_every_session():
     """Hours exist only when every session states its time, so time is something
     the model must emit, not something it may leave out."""
     from app.services.schedule.amend import RECORD_AMENDMENT_TOOL
 
     plan = RECORD_TRAINING_PLAN_TOOL["input_schema"]["properties"]
     session = plan["weeks"]["items"]["properties"]["sessions"]["items"]
-    sketch = plan["sketch_weeks"]["items"]
     amend = RECORD_AMENDMENT_TOOL["input_schema"]["properties"]["weeks"]["items"][
         "properties"
     ]["sessions"]["items"]
 
     assert "target_duration_s" in session["required"]
     assert "target_duration_s" in amend["required"]
-    assert "target_duration_s" in sketch["required"]
-    assert "target_walking_distance_m" in sketch["required"]
+
+
+def test_the_tool_no_longer_asks_the_model_for_sketched_weeks_or_week_phases():
+    """The weeks beyond the concrete ones, and every week's phase, are written by
+    code from the season (#1064): a sum or a label the model typed is what the
+    old sketch got wrong, so the tool offers no place to type one."""
+    schema = RECORD_TRAINING_PLAN_TOOL["input_schema"]
+
+    assert "sketch_weeks" not in schema["properties"]
+    assert "sketch_weeks" not in schema["required"]
+    week = schema["properties"]["weeks"]["items"]["properties"]
+    assert "phase" not in week
+    with pytest.raises(ValidationError):
+        DraftedPlan.model_validate({"weeks": [], "sketch_weeks": []})

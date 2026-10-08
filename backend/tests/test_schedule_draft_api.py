@@ -133,7 +133,7 @@ def test_asking_for_a_plan_returns_at_once_and_leaves_a_row_to_poll(db, client, 
     assert resp.status_code == 202
     body = resp.json()
     assert body["status"] == "drafting"
-    assert "writing your plan" in body["message"]
+    assert "writing your weeks" in body["message"]
     stored = db.query(TrainingPlan).one()
     assert stored.id == UUID(body["plan_id"])
     assert stored.user_id == user.id
@@ -210,7 +210,7 @@ def test_a_runner_who_has_never_had_a_plan_is_told_so_plainly(db, client):
 @pytest.mark.parametrize(
     "status, expected",
     [
-        ("drafting", "Your coach is writing your plan. This usually takes a minute."),
+        ("drafting", "Your coach is planning your season and writing your weeks. This usually takes a few minutes."),
         ("active", "Your plan is ready."),
         ("superseded", "This plan has been replaced by a newer one."),
         (
@@ -225,7 +225,8 @@ def test_a_runner_who_has_never_had_a_plan_is_told_so_plainly(db, client):
 )
 def test_each_status_reports_its_own_runner_facing_message(db, client, status, expected):
     user = _seed_user(db)
-    plan = _seed_plan(db, user, status=status, made_at=datetime(2026, 8, 9, 9, 0))
+    # Made just now: a drafting row past the staleness window reads as failed.
+    plan = _seed_plan(db, user, status=status, made_at=datetime.now(timezone.utc))
     _act_as(user)
 
     body = client.get("/api/schedule/draft").json()
@@ -340,8 +341,9 @@ def test_the_poll_reports_the_newest_plan_not_the_one_still_serving_the_week(
     db, client
 ):
     user = _seed_user(db)
-    _seed_plan(db, user, status="active", made_at=datetime(2026, 8, 1, 9, 0))
-    drafting = _seed_plan(db, user, status="drafting", made_at=datetime(2026, 8, 9, 9, 0))
+    now = datetime.now(timezone.utc)
+    _seed_plan(db, user, status="active", made_at=now - timedelta(days=8))
+    drafting = _seed_plan(db, user, status="drafting", made_at=now)
     _act_as(user)
 
     body = client.get("/api/schedule/draft").json()

@@ -33,7 +33,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -43,7 +43,7 @@ from app.models.training_plan import TrainingPlan
 from app.models.user import User
 from app.services.coach import turn
 from app.services.schedule import goals
-from app.services.schedule import store
+from app.services.schedule import season_store, store
 from app.services.schedule.draft import (
     PLACING_AND_COMMITTING,
     WRITING_A_SESSION,
@@ -52,9 +52,12 @@ from app.services.schedule.draft import (
 )
 from app.services.schedule.draft_contract import SESSION_PROPERTIES, DraftedWeek
 from app.services.schedule.effort import build_load_model, estimate_effort
+from app.services.schedule.frames import build_frames
 from app.services.schedule.norms import running_norm_weekly_m, weekly_hours_norm_s
 from app.services.schedule.plan_validator import VOLUME_CEILING, validate_amendment
+from app.services.schedule.repair import repair_weeks
 from app.services.schedule.rule_text import describe_rule
+from app.services.schedule.week_check import says_week
 from app.services.weeks import (
     MONDAY,
     describe_week_span,
@@ -302,6 +305,11 @@ class AmendProposal:
     end: Optional[date] = None
     failures: Optional[List[str]] = None
     failure_kind: str = store.FAILURE_UNKNOWN
+    # What code lengthened or added to hold a challenge or the usual walking after
+    # the retry (#1064), and what is still short once it had. Both also ride in
+    # `changes`, so the card and the ledger say them.
+    repairs: List[str] = field(default_factory=list)
+    shortfalls: List[str] = field(default_factory=list)
 
 
 def resolve_window(
@@ -427,9 +435,7 @@ def build_amend_context(
     starts_on = resolve_week_start(getattr(user, "profile", None))
 
     parts: List[str] = [
-        build_draft_context(
-            db, user, today=today, weeks=1, facts=facts, state_horizon=False
-        ),
+        build_draft_context(db, user, today=today, facts=facts),
         "\n## WHAT YOU ARE BEING ASKED TO DO",
         instruction.strip() or "Rewrite this window so the plan still works.",
         "\n## THE WINDOW",
@@ -538,6 +544,16 @@ async def propose_amendment(
         )
         return AmendProposal(ok=False, start=start, end=end, failures=[detail])
 
+    # The weeks are framed by the active season, so a season written for goals the
+    # runner has since changed would frame them against a plan they no longer
+    # have. Refused before any tokens are spent, in words the coach can pass on.
+    season_row = season_store.active_season(db, user.id)
+    if season_row is not None and season_store.is_stale(db, season_row):
+        logger.info("schedule amend: season %s is stale; refusing", season_row.id)
+        return AmendProposal(
+            ok=False, start=start, end=end, failures=[season_store.GOALS_CHANGED_MESSAGE]
+        )
+
     if turn.over_budget(user.id):
         return AmendProposal(
             ok=False,
@@ -558,6 +574,21 @@ async def propose_amendment(
     rules = store.plan_rules(plan)
     races = store.list_goal_races(db, user.id, on_or_after=today)
     race_arg = goals.validator_race(races)
+    # The window's weeks, framed by the active season (or by the runner's usual
+    # week alone when there is none), so an amendment is held to the challenge,
+    # the walking and the goal days exactly as the draft was.
+    first_week = week_start(today, starts_on)
+    frames = build_frames(
+        season=season_store.season_plan(season_row) if season_row is not None else None,
+        goals=store.list_goal_races(db, user.id),
+        facts=facts,
+        starts_on=starts_on,
+        today=today,
+        horizon_weeks=max(1, (week_start(end, starts_on) - first_week).days // 7 + 1),
+    )
+    window_weeks = set(_weeks_in(start, end, starts_on))
+    frames = [f for f in frames if f.week_start in window_weeks]
+    frames_by_week = {f.week_start: f for f in frames}
 
     failures: List[str] = []
     failure_kind = store.FAILURE_UNKNOWN
@@ -565,6 +596,10 @@ async def propose_amendment(
     transport_retries_left = 1
     max_tokens = amend_max_tokens(weeks)
     started_at = time.monotonic()
+    # The last attempt that was rejected, kept for the repair below: whichever way
+    # the attempts end (spent, or stopped by the time budget), a coherent plan that
+    # is only short of a number gets its numbers closed in code before it is lost.
+    pending = None
 
     while rewrites_left > 0:
         # #995: a rewrite is a whole second generation, and the budget covers one.
@@ -583,6 +618,7 @@ async def propose_amendment(
                 )
                 break
 
+        pending = None
         user_message = context
         if failures:
             # The retry has to carry the refusal option forward with it (#987).
@@ -679,9 +715,11 @@ async def propose_amendment(
             expected_weeks=_weeks_in(start, end, starts_on),
             race=race_arg,
             norm_weekly_s=norm_hours,
+            frames=frames,
         )
         if not check.ok:
             logger.info("schedule amend: rejected: %s", check.failures)
+            pending = (amended, check, surviving, rows)
             failures = check.failures
             failure_kind = (
                 store.FAILURE_TOO_BIG_A_JUMP
@@ -698,6 +736,21 @@ async def propose_amendment(
             end=end,
         )
 
+    if pending is not None and pending[1].only_numeric:
+        amended, check, surviving, rows = pending
+        repaired = _repair_amendment(
+            amended, check, frames_by_week, rules, surviving, rows, today,
+            validate=lambda candidate: validate_amendment(
+                candidate.weeks, rules=rules, surviving_by_week=surviving,
+                today=today, starts_on=starts_on,
+                norm_weekly_running_m=norm_running,
+                expected_weeks=_weeks_in(start, end, starts_on),
+                race=race_arg, norm_weekly_s=norm_hours, frames=frames,
+            ),
+            start=start, end=end,
+        )
+        if repaired is not None:
+            return repaired
     return AmendProposal(
         ok=False, start=start, end=end, failures=failures, failure_kind=failure_kind
     )
@@ -723,6 +776,43 @@ def _forecast_change(
         for session in week.sessions
     ]
     return _describe_change(removed, added)
+
+
+def _repair_amendment(
+    amended: "AmendedPlan",
+    check,
+    frames_by_week,
+    rules,
+    surviving,
+    rows,
+    today: date,
+    *,
+    validate,
+    start: date,
+    end: date,
+) -> Optional["AmendProposal"]:
+    """Close a coherent amendment's numeric shortfalls in code (#1064), or None.
+
+    The retry is spent and the only failures left are arithmetic (the challenge,
+    the usual walking). Repair lengthens or adds easy sessions where the ceilings
+    allow; whatever is still short is said on the card instead of being applied
+    silently. A repair that makes the amendment fail anything else is discarded.
+    """
+    weeks, notes = repair_weeks(
+        amended.weeks, check, frames_by_week, rules=rules, fixed_by_week=surviving
+    )
+    repaired = amended.model_copy(update={"weeks": weeks})
+    final = validate(repaired)
+    if not (final.ok or final.only_numeric):
+        return None
+    shortfalls = [f.shortfall for f in final.week_failures if f.shortfall]
+    changes = _forecast_change(rows, repaired, today)
+    changes.extend(notes)
+    changes.extend(f"Still short: {line}" for line in shortfalls)
+    return AmendProposal(
+        ok=True, amended=repaired, changes=changes, start=start, end=end,
+        repairs=notes, shortfalls=shortfalls,
+    )
 
 
 async def amend_plan(
@@ -782,7 +872,12 @@ def apply_proposal(
     written, changes = _apply(
         db, user, plan, proposal.amended, build_load_model(facts, today),
         start=proposal.start, end=proposal.end, today=today,
+        shortfalls=proposal.shortfalls,
     )
+    # What code did to hold the numbers, and what is still short once it had, is
+    # part of what the amendment DID: the ledger replaces the card's forecast with
+    # this, so a line left off here is a line the runner and the coach never see.
+    changes = [*changes, *proposal.repairs, *(f"Still short: {l}" for l in proposal.shortfalls)]
     return AmendOutcome(
         ok=True,
         summary=proposal.amended.summary,
@@ -790,6 +885,27 @@ def apply_proposal(
         sessions_written=written,
         changes=changes,
     )
+
+
+def _restate_shortfalls(
+    plan: TrainingPlan, rewritten: List[date], shortfalls: Sequence[str]
+) -> None:
+    """Make the plan's stored shortfalls describe the plan as it now stands.
+
+    The lines about the weeks the amendment rewrote are replaced by what is still
+    short in them now (nothing, when the rewrite holds), and every other week's
+    line stays. Left alone, the horizon and the coach went on saying a week was
+    short that the runner had just fixed. Written in the amendment's own
+    transaction, so the sessions and the sentence about them land together.
+    """
+    log = dict(plan.draft_log or {})
+    kept = [
+        line
+        for line in (log.get("shortfalls") or [])
+        if not any(says_week(line, week) for week in rewritten)
+    ]
+    log["shortfalls"] = [*kept, *shortfalls]
+    plan.draft_log = log  # reassigned: an in-place edit of a JSON column is not seen
 
 
 def _normalise(raw: Any) -> Any:
@@ -826,6 +942,7 @@ def _apply(
     start: date,
     end: date,
     today: date,
+    shortfalls: Sequence[str] = (),
 ) -> tuple:
     """Swap the window's replaceable sessions for the amended ones, in one
     transaction, on the plan the runner is already following.
@@ -887,6 +1004,7 @@ def _apply(
     # that writes inside it has not shortened anything.
     if plan.horizon_end is None or plan.horizon_end < end:
         plan.horizon_end = end
+    _restate_shortfalls(plan, sorted(written_weeks), shortfalls)
     db.commit()
     logger.info(
         "schedule: amended plan %s over %s..%s (%s replaced, %s written)",

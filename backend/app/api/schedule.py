@@ -32,6 +32,7 @@ from app.api.deps import (
     OwnedTrainingPlan,
 )
 from app.core.config import settings
+from app.schemas.season import ChallengeStatus, SeasonRead
 from app.schemas.schedule import (
     AmendmentStatusRead,
     DraftStatusRead,
@@ -41,14 +42,18 @@ from app.schemas.schedule import (
     ScheduleHorizonRead,
     ScheduleWeekRead,
 )
-from app.services.schedule import amend_watch, completion, store
+from app.services.activity_facts import query_facts
+from app.services.schedule import amend_watch, challenge, completion, season_store, store
+from app.services.schedule.season import enqueue_season
 from app.services.schedule.draft import enqueue_draft
 from app.services.schedule.horizon import (
     DEFAULT_HORIZON_WEEKS,
     MAX_HORIZON_WEEKS,
     build_horizon,
+    planned_by_challenge_week,
 )
 from app.services.schedule.week import build_week
+from app.services.weeks import resolve_week_start
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +132,11 @@ _DRAFT_FAILURE_MESSAGES = {
         "Nothing has changed — your runs still sync and your reports still "
         "arrive. Ask again once the allowance resets."
     ),
+    store.FAILURE_SEASON: (
+        "Your coach could not settle a season that held together, so no plan was "
+        "written. Nothing has changed: ask again, or talk it through in a "
+        "conversation."
+    ),
     # The fallback, and the sentence every failure used to get. No "just now"
     # (#879). This is read at the moment of failure and for as long afterwards as
     # the runner has not asked for another plan, which can be days: only the
@@ -140,7 +150,7 @@ _DRAFT_FAILURE_MESSAGES = {
 }
 
 _DRAFT_MESSAGES = {
-    "drafting": "Your coach is writing your plan. This usually takes a minute.",
+    "drafting": "Your coach is planning your season and writing your weeks. This usually takes a few minutes.",
     "active": "Your plan is ready.",
     "superseded": "This plan has been replaced by a newer one.",
     "failed": _DRAFT_FAILURE_MESSAGES[store.FAILURE_UNKNOWN],
@@ -202,7 +212,12 @@ def start_draft(db: DbSession, user: CurrentUser) -> DraftStatusRead:
 
 @router.get("/draft", response_model=DraftStatusRead)
 def read_draft_status(db: DbSession, user: CurrentUser) -> DraftStatusRead:
-    """Where the runner's most recent plan stands. Polled while drafting."""
+    """Where the runner's most recent plan stands. Polled while drafting.
+
+    Asks `draft_in_flight` first, which fails an abandoned draft, so a draft no
+    worker will finish reads as failed rather than writing for ever.
+    """
+    store.draft_in_flight(db, user.id)
     return _draft_status(store.latest_plan(db, user.id))
 
 
@@ -370,3 +385,103 @@ def dismiss_session(session: OwnedPlannedSession, db: DbSession) -> None:
         completion.dismiss_planned_session(db, session)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+# --- the season (#1064) -----------------------------------------------------
+
+_SEASON_MESSAGES = {
+    season_store.DRAFTING: "Your coach is planning your season. This usually takes a few minutes.",
+    season_store.ACTIVE: "Your season is ready.",
+    season_store.FAILED: season_store.FAILURE_MESSAGE,
+}
+
+
+def _challenge_statuses(db, user, plan, goal_names, today) -> list:
+    if plan is None or not plan.challenges():
+        return []
+    starts_on = resolve_week_start(getattr(user, "profile", None))
+    earliest = min(rule.start for _, rule in plan.challenges())
+    facts = query_facts(db, earliest, today + timedelta(days=1), user_id=user.id)
+    planned = planned_by_challenge_week(db, user, season_plan=plan, today=today)
+    out = []
+    for goal_id, rule in plan.challenges():
+        weeks, streak = challenge.challenge_status(
+            rule, facts, today, starts_on, planned_by_week=planned.get(goal_id)
+        )
+        out.append(
+            ChallengeStatus(
+                goal_id=goal_id,
+                name=goal_names.get(goal_id, "Challenge"),
+                rule=rule,
+                weeks=weeks,
+                streak=streak,
+            )
+        )
+    return out
+
+
+def _season_read(db, user) -> SeasonRead:
+    today = date.today()
+    upcoming = store.list_goal_races(db, user.id, on_or_after=today)
+    goals_read = [GoalRaceRead.model_validate(g) for g in upcoming]
+    drafting = season_store.drafting_in_flight(db, user.id)
+    active = season_store.active_season(db, user.id)
+    if active is not None:
+        plan = season_store.season_plan(active)
+        names = {g.id: g.name for g in store.list_goal_races(db, user.id)}
+        return SeasonRead(
+            id=active.id,
+            status=season_store.ACTIVE,
+            generated_at=active.generated_at,
+            model_id=active.model_id,
+            plan=plan,
+            goals=goals_read,
+            challenges=_challenge_statuses(db, user, plan, names, today),
+            stale=season_store.is_stale(db, active),
+            regenerating=drafting is not None,
+            message=_SEASON_MESSAGES[season_store.ACTIVE],
+        )
+    row = drafting or season_store.latest_season(db, user.id)
+    if row is None:
+        return SeasonRead(goals=goals_read, message="You have no season yet.")
+    return SeasonRead(
+        id=row.id,
+        status=row.status if row.status in _SEASON_MESSAGES else None,
+        model_id=row.model_id,
+        goals=goals_read,
+        message=(
+            row.failure_message
+            if row.status == season_store.FAILED and row.failure_message
+            else _SEASON_MESSAGES.get(row.status, "You have no season yet.")
+        ),
+    )
+
+
+@router.get("/season", response_model=SeasonRead)
+def read_season(db: DbSession, user: CurrentUser) -> SeasonRead:
+    """The coach's season: its read of every goal, the timeline, the challenges.
+
+    The active season when there is one (marked `stale` when the runner's goals
+    changed since), else where the latest attempt stands.
+    """
+    return _season_read(db, user)
+
+
+@router.post("/season", response_model=SeasonRead, status_code=202)
+def start_season(db: DbSession, user: CurrentUser) -> SeasonRead:
+    """Ask the coach to plan the season.
+
+    Runner-triggered like the draft: no background pass spends tokens on runners
+    who did not ask. A second request while one is being written is refused with
+    409 rather than joined, because a season is rewritten against the goals as
+    they stand now and the one in flight may have been started before an edit.
+    """
+    if season_store.drafting_in_flight(db, user.id) is not None:
+        raise HTTPException(
+            status_code=409, detail="Your coach is already planning your season."
+        )
+    if not store.list_goal_races(db, user.id, on_or_after=date.today()):
+        raise HTTPException(status_code=422, detail=season_store.NO_GOALS_MESSAGE)
+    season = season_store.create_drafting_season(db, user.id)
+    enqueue_season(user.id, season.id)
+    return _season_read(db, user)

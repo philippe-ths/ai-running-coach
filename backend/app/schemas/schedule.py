@@ -187,6 +187,10 @@ class PlannedWeekShape(BaseModel):
     # discipline -> share of the week's load, 0..1. Shares, not absolutes, so a
     # mix cannot contradict the total it is a mix of.
     discipline_mix: Dict[str, float] = Field(default_factory=dict)
+    # discipline -> the week's SECONDS of it. The mix above is load, so a challenge
+    # counted in time cannot be read off it; this is what it is read off. A shape
+    # stored before it existed reads empty (no migration: a JSON column).
+    duration_by_discipline_s: Dict[str, float] = Field(default_factory=dict)
     intent_mix: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -389,6 +393,31 @@ class ScheduleWeekRead(BaseModel):
 # --- the horizon read ------------------------------------------------------
 
 
+class HorizonChallenge(BaseModel):
+    """One challenge's line for one horizon week.
+
+    `threshold`, `planned` and `actual` are in the metric's own unit (seconds for
+    the two time metrics, metres for distance, a count for sessions). `planned`
+    is the plan's figure and, for a zone-time rule, an ESTIMATE (duration x the
+    runner's own share of that activity at the zone); `actual` is MEASURED from
+    heart-rate data and exists only once the week has begun. `met` is None until
+    the week is over.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    goal_id: UUID
+    name: str
+    index: int
+    weeks: int
+    metric: Literal["zone_time_s", "time_s", "distance_m", "sessions"]
+    min_zone: Optional[int] = None
+    threshold: float
+    planned: Optional[float] = None
+    actual: Optional[float] = None
+    met: Optional[bool] = None
+
+
 class HorizonWeek(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -426,6 +455,9 @@ class HorizonWeek(BaseModel):
     walking_distance_m: Optional[float] = None
     discipline_mix: Dict[str, float] = Field(default_factory=dict)
     intent_mix: Dict[str, float] = Field(default_factory=dict)
+    # Every challenge covering this week, with the plan's figure beside the bar
+    # it must clear (#1064). Empty when the runner has no season or none covers it.
+    challenges: List[HorizonChallenge] = Field(default_factory=list)
 
 
 class GoalRaceRead(BaseModel):
@@ -452,6 +484,9 @@ class ScheduleHorizonRead(BaseModel):
     # The largest weekly load in the window; bar lengths are true proportions of
     # it, so the ramp reads honestly instead of every bar looking maxed out.
     peak_effort_score: Optional[float] = None
+    # What the active plan is still short of after the retry and repair, in the
+    # runner's words (#1064): said, never silently accepted.
+    shortfalls: List[str] = Field(default_factory=list)
 
 
 # --- goal race writes ------------------------------------------------------

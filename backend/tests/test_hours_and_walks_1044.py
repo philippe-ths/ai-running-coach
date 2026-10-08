@@ -29,7 +29,6 @@ from app.services.schedule.draft_contract import (
     DraftedPlan,
     DraftedSession,
     DraftedWeek,
-    SketchedWeek,
 )
 from app.services.schedule.horizon import build_horizon
 from app.services.schedule.norms import (
@@ -123,7 +122,7 @@ def test_the_drafting_context_states_the_hours_limit_the_gate_enforces(db):
             distance_m=0, moving_time_s=180,
         )
 
-    context = build_draft_context(db, user, today=TODAY, weeks=12)
+    context = build_draft_context(db, user, today=TODAY)
 
     assert "Typical week, by activity (3.4 h moving in all):" in context
     assert "  - run: 2.3 h over 3.5 sessions, 28.0 km" in context
@@ -136,10 +135,10 @@ def test_the_drafting_context_states_the_hours_limit_the_gate_enforces(db):
     assert hours_ceilings(norm)[0] / 3600 > 6.7
     assert (
         "above 6.7 h of committed time, every activity together, is rejected "
-        "outright; a sketched week may reach 10.1 h"
+        "outright. A limit, not a target."
     ) in context
     at_stated = DraftedPlan(
-        rules=[], weeks=[_week(_timed(TUE, int(6.7 * 3600)))], sketch_weeks=[]
+        rules=[], weeks=[_week(_timed(TUE, int(6.7 * 3600)))]
     )
     assert validate_drafted_plan(at_stated, today=TODAY, norm_weekly_s=norm).ok
 
@@ -148,7 +147,7 @@ def test_the_drafting_context_states_the_hours_limit_the_gate_enforces(db):
 
 
 def test_a_week_over_twice_the_runners_usual_time_is_rejected():
-    plan = DraftedPlan(rules=[], weeks=[_week(_timed(TUE, 3600 * 7))], sketch_weeks=[])
+    plan = DraftedPlan(rules=[], weeks=[_week(_timed(TUE, 3600 * 7))])
 
     over = validate_drafted_plan(plan, today=TODAY, norm_weekly_s=3 * 3600)
     at = validate_drafted_plan(plan, today=TODAY, norm_weekly_s=3.5 * 3600)
@@ -166,7 +165,7 @@ def test_every_activity_counts_and_a_suggestion_does_not():
         _timed(SAT, 3600 * 5, discipline="walk", intent="easy", commitment="suggested",
                target_distance_m=20000),
     )
-    plan = DraftedPlan(rules=[], weeks=[week], sketch_weeks=[])
+    plan = DraftedPlan(rules=[], weeks=[week])
 
     assert not validate_drafted_plan(plan, today=TODAY, norm_weekly_s=1.4 * 3600).ok
     assert validate_drafted_plan(plan, today=TODAY, norm_weekly_s=1.5 * 3600).ok
@@ -175,7 +174,7 @@ def test_every_activity_counts_and_a_suggestion_does_not():
 def test_the_race_is_not_training_time():
     race = _timed(SAT, 3600 * 4, discipline="run", intent="long", target_distance_m=42195)
     plan = DraftedPlan(
-        rules=[], weeks=[_week(_timed(TUE, 3600), race)], sketch_weeks=[]
+        rules=[], weeks=[_week(_timed(TUE, 3600), race)]
     )
 
     with_race = validate_drafted_plan(
@@ -190,8 +189,7 @@ def test_the_race_is_not_training_time():
 def test_a_shakeout_on_race_day_is_still_training():
     race = _timed(SAT, 3600 * 4, discipline="run", intent="long", target_distance_m=42195)
     shakeout = _timed(SAT, 3600, discipline="run", intent="easy", target_distance_m=3000)
-    plan = DraftedPlan(rules=[], weeks=[_week(_timed(TUE, 3600), race, shakeout)],
-                       sketch_weeks=[])
+    plan = DraftedPlan(rules=[], weeks=[_week(_timed(TUE, 3600), race, shakeout)])
 
     check = validate_drafted_plan(
         plan, today=TODAY, norm_weekly_s=1800, race=(SAT, 42195)
@@ -200,22 +198,8 @@ def test_a_shakeout_on_race_day_is_still_training():
     assert not check.ok  # 2 h of training against a 1 h ceiling
 
 
-def test_a_sketched_week_may_reach_three_times_but_not_beyond():
-    def plan(hours):
-        return DraftedPlan(
-            rules=[],
-            weeks=[],
-            sketch_weeks=[SketchedWeek(week_start=NEXT_MON, target_duration_s=hours * 3600)],
-        )
-
-    assert validate_drafted_plan(plan(9), today=TODAY, norm_weekly_s=3 * 3600).ok
-    over = validate_drafted_plan(plan(9.5), today=TODAY, norm_weekly_s=3 * 3600)
-    assert not over.ok and over.codes == [VOLUME_CEILING]
-    assert "sketched week" in over.failures[0]
-
-
 def test_no_typical_week_means_no_hours_ceiling():
-    plan = DraftedPlan(rules=[], weeks=[_week(_timed(TUE, 3600 * 20))], sketch_weeks=[])
+    plan = DraftedPlan(rules=[], weeks=[_week(_timed(TUE, 3600 * 20))])
     assert validate_drafted_plan(plan, today=TODAY, norm_weekly_s=None).ok
 
 
@@ -267,42 +251,13 @@ async def test_the_draft_rejects_a_week_of_too_many_hours(db, monkeypatch):
     user = _seed_user(db)
     _seed_history(db, user)
     plan = store.create_drafting_plan(db, user.id)
-    week = {"rules": [], "weeks": [_too_many_hours_week(TODAY)], "sketch_weeks": []}
+    week = {"rules": [], "weeks": [_too_many_hours_week(TODAY)]}
     _inject(monkeypatch, _FakeClient([week, week]))
 
     outcome = await draft_plan(db, user, plan, today=TODAY)
 
     assert outcome.ok is False
     assert outcome.failure_kind == store.FAILURE_TOO_BIG_A_JUMP
-
-
-@pytest.mark.asyncio
-async def test_a_sketched_weeks_hours_and_walking_are_stored_with_it(db, monkeypatch):
-    """A sketch is what later sessions are written from (#981), so the hours and
-    walking it was agreed on have to survive being stored."""
-    user = _seed_user(db)
-    _seed_history(db, user)
-    plan = store.create_drafting_plan(db, user.id)
-    drafted = {
-        "rules": [],
-        "weeks": [],
-        "sketch_weeks": [
-            {
-                "week_start": NEXT_MON.isoformat(),
-                "target_duration_s": 18000,
-                "target_walking_distance_m": 12000,
-                "sessions_by_discipline": {"walk": 3},
-            }
-        ],
-    }
-    _inject(monkeypatch, _FakeClient([drafted]))
-
-    outcome = await draft_plan(db, user, plan, today=TODAY)
-
-    assert outcome.ok, outcome.failures
-    (shape,) = store.plan_week_shapes(db.get(TrainingPlan, outcome.plan_id))
-    assert shape.target_duration_s == 18000
-    assert shape.target_walking_distance_m == 12000
 
 
 def test_an_amendment_rejects_a_week_of_too_many_hours(db):

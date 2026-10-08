@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     # Coach AI
     ANTHROPIC_API_KEY: str = ""
-    COACH_MODEL_ID: str = "claude-sonnet-4-6"
+    COACH_MODEL_ID: str = "claude-sonnet-5-5"
     # #766: the model for conversational turns (activity chat box + thread
     # turns). Unset = COACH_MODEL_ID, so day-one behaviour is byte-identical and
     # the lever exists without a deploy (the reversible-config-flip idiom).
@@ -358,6 +358,18 @@ class Settings(BaseSettings):
     def period_model_id(self) -> str:
         return self.COACH_PERIOD_MODEL_ID or self.COACH_MODEL_ID
 
+    # #1064: the model lane for drafting a training plan, the same idiom. Its own
+    # lever because a draft is one rare, runner-requested call whose whole value is
+    # the quality of the reasoning behind a multi-week plan, which makes the
+    # strongest model both affordable and the defensible choice, and because it is
+    # the one lane that thinks at length and searches the web
+    # (`generate_structured_reasoned`).
+    COACH_SCHEDULE_MODEL_ID: str = ""
+
+    @property
+    def schedule_model_id(self) -> str:
+        return self.COACH_SCHEDULE_MODEL_ID or self.COACH_MODEL_ID
+
     # Runner memory (ADR 0025), the rewrite-from-source replacement for the retired
     # belief + narrative loop. The conventional #522 default-True kill switch on top
     # of the prompt gate: the background memory update pass is enqueued, and the
@@ -398,6 +410,14 @@ class Settings(BaseSettings):
     # default_timeout (queue.enqueue paths) and as the explicit timeout on the
     # rq-scheduler enqueue_in calls (block-complete opener, scheduled fuller turn).
     RQ_JOB_TIMEOUT_SECONDS: int = 600
+
+    # The plan-drafting job's own ceiling (#1064). One job may now write the season
+    # (a thinking, web-searching call) and then the weeks (a second thinking call),
+    # each with one retry, which can run well past the 600s every other job needs.
+    # Applied as `job_timeout` on that enqueue only, and the stale-draft rule is
+    # derived from it (`store.DRAFT_STALE_AFTER`), so a draft is never declared
+    # abandoned while its job could still be running.
+    SCHEDULE_JOB_TIMEOUT_SECONDS: int = 1500
 
     # Worker concurrency (#594). How many jobs the RQ worker process runs at once.
     # 1 (default) is exactly today's behaviour: a single in-process Worker on the

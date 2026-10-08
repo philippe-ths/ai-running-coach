@@ -17,12 +17,14 @@ from uuid import uuid4
 from app.models import User, UserProfile
 from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
+from app.schemas.season import SeasonPlan
 from app.services.schedule import store
 from app.services.schedule.amend import AmendedPlan, _apply, _shape_lines
 from app.services.schedule.coach_view import _written_through
 from app.services.schedule.draft import _persist
 from app.services.schedule.draft_contract import DraftedPlan, normalise
 from app.services.schedule.effort import build_load_model
+from app.services.schedule.frames import build_frames
 from app.services.schedule.horizon import build_horizon
 
 TODAY = date(2026, 8, 12)  # a Wednesday
@@ -69,24 +71,39 @@ def _week(week_start: date, *sessions: dict, phase=None) -> dict:
     }
 
 
-def _draft(weeks, sketch_weeks=()) -> DraftedPlan:
+def _draft(weeks) -> DraftedPlan:
     return DraftedPlan.model_validate(
-        normalise(
-            {
-                "summary": "A plan.",
-                "rules": [],
-                "weeks": list(weeks),
-                "sketch_weeks": list(sketch_weeks),
-            }
-        )
+        normalise({"summary": "A plan.", "rules": [], "weeks": list(weeks)})
     )
 
 
-def _persisted(db, user, drafted) -> TrainingPlan:
+def _peak_frames():
+    """Frames for a season whose phase covers WEEK_2 (a shape, not concrete)."""
+    season = SeasonPlan.model_validate(
+        {
+            "summary": "s",
+            "goals": [],
+            "phases": [
+                {
+                    "kind": "sharpen", "start": WEEK_2.isoformat(),
+                    "end": (WEEK_2 + timedelta(days=6)).isoformat(), "run_km": 40,
+                }
+            ],
+        }
+    )
+    return build_frames(
+        season=season, goals=[], facts=[], starts_on=0, today=TODAY, horizon_weeks=4
+    )
+
+
+def _persisted(db, user, drafted, *, frames=()) -> TrainingPlan:
     plan = TrainingPlan(user_id=user.id, status="drafting", rules=[], week_shapes=[])
     db.add(plan)
     db.commit()
-    _persist(db, user, plan, drafted, build_load_model([], TODAY), model_id="m")
+    _persist(
+        db, user, plan, drafted, build_load_model([], TODAY), model_id="m",
+        frames=frames,
+    )
     db.refresh(plan)
     return plan
 
@@ -116,11 +133,6 @@ def test_a_drafted_concrete_weeks_phase_reaches_the_horizon(db):
 
 def test_a_phase_only_entry_changes_no_coverage_reach_or_count(db):
     user = _user(db)
-    sketch = {
-        "week_start": WEEK_2.isoformat(),
-        "phase": "Peak",
-        "target_running_distance_m": 40000,
-    }
     plan = _persisted(
         db,
         user,
@@ -134,8 +146,8 @@ def test_a_phase_only_entry_changes_no_coverage_reach_or_count(db):
                     phase="Build",
                 ),
             ],
-            [sketch],
         ),
+        frames=_peak_frames(),
     )
 
     shapes = store.plan_week_shapes(plan)

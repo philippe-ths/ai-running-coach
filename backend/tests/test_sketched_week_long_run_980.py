@@ -28,6 +28,7 @@ no test here reaches the network.
 """
 
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -35,6 +36,7 @@ import pytest
 from app.models import Activity, DerivedMetric, User, UserProfile
 from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
+from app.schemas.season import SeasonPlan
 from app.services.schedule import draft as draft_mod
 from app.services.schedule import store
 from app.services.schedule.draft import draft_plan
@@ -61,15 +63,21 @@ class _FakeClient:
         self.calls = []
         self.model = FAKE_MODEL
 
-    async def generate_structured(self, *, system, user, tool, max_tokens=1024):
+    async def generate_structured_reasoned(
+        self, *, system, user, tool, max_tokens, effort="high",
+        web_search_max_uses=0, timeout=None,
+    ):
         self.calls.append({"system": system, "user": user, "tool": tool})
         result = self._results.pop(0)
         if isinstance(result, Exception):
             raise result
-        return result
+        return result, SimpleNamespace(
+            input_tokens=1000, output_tokens=500, web_search_requests=0
+        )
 
 
 def _inject(monkeypatch, client):
+    monkeypatch.setattr(draft_mod.settings, "SCHEDULE_CONCRETE_WEEKS", 1)
     monkeypatch.setattr(draft_mod.turn, "build_client", lambda kind, uid: client)
     monkeypatch.setattr(draft_mod.turn, "over_budget", lambda user_id: False)
 
@@ -157,20 +165,14 @@ def _session(db, plan, *, start, intent="easy", **kw) -> PlannedSession:
     return row
 
 
-def _drafted_answer(**sketch) -> dict:
-    """A minimal accepted plan whose one sketched week carries whatever is given."""
-    week = {
-        "week_start": NEXT_MON.isoformat(),
-        "sessions_by_discipline": {"run": 4},
-        "intent_counts": {"easy": 3, "long": 1},
-    }
-    week.update(sketch)
+def _drafted_answer() -> dict:
+    """A minimal accepted plan: one concrete week. Every later week is written by
+    code from the season's phases."""
     return {
         "rules": [],
         "weeks": [
             {
                 "week_start": TODAY.isoformat(),
-                "phase": "base",
                 "sessions": [
                     {
                         "window_start": TUE.isoformat(),
@@ -183,9 +185,26 @@ def _drafted_answer(**sketch) -> dict:
                 ],
             }
         ],
-        "sketch_weeks": [week],
-        "summary": "A base week and a sketch beyond it.",
+        "summary": "A base week and a season beyond it.",
     }
+
+
+def _season(**phase) -> SeasonPlan:
+    """A season whose one phase covers the concrete week and the week after it."""
+    return SeasonPlan.model_validate(
+        {
+            "summary": "Build to the peak.",
+            "goals": [],
+            "phases": [
+                {
+                    "kind": "build",
+                    "start": TODAY.isoformat(),
+                    "end": (NEXT_MON + timedelta(days=6)).isoformat(),
+                    **phase,
+                }
+            ],
+        }
+    )
 
 
 def _week(horizon, week_start: date):
@@ -199,33 +218,26 @@ def _week(horizon, week_start: date):
 async def test_a_sketched_weeks_long_run_and_focus_reach_the_horizon_unchanged(
     db, monkeypatch
 ):
-    """The whole point of #980, end to end.
+    """The whole point of #980, end to end, now written by code (#1064).
 
     The coach settled a 20 km long run and a race-pace tempo for a week seven days
-    out. Both are coaching decisions nothing in the app can re-derive, so if they
-    do not survive the write they are gone: the week reads as a bare weekly total
-    and the peak the runner agreed to is unrecoverable. This walks the real path —
-    the drafting tool's answer, `_shape_for`, the JSON column, `plan_week_shapes`
-    coercion, `build_horizon` — rather than any one hop of it.
+    out, on the season's phase. Both are coaching decisions nothing in the app can
+    re-derive, so they must survive the write: the week reads as the build the
+    runner agreed to rather than a bare weekly total. This walks the real path:
+    the season's phase, the frame, `write_shapes`, the JSON column,
+    `plan_week_shapes` coercion, `build_horizon`.
     """
     user = _seed_user(db)
     _seed_history(db, user)
     plan = store.create_drafting_plan(db, user.id)
-    _inject(
-        monkeypatch,
-        _FakeClient(
-            [
-                _drafted_answer(
-                    phase="build",
-                    target_running_distance_m=37000,
-                    long_run_distance_m=20000,
-                    quality_focus="race-pace tempo",
-                )
-            ]
+    _inject(monkeypatch, _FakeClient([_drafted_answer()]))
+
+    outcome = await draft_plan(
+        db, user, plan, today=TODAY,
+        season=_season(
+            weekly_hours=6, run_km=37, long_run_km=20, focus="race-pace tempo"
         ),
     )
-
-    outcome = await draft_plan(db, user, plan, today=TODAY)
 
     assert outcome.ok is True
     db.refresh(plan)
@@ -242,24 +254,24 @@ async def test_a_sketched_weeks_long_run_and_focus_reach_the_horizon_unchanged(
 
 
 @pytest.mark.asyncio
-async def test_a_sketch_that_states_neither_stores_neither_rather_than_a_zero(
+async def test_a_phase_that_states_neither_stores_neither_rather_than_a_zero(
     db, monkeypatch
 ):
     """A week the coach said nothing about is not a week with a 0 km long run.
 
-    The coach is told to leave the field out for a week that genuinely holds no
-    long run, so the absence has to survive as an absence: stored as `0.0` it
-    would draw a "0.0 km" line for a week nobody made that claim about.
+    A phase with no long-run target and no focus leaves both absent: stored as
+    `0.0` they would draw a "0.0 km" line for a week nobody made that claim
+    about, and held flat at the runner's current longest run they would state a
+    target nobody set.
     """
     user = _seed_user(db)
     _seed_history(db, user)
     plan = store.create_drafting_plan(db, user.id)
-    _inject(
-        monkeypatch,
-        _FakeClient([_drafted_answer(target_running_distance_m=20000)]),
-    )
+    _inject(monkeypatch, _FakeClient([_drafted_answer()]))
 
-    assert (await draft_plan(db, user, plan, today=TODAY)).ok is True
+    assert (
+        await draft_plan(db, user, plan, today=TODAY, season=_season(run_km=20))
+    ).ok is True
 
     db.refresh(plan)
     shape = next(
