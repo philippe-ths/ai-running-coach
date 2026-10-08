@@ -57,9 +57,25 @@ def _week_from_sessions(sessions: List[Any]) -> Dict[str, Any]:
     # second field that could disagree with the sessions beneath it. The longest
     # `long` run rather than the first, because a week may legitimately hold two.
     long_run = 0.0
+    # A long run given only as a time is still a long run (#985): its time is
+    # kept beside the distance, so "90 minutes easy" does not read as no long run.
+    long_run_time = 0.0
+    duration = 0.0
+    # A week's hours are stated only when every committed session states its
+    # time: a plan written before sessions carried both (or a session since
+    # adjusted to a distance) would otherwise headline a fraction of the week.
+    untimed = False
+    walking_distance = 0.0
     for session in sessions:
         if session.commitment != "committed":
             continue
+        duration += session.target_duration_s or 0
+        # A rest day has no time to state, so it never blanks the week.
+        untimed = untimed or (
+            not session.target_duration_s and session.intent != "rest"
+        )
+        if session.discipline == "walk":
+            walking_distance += session.target_distance_m or 0.0
         effort = session.target_effort_score or 0.0
         load += effort
         by_discipline[session.discipline] = (
@@ -74,10 +90,14 @@ def _week_from_sessions(sessions: List[Any]) -> Dict[str, Any]:
             running_distance += distance
             if session.intent == "long":
                 long_run = max(long_run, distance)
+                long_run_time = max(long_run_time, session.target_duration_s or 0)
     return {
         "running_distance_m": running_distance,
         "effort_score": load,
         "long_run_distance_m": long_run or None,
+        "long_run_duration_s": long_run_time or None,
+        "duration_s": None if untimed else duration or None,
+        "walking_distance_m": walking_distance or None,
         # A written week states its quality work in the sessions themselves, so
         # there is no summary to add on top: the horizon's job here is to carry
         # the sketch's stated focus forward, not to re-describe real sessions.
@@ -196,6 +216,8 @@ def build_horizon(
                     effort_score=shape.target_effort_score,
                     long_run_distance_m=shape.long_run_distance_m,
                     quality_focus=shape.quality_focus,
+                    duration_s=shape.target_duration_s,
+                    walking_distance_m=shape.target_walking_distance_m,
                     discipline_mix=shape.discipline_mix,
                     intent_mix=shape.intent_mix,
                 )

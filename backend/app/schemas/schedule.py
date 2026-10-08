@@ -180,6 +180,10 @@ class PlannedWeekShape(BaseModel):
     # never rewritten.
     long_run_distance_m: Optional[float] = Field(default=None, ge=0)
     quality_focus: Optional[str] = Field(default=None, max_length=80)
+    # The week's time across every activity and its walking distance (#1044),
+    # as the coach stated them. Older shapes read None, as above.
+    target_duration_s: Optional[float] = Field(default=None, ge=0)
+    target_walking_distance_m: Optional[float] = Field(default=None, ge=0)
     # discipline -> share of the week's load, 0..1. Shares, not absolutes, so a
     # mix cannot contradict the total it is a mix of.
     discipline_mix: Dict[str, float] = Field(default_factory=dict)
@@ -411,7 +415,15 @@ class HorizonWeek(BaseModel):
     # between them instead of the progression disappearing at week four. `null`
     # for a week that holds no long run, which is a real answer and not a zero.
     long_run_distance_m: Optional[float] = None
+    # The long run's time, so one given only in minutes still reads as a long
+    # run (#985). Planned weeks only: a sketch states its long run as distance.
+    long_run_duration_s: Optional[float] = None
     quality_focus: Optional[str] = None
+    # The week's time across every activity and its walking distance (#1044):
+    # summed from a planned week's committed sessions, as stated for a sketched
+    # one. `null` when nothing in the week states it.
+    duration_s: Optional[float] = None
+    walking_distance_m: Optional[float] = None
     discipline_mix: Dict[str, float] = Field(default_factory=dict)
     intent_mix: Dict[str, float] = Field(default_factory=dict)
 

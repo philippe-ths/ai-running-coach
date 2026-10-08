@@ -49,6 +49,8 @@ Its date is an exact `race_date`, an approximate `window_start`/`window_end`, or
 A `TrainingPlan` is the plan container: a nullable `goal_race_id`, a `horizon_end`, and two strict-coerced JSON columns `rules` (`List[SpacingRule]`) and `week_shapes` (`List[PlannedWeekShape]`).
 Its `status` is `drafting`, `active`, `superseded`, or `failed`, with at most one active plan per user held by the writer rather than a DB constraint.
 A `PlannedWeekShape` also carries `long_run_distance_m` and `quality_focus`, so a sketched week states the progression it was agreed on rather than only a weekly total.
+A `PlannedWeekShape` also carries `target_duration_s` (the week's time across every activity) and `target_walking_distance_m`.
+A concrete week's phase is kept as a phase-only `week_shapes` entry, since `PlannedSession` rows have nowhere to hold it.
 `superseded_at` records when a plan stopped being current, written only by `activate_plan` and cleared on the row it activates, so a superseded plan stays reachable and restorable.
 A `PlannedSession` is the schedule's concrete unit, described along three independent axes: PLACEMENT, COMMITMENT (`committed` or `suggested`), and DISCIPLINE (`run`, `walk`, `bike`, `strength`, `row`, `other`).
 Placement has no column: a session stores an inclusive `[window_start, window_end]`, and `derive_placement` reads `pinned`, `week`, or `window` from its span.
@@ -103,7 +105,6 @@ Auth degrades to a single local user only when Clerk is unconfigured outside pro
 `/api/auth/strava/login` is gated on the session and mints a short-lived HMAC-signed `state` carrying the authenticated `user_id`, which the bare-redirect callback verifies to link the new `StravaAccount`.
 Railway runs the backend as two services off one image (`web` FastAPI, `worker` RQ with `with_scheduler=True`) plus managed Postgres and Redis; Vercel hosts the frontend.
 Server components call `BACKEND_URL` directly and the catch-all route handler `frontend/app/api/[...path]/route.ts` proxies client-side `/api/*` calls, both injecting HTTP Basic credentials server-side.
-Locally `docker compose` provides only Postgres and Redis, while the host runs `uvicorn`, `rq worker --with-scheduler`, and `next dev`.
 No production hostname is hardcoded; every seam URL is an env var, so a custom domain is a config and DNS change.
 
 ## Important Constraints
@@ -130,11 +131,11 @@ A switch that block does not declare runs at its CODE default, which is False fo
 The orthogonal coach-input switch `COACH_SCHEDULE_ENABLED` (default True) drops the `right_now.schedule` pack section while the schedule screen keeps working.
 `SCHEDULE_HORIZON_WEEKS` (default 12) and `SCHEDULE_CONCRETE_WEEKS` (default 3) are inputs to the drafting prompt as well as the horizon read.
 A drafted plan whose goal race falls inside the horizon is written as concrete sessions all the way to the race, bounded by the drafted contract's six-week concrete cap.
+`plan_validator` bounds each week's committed running km and, via `hours_ceilings`, its committed time across every activity, both against the runner's own typical week and with the race left out.
 `COACH_PERIOD_REPORT_ENABLED` (default True) gates every `/api/coach/period-reports` route with 503 and hides the frontend entry point.
 `EXCHANGE_STAGE2_DELAY_SECONDS` (default 10800) is the fuller-turn timer and `EXCHANGE_REPLY_WINDOW_SECONDS` (default 86400) is how long a reply still triggers the fuller turn early; both are inert under a single-shot prompt.
 `RQ_JOB_TIMEOUT_SECONDS` (default 600) is the RQ death-penalty ceiling, applied as the queue `default_timeout` and as explicit `job_timeout=` on `queue.enqueue_in` calls, because a two-stage generation runs past RQ's 180s default.
 `BLOCK_GAP_SECONDS` (default 1800) is both the block grouping threshold and the block-complete debounce that gates the opener.
-Block assignment runs under every prompt, while the block-complete opener trigger is two-stage-only.
 Telegram is the only notification channel, active when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are both set, otherwise the notifier is a no-op.
 `resolve_recipient(user)` returns the activity owner's bound `User.telegram_chat_id`; an unbound user falls back to the global `TELEGRAM_CHAT_ID` only for the identified deployment owner (`OWNER_EMAIL`, or a db-proven single-user deploy) and otherwise fails closed to null.
 The Telegram vars must be set on both Railway app services, with `TELEGRAM_WEBHOOK_SECRET` and `TELEGRAM_BOT_USERNAME` needed on web only.
@@ -241,7 +242,6 @@ A handler declares the owned resource it operates on (`OwnedActivity`, `OwnedBlo
 The package computes no training total of its own: actuals and windows come from `activity_facts`, the week boundary from `weeks.py`, and typical from `coach/volume.py` and its own `norms.py`.
 `backend/app/services/notifications/` holds the notifier port and adapters, the channel selection and composer, the Telegram template, the shared prose-render helpers, and the opaque tap-token codec.
 `backend/app/services/` also holds `blocks.py`, `weeks.py`, `activity_facts.py`, `trends.py`, `training_load.py`, `readiness.py`, `laps.py`, `activity_queries.py`, `account_deletion.py`, `checkins.py`, `intents.py`, and `units/cadence.py`.
-`checkins.py` and `intents.py` are shared single write paths used by both the API and the Telegram or proposed-action callers.
 `best_efforts.py` parses Strava's per-run `best_efforts` and their `pr_rank`, and `upsert_activity` preserves them across a summary-only re-sync as it does laps.
 `intents.py` is also the single home of the stated-intent vocabulary, rendered by the frontend from `ActivityDetailRead.intent_options` rather than a frontend copy.
 `backend/app/jobs/` holds the RQ jobs, with `process_new_activity.py` as the convergence pipeline and the job layer's four entrypoints.

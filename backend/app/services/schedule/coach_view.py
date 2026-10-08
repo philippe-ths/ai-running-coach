@@ -153,11 +153,12 @@ def _target(session: Any) -> Optional[str]:
         # prescription stays: it is what they actually go out and do.
         total = planned_distance_m(session)
         return f"{total / 1000:.2f} km ({prescription})" if total else prescription
+    parts = []
     if session.target_distance_m:
-        return f"{session.target_distance_m / 1000:.1f} km"
+        parts.append(f"{session.target_distance_m / 1000:.1f} km")
     if session.target_duration_s:
-        return f"{int(session.target_duration_s // 60)} min"
-    return None
+        parts.append(f"{int(session.target_duration_s // 60)} min")
+    return ", ".join(parts) or None
 
 
 def _when(session: Any, today: date, starts_on: int, *, next_week: bool = False) -> str:
