@@ -83,8 +83,8 @@ def _active_season(db, user, goals, *, challenge_start):
          "end": goals["marathon"].window_end.isoformat()},
     ]
     season.plan = payload
-    season.goals_fingerprint = season_store.goals_fingerprint(
-        store.list_goal_races(db, user.id, on_or_after=date.today())
+    season.goals_fingerprint = season_store.stamp(
+        store.list_goal_races(db, user.id, on_or_after=date.today()), date.today()
     )
     season.model_id = "claude-opus-5-5"
     season_store.activate_season(db, season)
@@ -144,6 +144,9 @@ def test_an_active_season_is_served_with_its_plan_goals_and_challenge_status(db,
     assert body["status"] == "active" and body["model_id"] == "claude-opus-5-5"
     assert body["plan"]["goals"][1]["kind"] == "challenge"
     assert body["stale"] is False and body["regenerating"] is False
+    # The plan's shortfalls are the HORIZON's, from the plan's own log: the season
+    # read carries none, so the two screens cannot say two different things.
+    assert "shortfalls" not in body
     (status,) = body["challenges"]
     assert status["name"] == "10h a week"
     assert [w["index"] for w in status["weeks"]] == [1, 2, 3, 4]
@@ -194,8 +197,8 @@ def test_a_failed_first_attempt_reports_the_runner_facing_message(db, client):
 def test_a_drafting_season_past_its_deadline_reads_as_failed(db, client):
     user = _user(db)
     season = season_store.create_drafting_season(db, user.id)
-    season.created_at = datetime.now(timezone.utc) - timedelta(
-        seconds=settings.RQ_JOB_TIMEOUT_SECONDS + 181
+    season.created_at = datetime.now(timezone.utc) - season_store.stale_after() - timedelta(
+        seconds=1
     )
     db.commit()
     _act_as(user)

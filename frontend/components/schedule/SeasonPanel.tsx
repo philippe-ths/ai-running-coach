@@ -29,7 +29,7 @@ import type {
 import { useSeason } from "@/lib/useSeason";
 import { DISCIPLINE_LABEL, safeDiscipline } from "./palette";
 import { addDaysIso, formatDayMonth, formatWhen, todayIso } from "./dates";
-import { formatHeld, formatNeeded, metricLabel, metricUnit } from "./challenge";
+import { formatHeld, formatNeeded, metricLabel, metricUnit, weekFigure } from "./challenge";
 import SeasonTimeline from "./SeasonTimeline";
 
 const KIND_LABEL: Record<GoalKind, string> = {
@@ -86,7 +86,7 @@ export default function SeasonPanel({
   /** Fired once when a season this card watched being written lands. */
   onSeasonReady?: () => void;
 }) {
-  const { season, loading, drafting, failed, starting, error, start } = useSeason(
+  const { season, loading, drafting, regenerating, failed, starting, error, start } = useSeason(
     refreshToken,
     onSeasonReady,
   );
@@ -108,7 +108,7 @@ export default function SeasonPanel({
           <button
             type="button"
             onClick={() => void start()}
-            disabled={starting || drafting}
+            disabled={starting || drafting || regenerating}
             className={`${ACTION_BUTTON} text-xs text-blue-700 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30`}
           >
             <RefreshCw size={13} aria-hidden="true" />
@@ -139,6 +139,25 @@ export default function SeasonPanel({
         </div>
       )}
 
+      {/* A newer season is being written behind the current one: the current
+          one stays on screen, and the note says a re-plan is under way. */}
+      {regenerating && !drafting && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mt-3 flex items-start gap-2 rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-300"
+        >
+          <Loader2 size={16} className="mt-0.5 shrink-0 animate-spin" aria-hidden="true" />
+          <p>
+            Your coach is re-planning your season…
+            <span className="block text-xs text-gray-500 dark:text-gray-400">
+              The season below stays as it is until the new one lands. You can leave this page
+              and come back.
+            </span>
+          </p>
+        </div>
+      )}
+
       {failed && !drafting && (
         <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
           <p>
@@ -162,7 +181,11 @@ export default function SeasonPanel({
       )}
 
       {season?.status === "active" && season.plan && !drafting && (
-        <ActiveSeason season={season} starting={starting} onReplan={() => void start()} />
+        <ActiveSeason
+          season={season}
+          busy={starting || regenerating}
+          onReplan={() => void start()}
+        />
       )}
     </section>
   );
@@ -190,11 +213,12 @@ function NoSeason({ starting, onStart }: { starting: boolean; onStart: () => voi
 
 function ActiveSeason({
   season,
-  starting,
+  busy,
   onReplan,
 }: {
   season: SeasonRead;
-  starting: boolean;
+  /** Asking, or a re-plan already under way: the re-plan button waits. */
+  busy: boolean;
   onReplan: () => void;
 }) {
   const plan = season.plan!;
@@ -224,15 +248,15 @@ function ActiveSeason({
           <button
             type="button"
             onClick={onReplan}
-            disabled={starting}
+            disabled={busy}
             className={`${ACTION_BUTTON} mt-2 border border-amber-300 text-xs text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40`}
           >
-            {starting ? (
+            {busy ? (
               <Loader2 size={12} className="animate-spin" aria-hidden="true" />
             ) : (
               <RefreshCw size={12} aria-hidden="true" />
             )}
-            {starting ? "Asking…" : "Re-plan my season"}
+            {busy ? "Re-planning…" : "Re-plan my season"}
           </button>
         </div>
       )}
@@ -245,20 +269,6 @@ function ActiveSeason({
           {plan.summary}
         </p>
       </div>
-
-      {season.shortfalls.length > 0 && (
-        <div
-          role="note"
-          className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200"
-        >
-          <p className="font-semibold">What this season cannot do yet</p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4">
-            {season.shortfalls.map((line, i) => (
-              <li key={i}>{line}</li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       <SeasonTimeline phases={plan.phases} goals={timelineGoals} />
 
@@ -436,7 +446,7 @@ function Challenge({
           {weeks.map((w) => {
             const isCurrent = current?.week_start === w.week_start;
             const state = w.met === true ? "met" : w.met === false ? "missed" : isCurrent ? "this week" : "ahead";
-            const value = w.actual ?? w.planned;
+            const value = weekFigure(w);
             return (
               <li
                 key={w.week_start}

@@ -429,7 +429,6 @@ def _season_read(db, user) -> SeasonRead:
     if active is not None:
         plan = season_store.season_plan(active)
         names = {g.id: g.name for g in store.list_goal_races(db, user.id)}
-        log = active.draft_log or {}
         return SeasonRead(
             id=active.id,
             status=season_store.ACTIVE,
@@ -438,9 +437,8 @@ def _season_read(db, user) -> SeasonRead:
             plan=plan,
             goals=goals_read,
             challenges=_challenge_statuses(db, user, plan, names, today),
-            stale=active.goals_fingerprint != season_store.goals_fingerprint(upcoming),
+            stale=season_store.is_stale(db, active),
             regenerating=drafting is not None,
-            shortfalls=list(log.get("shortfalls") or []),
             message=_SEASON_MESSAGES[season_store.ACTIVE],
         )
     row = drafting or season_store.latest_season(db, user.id)

@@ -253,6 +253,25 @@ class Usage:
     web_search_requests: int = 0
 
 
+class ReasonedCallFailed(ValueError):
+    """A reasoned structured call that ran, was billed, and returned no usable
+    tool input: stopped on `max_tokens`, or never called the tool (#1064).
+
+    A ValueError, as it always was, so a caller that does not know it still
+    treats it as a failed answer. It carries the call's accumulated `Usage`
+    because the tokens were spent: the metered client records them before
+    re-raising, and the run log shows what the failed attempt cost. It is the
+    model's OUTPUT that failed, never the network, so a caller feeds it to its
+    rewrite ("your answer was cut off") instead of reporting the coach as
+    unreachable.
+    """
+
+    def __init__(self, message: str, usage: "Usage", *, truncated: bool) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.truncated = truncated
+
+
 def _usage_from_response(response: Any) -> Usage:
     """Extract token usage from an Anthropic response, defaulting to 0/0."""
     usage = getattr(response, "usage", None)
@@ -530,7 +549,8 @@ class AnthropicClient:
         check, never an instruction. A `pause_turn` is continued by echoing the
         paused message back, up to `_MAX_PAUSE_CONTINUATIONS` times, usage summed.
 
-        Raises ValueError on a `max_tokens` stop (a truncated tool call must not be
+        Raises `ReasonedCallFailed` (a ValueError carrying the call's usage) on a
+        `max_tokens` stop (a truncated tool call must not be
         read as an answer, #931) and when no `tool` block comes back. `timeout` is a
         DEADLINE for the whole call, continuations included, as in the sibling.
         """
@@ -602,9 +622,11 @@ class AnthropicClient:
                 + round_usage.web_search_requests,
             )
             if final.stop_reason == "max_tokens":
-                raise ValueError(
+                raise ReasonedCallFailed(
                     f"{tool_name} tool call truncated at max_tokens={budget_tokens}; "
-                    "the tool input is incomplete and must not be read as an answer"
+                    "the tool input is incomplete and must not be read as an answer",
+                    total,
+                    truncated=True,
                 )
             if final.stop_reason == "pause_turn" and continuations < _MAX_PAUSE_CONTINUATIONS:
                 # Imported here: chat.py imports this module.
@@ -624,7 +646,9 @@ class AnthropicClient:
                 ):
                     tool_input = getattr(block, "input", None)
                     return (dict(tool_input) if isinstance(tool_input, dict) else {}), total
-            raise ValueError(f"no {tool_name} tool_use block in response")
+            raise ReasonedCallFailed(
+                f"no {tool_name} tool_use block in response", total, truncated=False
+            )
 
     async def generate_coach_message(
         self,

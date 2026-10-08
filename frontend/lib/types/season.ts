@@ -94,6 +94,9 @@ export interface SeasonRead {
   challenges: ChallengeStatus[];
   // True when the runner's goals changed since this season was written.
   stale: boolean;
-  shortfalls: string[];
+  // True while a newer season is being written behind this active one: keep
+  // showing this one and say a re-plan is under way. (What the PLAN cannot do
+  // is on the horizon read, from the plan's own log: one source.)
+  regenerating: boolean;
   message: string | null;
 }

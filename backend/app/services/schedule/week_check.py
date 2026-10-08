@@ -20,6 +20,7 @@ Pure: no I/O, no model.
 """
 
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
@@ -44,7 +45,9 @@ NUMERIC_CODES = frozenset({CHALLENGE, WALKING})
 GOAL_DAY_SHARE = 0.9
 
 # A plan is a prescription, not a stopwatch: a week within this much of its
-# threshold, in the metric's own terms, meets it. A minute, ten metres.
+# threshold, in the metric's own terms, meets it. A minute, ten metres. The
+# schedule screen judges a planned week by the same figures (`PLAN_TOLERANCE` in
+# frontend/components/schedule/challenge.ts, pinned to this by a test).
 _TOLERANCE = {
     "zone_time_s": 60.0,
     "time_s": 60.0,
@@ -92,7 +95,10 @@ def counts_towards_week(session: Any, today: date) -> bool:
 
     A session whose window has closed is history: the runner's measured actuals
     already hold whatever they did, and counting its plan too would count it
-    twice. A suggestion is an offer, not a commitment; a rest day is not work.
+    twice. The same holds for one ticked off while its window is still open (a
+    floating session done on Tuesday): the actual run is in `frame.done`, so the
+    plan's row for it must not count a second time. A suggestion is an offer, not
+    a commitment; a rest day is not work; a dismissed session was declined.
     """
     if getattr(session, "commitment", "committed") != "committed":
         return False
@@ -100,7 +106,16 @@ def counts_towards_week(session: Any, today: date) -> bool:
         return False
     if getattr(session, "dismissed_at", None) is not None:
         return False
+    completed_at = getattr(session, "completed_at", None)
+    if completed_at is not None and _day_of(completed_at) < today:
+        # Done before today: `frame.done` (which runs through yesterday) holds
+        # it. One done TODAY is not in `frame.done` yet, so its plan still counts.
+        return False
     return session.window_end >= today
+
+
+def _day_of(moment: Any) -> date:
+    return moment.date() if hasattr(moment, "date") and callable(moment.date) else moment
 
 
 def planned_metrics(sessions: Sequence[Any], frame: "WeekFrame") -> PlannedMetrics:
@@ -174,6 +189,17 @@ def rule_value(rule: Any, metrics: PlannedMetrics) -> float:
 
 def _day(d: date) -> str:
     return f"{d.day} {d:%b}"
+
+
+def says_week(line: str, week_start: date) -> bool:
+    """Whether a stored shortfall line is about the week starting `week_start`.
+
+    Every shortfall a week's check or a shape writes names its week as "the week
+    of 19 Oct", so a plan's stored shortfalls can be restated week by week
+    (an amendment replaces the lines of the weeks it rewrote) without a second
+    structure that could disagree with the sentences runners read.
+    """
+    return re.search(rf"the week of {re.escape(_day(week_start))}\b", line, re.I) is not None
 
 
 def _fmt(metric: str, value: float) -> str:

@@ -51,12 +51,12 @@ def value(frame, sessions):
 
 
 def short_week():
-    """4.4 h of estimated zone 2+ time and 27 km of walking: 5.6 h short."""
+    """4.4 h of estimated zone 2+ time and 30 km of walking: 5.6 h short."""
     return [
         session(d(1), "run", hours=1.0, km=10),
         session(d(3), "run", hours=1.0, km=10),
         session(d(5), "run", hours=1.5, km=15, intent="long"),
-        *[session(d(n), "walk", hours=0.9, km=4.5) for n in range(6)],
+        *[session(d(n), "walk", hours=0.9, km=5.0) for n in range(6)],
     ]
 
 
@@ -232,7 +232,7 @@ def test_a_walking_shortfall_lengthens_the_walks_then_adds_walks_from_the_weeks_
     frame = frame_for()
     week = [
         *[s for s in short_week() if s.discipline == "run"],
-        *[session(d(n), "bike", hours=3.0) for n in (1, 3, 5)],
+        *[session(d(n), "bike", hours=3.5) for n in (1, 5)],
         session(d(2), "walk", hours=0.9, km=4.5),
         session(d(4), "walk", hours=0.9, km=4.5),
     ]
@@ -241,7 +241,7 @@ def test_a_walking_shortfall_lengthens_the_walks_then_adds_walks_from_the_weeks_
     result = repair_week(frame, week)
 
     walked = planned_metrics(result.sessions, frame).distance_m["walk"]
-    assert walked >= 27_000 - 10
+    assert walked >= 30_000 - 10
     assert [f.code for f in check_week(frame, result.sessions)] == []
     assert any("usual walking" in n for n in result.notes)
     # The two walks were stretched together (distance with time), then more added,

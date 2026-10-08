@@ -4,18 +4,19 @@ The `store.py` idioms, in their own module because a season is a different row
 with a different lifecycle (rewritten when the goals change, not when the weeks
 do). Every function takes a REQUIRED `user_id`.
 
-A `drafting` season older than `STALE_AFTER` reads as failed. The bound is the
-job's own timeout plus a margin, so a season is never declared abandoned while
-its job could still be running, and a worker that died cannot leave the runner
-looking at a spinner forever (the `store.draft_in_flight` problem, with the
-threshold derived rather than guessed).
+A `drafting` season older than `stale_after()` reads as failed. The bound is the
+longest job that writes a season plus a margin: the season job, and the schedule
+job that writes a season before the weeks. So a season is never declared
+abandoned while its job could still be running, and a worker that died cannot
+leave the runner looking at a spinner forever (the `store.draft_in_flight`
+problem, with the threshold derived rather than guessed).
 """
 
 import hashlib
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional, Sequence
 
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.season import Season
 from app.schemas.season import SeasonPlan
+from app.services.schedule import store
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +50,21 @@ OVER_BUDGET_MESSAGE = (
     "Nothing has changed: ask again once the allowance resets."
 )
 NO_GOALS_MESSAGE = "Add a goal first: the season is built around what you are aiming at."
+GOALS_CHANGED_MESSAGE = (
+    "Your goals have changed since your season was planned, so these weeks cannot "
+    "be changed against it. Draft your plan again first, then change the weeks."
+)
 
 
 def stale_after() -> timedelta:
-    return timedelta(seconds=settings.RQ_JOB_TIMEOUT_SECONDS + 180)
+    """The longest a season's writer can legitimately run, plus a margin.
+
+    A season is written by its own job (`RQ_JOB_TIMEOUT_SECONDS`) and also inside
+    the schedule job, which plans the season and then the weeks
+    (`SCHEDULE_JOB_TIMEOUT_SECONDS`), so the bound is the longer of the two.
+    """
+    longest = max(settings.RQ_JOB_TIMEOUT_SECONDS, settings.SCHEDULE_JOB_TIMEOUT_SECONDS)
+    return timedelta(seconds=longest + 180)
 
 
 def goals_fingerprint(goals: Sequence[Any]) -> str:
@@ -80,6 +93,34 @@ def goals_fingerprint(goals: Sequence[Any]) -> str:
     )
     blob = json.dumps(rows, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode()).hexdigest()
+
+
+def stamp(goals: Sequence[Any], as_of: date) -> str:
+    """The fingerprint a season stores: the day it was written plus the hash of
+    the goals it was written against (those still ahead on that day).
+
+    The day travels WITH the hash so the comparison can look at the same set of
+    goals. Read over "goals still ahead today" instead, a dated goal that simply
+    passed would drop out and mark the season stale; only an edit, an addition or
+    a deletion should.
+    """
+    return f"{as_of.isoformat()}:{goals_fingerprint(goals)}"
+
+
+def is_stale(db: Session, season: Season) -> bool:
+    """Whether the runner's goals changed since this season was written.
+
+    Compared over the goals still ahead on the day the season was written
+    (`stamp`), so a goal whose date has since passed is not a change. A season
+    with no readable stamp reads as stale: nothing says what it was written for.
+    """
+    day, _, _ = (season.goals_fingerprint or "").partition(":")
+    try:
+        written_on = date.fromisoformat(day)
+    except ValueError:
+        return True
+    goals = store.list_goal_races(db, season.user_id, on_or_after=written_on)
+    return season.goals_fingerprint != stamp(goals, written_on)
 
 
 def season_plan(season: Season) -> Optional[SeasonPlan]:
@@ -173,6 +214,16 @@ def activate_season(db: Session, season: Season) -> Season:
     season.superseded_at = None
     season.generated_at = now
     season.failure_message = None
+    db.commit()
+    db.refresh(season)
+    return season
+
+
+def supersede_season(db: Session, season: Season) -> Season:
+    """Retire an active season without a successor: the runner has no goal left
+    to plan it around."""
+    season.status = SUPERSEDED
+    season.superseded_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(season)
     return season

@@ -187,6 +187,10 @@ class PlannedWeekShape(BaseModel):
     # discipline -> share of the week's load, 0..1. Shares, not absolutes, so a
     # mix cannot contradict the total it is a mix of.
     discipline_mix: Dict[str, float] = Field(default_factory=dict)
+    # discipline -> the week's SECONDS of it. The mix above is load, so a challenge
+    # counted in time cannot be read off it; this is what it is read off. A shape
+    # stored before it existed reads empty (no migration: a JSON column).
+    duration_by_discipline_s: Dict[str, float] = Field(default_factory=dict)
     intent_mix: Dict[str, float] = Field(default_factory=dict)
 
 

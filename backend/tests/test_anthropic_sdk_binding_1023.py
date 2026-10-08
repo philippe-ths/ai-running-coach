@@ -338,6 +338,35 @@ async def test_reasoned_call_raises_on_a_max_tokens_stop():
     assert len(sent) == 1  # not retried: the same call at the same cap truncates again
 
 
+@pytest.mark.asyncio
+async def test_a_reasoned_call_with_no_answer_carries_the_usage_it_spent():
+    """#1064: the failure is a ValueError still, but it carries the call's usage
+    and says whether it was cut off, so the client can bill it and the caller can
+    tell the coach what went wrong."""
+    from app.services.coach.llm import ReasonedCallFailed
+
+    client, _sent = _reasoned_client(
+        [_stream(_reasoned_sse([_tool_use_block(payload={})], stop_reason="max_tokens",
+                               output_tokens=77, searches=2))],
+        "claude-opus-5-5",
+    )
+    with pytest.raises(ReasonedCallFailed) as cut:
+        await client.generate_structured_reasoned(system="s", user="u", tool=_TOOL, max_tokens=64)
+    assert cut.value.truncated is True
+    assert (cut.value.usage.input_tokens, cut.value.usage.output_tokens) == (100, 77)
+    assert cut.value.usage.web_search_requests == 2
+
+    prose = ({"type": "text", "text": ""}, [{"type": "text_delta", "text": "no tool"}])
+    client, _sent = _reasoned_client(
+        [_stream(_reasoned_sse([prose], stop_reason="end_turn", output_tokens=9))],
+        "claude-opus-5-5",
+    )
+    with pytest.raises(ReasonedCallFailed) as silent:
+        await client.generate_structured_reasoned(system="s", user="u", tool=_TOOL, max_tokens=64)
+    assert silent.value.truncated is False
+    assert silent.value.usage.output_tokens == 9
+
+
 def _paused_turn_blocks():
     return [
         (

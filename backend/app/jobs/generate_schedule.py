@@ -132,13 +132,15 @@ async def _ensure_season(db, user, thread_id) -> tuple | None:
     """
     upcoming = store.list_goal_races(db, user.id, on_or_after=date.today())
     active = season_store.active_season(db, user.id)
-    if active is not None and active.goals_fingerprint == season_store.goals_fingerprint(
-        upcoming
-    ):
-        return None
     if not upcoming:
-        # No goals: nothing to plan a season around. The draft proceeds without
-        # one, planning for general progression as it always did.
+        # No goals ahead: nothing to plan a season around, and an old season
+        # about goals the runner has since removed (or already raced) must not
+        # frame the weeks. It is retired and the draft proceeds without one,
+        # planning for general progression.
+        if active is not None:
+            season_store.supersede_season(db, active)
+        return None
+    if active is not None and not season_store.is_stale(db, active):
         return None
     if season_store.drafting_in_flight(db, user.id) is not None:
         return (

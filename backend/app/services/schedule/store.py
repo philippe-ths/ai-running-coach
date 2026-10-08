@@ -432,6 +432,7 @@ def is_phase_only(shape: PlannedWeekShape) -> bool:
         and shape.target_walking_distance_m is None
         and not shape.quality_focus
         and not shape.discipline_mix
+        and not shape.duration_by_discipline_s
         and not shape.intent_mix
     )
 

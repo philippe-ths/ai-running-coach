@@ -69,7 +69,14 @@ import type {
 } from "@/lib/types/schedule";
 import { formatDateLabel } from "@/lib/format";
 import { addDaysIso } from "./dates";
-import { formatHeld, formatNeeded, metricLabel, metricUnit } from "./challenge";
+import {
+  formatHeld,
+  formatNeeded,
+  metricLabel,
+  metricUnit,
+  planMeetsThreshold,
+  weekFigure,
+} from "./challenge";
 import {
   ACTIVITY_FILL,
   DISCIPLINE_LABEL,
@@ -255,7 +262,7 @@ const CHALLENGE_TONE: Record<ChallengeState, string> = {
  * says so rather than drawing the same tick as one that does not.
  */
 function readChallenge(c: HorizonChallenge, withName: boolean): ChallengeReading {
-  const value = c.actual ?? c.planned;
+  const value = weekFigure(c);
   const label = metricLabel(c.metric, c.min_zone);
   const name = withName ? `${c.name}: ` : "";
   const figures =
@@ -270,7 +277,7 @@ function readChallenge(c: HorizonChallenge, withName: boolean): ChallengeReading
   if (c.planned == null) {
     return { state: "unplanned", figures, symbol: "\u2013", word: "not planned yet", position };
   }
-  return c.planned >= c.threshold
+  return planMeetsThreshold(c.metric, c.planned, c.threshold)
     ? { state: "plan-ok", figures, symbol: "\u2713", word: "planned", position }
     : { state: "plan-short", figures, symbol: "\u25B2", word: "plan falls short", position };
 }

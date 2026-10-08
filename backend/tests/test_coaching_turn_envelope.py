@@ -20,7 +20,7 @@ import pytest
 
 from app.core.config import settings
 from app.services.coach import budget, turn
-from app.services.coach.llm import ChatTurnDelta, MessageResult, Usage
+from app.services.coach.llm import ChatTurnDelta, MessageResult, ReasonedCallFailed, Usage
 from app.services.coach.turn import MeteredClient, TurnKind, build_client, resolve_model
 
 
@@ -170,6 +170,26 @@ def test_reasoned_call_records_its_tokens_and_its_searches(gate, monkeypatch):
         system="s", user="u", tool={"name": "t"}, max_tokens=64,
         effort="medium", web_search_max_uses=2, timeout=30.0,
     )
+
+
+def test_a_reasoned_call_that_returns_no_answer_still_records_what_it_spent(gate, monkeypatch):
+    """#1064: a long think cut off at max_tokens is the most expensive kind of
+    failure, and a cap that only counted answers would never see it."""
+    monkeypatch.setattr(settings, "LLM_BUDGET_USER_DAILY_USD", 1.0)
+    inner = _inner("claude-opus-5-5")
+    inner.generate_structured_reasoned = AsyncMock(
+        side_effect=ReasonedCallFailed(
+            "truncated", Usage(input_tokens=1_000_000, output_tokens=0), truncated=True
+        )
+    )
+    client = MeteredClient(inner, "user-A")
+
+    with pytest.raises(ReasonedCallFailed):
+        asyncio.run(client.generate_structured_reasoned(
+            system="s", user="u", tool={"name": "t"}, max_tokens=64,
+        ))
+
+    assert gate.over_budget("user-A") is True
 
 
 def test_streaming_turn_records_each_round(gate, monkeypatch):

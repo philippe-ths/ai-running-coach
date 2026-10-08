@@ -31,6 +31,7 @@ from app.models.season import Season
 from app.models.user import User
 from app.schemas.season import DraftLog, SeasonPlan
 from app.services.coach import turn
+from app.services.coach.llm import ReasonedCallFailed
 from app.services.coach.retrieval import fetch_corpus
 from app.services.coach.stance import resolve_stance
 from app.services.readiness import build_readiness
@@ -50,7 +51,7 @@ from app.services.schedule.norms import (
 from app.services.schedule.plan_validator import (
     MAX_WEEKLY_MULTIPLE,
 )
-from app.services.schedule.run_log import attempt_cost
+from app.services.schedule.run_log import attempt_cost, output_failure
 from app.services.schedule.season_check import check_season
 from app.services.schedule.season_prompt import (
     FROM_CONVERSATION,
@@ -365,6 +366,17 @@ async def generate_season(
                 effort="high",
                 web_search_max_uses=WEB_SEARCH_MAX_USES,
             )
+        except ReasonedCallFailed as exc:
+            # Billed, and the coach's OUTPUT failed (cut off, or no tool call):
+            # a rewrite's business, logged with its cost, never "unreachable".
+            logger.warning("season: unusable answer: %s", exc)
+            rewrites_left -= 1
+            attempt = attempt_cost(client.model, exc.usage)
+            log.attempts.append(attempt)
+            failures = [output_failure(exc, RECORD_SEASON_TOOL["name"])]
+            attempt.failures = list(failures)
+            previous = None
+            continue
         except Exception as exc:  # noqa: BLE001 - transport, timeout, refusal
             logger.warning("season: generation call failed: %s", exc)
             if transport_retries_left > 0:
@@ -396,15 +408,30 @@ async def generate_season(
             previous = plan.model_dump(mode="json")
             continue
 
+        if not _still_drafting(db, season):
+            # Expired as stale (or superseded) while the model was working: the
+            # runner has been told, and a row nobody is waiting for must not
+            # come back to life as the active season.
+            logger.warning("season: %s is %s, not drafting; discarding", season.id, season.status)
+            return SeasonOutcome(
+                ok=False, season_id=season.id, failures=["the season was no longer being drafted"]
+            )
+
         log.first_try_passed = 1 if len(log.attempts) == 1 else 0
         season.plan = plan.model_dump(mode="json")
-        season.goals_fingerprint = season_store.goals_fingerprint(upcoming)
+        season.goals_fingerprint = season_store.stamp(upcoming, today)
         season.model_id = client.model
         season.draft_log = log.model_dump(mode="json")
         season_store.activate_season(db, season)
         return SeasonOutcome(ok=True, season_id=season.id)
 
     return _fail(db, season, season_store.FAILURE_MESSAGE, failures, log=log)
+
+
+def _still_drafting(db: Session, season: Season) -> bool:
+    """Re-read the row: a worker that outlived `stale_after` finds it failed."""
+    db.refresh(season)
+    return season.status == season_store.DRAFTING
 
 
 def _fail(
@@ -415,6 +442,8 @@ def _fail(
     *,
     log: Optional[DraftLog] = None,
 ) -> SeasonOutcome:
+    if not _still_drafting(db, season):
+        return SeasonOutcome(ok=False, season_id=season.id, failures=failures)
     if log is not None:
         season.draft_log = log.model_dump(mode="json")
     season_store.fail_season(db, season, message)

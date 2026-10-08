@@ -257,6 +257,21 @@ def check_season(
             )
     for view in plan.goals:
         goal = by_id.get(view.goal_id)
+        if goal is None or view.challenge is None:
+            continue
+        # A challenge week with no phase is a week no frame can state: it would be
+        # neither written nor sketched, and the rule would be unplanned there.
+        covered_to = view.challenge.last_week_start + timedelta(days=6)
+        if last.end < covered_to:
+            failures.append(
+                f'The timeline ends {last.end.isoformat()} but the challenge '
+                f'"{goal.name}" runs through the week of '
+                f'{_fmt_date(view.challenge.last_week_start)} (to {covered_to.isoformat()}). '
+                "Extend the phases to at least that day, so every week of the challenge "
+                "has a phase."
+            )
+    for view in plan.goals:
+        goal = by_id.get(view.goal_id)
         if goal is None or view.kind not in _DATED_KINDS or view.date is None:
             continue
         holders = [

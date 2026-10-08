@@ -47,12 +47,12 @@ def challenge_frame(hours=10.0, weeks=10):
 
 
 def good_week(week=WEEK_2):
-    """10.9 h of estimated zone 2+ time and 27 km of walking."""
+    """10.9 h of estimated zone 2+ time and 30 km of walking."""
     return [
         *[session(day(week, n), "run", hours=1.5) for n in (0, 2, 4, 5)],  # 6 h
         session(day(week, 1), "bike", hours=2.0),
         session(day(week, 3), "bike", hours=2.0),
-        *[session(day(week, n), "walk", hours=0.9, km=4.5) for n in range(6)],  # 27 km
+        *[session(day(week, n), "walk", hours=0.9, km=5.0) for n in range(6)],  # 30 km, the usual
     ]
 
 
@@ -204,15 +204,15 @@ def test_the_walking_floor_fires_with_the_runners_own_numbers():
 
     walking = [f for f in failures if f.code == WALKING]
     assert len(walking) == 1
-    assert walking[0].gap == pytest.approx(17_000)
+    assert walking[0].gap == pytest.approx(20_000)
     assert "usually walks 30 km a week" in walking[0].message
-    assert "at least 27.0 km" in walking[0].message
+    assert "at least 30.0 km" in walking[0].message
     assert "holds 10.0 km" in walking[0].message
 
 
 def test_this_weeks_walking_floor_is_the_share_of_the_week_still_ahead():
     current = frames()[THIS_WEEK]
-    needed = 27_000 * 4 / 7  # Thursday to Sunday
+    needed = 30_000 * 4 / 7  # Thursday to Sunday
 
     short = check_week(current, [session(TODAY, "walk", hours=1.0, km=needed / 1000 - 1)])
     enough = check_week(current, [session(TODAY, "walk", hours=2.0, km=needed / 1000 + 0.1)])
@@ -238,7 +238,7 @@ def race_week(extra=()):
         session(day(RACE_WEEK, 1), "bike", hours=2.0),
         session(day(RACE_WEEK, 3), "bike", hours=2.0),
         session(day(RACE_WEEK, 4), "bike", hours=2.0),
-        *[session(day(RACE_WEEK, n), "walk", hours=0.9, km=4.5) for n in range(6)],
+        *[session(day(RACE_WEEK, n), "walk", hours=0.9, km=5.0) for n in range(6)],
         *extra,
     ]
 

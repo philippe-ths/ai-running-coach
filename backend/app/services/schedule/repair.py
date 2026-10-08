@@ -110,7 +110,9 @@ class _Week:
         self.rules = list(rules)
         self.notes: List[str] = []
         # Goal days and the day before each: nothing is lengthened or added there.
-        self.protected = set()
+        # The frame knows every dated goal, including one on the NEXT week's first
+        # day, whose eve is this week's last.
+        self.protected = set(frame.protected_days)
         for goal in frame.dated:
             self.protected.add(goal.day)
             self.protected.add(goal.day - timedelta(days=1))

@@ -393,8 +393,9 @@ async def test_the_plan_records_the_model_it_actually_ran_on_and_its_rules(
     assert plan.generated_at is not None
     assert [rule["kind"] for rule in plan.rules] == ["rest_day_after"]
     assert store.plan_rules(plan)[0].intent == "long"
-    # The horizon ends with the last week the plan says anything about.
-    assert plan.horizon_end == TODAY + timedelta(days=6)
+    # The horizon ends with the last week the plan says anything about: with no
+    # season the later weeks are sketched from the usual week, out to the horizon.
+    assert plan.horizon_end == TODAY + timedelta(weeks=draft_mod.settings.SCHEDULE_HORIZON_WEEKS, days=-1)
 
 
 async def test_another_runners_active_plan_is_never_superseded(db, monkeypatch):
@@ -420,13 +421,13 @@ async def test_another_runners_active_plan_is_never_superseded(db, monkeypatch):
 # --- the weeks beyond the concrete ones ---------------------------------------
 
 
-async def test_no_season_means_no_shapes_and_the_model_is_never_asked_for_them(
+async def test_no_season_sketches_the_later_weeks_from_the_usual_week_and_the_model_never_types_a_shape(
     db, monkeypatch
 ):
-    """The weeks beyond the concrete ones are written by code from a season's
-    phases (#1064). With no season there are no phases to write them from, so the
-    plan holds only the weeks the model wrote, and the tool offers no place to
-    type a sketch."""
+    """The weeks beyond the concrete ones are written by code (#1064). With no
+    season there are no phases, so they are sketched from the runner's usual week
+    (phase Base, no challenge) rather than left empty, and the tool still offers no
+    place for the model to type a sketch."""
     user = _seed_user(db)
     _seed_history(db, user)
     plan = store.create_drafting_plan(db, user.id)
@@ -437,7 +438,11 @@ async def test_no_season_means_no_shapes_and_the_model_is_never_asked_for_them(
 
     assert outcome.ok is True
     db.refresh(plan)
-    assert [s for s in store.plan_week_shapes(plan) if not store.is_phase_only(s)] == []
+    sketched = [s for s in store.plan_week_shapes(plan) if not store.is_phase_only(s)]
+    written = len(_good_plan()["weeks"])
+    assert len(sketched) == draft_mod.settings.SCHEDULE_HORIZON_WEEKS - written
+    assert {s.phase for s in sketched} == {"Base"}
+    assert all(s.target_duration_s for s in sketched)
     assert "sketch_weeks" not in client.calls[0]["tool"]["input_schema"]["properties"]
     assert plan.season_id is None
     assert plan.draft_log["model"] == FAKE_MODEL

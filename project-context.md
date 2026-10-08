@@ -50,10 +50,12 @@ A `TrainingPlan` is the plan container: a nullable `goal_race_id`, a `horizon_en
 Its `status` is `drafting`, `active`, `superseded`, or `failed`, with at most one active plan per user held by the writer rather than a DB constraint.
 A `TrainingPlan` also carries a nullable `season_id` and `draft_log` (`DraftLog`: attempts with failures, tokens and cost, repairs, first-try weeks, shortfalls).
 A `Season` (table `seasons`, same four statuses) is the coach's read of every goal: a strict-coerced `SeasonPlan` JSON, a `goals_fingerprint` of the goals it was written against, and its own `draft_log`.
+`Season.goals_fingerprint` is the generation day plus a hash of the goals still ahead on that day, so only an edit, addition or deletion makes a season stale and a date going by does not.
 A `SeasonPlan` holds a `GoalView` per goal (kind, success, recommended date or window, up to three real events with links, approach), contiguous `SeasonPhase`s whose targets are where each phase ends, and any `ChallengeRule`.
 A `ChallengeRule` is a metric (`zone_time_s`, `time_s`, `distance_m`, `sessions`), disciplines, `min_zone`, a weekly threshold, a week count and a start, checked in code against measured weeks.
-A sketched `PlannedWeekShape` is written by code from the season's phases (`shapes.py`), carrying `long_run_distance_m`, `quality_focus` and a time-share `discipline_mix`, never a figure a model typed.
+A sketched `PlannedWeekShape` is written by code from the season's phases (`shapes.py`), carrying `long_run_distance_m`, `quality_focus` and a load-share `discipline_mix`, never a figure a model typed.
 A `PlannedWeekShape` also carries `target_duration_s` (the week's time across every activity) and `target_walking_distance_m`.
+A shape also carries `duration_by_discipline_s` (the week's seconds per activity, empty on older rows), which a challenge is read from because the mix is load.
 A concrete week's phase is kept as a phase-only `week_shapes` entry, since `PlannedSession` rows have nowhere to hold it.
 `superseded_at` records when a plan stopped being current, written only by `activate_plan` and cleared on the row it activates, so a superseded plan stays reachable and restorable.
 A `PlannedSession` is the schedule's concrete unit, described along three independent axes: PLACEMENT, COMMITMENT (`committed` or `suggested`), and DISCIPLINE (`run`, `walk`, `bike`, `strength`, `row`, `other`).
@@ -120,26 +122,24 @@ A prompt whose `PROMPT_FEATURES` entry carries `TWO_STAGE` activates the two-sta
 `COACH_RECEIPT_CADENCE` (bool, default off, ADR 0018) is orthogonal to `COACH_PROMPT_ID` and is ON in production.
 When on and the active prompt is two-stage, it replaces the debounced LLM opener and 3h fuller timer with an instant deterministic per-activity receipt plus one full report about `BLOCK_GAP_SECONDS` after the session; it is inert under a single-shot prompt.
 Twenty `COACH_*_ENABLED` bools exist; most REMOVE one named item from what the coach receives, while `COACH_THREADS_ENABLED` and `COACH_PERIOD_REPORT_ENABLED` gate a surface instead.
-`COACH_MEMORY_ENABLED` drops the `memory` pack section and disables the runner-memory update writer.
 `COACH_VOICE_BLOCK_ENABLED` off means the voice rewrite pass never runs, so every runner reads the voiceless baseline.
 `COACH_THREADS_ENABLED` off means every `/api/coach/threads` route refuses with 503 and the frontend renders no launcher, sheet, or conversational report options.
 PRODUCTION DOES NOT RUN THE CODE DEFAULTS, and the difference is what the coach actually receives, so any reasoning about its inputs starts here rather than from the defaults above.
 Eleven coach inputs are OFF in the deployed environment: `COACH_ADHERENCE_ENABLED`, `COACH_CONTINUITY_ENABLED`, `COACH_HOUSE_SCHOOLS_ENABLED`, `COACH_LONGITUDINAL_ENABLED`, `COACH_PLAYBOOK_ENABLED`, `COACH_PREVIOUS_30D_ENABLED`, `COACH_PRIOR_REPORTS_ENABLED`, `COACH_SALIENCE_ENABLED`, `COACH_SLEEP_QUALITY_ENABLED`, `COACH_STOPS_ANALYSIS_ENABLED`, `COACH_USER_MATERIALS_ENABLED`.
 `backend/.env.example`'s prod-parity block is the source of truth for that list and is what `make diagram-check` pins the diagrams against.
 A switch that block does not declare runs at its CODE default, which is False for `COACH_ADHERENCE_ENABLED` and `COACH_PRIOR_REPORTS_ENABLED` and True for the rest, so "absent" never means "on".
-`backend/tests/test_prod_switch_state_919.py` recomputes that list the way the app resolves it and fails the build when this file drifts from it.
 `SCHEDULE_ENABLED` (default True) gates the schedule screen: off, every `/api/schedule` route refuses with 503 and the frontend renders no Schedule tab, while stored plans, sessions, and races are untouched.
 The orthogonal coach-input switch `COACH_SCHEDULE_ENABLED` (default True) drops the `right_now.schedule` pack section while the schedule screen keeps working.
 `SCHEDULE_HORIZON_WEEKS` (default 12) and `SCHEDULE_CONCRETE_WEEKS` (default 3) set how many weeks the model writes as sessions; every later week is a shape written by code.
 A dated goal inside the horizon, booked or recommended by the season, extends the written weeks to its week, bounded by the contract's six-week cap.
 `plan_validator` bounds each week's committed running km and, via `hours_ceilings`, its committed time across every activity, both against the runner's own typical week and with the race left out.
-`validate_drafted_plan` and `validate_amendment` also hold each written week to its frame through `week_check.check_week`: the challenge threshold, 0.9x the usual walking when that is 5 km or more, and a pinned session on each dated goal's day.
+`validate_drafted_plan` and `validate_amendment` also hold each written week to its frame through `week_check.check_week`: the challenge threshold, the whole usual walking when that is 5 km or more, and a pinned session on each dated goal's day.
 One check returns every failure; the one retry carries them all, then `repair.py` closes only the challenge and walking shortfalls within the ceilings and the rest is stored in `draft_log.shortfalls`.
+`ChallengeFrame.plan_for` aims a time-metric challenge 5% over its threshold because the planned figure is an estimate, while the check still holds the threshold itself.
 `COACH_SCHEDULE_MODEL_ID` (falling back to `COACH_MODEL_ID`) is the lane for the season and the weeks, called through `generate_structured_reasoned` with extended thinking and, for the season, web search.
 `SCHEDULE_JOB_TIMEOUT_SECONDS` (default 1500) is the drafting job's own RQ ceiling, and `store.DRAFT_STALE_AFTER` is that plus three minutes.
 `COACH_PERIOD_REPORT_ENABLED` (default True) gates every `/api/coach/period-reports` route with 503 and hides the frontend entry point.
 `COACH_EVENT_SEARCH_ENABLED` (default True, on in the prod-parity block) removes the thread turn's `web_search` tool and refuses the `add_goal` offer.
-`EXCHANGE_STAGE2_DELAY_SECONDS` (default 10800) is the fuller-turn timer and `EXCHANGE_REPLY_WINDOW_SECONDS` (default 86400) is how long a reply still triggers the fuller turn early; both are inert under a single-shot prompt.
 `RQ_JOB_TIMEOUT_SECONDS` (default 600) is the RQ death-penalty ceiling, applied as the queue `default_timeout` and as explicit `job_timeout=` on `queue.enqueue_in` calls, because a two-stage generation runs past RQ's 180s default.
 `BLOCK_GAP_SECONDS` (default 1800) is both the block grouping threshold and the block-complete debounce that gates the opener.
 Telegram is the only notification channel, active when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are both set, otherwise the notifier is a no-op.

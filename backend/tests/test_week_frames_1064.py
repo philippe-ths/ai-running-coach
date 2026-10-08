@@ -191,8 +191,9 @@ def test_the_frame_carries_the_usual_week_zone_shares_and_ceilings():
     assert frame.run_ceiling_m == pytest.approx(2 * 28_000, abs=100)
 
 
-def test_the_walking_floor_is_ninety_percent_of_usual_when_walking_is_material():
-    assert walking_floor_m(30_000) == pytest.approx(27_000)
+def test_the_walking_floor_is_all_of_the_usual_walking_when_walking_is_material():
+    # A dog does not taper: the whole usual week of walking is kept.
+    assert walking_floor_m(30_000) == pytest.approx(30_000)
     assert walking_floor_m(4_999) is None
     assert walking_floor_m(None) is None
 
@@ -250,7 +251,7 @@ def test_a_frame_is_stated_plainly_for_the_prompt():
     assert "run 98%" in text and "walk 27%" in text
     assert "Chatham 10k is on Sun 2026-11-08, 10 km (booked)" in text
     assert "race week" in text
-    assert "at least 27.0 km of walking" in text
+    assert "at least 30.0 km of walking" in text
     this_week = "\n".join(describe_frame(frames_for(season, [g, race])[0]))
     assert "4 of 7 days left" in this_week
 

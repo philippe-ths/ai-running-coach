@@ -248,5 +248,4 @@ class SeasonRead(BaseModel):
     # True while a newer season is being written behind an active one, so the
     # screen can keep showing the current season and say a rewrite is under way.
     regenerating: bool = False
-    shortfalls: List[str] = Field(default_factory=list)
     message: Optional[str] = None

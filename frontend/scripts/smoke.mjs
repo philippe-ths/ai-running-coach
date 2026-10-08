@@ -933,7 +933,7 @@ function buildSeason() {
       },
     ],
     stale: false,
-    shortfalls: [],
+    regenerating: false,
     message: null,
   };
 }

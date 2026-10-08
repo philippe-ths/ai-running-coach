@@ -28,7 +28,10 @@ export type SeasonWatch = {
   season: SeasonRead | null;
   /** The first read has not answered yet. */
   loading: boolean;
+  /** No active season yet and one is being written. */
   drafting: boolean;
+  /** An active season is on screen and a newer one is being written behind it. */
+  regenerating: boolean;
   failed: boolean;
   starting: boolean;
   error: string | null;
@@ -50,6 +53,9 @@ export function useSeason(refreshToken = 0, onReady?: () => void): SeasonWatch {
   const polls = useRef(0);
   const errors = useRef(0);
   const sawDrafting = useRef(false);
+  // When the season on screen was written, as the watch began: a re-plan that
+  // fails leaves the same season active, and only a NEW one is "ready".
+  const writtenAtStart = useRef<string | null>(null);
   const alive = useRef(true);
   // A ref keeps the poll loop from re-subscribing when the owner's callback
   // changes identity.
@@ -64,7 +70,11 @@ export function useSeason(refreshToken = 0, onReady?: () => void): SeasonWatch {
       errors.current = 0;
       setSeason(data);
       setLoading(false);
-      if (data?.status === "drafting" && polls.current < MAX_POLLS) {
+      // A season is being written when the read says so outright (nothing active
+      // yet) or when it is `regenerating` behind an active one: both are watched.
+      const writing = data?.status === "drafting" || data?.regenerating === true;
+      if (writing && polls.current < MAX_POLLS) {
+        if (!sawDrafting.current) writtenAtStart.current = data?.generated_at ?? null;
         sawDrafting.current = true;
         polls.current += 1;
         timer.current = setTimeout(poll, POLL_INTERVAL_MS);
@@ -72,7 +82,7 @@ export function useSeason(refreshToken = 0, onReady?: () => void): SeasonWatch {
       }
       if (data?.status === "active" && sawDrafting.current) {
         sawDrafting.current = false;
-        ready.current?.();
+        if ((data.generated_at ?? null) !== writtenAtStart.current) ready.current?.();
       }
     } catch {
       if (!alive.current) return;
@@ -99,20 +109,23 @@ export function useSeason(refreshToken = 0, onReady?: () => void): SeasonWatch {
   }, [poll, refreshToken]);
 
   const drafting = season?.status === "drafting";
+  const regenerating = season?.status === "active" && season.regenerating === true;
 
   const start = useCallback(async () => {
-    if (starting || drafting) return;
+    if (starting || drafting || regenerating) return;
     setStarting(true);
     setError(null);
     try {
       await fetchFromAPI("/api/schedule/season", { method: "POST" });
     } catch {
       // A 409 means one is already being written, which is what the runner
-      // wanted to happen. Anything else is a real failure, and the read below
-      // tells the two apart without guessing from a status string.
+      // wanted to happen: resume watching it. That is either a first season
+      // ("drafting") or a re-plan behind the active one ("regenerating"). Anything
+      // else is a real failure, and the read below tells the two apart without
+      // guessing from a status string.
       try {
         const now: SeasonRead | null = await fetchFromAPI("/api/schedule/season");
-        if (now?.status !== "drafting") {
+        if (now?.status !== "drafting" && now?.regenerating !== true) {
           setError(
             "Could not ask your coach to plan your season just now. Nothing has changed, try again.",
           );
@@ -133,12 +146,13 @@ export function useSeason(refreshToken = 0, onReady?: () => void): SeasonWatch {
     // sees it; `sawDrafting` is set by the poll that actually does.
     await poll();
     setStarting(false);
-  }, [drafting, poll, starting]);
+  }, [drafting, regenerating, poll, starting]);
 
   return {
     season,
     loading,
     drafting,
+    regenerating,
     failed: season?.status === "failed",
     starting,
     error,

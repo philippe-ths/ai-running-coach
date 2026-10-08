@@ -8,6 +8,37 @@ import type { ChallengeMetric } from "@/lib/types/season";
 
 type Metric = ChallengeMetric;
 
+// How far under its threshold a PLANNED week may sit and still meet it. A mirror
+// of `_TOLERANCE` in backend/app/services/schedule/week_check.py, the check the
+// plan was held to: a plan is a prescription, not a stopwatch, so a minute or ten
+// metres short is a week that holds. Keep the two in step, or the screen shows a
+// triangle ("plan falls short") for a week the backend accepted.
+const PLAN_TOLERANCE: Record<Metric, number> = {
+  zone_time_s: 60,
+  time_s: 60,
+  distance_m: 10,
+  sessions: 0,
+};
+
+/** Whether a planned week meets its threshold, by the backend check's tolerance. */
+export function planMeetsThreshold(metric: Metric, planned: number, threshold: number): boolean {
+  return planned >= threshold - PLAN_TOLERANCE[metric];
+}
+
+/**
+ * The figure to show beside a challenge week. A week that is over shows what the
+ * runner DID; any other week shows what the PLAN holds, which already counts
+ * what has been done so far this week. The measured partial of the current week
+ * is never drawn beside a plan mark: it is part of the plan's figure, not a rival.
+ */
+export function weekFigure(week: {
+  met: boolean | null;
+  actual: number | null;
+  planned: number | null;
+}): number | null {
+  return week.met != null ? week.actual : week.planned;
+}
+
 function scaled(metric: Metric, value: number): number {
   if (metric === "zone_time_s" || metric === "time_s") return value / 3600;
   if (metric === "distance_m") return value / 1000;

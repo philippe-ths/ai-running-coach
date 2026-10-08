@@ -43,6 +43,7 @@ from app.models.user import User
 from app.schemas.season import DraftLog, SeasonPlan
 from app.services.activity_facts import query_facts
 from app.services.coach import turn
+from app.services.coach.llm import ReasonedCallFailed
 from app.services.coach.retrieval import fetch_corpus
 from app.services.coach.stance import resolve_stance
 from app.services.coach.volume import build_training_volume
@@ -76,7 +77,7 @@ from app.services.schedule.plan_validator import (
     volume_ceilings,
 )
 from app.services.schedule.repair import repair_weeks
-from app.services.schedule.run_log import attempt_cost
+from app.services.schedule.run_log import attempt_cost, output_failure
 from app.services.schedule.shapes import write_shapes
 from app.services.weeks import resolve_week_start, week_start
 
@@ -822,6 +823,20 @@ async def draft_plan(
             # that misbehaved; the catch below would report it to the runner as
             # "could not be reached" after retries that reached nothing.
             raise
+        except ReasonedCallFailed as exc:
+            # The call ran and was billed but gave no usable answer (cut off, or
+            # no tool call). That is the coach's OUTPUT failing, not the network,
+            # so it spends a rewrite, is logged with its cost, and tells the coach
+            # what went wrong instead of reporting it as unreachable.
+            logger.warning("schedule draft: unusable answer: %s", exc)
+            rewrites_left -= 1
+            attempt = attempt_cost(client.model, exc.usage)
+            log.attempts.append(attempt)
+            failures = [output_failure(exc, RECORD_TRAINING_PLAN_TOOL["name"])]
+            attempt.failures = list(failures)
+            previous = None
+            failure_kind = store.FAILURE_UNKNOWN
+            continue
         except Exception as exc:  # transport, timeout, refusal
             logger.warning("schedule draft: generation call failed: %s", exc)
             if transport_retries_left > 0:
@@ -855,6 +870,7 @@ async def draft_plan(
             _persist(
                 db, user, plan, drafted, load_model, model_id=client.model,
                 season_row=season_row, frames=frames, concrete=set(expected), log=log,
+                usual_week=season_plan is None,
             )
             return DraftOutcome(ok=True, plan_id=plan.id, summary=drafted.summary)
 
@@ -877,6 +893,7 @@ async def draft_plan(
                 _persist(
                     db, user, plan, repaired, load_model, model_id=client.model,
                     season_row=season_row, frames=frames, concrete=set(expected), log=log,
+                    usual_week=season_plan is None,
                 )
                 return DraftOutcome(ok=True, plan_id=plan.id, summary=repaired.summary)
             check = final
@@ -901,11 +918,13 @@ def _persist(
     frames: Sequence[Any] = (),
     concrete: Optional[set] = None,
     log: Optional[DraftLog] = None,
+    usual_week: bool = False,
 ) -> None:
     """Write the accepted plan and make it the runner's active one.
 
     The concrete weeks are the model's sessions (repaired where needed); every
-    later week is a shape written by code from the season. A concrete week's phase
+    later week is a shape written by code from the season (or, with no season, from
+    the runner's usual week). A concrete week's phase
     is the frame's, so the horizon groups the two halves under one name.
     """
     log = log or DraftLog(model=model_id)
@@ -924,7 +943,11 @@ def _persist(
         )
         for week in drafted.weeks
     ]
-    shapes, shape_shortfalls = write_shapes(frames, load_model, concrete)
+    # No season (the runner has no goal) leaves no phases to sketch from, so the
+    # later weeks are sketched from their usual week rather than left empty.
+    shapes, shape_shortfalls = write_shapes(
+        frames, load_model, concrete, usual_week=usual_week
+    )
     log.shortfalls = list(log.shortfalls) + shape_shortfalls
 
     plan.rules = [rule.model_dump(mode="json") for rule in drafted.rules]

@@ -71,8 +71,8 @@ def active_season(db, user, goals, *, start=THIS_WEEK, weeks=10):
     row.plan = challenge_season(
         goals["challenge"], race=goals["race"], start=start, weeks=weeks
     ).model_dump(mode="json")
-    row.goals_fingerprint = season_store.goals_fingerprint(
-        store.list_goal_races(db, user.id, on_or_after=TODAY)
+    row.goals_fingerprint = season_store.stamp(
+        store.list_goal_races(db, user.id, on_or_after=TODAY), TODAY
     )
     return season_store.activate_season(db, row)
 
@@ -112,8 +112,8 @@ def run_job(db, user, plan, monkeypatch, *, season_outcome=None, draft_calls=Non
             season_store.fail_season(db_, season_, season_outcome.message)
             return season_outcome
         season_.plan = {"summary": "s", "goals": [], "phases": []}
-        season_.goals_fingerprint = season_store.goals_fingerprint(
-            store.list_goal_races(db_, user_.id, on_or_after=date.today())
+        season_.goals_fingerprint = season_store.stamp(
+            store.list_goal_races(db_, user_.id, on_or_after=date.today()), date.today()
         )
         season_store.activate_season(db_, season_)
         return SimpleNamespace(ok=True, message=None)
@@ -289,7 +289,7 @@ def horizon_plan(db, user):
     for n in (0, 2, 4, 6):
         add(db, plan, WEEK_2 + timedelta(days=n), "bike", 2.0)
     for n in range(6):
-        add(db, plan, WEEK_2 + timedelta(days=n), "walk", 0.9, km=4.5)
+        add(db, plan, WEEK_2 + timedelta(days=n), "walk", 0.9, km=5.0)
     add(db, plan, WEEK_2 + timedelta(days=5), "bike", 5.0, commitment="suggested")
     db.commit()
     return plan
@@ -451,7 +451,7 @@ def amended_answer(*, bike_hours):
     for n in (0, 2, 4, 6):
         sessions.append(_raw(WEEK_2 + timedelta(days=n), "bike", bike_hours))
     for n in range(6):
-        sessions.append(_raw(WEEK_2 + timedelta(days=n), "walk", 0.9, km=4.5))
+        sessions.append(_raw(WEEK_2 + timedelta(days=n), "walk", 0.9, km=5.0))
     return {"weeks": [{"week_start": WEEK_2.isoformat(), "sessions": sessions}],
             "summary": "More riding."}
 

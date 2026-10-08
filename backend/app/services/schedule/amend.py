@@ -33,7 +33,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -57,6 +57,7 @@ from app.services.schedule.norms import running_norm_weekly_m, weekly_hours_norm
 from app.services.schedule.plan_validator import VOLUME_CEILING, validate_amendment
 from app.services.schedule.repair import repair_weeks
 from app.services.schedule.rule_text import describe_rule
+from app.services.schedule.week_check import says_week
 from app.services.weeks import (
     MONDAY,
     describe_week_span,
@@ -543,6 +544,16 @@ async def propose_amendment(
         )
         return AmendProposal(ok=False, start=start, end=end, failures=[detail])
 
+    # The weeks are framed by the active season, so a season written for goals the
+    # runner has since changed would frame them against a plan they no longer
+    # have. Refused before any tokens are spent, in words the coach can pass on.
+    season_row = season_store.active_season(db, user.id)
+    if season_row is not None and season_store.is_stale(db, season_row):
+        logger.info("schedule amend: season %s is stale; refusing", season_row.id)
+        return AmendProposal(
+            ok=False, start=start, end=end, failures=[season_store.GOALS_CHANGED_MESSAGE]
+        )
+
     if turn.over_budget(user.id):
         return AmendProposal(
             ok=False,
@@ -567,7 +578,6 @@ async def propose_amendment(
     # week alone when there is none), so an amendment is held to the challenge,
     # the walking and the goal days exactly as the draft was.
     first_week = week_start(today, starts_on)
-    season_row = season_store.active_season(db, user.id)
     frames = build_frames(
         season=season_store.season_plan(season_row) if season_row is not None else None,
         goals=store.list_goal_races(db, user.id),
@@ -797,6 +807,7 @@ def _repair_amendment(
         return None
     shortfalls = [f.shortfall for f in final.week_failures if f.shortfall]
     changes = _forecast_change(rows, repaired, today)
+    changes.extend(notes)
     changes.extend(f"Still short: {line}" for line in shortfalls)
     return AmendProposal(
         ok=True, amended=repaired, changes=changes, start=start, end=end,
@@ -861,7 +872,12 @@ def apply_proposal(
     written, changes = _apply(
         db, user, plan, proposal.amended, build_load_model(facts, today),
         start=proposal.start, end=proposal.end, today=today,
+        shortfalls=proposal.shortfalls,
     )
+    # What code did to hold the numbers, and what is still short once it had, is
+    # part of what the amendment DID: the ledger replaces the card's forecast with
+    # this, so a line left off here is a line the runner and the coach never see.
+    changes = [*changes, *proposal.repairs, *(f"Still short: {l}" for l in proposal.shortfalls)]
     return AmendOutcome(
         ok=True,
         summary=proposal.amended.summary,
@@ -869,6 +885,27 @@ def apply_proposal(
         sessions_written=written,
         changes=changes,
     )
+
+
+def _restate_shortfalls(
+    plan: TrainingPlan, rewritten: List[date], shortfalls: Sequence[str]
+) -> None:
+    """Make the plan's stored shortfalls describe the plan as it now stands.
+
+    The lines about the weeks the amendment rewrote are replaced by what is still
+    short in them now (nothing, when the rewrite holds), and every other week's
+    line stays. Left alone, the horizon and the coach went on saying a week was
+    short that the runner had just fixed. Written in the amendment's own
+    transaction, so the sessions and the sentence about them land together.
+    """
+    log = dict(plan.draft_log or {})
+    kept = [
+        line
+        for line in (log.get("shortfalls") or [])
+        if not any(says_week(line, week) for week in rewritten)
+    ]
+    log["shortfalls"] = [*kept, *shortfalls]
+    plan.draft_log = log  # reassigned: an in-place edit of a JSON column is not seen
 
 
 def _normalise(raw: Any) -> Any:
@@ -905,6 +942,7 @@ def _apply(
     start: date,
     end: date,
     today: date,
+    shortfalls: Sequence[str] = (),
 ) -> tuple:
     """Swap the window's replaceable sessions for the amended ones, in one
     transaction, on the plan the runner is already following.
@@ -966,6 +1004,7 @@ def _apply(
     # that writes inside it has not shortened anything.
     if plan.horizon_end is None or plan.horizon_end < end:
         plan.horizon_end = end
+    _restate_shortfalls(plan, sorted(written_weeks), shortfalls)
     db.commit()
     logger.info(
         "schedule: amended plan %s over %s..%s (%s replaced, %s written)",

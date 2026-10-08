@@ -39,6 +39,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.schemas.season import ChallengeRule, SeasonPhase, SeasonPlan
 from app.services.schedule import goals as goal_text
+from app.services.schedule.prompt_text import (
+    APPROACH_MAX,
+    FOCUS_MAX,
+    SUCCESS_MAX,
+    SUMMARY_MAX,
+    flat,
+)
 from app.services.schedule.norms import (
     DisciplineNorm,
     TypicalSession,
@@ -54,10 +61,16 @@ from app.services.schedule.norms import (
 from app.services.schedule.plan_validator import hours_ceilings, volume_ceilings
 from app.services.weeks import week_start as _week_start
 
-# Their walking is part of their life rather than load to periodise, so a plan
-# keeps most of it every week. Below a few km a week it is not a habit the plan
-# has to carry.
-WALKING_FLOOR_MULTIPLE = 0.9
+# Their walking is part of their life rather than load to periodise (a dog does
+# not taper), so a plan keeps all of it every week. Below a few km a week it is
+# not a habit the plan has to carry.
+WALKING_FLOOR_MULTIPLE = 1.0
+
+# A challenge's planned figure is an ESTIMATE from the runner's own shares, and
+# the rule is judged on what the watch records. A plan aimed exactly at the
+# threshold misses about half its weeks in reality, so the plan aims a little
+# over it. The check still holds the rule itself.
+CHALLENGE_PLANNING_MARGIN = 1.05
 MATERIAL_WALKING_M = 5000.0
 
 # A dated goal of these kinds is a day the week must hold.
@@ -108,6 +121,14 @@ class ChallengeFrame:
     def threshold(self) -> float:
         return self.rule.at_least
 
+    @property
+    def plan_for(self) -> float:
+        """What to plan: over the threshold for a time metric, whose planned
+        figure is an estimate; the threshold itself for distance and sessions."""
+        if self.rule.metric in ("zone_time_s", "time_s"):
+            return self.rule.at_least * CHALLENGE_PLANNING_MARGIN
+        return self.rule.at_least
+
 
 @dataclass(frozen=True)
 class Targets:
@@ -142,6 +163,10 @@ class WeekFrame:
     sketch_hours_ceiling_s: Optional[float] = None
     # Measured, current week only: what was done on the days before today.
     done: Optional[WeekActuals] = None
+    # Every dated goal's day and the day before it, in ANY week: a race on the
+    # next Monday makes this week's Sunday its eve, and a repair of this week must
+    # not put a session there although the race is in another frame.
+    protected_days: frozenset = frozenset()
 
     @property
     def week_end(self) -> date:
@@ -276,6 +301,12 @@ def build_frames(
         else []
     )
 
+    protected_days = frozenset(
+        day
+        for view in dated_views
+        for day in (view.date, view.date - timedelta(days=1))
+    )
+
     frames: List[WeekFrame] = []
     for index in range(horizon_weeks):
         start = this_week + timedelta(weeks=index)
@@ -346,6 +377,7 @@ def build_frames(
                 sketch_run_ceiling_m=run_ceilings[1] if run_ceilings else None,
                 sketch_hours_ceiling_s=hours[1] if hours else None,
                 done=done,
+                protected_days=protected_days,
             )
         )
     return frames
@@ -398,7 +430,7 @@ def describe_frame(frame: WeekFrame) -> List[str]:
     if frame.phase is not None:
         label = f"- Phase: {frame.phase.kind}"
         if frame.phase.focus:
-            label += f" ({frame.phase.focus})"
+            label += f" ({flat(frame.phase.focus, FOCUS_MAX)})"
         if frame.phase_goal:
             label += f", towards {frame.phase_goal}"
         lines.append(label)
@@ -448,7 +480,13 @@ def describe_frame(frame: WeekFrame) -> List[str]:
             f'- Challenge "{c.name}", week {c.index} of {c.weeks}: this week must hold '
             f"at least {describe_challenge(c)}"
             f"{', and that includes this race week' if frame.dated else ''}. A week "
-            f"that falls short is rejected.{spec_note}"
+            f"that falls short is rejected."
+            + (
+                f" Plan about {c.plan_for / 3600:.1f} h: the planned figure is an "
+                "estimate and the rule counts what their watch records."
+                if c.rule.metric in ("zone_time_s", "time_s") else ""
+            )
+            + spec_note
         )
     if frame.done is not None and (frame.done.total_time_s > 0):
         done_bits = [f"{_hours(frame.done.total_time_s)} moving"]
@@ -503,13 +541,20 @@ def describe_season(season: SeasonPlan, goals: Sequence[Any]) -> List[str]:
     of every goal, the challenge rules and the phase timeline. These are the coach's
     own earlier decisions, so the weeks are told to sit inside them."""
     by_id = _goal_by_id(goals)
-    lines = [f"Your summary of it: {season.summary}", "Your view of each goal:"]
+    lines = [
+        f"Your summary of it: {flat(season.summary, SUMMARY_MAX)}",
+        "Your view of each goal:",
+    ]
     for view in season.goals:
         goal = by_id.get(view.goal_id)
         name = goal.name if goal is not None else "Goal"
         booked = ", booked, the date is the runner's" if goal is not None and goal.booked else ""
         head = f'- "{name}" ({view.kind}{booked}): {_view_when(view)}.'
-        lines.append(head + f" Success: {view.success} Approach: {view.approach}")
+        lines.append(
+            head
+            + f" Success: {flat(view.success, SUCCESS_MAX)}"
+            + f" Approach: {flat(view.approach, APPROACH_MAX)}"
+        )
         if view.challenge is not None:
             rule = view.challenge
             frame = ChallengeFrame(goal_id=view.goal_id, name=name, rule=rule, index=1)
@@ -527,7 +572,7 @@ def describe_season(season: SeasonPlan, goals: Sequence[Any]) -> List[str]:
         if phase.long_run_km is not None:
             bits.append(f"long run {phase.long_run_km:g} km")
         targets = f" (ends at {', '.join(bits)})" if bits else ""
-        focus = f": {phase.focus}" if phase.focus else ""
+        focus = f": {flat(phase.focus, FOCUS_MAX)}" if phase.focus else ""
         lines.append(
             f"- {phase.kind} {phase.start.isoformat()} to {phase.end.isoformat()}"
             f"{focus}{targets}"

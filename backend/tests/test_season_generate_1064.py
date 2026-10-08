@@ -20,6 +20,7 @@ from app.models import User, UserProfile
 from app.models.season import Season
 from app.schemas.season import DraftLog, SeasonPlan
 from app.services.coach import turn
+from app.services.coach.llm import ReasonedCallFailed, Usage
 from app.services.schedule import season as season_mod
 from app.services.schedule import season_store, store
 from app.services.schedule.season import build_season_context, generate_season
@@ -117,7 +118,7 @@ def test_a_season_that_passes_first_time_is_activated_with_its_run_log(db, user,
     assert SeasonPlan.model_validate(season.plan).goals[0].goal_id == goals["race"].id
     assert season.model_id == "claude-opus-5-5"
     assert season.generated_at is not None
-    assert season.goals_fingerprint == season_store.goals_fingerprint(list(goals.values()))
+    assert season.goals_fingerprint == season_store.stamp(list(goals.values()), TODAY)
     log = DraftLog.model_validate(season.draft_log)
     assert (log.first_try_passed, log.checked) == (1, 1)
     assert len(log.attempts) == 1 and log.attempts[0].failures == []
@@ -300,8 +301,8 @@ def test_the_fingerprint_is_stable_and_moves_with_any_goal_edit(db, user, goals)
 
 def test_a_drafting_season_past_the_job_timeout_reads_as_failed(db, user):
     season = drafting(db, user)
-    season.created_at = datetime.now(timezone.utc) - timedelta(
-        seconds=settings.RQ_JOB_TIMEOUT_SECONDS + 181
+    season.created_at = datetime.now(timezone.utc) - season_store.stale_after() - timedelta(
+        seconds=1
     )
     db.commit()
 
@@ -309,6 +310,25 @@ def test_a_drafting_season_past_the_job_timeout_reads_as_failed(db, user):
     db.refresh(season)
     assert season.status == season_store.FAILED
     assert season.failure_message == season_store.STALE_MESSAGE
+
+
+def test_the_stale_bound_covers_the_longest_job_that_writes_a_season():
+    """#1064: the schedule job plans the season and then the weeks, so its
+    timeout (not only the season job's) is how long a season may legitimately
+    be drafting."""
+    longest = max(settings.RQ_JOB_TIMEOUT_SECONDS, settings.SCHEDULE_JOB_TIMEOUT_SECONDS)
+    assert settings.SCHEDULE_JOB_TIMEOUT_SECONDS > settings.RQ_JOB_TIMEOUT_SECONDS
+    assert season_store.stale_after() == timedelta(seconds=longest + 180)
+
+
+def test_a_season_written_inside_the_schedule_job_is_not_expired_mid_write(db, user):
+    season = drafting(db, user)
+    season.created_at = datetime.now(timezone.utc) - timedelta(
+        seconds=settings.SCHEDULE_JOB_TIMEOUT_SECONDS + 100
+    )
+    db.commit()
+
+    assert season_store.drafting_in_flight(db, user.id).id == season.id
 
 
 def test_a_drafting_season_inside_the_window_is_in_flight(db, user):
@@ -449,3 +469,45 @@ def test_the_enqueue_helper_passes_the_job_timeout(monkeypatch):
     assert seen["fn"] == "generate_season_job"
     assert seen["args"] == (str(uid), str(sid), None)
     assert seen["kwargs"] == {"job_timeout": settings.RQ_JOB_TIMEOUT_SECONDS}
+
+
+# --- a call that ran and gave no answer is a failed ANSWER, not an unreachable coach ---
+
+
+def _cut_off(truncated=True):
+    return ReasonedCallFailed(
+        "no usable answer", Usage(input_tokens=9_000, output_tokens=24_000), truncated=truncated
+    )
+
+
+def test_a_cut_off_answer_is_retried_with_what_went_wrong_and_logged_with_its_cost(
+    db, user, goals
+):
+    season = drafting(db, user)
+    client = FakeClient(_cut_off(), valid_payload(goals))
+
+    outcome = go(db, user, season, client)
+
+    assert outcome.ok
+    log = DraftLog.model_validate(season.draft_log)
+    assert len(log.attempts) == 2
+    assert (log.attempts[0].input_tokens, log.attempts[0].output_tokens) == (9_000, 24_000)
+    assert log.attempts[0].cost_usd > 0
+    assert "cut off" in log.attempts[0].failures[0]
+    assert "YOUR PREVIOUS ATTEMPT WAS REJECTED" in client.calls[1]["user"]
+    assert "cut off" in client.calls[1]["user"]
+    assert log.first_try_passed == 0
+
+
+def test_two_answers_that_never_arrive_fail_the_season_as_unsettled_not_unreachable(
+    db, user, goals
+):
+    season = drafting(db, user)
+    client = FakeClient(_cut_off(), _cut_off(truncated=False))
+
+    outcome = go(db, user, season, client)
+
+    assert not outcome.ok
+    assert outcome.message == season_store.FAILURE_MESSAGE
+    assert any("did not call" in f for f in outcome.failures)
+    assert len(DraftLog.model_validate(season.draft_log).attempts) == 2

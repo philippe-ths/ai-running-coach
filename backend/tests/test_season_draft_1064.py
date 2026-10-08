@@ -24,6 +24,7 @@ from app.models.season import Season
 from app.models.training_plan import TrainingPlan
 from app.schemas.season import DraftLog
 from app.services.coach import turn
+from app.services.coach.llm import ReasonedCallFailed, Usage
 from app.services.schedule import draft as draft_mod
 from app.services.schedule import season_store, store
 from app.services.schedule.draft import draft_plan
@@ -89,8 +90,8 @@ def active_season(db, user, goals, **kw):
     row.plan = challenge_season(
         goals["challenge"], race=goals["race"], start=date(2026, 10, 12), **kw
     ).model_dump(mode="json")
-    row.goals_fingerprint = season_store.goals_fingerprint(
-        store.list_goal_races(db, user.id, on_or_after=TODAY)
+    row.goals_fingerprint = season_store.stamp(
+        store.list_goal_races(db, user.id, on_or_after=TODAY), TODAY
     )
     row.model_id = "claude-opus-5-5"
     return season_store.activate_season(db, row)
@@ -128,7 +129,7 @@ def good_week(frame, *, race=None, skip_walks=False, bike_hours=2.0):
     sessions = []
     if not skip_walks:
         for d in days[:6]:
-            sessions.append(_sess(d, "walk", 0.9, km=4.5))
+            sessions.append(_sess(d, "walk", 0.9, km=5.0))
     if frame.challenges:
         for d in days[:4]:
             sessions.append(_sess(d, "bike", bike_hours))
@@ -269,13 +270,43 @@ def test_the_weeks_beyond_the_written_ones_are_shapes_written_by_code(
     frame = all_frames[date(2026, 11, 9)]
     assert after_race.target_duration_s >= frame.targets.weekly_hours_s - 1
     assert sum(after_race.discipline_mix.values()) == pytest.approx(1.0, abs=0.01)
-    zone = sum(after_race.target_duration_s * share * frame.share(2, d)
-               for d, share in after_race.discipline_mix.items())
+    # The challenge is counted from the seconds the shape states, not from the
+    # load shares of its mix.
+    zone = sum(seconds * frame.share(2, d)
+               for d, seconds in after_race.duration_by_discipline_s.items())
     assert zone >= 36_000 - 60
     # Concrete weeks carry only their phase, from the frame.
     assert store.is_phase_only(shapes[date(2026, 11, 2)])
     assert shapes[date(2026, 11, 2)].phase == "Base"
     assert plan.horizon_end == date(2026, 12, 27)
+
+
+def test_a_runner_with_no_season_still_gets_their_later_weeks_sketched_from_the_usual_week(
+    db, user, monkeypatch
+):
+    """No goal, no season: the plan covers the concrete weeks with sessions and
+    the rest of the horizon from the runner's usual week (phase Base, no
+    challenge), so the 12-week view is not empty."""
+    frames = frames_of(db, user, None)
+    concrete = frames[: settings.SCHEDULE_CONCRETE_WEEKS]
+    inject(monkeypatch, FakeClient(answer(concrete)))
+    plan = store.create_drafting_plan(db, user.id)
+
+    outcome = go(db, user, plan)
+
+    assert outcome.ok, outcome.failures
+    db.refresh(plan)
+    shapes = {s.week_start: s for s in store.plan_week_shapes(plan)}
+    later = [f for f in frames if f.week_start not in {c.week_start for c in concrete}]
+    assert len(later) == 12 - settings.SCHEDULE_CONCRETE_WEEKS
+    for frame in later:
+        shape = shapes[frame.week_start]
+        assert shape.phase == "Base"
+        assert shape.target_duration_s == pytest.approx(frame.usual_total_s, rel=0.01)
+        assert shape.target_walking_distance_m == pytest.approx(30_000, abs=1)
+        assert shape.target_running_distance_m == pytest.approx(28_000, rel=0.02)
+    assert plan.horizon_end == frames[-1].week_end
+    assert plan.season_id is None
 
 
 # --- the retry carries every failure, with its exact gap ---------------------------------------
@@ -325,6 +356,44 @@ def test_a_week_the_model_leaves_out_is_a_failure_not_a_blank_week(db, user, goa
     assert "one of the weeks to write as real sessions but the plan says nothing" in (
         client.calls[1]["user"]
     )
+
+
+# --- a call that ran and gave no answer is a failed ANSWER, not an unreachable coach ---
+
+
+def test_a_cut_off_plan_is_retried_and_its_cost_is_in_the_run_log(db, user, goals, monkeypatch):
+    season = active_season(db, user, goals)
+    frames = concrete_frames(db, user, season)
+    cut = ReasonedCallFailed(
+        "truncated", Usage(input_tokens=15_000, output_tokens=20_000), truncated=True
+    )
+    client = inject(monkeypatch, FakeClient(cut, answer(frames)))
+    plan = store.create_drafting_plan(db, user.id)
+
+    outcome = go(db, user, plan)
+
+    assert outcome.ok, outcome.failures
+    db.refresh(plan)
+    log = DraftLog.model_validate(plan.draft_log)
+    assert len(log.attempts) == 2
+    assert (log.attempts[0].input_tokens, log.attempts[0].output_tokens) == (15_000, 20_000)
+    assert log.attempts[0].cost_usd > 0 and "cut off" in log.attempts[0].failures[0]
+    assert "cut off" in client.calls[1]["user"]
+
+
+def test_two_unusable_answers_fail_the_plan_without_calling_the_coach_unreachable(
+    db, user, goals, monkeypatch
+):
+    active_season(db, user, goals)
+    silent = ReasonedCallFailed("none", Usage(input_tokens=1, output_tokens=1), truncated=False)
+    inject(monkeypatch, FakeClient(silent, silent))
+
+    outcome = go(db, user, store.create_drafting_plan(db, user.id))
+
+    assert not outcome.ok
+    assert outcome.failure_kind != store.FAILURE_UNREACHABLE
+    assert "could not be reached" not in " ".join(outcome.failures)
+    assert "did not call" in " ".join(outcome.failures)
 
 
 # --- repair, shortfalls, and what fails ------------------------------------------------------------

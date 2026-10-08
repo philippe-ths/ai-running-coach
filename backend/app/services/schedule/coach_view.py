@@ -46,6 +46,7 @@ from app.schemas.coach_context import (
     UpcomingSessionContext,
 )
 from app.services.schedule import goals, season_store, store
+from app.services.schedule.prompt_text import SUCCESS_MAX, SUMMARY_MAX, flat
 from app.services.schedule.completion import find_matching_session
 from app.services.schedule.planned_distance import planned_distance_m
 from app.services.schedule.placement import (
@@ -514,7 +515,7 @@ def season_section(db: Session, user: Any, today: date) -> dict:
             "name": goal.name if goal is not None else "Goal",
             "kind": view.kind,
             "booked": bool(goal.booked) if goal is not None else False,
-            "success": view.success,
+            "success": flat(view.success, SUCCESS_MAX),
         }
         if view.date is not None:
             item["date"] = view.date.isoformat()
@@ -529,10 +530,8 @@ def season_section(db: Session, user: Any, today: date) -> dict:
                 f"{rule.start.isoformat()}"
             )
         views.append(item)
-    out: dict = {"summary": plan.summary, "goals": views}
-    if row.goals_fingerprint != season_store.goals_fingerprint(
-        store.list_goal_races(db, user.id, on_or_after=today)
-    ):
+    out: dict = {"summary": flat(plan.summary, SUMMARY_MAX), "goals": views}
+    if season_store.is_stale(db, row):
         out["stale"] = "the runner has changed their goals since this season was written"
     return {"season": out}
 

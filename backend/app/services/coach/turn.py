@@ -64,7 +64,13 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.coaching_relationship import CoachingRelationship
 from app.services.coach import budget
-from app.services.coach.llm import AnthropicClient, ChatTurnDelta, MessageResult, Usage
+from app.services.coach.llm import (
+    AnthropicClient,
+    ChatTurnDelta,
+    MessageResult,
+    ReasonedCallFailed,
+    Usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -256,10 +262,18 @@ class MeteredClient:
     ) -> tuple[Dict[str, Any], Usage]:
         """The thinking, web-searching structured call, metered with its searches
         (`_record` reads `web_search_requests`, so each query is priced)."""
-        result, usage = await self._inner.generate_structured_reasoned(
-            system=system, user=user, tool=tool, max_tokens=max_tokens,
-            effort=effort, web_search_max_uses=web_search_max_uses, timeout=timeout,
-        )
+        try:
+            result, usage = await self._inner.generate_structured_reasoned(
+                system=system, user=user, tool=tool, max_tokens=max_tokens,
+                effort=effort, web_search_max_uses=web_search_max_uses,
+                timeout=timeout,
+            )
+        except ReasonedCallFailed as exc:
+            # The call ran and was billed even though it returned no answer: a
+            # cap that only counted answers would not count the expensive
+            # failures (a long think cut off at max_tokens).
+            self._record(exc.usage)
+            raise
         self._record(usage)
         return result, usage
 
