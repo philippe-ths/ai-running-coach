@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models.user import User
 from app.schemas.schedule import GoalRaceRead, HorizonWeek, ScheduleHorizonRead
-from app.services.schedule import store
+from app.services.schedule import goals, store
 from app.services.schedule.placement import WEEK_LENGTH_DAYS
 from app.services.schedule.planned_distance import planned_distance_m
 from app.services.weeks import resolve_week_start, week_start
@@ -231,7 +231,9 @@ def build_horizon(
         races=[
             GoalRaceRead.model_validate(race)
             for race in races
-            if race.race_date <= span_end
+            # A goal with no date has no week to stand in (#1042); the goals
+            # panel lists it, the horizon cannot place it.
+            if goals.ready_by(race) is not None and goals.ready_by(race) <= span_end
         ],
         has_plan=plan is not None,
         peak_effort_score=max(loads) if loads else None,

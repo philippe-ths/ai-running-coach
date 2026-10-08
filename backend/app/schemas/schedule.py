@@ -421,8 +421,13 @@ class GoalRaceRead(BaseModel):
 
     id: UUID
     name: str
-    race_date: date
-    distance_m: float
+    race_date: Optional[date] = None
+    window_start: Optional[date] = None
+    window_end: Optional[date] = None
+    distance_m: Optional[float] = None
+    target_time_s: Optional[int] = None
+    notes: Optional[str] = None
+    booked: bool = False
     priority: str
 
 
@@ -441,12 +446,39 @@ class ScheduleHorizonRead(BaseModel):
 
 
 class GoalRaceCreate(BaseModel):
+    """A goal as the runner holds it (#1042): the date is exact, a window, or absent.
+
+    Also the body of an edit, which replaces the whole goal: the form always
+    sends every field, and booking a goal is the same goal with a date added.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=200)
-    race_date: date
-    distance_m: float = Field(gt=0, le=1_000_000)
+    race_date: Optional[date] = None
+    window_start: Optional[date] = None
+    window_end: Optional[date] = None
+    distance_m: Optional[float] = Field(default=None, gt=0, le=1_000_000)
+    # Up to a week: long enough for a multi-day ultra, short enough to catch a
+    # unit slip (minutes typed where seconds were meant).
+    target_time_s: Optional[int] = Field(default=None, gt=0, le=7 * 24 * 3600)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+    booked: bool = False
     priority: Literal["A", "B", "C"] = "A"
+
+    @model_validator(mode="after")
+    def _one_kind_of_date(self) -> "GoalRaceCreate":
+        if self.race_date is not None and (self.window_start or self.window_end):
+            raise ValueError("a goal has an exact date or a window, not both")
+        if (self.window_start is None) != (self.window_end is None):
+            raise ValueError("a window needs both a start and an end")
+        if self.window_start and self.window_end and self.window_start > self.window_end:
+            raise ValueError("the window ends before it starts")
+        if self.booked and self.race_date is None:
+            raise ValueError("a booked goal has an exact date")
+        if self.notes is not None:
+            self.notes = self.notes.strip() or None
+        return self
 
 
 # --- drafting --------------------------------------------------------------

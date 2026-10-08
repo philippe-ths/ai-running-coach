@@ -21,7 +21,19 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, String, Uuid, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    Uuid,
+    false,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -37,10 +49,20 @@ class GoalRace(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
 
     name: Mapped[str] = mapped_column(String(200))
-    race_date: Mapped[date] = mapped_column(Date, index=True)
+    # A goal is held as precisely as the runner holds it (#1042): an exact
+    # `race_date`, or a `window_start`..`window_end` ("~March", "May to June"),
+    # or neither ("someday"). Never both; the API enforces it.
+    race_date: Mapped[Optional[date]] = mapped_column(Date, index=True, nullable=True)
+    window_start: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    window_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     # Metres, like every other distance in this codebase (Activity.distance,
     # DerivedMetric, the fact stream). The UI speaks km; the store speaks metres.
-    distance_m: Mapped[float] = mapped_column(Float)
+    # Null for a goal with no fixed distance (a volume block, a backyard ultra).
+    distance_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    target_time_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # The runner's own words for the coach. Reaches prompts quoted as theirs.
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    booked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     # "A" | "B" | "C" — plain String like every other enum-ish column here; the
     # allowed set is validated at the API (the `UserMaterial.kind` precedent).
     priority: Mapped[str] = mapped_column(String, default="A")

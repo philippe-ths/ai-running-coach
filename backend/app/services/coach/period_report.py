@@ -53,6 +53,7 @@ from app.services.coach.period_report_pack import (
     build_period_report_pack,
 )
 from app.services.coach.validator import validate_conversational_policy
+from app.services.schedule import goals as schedule_goals
 
 logger = logging.getLogger(__name__)
 
@@ -207,13 +208,9 @@ def build_prompt_context(pack: PeriodReportPack) -> str:
     parts.append("\n## THE RUNNER")
     parts.extend(_profile_lines(pack.profile))
 
-    if pack.goal_race:
-        race = pack.goal_race
-        parts.append("\n## THEIR RACE")
-        parts.append(
-            f"- {race['name']}: {race['race_date']} "
-            f"({race['distance_m'] / 1000:.1f} km, priority {race['priority']})"
-        )
+    if pack.goals:
+        parts.append("\n## THEIR GOALS")
+        parts.extend(schedule_goals.line_from(goal) for goal in pack.goals)
 
     if pack.memory:
         parts.append("\nMEMORY — what this runner has told you (their memory profile):")

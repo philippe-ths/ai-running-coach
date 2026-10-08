@@ -42,6 +42,7 @@ from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
 from app.models.user import User
 from app.services.coach import turn
+from app.services.schedule import goals
 from app.services.schedule import store
 from app.services.schedule.draft import (
     PLACING_AND_COMMITTING,
@@ -547,10 +548,7 @@ async def propose_amendment(
     norm_running = running_norm_weekly_m(facts, today)
     rules = store.plan_rules(plan)
     races = store.list_goal_races(db, user.id, on_or_after=today)
-    target_race = next(
-        (r for r in races if r.priority == "A"), races[0] if races else None
-    )
-    race_arg = (target_race.race_date, target_race.distance_m) if target_race else None
+    race_arg = goals.validator_race(races)
 
     failures: List[str] = []
     failure_kind = store.FAILURE_UNKNOWN
