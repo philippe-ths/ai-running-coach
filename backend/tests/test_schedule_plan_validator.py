@@ -20,7 +20,6 @@ from app.services.schedule.draft_contract import (
     DraftedPlan,
     DraftedSession,
     DraftedWeek,
-    SketchedWeek,
 )
 from app.services.schedule.plan_validator import (
     MAX_WEEKLY_MULTIPLE,
@@ -52,10 +51,8 @@ def _session(**overrides) -> DraftedSession:
     return DraftedSession(**payload)
 
 
-def _plan(*, weeks=(), sketch_weeks=(), rules=()) -> DraftedPlan:
-    return DraftedPlan(
-        rules=list(rules), weeks=list(weeks), sketch_weeks=list(sketch_weeks)
-    )
+def _plan(*, weeks=(), rules=()) -> DraftedPlan:
+    return DraftedPlan(rules=list(rules), weeks=list(weeks))
 
 
 def _week(start=MON, sessions=()) -> DraftedWeek:
@@ -116,15 +113,6 @@ def test_a_well_formed_plan_passes():
                 ],
             )
         ],
-        sketch_weeks=[
-            SketchedWeek(
-                week_start=NEXT_MON,
-                phase="build",
-                target_running_distance_m=45000,
-                sessions_by_discipline={"run": 4},
-                intent_counts={"easy": 2, "long": 1, "quality": 1},
-            )
-        ],
     )
 
     check = validate_drafted_plan(plan, today=MON, norm_weekly_running_m=40000)
@@ -164,35 +152,6 @@ def test_the_same_week_given_twice_is_rejected():
 
     assert check.ok is False
     assert f"week {MON} appears twice" in _failures(check)
-
-
-def test_a_week_given_as_both_concrete_and_sketched_is_rejected():
-    """Two answers for one week, with nothing to say which the runner follows."""
-    plan = _plan(
-        weeks=[_week(MON, [_session()])],
-        sketch_weeks=[SketchedWeek(week_start=MON, sessions_by_discipline={"run": 3})],
-    )
-
-    check = validate_drafted_plan(plan, today=MON)
-
-    assert check.ok is False
-    assert "given as both concrete and sketched" in _failures(check)
-
-
-def test_a_sketched_week_is_held_to_the_same_boundary_and_clock():
-    plan = _plan(
-        sketch_weeks=[
-            SketchedWeek(week_start=WED),
-            SketchedWeek(week_start=MON - timedelta(days=7)),
-        ]
-    )
-
-    check = validate_drafted_plan(plan, today=MON)
-
-    assert check.ok is False
-    assert "sketched week" in _failures(check)
-    assert "does not start on the runner's week boundary" in _failures(check)
-    assert "is in the past" in _failures(check)
 
 
 # --- sessions ---------------------------------------------------------------
@@ -607,19 +566,6 @@ def test_only_committed_running_counts_toward_the_ceiling():
     assert check.ok is True
 
 
-def test_a_sketched_weeks_running_target_is_held_to_the_same_ceiling():
-    plan = _plan(
-        sketch_weeks=[
-            SketchedWeek(week_start=NEXT_MON, target_running_distance_m=200_000)
-        ]
-    )
-
-    check = validate_drafted_plan(plan, today=MON, norm_weekly_running_m=20000)
-
-    assert check.ok is False
-    assert f"sketched week {NEXT_MON} plans" in _failures(check)
-
-
 # --- the runner's own week boundary ----------------------------------------
 
 
@@ -696,9 +642,7 @@ def test_a_week_beyond_the_configured_horizon_is_rejected():
     other gate, because nothing tied a drafted week to the horizon the coach was
     asked for.
     """
-    plan = _plan(
-        sketch_weeks=[SketchedWeek(week_start=MON + timedelta(days=7 * 60))]
-    )
+    plan = _plan(weeks=[_week(MON + timedelta(days=7 * 60))])
 
     check = validate_drafted_plan(
         plan, today=MON, horizon_weeks=12, norm_weekly_running_m=None
@@ -709,9 +653,7 @@ def test_a_week_beyond_the_configured_horizon_is_rejected():
 
 
 def test_a_plan_within_its_horizon_passes_the_reach_check():
-    plan = _plan(
-        sketch_weeks=[SketchedWeek(week_start=MON + timedelta(days=7 * 11))]
-    )
+    plan = _plan(weeks=[_week(MON + timedelta(days=7 * 11))])
 
     check = validate_drafted_plan(
         plan, today=MON, horizon_weeks=12, norm_weekly_running_m=None
@@ -801,40 +743,6 @@ def test_a_session_with_nothing_to_size_it_is_still_rejected():
 
     assert check.ok is False
     assert any("nothing can size it" in f for f in check.failures)
-
-
-def test_a_sketched_week_may_ramp_further_than_a_concrete_one():
-    """A build is not absurdity.
-
-    Going from 18 km/week to 38 km at peak over ten weeks is ordinary coaching. A
-    single ceiling held a sketched week ten weeks out to the same bound as next
-    Tuesday and rejected a perfectly sensible half-marathon build, which is the
-    ceiling second-guessing the ramp rather than catching nonsense.
-    """
-    norm = 18_000.0
-    fine = _plan(
-        sketch_weeks=[
-            SketchedWeek(
-                week_start=MON + timedelta(days=70),
-                target_running_distance_m=40_000,
-            )
-        ]
-    )
-    absurd = _plan(
-        sketch_weeks=[
-            SketchedWeek(
-                week_start=MON + timedelta(days=70),
-                target_running_distance_m=90_000,
-            )
-        ]
-    )
-
-    assert validate_drafted_plan(
-        fine, today=MON, norm_weekly_running_m=norm
-    ).ok is True
-    assert validate_drafted_plan(
-        absurd, today=MON, norm_weekly_running_m=norm
-    ).ok is False
 
 
 def test_the_concrete_week_ceiling_is_unchanged():

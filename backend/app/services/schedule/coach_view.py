@@ -45,7 +45,7 @@ from app.schemas.coach_context import (
     ScheduleContext,
     UpcomingSessionContext,
 )
-from app.services.schedule import goals, store
+from app.services.schedule import goals, season_store, store
 from app.services.schedule.completion import find_matching_session
 from app.services.schedule.planned_distance import planned_distance_m
 from app.services.schedule.placement import (
@@ -463,6 +463,80 @@ def _written_through(
     return out
 
 
+def _amount(metric: str, value: float) -> str:
+    if metric in ("zone_time_s", "time_s"):
+        return f"{value / 3600:.1f} h"
+    if metric == "distance_m":
+        return f"{value / 1000:.1f} km"
+    return f"{value:.0f} sessions"
+
+
+def challenge_line(item: Any) -> dict:
+    """One challenge week as the coach is told it (north star: label what it is).
+
+    A bare "9.6" beside a threshold would be read as what the runner did. So the
+    PLANNED figure says it is an estimate from the runner's own heart-rate shares,
+    the DONE figure says it is measured, and `met` is only ever stated for a week
+    that is over.
+    """
+    zone = f" in zone {item.min_zone} or above" if item.min_zone else ""
+    out = {
+        "challenge": item.name,
+        "week": f"{item.index} of {item.weeks}",
+        "needs": _amount(item.metric, item.threshold) + zone,
+    }
+    if item.planned is not None:
+        out["planned"] = (
+            _amount(item.metric, item.planned)
+            + (" (an estimate from the runner's own heart-rate shares, not measured)"
+               if item.metric == "zone_time_s" else "")
+        )
+    if item.actual is not None:
+        out["done_so_far_measured"] = _amount(item.metric, item.actual)
+    if item.met is not None:
+        out["week_over_and_met"] = item.met
+    return out
+
+
+def season_section(db: Session, user: Any, today: date) -> dict:
+    """The coach's own season, as the conversation needs it (#1064): the summary,
+    each goal's kind and recommended date, the challenge rules, and what the plan
+    is still short of. {} when the runner has no active season."""
+    row = season_store.active_season(db, user.id)
+    plan = season_store.season_plan(row) if row is not None else None
+    if plan is None:
+        return {}
+    names = {g.id: g for g in store.list_goal_races(db, user.id)}
+    views = []
+    for view in plan.goals:
+        goal = names.get(view.goal_id)
+        item: dict = {
+            "name": goal.name if goal is not None else "Goal",
+            "kind": view.kind,
+            "booked": bool(goal.booked) if goal is not None else False,
+            "success": view.success,
+        }
+        if view.date is not None:
+            item["date"] = view.date.isoformat()
+        elif view.window_start is not None:
+            item["window"] = f"{view.window_start.isoformat()} to {view.window_end.isoformat()}"
+        if view.challenge is not None:
+            rule = view.challenge
+            item["challenge_rule"] = (
+                f"at least {_amount(rule.metric, rule.at_least)}"
+                + (f" in zone {rule.min_zone} or above" if rule.min_zone else "")
+                + f" in each of {rule.weeks} straight weeks from the week of "
+                f"{rule.start.isoformat()}"
+            )
+        views.append(item)
+    out: dict = {"summary": plan.summary, "goals": views}
+    if row.goals_fingerprint != season_store.goals_fingerprint(
+        store.list_goal_races(db, user.id, on_or_after=today)
+    ):
+        out["stale"] = "the runner has changed their goals since this season was written"
+    return {"season": out}
+
+
 def build_thread_schedule(
     db: Session, user: Any, *, today: Optional[date] = None
 ) -> Optional[dict]:
@@ -497,7 +571,11 @@ def build_thread_schedule(
     if plan is None:
         # Goals reach the coach with or without a plan (#1042): "what should I
         # train for my March half" is a question a runner asks BEFORE a plan.
-        no_plan = {**({"draft": draft} if draft else {}), **_goals_section(db, user.id, today)}
+        no_plan = {
+            **({"draft": draft} if draft else {}),
+            **_goals_section(db, user.id, today),
+            **season_section(db, user, today),
+        }
         return {"has_plan": False, **no_plan} if no_plan else None
 
     starts_on = resolve_week_start(getattr(user, "profile", None))
@@ -517,6 +595,15 @@ def build_thread_schedule(
         # is what stops the coach describing a race build the plan does not
         # contain.
         **_goals_section(db, user.id, today),
+        # The coach's own season (#1064): its view of each goal, the dates it
+        # recommended and any challenge rule, so a conversation about the plan
+        # starts from what the coach already decided.
+        **season_section(db, user, today),
+        **(
+            {"plan_is_still_short_of": plan.draft_log["shortfalls"]}
+            if (plan.draft_log or {}).get("shortfalls")
+            else {}
+        ),
         # Where the WRITTEN sessions stop (#981). A plan holds real sessions for
         # its near weeks and shape beyond, so "the plan runs to 11 Oct" and "the
         # plan tells you what to do until 30 Aug" are different facts and the

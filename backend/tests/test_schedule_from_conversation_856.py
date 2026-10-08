@@ -19,6 +19,7 @@ as one the Schedule button asked for.
 """
 
 import uuid
+from types import SimpleNamespace
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -339,7 +340,10 @@ def test_a_seeded_draft_is_told_to_transcribe_rather_than_re_plan(db):
     class _Client:
         model = "test-model"
 
-        async def generate_structured(self, *, system, user, tool, max_tokens):
+        async def generate_structured_reasoned(
+            self, *, system, user, tool, max_tokens, effort, web_search_max_uses,
+            timeout=None,
+        ):
             seen.setdefault("systems", []).append(system)
             seen.setdefault("users", []).append(user)
             raise RuntimeError("stop after capturing the prompt")
@@ -380,7 +384,10 @@ def test_a_seeded_draft_that_fails_the_gate_stores_nothing(db):
     class _Client:
         model = "test-model"
 
-        async def generate_structured(self, *, system, user, tool, max_tokens):
+        async def generate_structured_reasoned(
+            self, *, system, user, tool, max_tokens, effort, web_search_max_uses,
+            timeout=None,
+        ):
             # Well-shaped and incoherent: a session in a week that has already
             # gone. `validate_drafted_plan` is what must catch this, not a test.
             return {
@@ -403,8 +410,7 @@ def test_a_seeded_draft_that_fails_the_gate_stores_nothing(db):
                         ],
                     }
                 ],
-                "sketch_weeks": [],
-            }
+            }, SimpleNamespace(input_tokens=1, output_tokens=1, web_search_requests=0)
 
     with patch.object(draft.turn, "over_budget", return_value=False), patch.object(
         draft.turn, "build_client", return_value=_Client()

@@ -109,6 +109,28 @@ def _zone_number(key: Any) -> Optional[int]:
         return None
 
 
+def zone_seconds(fact: Any) -> Dict[int, float]:
+    """One activity's time in each heart-rate zone, in seconds of MOVING time.
+
+    The stored `time_in_zones` counts heart-rate SAMPLES, which equal seconds
+    only for a 1 s recording. A watch on smart recording logs a walk or a ride
+    about every 4 s, so its stored figures run about 4x short. Each zone's share
+    of the samples is spread over the activity's moving time instead, so a walk
+    and a run are measured on the same clock. Empty when there is no heart-rate
+    data: that time is never guessed.
+    """
+    counts = {}
+    for key, value in (getattr(fact, "time_in_zones", None) or {}).items():
+        number = _zone_number(key)
+        if number is not None and value:
+            counts[number] = counts.get(number, 0) + value
+    total = sum(counts.values())
+    moving = getattr(fact, "moving_time_s", 0) or 0
+    if total <= 0 or moving <= 0:
+        return {}
+    return {number: moving * value / total for number, value in counts.items()}
+
+
 def zone_shares(
     facts: Sequence[Any], as_of: date, min_zone: int, *, weeks: int = BASELINE_WEEKS
 ) -> dict:
@@ -126,15 +148,13 @@ def zone_shares(
     measured: dict = {}
     in_zone: dict = {}
     for fact in facts:
-        zones = getattr(fact, "time_in_zones", None)
-        if not zones or not (start <= fact.local_date <= end):
+        if not (start <= fact.local_date <= end):
+            continue
+        zones = zone_seconds(fact)
+        if not zones:
             continue
         discipline = discipline_for_fact(fact)
-        for key, seconds in zones.items():
-            number = _zone_number(key)
-            if number is None:
-                continue
-            seconds = seconds or 0
+        for number, seconds in zones.items():
             measured[discipline] = measured.get(discipline, 0) + seconds
             if number >= min_zone:
                 in_zone[discipline] = in_zone.get(discipline, 0) + seconds
@@ -157,8 +177,8 @@ def estimated_zone_s(seconds_by_discipline: dict, shares: dict) -> float:
 class WeekActuals:
     """One week of what the runner actually did, measured and never estimated.
 
-    `zone_s[discipline][n]` is the seconds spent in zone n, straight from the
-    stored `time_in_zones`. An activity with no heart-rate data adds nothing
+    `zone_s[discipline][n]` is the seconds spent in zone n, from the stored
+    `time_in_zones` spread over moving time (`zone_seconds`). An activity with no heart-rate data adds nothing
     there: a challenge counted from a guess would let a week "pass" on an
     estimate the runner's own watch never recorded.
     """
@@ -192,13 +212,25 @@ class WeekActuals:
 
 
 def weekly_actuals(
-    facts: Sequence[Any], week_start: date, starts_on: int
+    facts: Sequence[Any],
+    week_start: date,
+    starts_on: int,
+    *,
+    through: Optional[date] = None,
 ) -> WeekActuals:
     """The totals for the week containing `week_start` (snapped to the runner's
     own boundary): time and distance by discipline, session count, measured zone
-    time."""
+    time.
+
+    `through` stops the count at that day, inclusive. A challenge week still
+    being lived counts what was done before today plus what is planned from
+    today, and counting today twice (done AND planned) would let a week pass on
+    a session counted two ways.
+    """
     start = _week_start(week_start, starts_on)
     end = start + timedelta(days=6)
+    if through is not None:
+        end = min(end, through)
     actuals = WeekActuals(week_start=start)
     for fact in facts:
         if not (start <= fact.local_date <= end):
@@ -213,13 +245,95 @@ def weekly_actuals(
         actuals.sessions_by_discipline[discipline] = (
             actuals.sessions_by_discipline.get(discipline, 0) + 1
         )
-        for key, seconds in (getattr(fact, "time_in_zones", None) or {}).items():
-            number = _zone_number(key)
-            if number is None:
-                continue
+        for number, seconds in zone_seconds(fact).items():
             by_zone = actuals.zone_s.setdefault(discipline, {})
-            by_zone[number] = by_zone.get(number, 0) + (seconds or 0)
+            by_zone[number] = by_zone.get(number, 0) + seconds
     return actuals
+
+
+def walking_norm_weekly_m(facts: Sequence[Any], as_of: date) -> Optional[float]:
+    """The runner's typical weekly walking distance, or None."""
+    walk = next(
+        (n for n in weekly_norms_by_discipline(facts, as_of) if n.discipline == "walk"),
+        None,
+    )
+    return walk.distance_m if walk is not None else None
+
+
+# A session is "typical" for repair only from a run of history that says so; a
+# discipline done fewer times than this in the baseline window has no typical.
+MIN_TYPICAL_SESSIONS = 3
+# Under a quarter hour is a warm-up or a stray tracker blip, not a session.
+MIN_TYPICAL_SESSION_S = 900
+
+
+def typical_sessions(
+    facts: Sequence[Any], as_of: date, *, weeks: int = BASELINE_WEEKS
+) -> Dict[str, "TypicalSession"]:
+    """Per discipline, the median session this runner actually does.
+
+    Repair copies these instead of inventing a session: the duration and distance
+    are the runner's own, so the pace a copy implies is their pace. A discipline
+    with fewer than `MIN_TYPICAL_SESSIONS` sessions in the window has no entry.
+    """
+    baseline_end = as_of - timedelta(days=7)
+    window = baseline_window(list(facts), baseline_end, weeks * 7)
+    if window is None:
+        return {}
+    start, end, _ = window
+    by_discipline: Dict[str, List[Any]] = {}
+    for fact in facts:
+        if not (start <= fact.local_date <= end):
+            continue
+        if (fact.moving_time_s or 0) < MIN_TYPICAL_SESSION_S:
+            continue
+        by_discipline.setdefault(discipline_for_fact(fact), []).append(fact)
+
+    def median(values: List[float]) -> float:
+        ordered = sorted(values)
+        mid = len(ordered) // 2
+        return (
+            ordered[mid]
+            if len(ordered) % 2
+            else (ordered[mid - 1] + ordered[mid]) / 2
+        )
+
+    out: Dict[str, TypicalSession] = {}
+    for discipline, group in by_discipline.items():
+        if len(group) < MIN_TYPICAL_SESSIONS:
+            continue
+        with_distance = [f.distance_m for f in group if (f.distance_m or 0) > 0]
+        out[discipline] = TypicalSession(
+            discipline=discipline,
+            duration_s=median([float(f.moving_time_s) for f in group]),
+            # A median over the sessions that HAVE a distance, so a gym session
+            # logged with none does not drag a ride's distance to zero.
+            distance_m=median(with_distance)
+            if len(with_distance) >= MIN_TYPICAL_SESSIONS
+            else None,
+        )
+    return out
+
+
+@dataclass(frozen=True)
+class TypicalSession:
+    discipline: str
+    duration_s: float
+    distance_m: Optional[float] = None
+
+
+def longest_recent_run_m(
+    facts: Sequence[Any], as_of: date, *, weeks: int = 8
+) -> Optional[float]:
+    """The runner's longest single run in the last `weeks` weeks: where a long-run
+    target starts from. None when they have run none."""
+    cutoff = as_of - timedelta(weeks=weeks)
+    runs = [
+        f.distance_m
+        for f in facts
+        if is_run(f) and cutoff <= f.local_date <= as_of and (f.distance_m or 0) > 0
+    ]
+    return max(runs) if runs else None
 
 
 def weekly_hours_norm_s(facts: Sequence[Any], as_of: date) -> Optional[float]:

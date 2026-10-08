@@ -22,6 +22,7 @@ runner).
 """
 
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -62,16 +63,33 @@ class _FakeClient:
         self.calls = []
         self.model = FAKE_MODEL
 
-    async def generate_structured(self, *, system, user, tool, max_tokens=1024):
-        self.calls.append({"system": system, "user": user, "tool": tool})
+    async def generate_structured_reasoned(
+        self, *, system, user, tool, max_tokens, effort="high",
+        web_search_max_uses=0, timeout=None,
+    ):
+        """The call the week writer makes (#1064): the answer and its usage."""
+        self.calls.append(
+            {
+                "system": system, "user": user, "tool": tool,
+                "max_tokens": max_tokens, "effort": effort,
+                "web_search_max_uses": web_search_max_uses,
+            }
+        )
         result = self._results.pop(0)
         if isinstance(result, Exception):
             raise result
-        return result
+        return result, SimpleNamespace(
+            input_tokens=8_000, output_tokens=3_000, web_search_requests=0
+        )
 
 
-def _inject(monkeypatch, client, *, over_budget: bool = False):
-    """Replace the ONE seam a coaching turn gets its client from."""
+def _inject(monkeypatch, client, *, over_budget: bool = False, concrete_weeks: int = 1):
+    """Replace the ONE seam a coaching turn gets its client from.
+
+    Concrete weeks default to ONE here: a draft must now answer every week it is
+    asked to write, and most tests exercise a single week's behaviour.
+    """
+    monkeypatch.setattr(draft_mod.settings, "SCHEDULE_CONCRETE_WEEKS", concrete_weeks)
     built = []
 
     def _build_client(kind, user_id):
@@ -204,7 +222,6 @@ def _good_plan() -> dict:
                 ],
             }
         ],
-        "sketch_weeks": [],
         "summary": "Two weeks of steady base work.",
     }
 
@@ -400,118 +417,30 @@ async def test_another_runners_active_plan_is_never_superseded(db, monkeypatch):
     ).one().status == "active"
 
 
-# --- sketched weeks ---------------------------------------------------------
+# --- the weeks beyond the concrete ones ---------------------------------------
 
 
-async def test_a_sketched_week_is_stored_as_shares_of_a_load_total(db, monkeypatch):
-    """The model gives COUNTS; the mixes are shares of load, computed here from
-    the same load model that prices concrete sessions. One number, one owner."""
+async def test_no_season_means_no_shapes_and_the_model_is_never_asked_for_them(
+    db, monkeypatch
+):
+    """The weeks beyond the concrete ones are written by code from a season's
+    phases (#1064). With no season there are no phases to write them from, so the
+    plan holds only the weeks the model wrote, and the tool offers no place to
+    type a sketch."""
     user = _seed_user(db)
     _seed_history(db, user)
     plan = store.create_drafting_plan(db, user.id)
-    answer = _good_plan()
-    answer["sketch_weeks"] = [
-        {
-            "week_start": NEXT_MON.isoformat(),
-            "phase": "build",
-            "target_running_distance_m": 40000,
-            "sessions_by_discipline": {"run": 4, "strength": 2},
-            "intent_counts": {"easy": 3, "long": 1, "strength": 2},
-        }
-    ]
-    _inject(monkeypatch, _FakeClient([answer]))
+    client = _FakeClient([_good_plan()])
+    _inject(monkeypatch, client)
 
     outcome = await draft_plan(db, user, plan, today=TODAY)
 
     assert outcome.ok is True
     db.refresh(plan)
-    # Concrete weeks also leave a phase-only marker (#1046); this test is about
-    # the sketched week's shares, so the markers are set aside.
-    shapes = [s for s in store.plan_week_shapes(plan) if not store.is_phase_only(s)]
-    assert [shape.week_start for shape in shapes] == [NEXT_MON]
-    shape = shapes[0]
-
-    assert shape.phase == "build"
-    assert set(shape.discipline_mix) == {"run", "strength"}
-    assert sum(shape.discipline_mix.values()) == pytest.approx(1.0, abs=0.001)
-    assert set(shape.intent_mix) == {"easy", "long", "strength"}
-    assert sum(shape.intent_mix.values()) == pytest.approx(1.0, abs=0.001)
-    # Running is priced from the DISTANCE the week names (40 km at the seeded
-    # per-metre median), not from a session count; the gym sessions still price
-    # at 2 x the per-session median (45).
-    assert shape.target_effort_score == pytest.approx(150.0 + 2 * 45.0)
-    assert shape.discipline_mix["run"] == pytest.approx(150 / 240, abs=0.001)
-    # No session rows for a week that was only sketched.
-    assert (
-        db.query(PlannedSession)
-        .filter(PlannedSession.window_start >= NEXT_MON)
-        .count()
-        == 0
-    )
-    assert plan.horizon_end == NEXT_MON + timedelta(days=6)
-
-
-async def test_a_sketched_weeks_load_follows_the_running_distance_it_names(db, monkeypatch):
-    """A sketched week's bar tracks the running target it names.
-
-    It did not: `_shape_for` priced every discipline from the per-SESSION median,
-    passing neither a duration nor a distance, so "4 runs, 20 km" and "4 runs,
-    40 km" stored the same load and drew the same horizon bar. The runner reads
-    that bar as the ramp, so the one thing the horizon exists to show was the one
-    thing it could not. The running share is now priced per metre.
-    """
-    user = _seed_user(db)
-    _seed_history(db, user)
-
-    async def _shape_for_target(distance_m: float):
-        plan = store.create_drafting_plan(db, user.id)
-        answer = _good_plan()
-        answer["sketch_weeks"] = [
-            {
-                "week_start": NEXT_MON.isoformat(),
-                "sessions_by_discipline": {"run": 4},
-                "target_running_distance_m": distance_m,
-            }
-        ]
-        _inject(monkeypatch, _FakeClient([answer]))
-        await draft_plan(db, user, plan, today=TODAY)
-        db.refresh(plan)
-        return store.plan_week_shapes(plan)[0]
-
-    modest = await _shape_for_target(20000)
-    big = await _shape_for_target(40000)
-
-    # Twice the running distance is twice the running load. Sizing a sketch by
-    # session count alone made "4 runs, 20 km" and "4 runs, 40 km" draw the same
-    # horizon bar, which hid the ramp the horizon exists to show.
-    assert modest.target_running_distance_m != big.target_running_distance_m
-    assert big.target_effort_score == pytest.approx(2 * modest.target_effort_score)
-    assert modest.target_effort_score == pytest.approx(75.0)
-
-
-async def test_a_sketched_week_for_a_discipline_the_runner_has_never_trained_abstains(
-    db, monkeypatch
-):
-    """No history, no price — and therefore no share, rather than a made-up one."""
-    user = _seed_user(db)
-    _seed_history(db, user)
-    plan = store.create_drafting_plan(db, user.id)
-    answer = _good_plan()
-    answer["sketch_weeks"] = [
-        {
-            "week_start": NEXT_MON.isoformat(),
-            "sessions_by_discipline": {"run": 4, "row": 2},
-            "intent_counts": {"easy": 4},
-        }
-    ]
-    _inject(monkeypatch, _FakeClient([answer]))
-
-    await draft_plan(db, user, plan, today=TODAY)
-
-    db.refresh(plan)
-    shape = store.plan_week_shapes(plan)[0]
-    assert set(shape.discipline_mix) == {"run"}
-    assert shape.discipline_mix["run"] == pytest.approx(1.0)
+    assert [s for s in store.plan_week_shapes(plan) if not store.is_phase_only(s)] == []
+    assert "sketch_weeks" not in client.calls[0]["tool"]["input_schema"]["properties"]
+    assert plan.season_id is None
+    assert plan.draft_log["model"] == FAKE_MODEL
 
 
 # --- one retry, with the failures fed back ---------------------------------
@@ -907,15 +836,14 @@ async def test_the_context_tells_the_coach_to_build_backwards_from_the_race(db):
     )
     db.commit()
 
-    context = build_draft_context(db, user, today=TODAY, weeks=12)
+    context = build_draft_context(db, user, today=TODAY)
 
     assert "Autumn Half" in context
     assert "21.1 km" in context
     assert "7 weeks away" in context
     # The race's own week, so phase placement is not date arithmetic done in prose.
     assert (TODAY + timedelta(days=42)).isoformat() in context
-    assert "The block is built for Autumn Half" in context
-    assert "built BACKWARDS from its date" in _SYSTEM_PROMPT
+    assert "THE SEASON AND THE WEEKS" in _SYSTEM_PROMPT
 
 
 async def test_a_runner_with_no_race_is_planned_for_progression_not_a_guess(db):
@@ -925,25 +853,12 @@ async def test_a_runner_with_no_race_is_planned_for_progression_not_a_guess(db):
     user = _seed_user(db)
     _seed_history(db, user)
 
-    context = build_draft_context(db, user, today=TODAY, weeks=12)
+    context = build_draft_context(db, user, today=TODAY)
 
     assert "No goal stated" in context
     assert "Do not invent a race" in __import__(
         "app.services.schedule.draft", fromlist=["_SYSTEM_PROMPT"]
     )._SYSTEM_PROMPT
-
-
-async def test_the_coach_is_told_not_to_stop_dead_at_the_race():
-    """A horizon that ends at the race leaves blank weeks behind it.
-
-    The runner is looking at three months; if the block simply stops on race day
-    the rest of the chart is a cliff. The weeks after are recovery and should be
-    sketched as such.
-    """
-    from app.services.schedule.draft import _SYSTEM_PROMPT
-
-    assert "do not stop dead at it" in _SYSTEM_PROMPT
-    assert "recovery" in _SYSTEM_PROMPT
 
 
 # --- the volume ceiling is stated, not only enforced (#859) -----------------
@@ -980,10 +895,10 @@ async def test_the_context_states_the_volume_ceiling_the_gate_will_enforce(db):
     _seed_history(db, user)
     _norm, concrete, sketched = _ceiling_km(db, user)
 
-    context = build_draft_context(db, user, today=TODAY, weeks=12)
+    context = build_draft_context(db, user, today=TODAY)
 
     assert f"above {concrete / 1000:.0f} km of committed running" in context
-    assert f"may reach {sketched / 1000:.0f} km" in context
+    assert "sketched week" not in context
     # Framed as a rejection threshold, never as the number to aim at: handed a
     # bare figure well above their typical week, a model reads it as the target.
     assert "That is a limit, not a target" in context
@@ -997,7 +912,7 @@ async def test_a_runner_with_no_norm_is_given_no_ceiling_at_all(db):
 
     user = _seed_user(db)  # no history at all
 
-    context = build_draft_context(db, user, today=TODAY, weeks=12)
+    context = build_draft_context(db, user, today=TODAY)
 
     assert "is rejected outright" not in context
     assert "limit, not a target" not in context
@@ -1026,7 +941,7 @@ async def test_a_runner_who_trains_but_does_not_run_is_given_no_ceiling_either(d
     )
     assert running_norm_weekly_m(facts, TODAY) is None  # the gate abstains
 
-    context = build_draft_context(db, user, today=TODAY, weeks=12)
+    context = build_draft_context(db, user, today=TODAY)
 
     assert "Typical week, ALL activities" in context  # the section IS written
     assert "RUNNING ONLY" not in context
@@ -1056,7 +971,7 @@ async def test_the_ceiling_the_coach_is_told_is_the_ceiling_that_rejects_it(db):
 
     user = _seed_user(db)
     _seed_history(db, user)
-    context = build_draft_context(db, user, today=TODAY, weeks=12)
+    context = build_draft_context(db, user, today=TODAY)
     stated_km = float(
         re.search(r"above ([\d.]+) km of committed running", context).group(1)
     )
@@ -1085,8 +1000,7 @@ async def test_the_ceiling_the_coach_is_told_is_the_ceiling_that_rejects_it(db):
                             ],
                         }
                     ],
-                    "sketch_weeks": [],
-                }
+                            }
             )
         )
 
@@ -1131,7 +1045,6 @@ def _over_ceiling_plan() -> dict:
                 ],
             }
         ],
-        "sketch_weeks": [],
     }
 
 
@@ -1189,7 +1102,6 @@ async def test_a_rejection_that_is_not_about_volume_stays_unclassified(
                 ],
             }
         ],
-        "sketch_weeks": [],
     }
     user = _seed_user(db)
     _seed_history(db, user)

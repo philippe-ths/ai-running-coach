@@ -25,12 +25,14 @@ Three decisions worth knowing before reading
    a destination rather than an empty state waiting to be filled.
 """
 
+import json
 import logging
 import math
 import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, List, Optional
+from types import SimpleNamespace
+from typing import Any, List, Optional, Sequence
 
 from sqlalchemy.orm import Session
 
@@ -38,6 +40,7 @@ from app.core.config import settings
 from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
 from app.models.user import User
+from app.schemas.season import DraftLog, SeasonPlan
 from app.services.activity_facts import query_facts
 from app.services.coach import turn
 from app.services.coach.retrieval import fetch_corpus
@@ -45,14 +48,22 @@ from app.services.coach.stance import resolve_stance
 from app.services.coach.volume import build_training_volume
 from app.services.readiness import build_readiness
 from app.services.schedule import goals
-from app.services.schedule import store
+from app.services.schedule import season_store, store
 from app.services.schedule.draft_contract import (
     MAX_CONCRETE_WEEKS,
+    MAX_SESSIONS_PER_WEEK,
     RECORD_TRAINING_PLAN_TOOL,
     DraftedPlan,
     normalise,
 )
 from app.services.schedule.effort import build_load_model, estimate_effort
+from app.services.schedule.frames import (
+    DATED_KINDS,
+    build_frames,
+    describe_frame,
+    describe_season,
+    phase_label,
+)
 from app.services.schedule.norms import (
     running_norm_weekly_m,
     weekly_hours_norm_s,
@@ -64,6 +75,9 @@ from app.services.schedule.plan_validator import (
     validate_drafted_plan,
     volume_ceilings,
 )
+from app.services.schedule.repair import repair_weeks
+from app.services.schedule.run_log import attempt_cost
+from app.services.schedule.shapes import write_shapes
 from app.services.weeks import resolve_week_start, week_start
 
 logger = logging.getLogger(__name__)
@@ -184,29 +198,21 @@ around the running: for a runner who walks six times a week, a plan with one \
 walk is a plan for someone else. Keep it easy where it is easy, and keep it off \
 the days that need fresh legs.
 
-Give CONCRETE sessions for the near weeks and SHAPE ONLY for the weeks beyond. \
-Nobody knows what week nine looks like yet, and pretending to is how a plan stops \
-being believable. The context below says how many weeks get real sessions; when a \
-race falls inside the horizon that is every week up to it, because those are the \
-weeks that decide the race and the runner will train every one of them.
+# THE SEASON AND THE WEEKS
 
-A shape is what those later weeks get WRITTEN FROM when the runner reaches them, \
-so say enough that the build you intend survives being read back: the phase, the \
-running distance, the walking distance and the week's hours, how far the long run \
-goes, and what the week's hard session is for. A weekly total on its own cannot tell anyone whether the week was built \
-around a 20 km long run or four 9 km ones, and the long run is usually the thing \
-the runner agreed to.
+You have already planned this runner's season: your view of every goal, the \
+dates you recommended, any challenge rule, and the phases with their targets. \
+They are in the context below under THE SEASON, and they are your own decisions, \
+so the weeks sit inside them. Under THE WEEKS each week to write is stated plainly: \
+its phase and targets, the dated goals it must hold, the challenge threshold it must \
+reach, the walking it must keep, and the limits it must stay under. Write real \
+sessions for exactly those weeks. Every statement under a week is checked after you \
+answer, and a week that misses one is sent back to you with the exact gap.
 
-If they have a goal race, the block is built BACKWARDS from its date; where they \
-only know roughly when ("around March"), from the start of that window. Work out \
-where each week sits relative to the race and let that decide the week's job: the \
-peak lands far enough out to absorb it, the taper runs into the race, and the \
-phase names say which block a week belongs to. A plan that ignores the date it is \
-aimed at is a volume curve, not a plan.
-
-If the race falls inside the horizon, do not stop dead at it. Sketch the weeks \
-after it too — easy, short, and honest that they are recovery — so the runner can \
-see there is training on the other side rather than a cliff.
+Where a week is a challenge week, building the hours is the job of that week, race \
+week included: easy sessions of the activity that counts most towards it for THIS \
+runner (the context gives their shares) are how a race week still holds. Where a \
+goal has a day, pin the goal to that day and plan the days around it.
 
 """
     + PLACING_AND_COMMITTING
@@ -252,8 +258,8 @@ confirmed they want it in their schedule. The transcript is below.
 
 Your job now is to TRANSCRIBE what you both agreed into the tool's structure — \
 not to plan it again. Where the conversation named a session, write that session. \
-Where it named a week's shape, write that shape. Keep the phases, the progression \
-and the race the conversation was built around.
+Where it named a week's shape, write the sessions that make that shape. Keep the \
+phases, the progression and the race the conversation was built around.
 
 Fill the gaps the conversation left, and only those. A gap is anything it did \
 not discuss: which day the Tuesday easy run falls on, and every part of the \
@@ -264,7 +270,7 @@ up to. A loose window still lives inside ONE week: widen it within the week, \
 never across the boundary into the next. "The weekend" for a Monday-start runner \
 is Saturday to Sunday; Sunday to Monday is two different weeks.
 
-If the conversation covered fewer weeks than the horizon asks for, sketch the \
+If the conversation covered fewer weeks than THE WEEKS lists, write the \
 remainder in the same direction rather than stopping short or changing course. If \
 it settled something you would not have chosen, write what was settled: they \
 agreed to that plan, not to your second thoughts about it."""
@@ -363,9 +369,7 @@ def build_draft_context(
     user: User,
     *,
     today: date,
-    weeks: int,
     facts: Optional[List[Any]] = None,
-    state_horizon: bool = True,
 ) -> str:
     """What a coach needs to write this plan — and nothing it does not.
 
@@ -396,30 +400,12 @@ one. The runner's week "
         f"starts on {'Sunday' if starts_on == 6 else 'Monday'}."
     )
     races = store.list_goal_races(db, user.id, on_or_after=today)
-    # An AMENDMENT states its own window and gets no horizon instruction (#981).
-    # It reuses this builder for the runner, their training and their ceiling,
-    # which are the same facts either way, but "give concrete sessions for the
-    # first N weeks" is an instruction about writing a whole plan and would sit
-    # beside the window contradicting it.
-    if state_horizon:
-        concrete = concrete_weeks_for(today, weeks, races, starts_on=starts_on)
-        if concrete >= weeks:
-            parts.append(
-                f"HORIZON: {weeks} weeks, and the runner's race falls inside it. "
-                f"Give concrete sessions for ALL {weeks} weeks."
-            )
-        else:
-            parts.append(
-                f"HORIZON: {weeks} weeks. Give concrete sessions for the first "
-                f"{concrete} weeks and shape only beyond that."
-            )
 
     parts.append("\n## THE RUNNER")
     parts.extend(_profile_lines(user, getattr(user, "profile", None)))
 
     if races:
         parts.append("\n## THEIR GOALS")
-        target = goals.target_goal(races)
         for race in races:
             suffix = (
                 f" (the week beginning {week_start(race.race_date, starts_on).isoformat()})"
@@ -427,16 +413,6 @@ one. The runner's week "
                 else ""
             )
             parts.append(goals.prompt_line(race, today, suffix=suffix))
-        if target is not None:
-            parts.append(
-                f"- The block is built for {target.name}. A goal with no date is a "
-                "direction, not a deadline."
-            )
-        else:
-            parts.append(
-                "- None of these has a date, so they are directions, not deadlines: "
-                "plan for progression towards them."
-            )
     else:
         parts.append("\n## THEIR GOALS\nNo goal stated. Plan for general progression.")
 
@@ -479,13 +455,10 @@ one. The runner's week "
             # Said from `hours_ceilings`, the function the gate calls, so the
             # limit stated is the limit enforced (the #859 rule for km below).
             # Rounded DOWN to a tenth: a week under the stated limit must pass.
-            concrete_h, sketched_h = (
-                math.floor(limit / 360) / 10 for limit in hours_ceilings(total_h * 3600)
-            )
+            concrete_h = math.floor(hours_ceilings(total_h * 3600)[0] / 360) / 10
             parts.append(
-                f"- A concrete week above {concrete_h:.1f} h of committed time, every "
-                f"activity together, is rejected outright; a sketched week may reach "
-                f"{sketched_h:.1f} h. A limit, not a target."
+                f"- A week above {concrete_h:.1f} h of committed time, every "
+                f"activity together, is rejected outright. A limit, not a target."
             )
         # The number that actually bounds a running plan, given explicitly. The
         # all-activity figure above is the one a coach is most likely to misread
@@ -511,12 +484,11 @@ one. The runner's week "
             # what it is, and a bare "38 km" beside a typical 19 reads to a model
             # as the number to aim at — the North Star's second question.
             parts.append(
-                f"- A concrete week above {ceilings[0] / 1000:.0f} km of committed "
+                f"- A week above {ceilings[0] / 1000:.0f} km of committed "
                 f"running is rejected outright as a jump this runner's history "
                 f"cannot support. That is a limit, not a target — most weeks "
                 f"should sit near their typical, and a build climbs towards the "
-                f"limit rather than starting at it. A sketched week further out "
-                f"may reach {ceilings[1] / 1000:.0f} km."
+                f"limit rather than starting at it."
             )
     else:
         parts.append(
@@ -661,6 +633,63 @@ def _memory_lines(db: Session, user: User) -> List[str]:
     return lines[:16]
 
 
+def _draft_max_tokens(weeks: int) -> int:
+    """Output room for N concrete weeks plus the model's thinking: about 2500 a
+    week and 1500 over, clamped. Undersizing is not a soft failure, since a stop
+    on `max_tokens` raises by design rather than returning half a plan."""
+    return max(6000, min(20000, 2500 * weeks + 1500))
+
+
+def _season_for(db: Session, user: User, season: Any) -> tuple:
+    """(season row or None, its coerced plan or None). `season` may be the row, a
+    coerced plan (tests), or None to read the runner's active season."""
+    if isinstance(season, SeasonPlan):
+        return None, season
+    row = season if season is not None else season_store.active_season(db, user.id)
+    if row is None:
+        return None, None
+    return row, season_store.season_plan(row)
+
+
+def _dated_stand_ins(season_plan: Optional[SeasonPlan], races: List[Any]) -> List[Any]:
+    """Goal-like objects carrying the date a week must hold, for
+    `concrete_weeks_for`: the season's recommended dates when there is a season (a
+    day the coach chose is a day the plan holds), else the runner's stated ones."""
+    if season_plan is None:
+        return races
+    return [
+        SimpleNamespace(race_date=view.date)
+        for view in season_plan.goals
+        if view.kind in DATED_KINDS and view.date is not None
+    ]
+
+
+def _retry_message(context: str, failures: List[str], previous: Optional[dict]) -> str:
+    out = [context, "\n## YOUR PREVIOUS ATTEMPT WAS REJECTED"]
+    out.extend(f"- {failure}" for failure in failures)
+    if previous is not None:
+        out.append(
+            "\nThe attempt, for reference:\n"
+            + json.dumps(previous, separators=(",", ":"), default=str)
+        )
+    out.append("\nWrite the plan again, fixing every one of these and keeping what was sound.")
+    return "\n".join(out)
+
+
+def _repair(drafted: DraftedPlan, check, frames_by_week: dict) -> tuple:
+    """Close the numeric shortfalls the check found, week by week."""
+    weeks, notes = repair_weeks(
+        drafted.weeks, check, frames_by_week, rules=drafted.rules
+    )
+    return drafted.model_copy(update={"weeks": weeks}), notes
+
+
+def _first_try_passed(check, expected: List[date]) -> int:
+    if check.plan_level_failure:
+        return 0
+    return len([week for week in expected if week not in check.failed_weeks])
+
+
 async def draft_plan(
     db: Session,
     user: User,
@@ -668,14 +697,23 @@ async def draft_plan(
     *,
     today: Optional[date] = None,
     thread_id: Optional[str] = None,
+    season: Any = None,
+    client: Any = None,
 ) -> DraftOutcome:
-    """Generate, validate and store one plan. One retry, then fail visibly.
+    """Generate, validate, repair and store one plan. One retry, then fail visibly.
+
+    The weeks are written INSIDE the runner's active season (`season`, or the
+    active one): the model writes real sessions for the weeks it is given a frame
+    for, code writes every later week as a shape, and one check holds each written
+    week to every goal at once. A numeric shortfall (the challenge, the usual
+    walking) that survives the retry is closed by `repair` where the ceilings
+    allow and otherwise stored as a shortfall and shown; any other failure fails
+    the draft as it always has.
 
     `thread_id` (#856) names a conversation in which the runner and the coach
-    already settled this block. It changes the TASK — transcribe what was agreed
-    rather than plan afresh — and nothing else: the same forced tool, the same
-    coercion, the same coherence gate, the same all-or-nothing store. A plan that
-    reaches the schedule through a conversation is not a plan held to a lower bar.
+    already settled this block. It changes the TASK, transcribe what was agreed
+    rather than plan afresh, and nothing else: the same forced tool, the same
+    coercion, the same coherence gate, the same all-or-nothing store.
     """
     today = today or date.today()
     weeks = settings.SCHEDULE_HORIZON_WEEKS
@@ -689,20 +727,49 @@ async def draft_plan(
         )
 
     facts = fetch_draft_facts(db, user, today)
-    context = build_draft_context(db, user, today=today, weeks=weeks, facts=facts)
+    season_row, season_plan = _season_for(db, user, season)
+    races = store.list_goal_races(db, user.id, on_or_after=today)
+    all_goals = store.list_goal_races(db, user.id)
+    frames = build_frames(
+        season=season_plan, goals=all_goals, facts=facts,
+        starts_on=starts_on, today=today, horizon_weeks=weeks,
+    )
+    concrete = min(
+        concrete_weeks_for(
+            today, weeks, _dated_stand_ins(season_plan, races), starts_on=starts_on
+        ),
+        len(frames),
+    )
+    concrete_frames = frames[:concrete]
+    expected = [frame.week_start for frame in concrete_frames]
+    frames_by_week = {frame.week_start: frame for frame in concrete_frames}
+
+    context = build_draft_context(db, user, today=today, facts=facts)
+    if season_plan is not None:
+        context += "\n\n## THE SEASON\n" + "\n".join(describe_season(season_plan, all_goals))
+    context += (
+        "\n\n## THE WEEKS\nWrite real sessions for exactly these weeks, one entry "
+        "each, in order. What is stated under a week is what that week is checked "
+        f"against. A week holds at most {MAX_SESSIONS_PER_WEEK} sessions, so reach "
+        "a threshold with longer sessions rather than more of them.\n\n"
+        + "\n\n".join("\n".join(describe_frame(frame)) for frame in concrete_frames)
+    )
     system = _SYSTEM_PROMPT
     transcript = _conversation_block(db, user, thread_id)
     if transcript:
         system = _SYSTEM_PROMPT + _FROM_CONVERSATION
         context = context + transcript
-    client = turn.build_client(turn.TurnKind.SCHEDULE, user.id)
+    client = client or turn.build_client(turn.TurnKind.SCHEDULE, user.id)
 
     load_model = build_load_model(facts, today)
     norm_running = running_norm_weekly_m(facts, today)
     # The goal race, for the volume ceiling only. A race is the runner's own
     # fixed commitment, not a training decision the gate has a view on.
-    races = store.list_goal_races(db, user.id, on_or_after=today)
     race_arg = goals.validator_race(races)
+    norm_hours = weekly_hours_norm_s(facts, today)
+
+    log = DraftLog(model=client.model, checked=len(expected))
+    max_tokens = _draft_max_tokens(len(expected))
 
     # Two budgets, deliberately separate. A transport blip is not the coach's
     # fault, so it must not consume the one chance to REWRITE a rejected plan —
@@ -711,26 +778,50 @@ async def draft_plan(
     # a provider's exception text back would put its internals into model input
     # to no purpose, since the coach cannot act on them.
     failures: List[str] = []
+    previous: Optional[dict] = None
     failure_kind = store.FAILURE_UNKNOWN
     rewrites_left = 2
     transport_retries_left = 1
 
-    while rewrites_left > 0:
-        user_message = context
-        if failures:
-            user_message = (
-                f"{context}\n\n## YOUR PREVIOUS ATTEMPT WAS REJECTED\n"
-                + "\n".join(f"- {failure}" for failure in failures)
-                + "\n\nWrite the plan again, fixing every one of these."
-            )
+    def validate(candidate: DraftedPlan):
+        return validate_drafted_plan(
+            candidate,
+            today=today,
+            starts_on=starts_on,
+            norm_weekly_running_m=norm_running,
+            horizon_weeks=weeks,
+            race=race_arg,
+            norm_weekly_s=norm_hours,
+            frames=concrete_frames,
+            expected_weeks=expected,
+        )
 
+    def kind_of(check) -> str:
+        # Structural, not a substring match on the gate's prose: the check
+        # reports WHICH kind of rejection fired, so improving the wording of a
+        # failure can never silently change what the runner is told.
+        return (
+            store.FAILURE_TOO_BIG_A_JUMP
+            if VOLUME_CEILING in check.codes
+            else store.FAILURE_UNKNOWN
+        )
+
+    while rewrites_left > 0:
+        user_message = context if not failures else _retry_message(context, failures, previous)
         try:
-            raw = await client.generate_structured(
+            raw, usage = await client.generate_structured_reasoned(
                 system=system,
                 user=user_message,
                 tool=RECORD_TRAINING_PLAN_TOOL,
-                max_tokens=8192,
+                max_tokens=max_tokens,
+                effort="high",
+                web_search_max_uses=0,
             )
+        except (TypeError, AttributeError):
+            # A bad kwarg or a missing method is a bug in this code, not a network
+            # that misbehaved; the catch below would report it to the runner as
+            # "could not be reached" after retries that reached nothing.
+            raise
         except Exception as exc:  # transport, timeout, refusal
             logger.warning("schedule draft: generation call failed: %s", exc)
             if transport_retries_left > 0:
@@ -743,39 +834,57 @@ async def draft_plan(
             )
 
         rewrites_left -= 1
+        attempt = attempt_cost(client.model, usage)
+        log.attempts.append(attempt)
+        first_attempt = len(log.attempts) == 1
 
         try:
             drafted = DraftedPlan.model_validate(normalise(raw))
         except Exception as exc:
             logger.warning("schedule draft: off-contract plan: %s", exc)
             failures = [f"the plan was not the shape the tool requires: {exc}"]
+            attempt.failures = list(failures)
+            previous = None
             failure_kind = store.FAILURE_UNKNOWN
             continue
 
-        check = validate_drafted_plan(
-            drafted,
-            today=today,
-            starts_on=starts_on,
-            norm_weekly_running_m=norm_running,
-            horizon_weeks=weeks,
-            race=race_arg,
-            norm_weekly_s=weekly_hours_norm_s(facts, today),
-        )
-        if not check.ok:
-            logger.info("schedule draft: rejected: %s", check.failures)
-            failures = check.failures
-            # Structural, not a substring match on the gate's prose: the check
-            # reports WHICH kind of rejection fired, so improving the wording of
-            # a failure can never silently change what the runner is told.
-            failure_kind = (
-                store.FAILURE_TOO_BIG_A_JUMP
-                if VOLUME_CEILING in check.codes
-                else store.FAILURE_UNKNOWN
+        check = validate(drafted)
+        if first_attempt:
+            log.first_try_passed = _first_try_passed(check, expected)
+        if check.ok:
+            _persist(
+                db, user, plan, drafted, load_model, model_id=client.model,
+                season_row=season_row, frames=frames, concrete=set(expected), log=log,
             )
-            continue
+            return DraftOutcome(ok=True, plan_id=plan.id, summary=drafted.summary)
 
-        _persist(db, user, plan, drafted, load_model, model_id=client.model)
-        return DraftOutcome(ok=True, plan_id=plan.id, summary=drafted.summary)
+        logger.info("schedule draft: rejected: %s", check.failures)
+        attempt.failures = list(check.failures)
+
+        if rewrites_left == 0 and check.only_numeric:
+            # The retry is spent and the plan is coherent, just short of a number.
+            # Close what the ceilings allow in code, then store what is left as a
+            # shortfall rather than failing a plan whose only fault is arithmetic.
+            repaired, notes = _repair(drafted, check, frames_by_week)
+            final = validate(repaired)
+            if final.ok or final.only_numeric:
+                log.repairs = notes
+                log.shortfalls = [f.shortfall for f in final.week_failures if f.shortfall]
+                logger.warning(
+                    "schedule draft: stored with %d repair(s), %d shortfall(s)",
+                    len(notes), len(log.shortfalls),
+                )
+                _persist(
+                    db, user, plan, repaired, load_model, model_id=client.model,
+                    season_row=season_row, frames=frames, concrete=set(expected), log=log,
+                )
+                return DraftOutcome(ok=True, plan_id=plan.id, summary=repaired.summary)
+            check = final
+            attempt.failures = list(final.failures)
+
+        failures = check.failures
+        previous = drafted.model_dump(mode="json")
+        failure_kind = kind_of(check)
 
     return DraftOutcome(ok=False, failures=failures, failure_kind=failure_kind)
 
@@ -788,28 +897,49 @@ def _persist(
     load_model,
     *,
     model_id: str,
+    season_row: Any = None,
+    frames: Sequence[Any] = (),
+    concrete: Optional[set] = None,
+    log: Optional[DraftLog] = None,
 ) -> None:
-    """Write the accepted plan and make it the runner's active one."""
-    plan.rules = [rule.model_dump(mode="json") for rule in drafted.rules]
-    plan.week_shapes = [
-        shape
-        for shape in (
-            _shape_for(week, load_model) for week in drafted.sketch_weeks
+    """Write the accepted plan and make it the runner's active one.
+
+    The concrete weeks are the model's sessions (repaired where needed); every
+    later week is a shape written by code from the season. A concrete week's phase
+    is the frame's, so the horizon groups the two halves under one name.
+    """
+    log = log or DraftLog(model=model_id)
+    frames_by_week = {frame.week_start: frame for frame in frames}
+    concrete = concrete if concrete is not None else {w.week_start for w in drafted.weeks}
+    weeks = [
+        week.model_copy(
+            update={
+                "phase": (
+                    phase_label(frames_by_week[week.week_start].phase)
+                    if week.week_start in frames_by_week
+                    else None
+                )
+                or week.phase
+            }
         )
-        if shape is not None
-    ] + store.concrete_week_phases(drafted.weeks)
-    horizon_ends = [w.week_start for w in drafted.weeks] + [
-        s.week_start for s in drafted.sketch_weeks
+        for week in drafted.weeks
     ]
-    plan.horizon_end = (
-        max(horizon_ends) + timedelta(days=6) if horizon_ends else None
-    )
+    shapes, shape_shortfalls = write_shapes(frames, load_model, concrete)
+    log.shortfalls = list(log.shortfalls) + shape_shortfalls
+
+    plan.rules = [rule.model_dump(mode="json") for rule in drafted.rules]
+    plan.week_shapes = shapes + store.concrete_week_phases(weeks)
+    reach = [w.week_start for w in weeks] + [s["week_start"] for s in shapes]
+    reach = [d if isinstance(d, date) else date.fromisoformat(d) for d in reach]
+    plan.horizon_end = max(reach) + timedelta(days=6) if reach else None
     # The model the draft ACTUALLY ran on, taken from the client rather than
     # re-read from config — the provenance gap `service._persist_report` still
     # carries and that this path has no reason to inherit.
     plan.model_id = model_id
+    plan.season_id = season_row.id if season_row is not None else None
+    plan.draft_log = log.model_dump(mode="json")
 
-    for week in drafted.weeks:
+    for week in weeks:
         for session in week.sessions:
             db.add(
                 PlannedSession(
@@ -837,75 +967,6 @@ def _persist(
     store.activate_plan(db, plan)
 
 
-def _shape_for(sketch, load_model) -> Optional[dict]:
-    """A sketched week as the stored `PlannedWeekShape`.
-
-    The model gives counts; the mixes are shares of load, so they are computed
-    here from the same load model that prices concrete sessions. One number, one
-    owner — a mix can never contradict the total it is a mix of.
-    """
-    counts = sketch.sessions_by_discipline or {}
-    by_discipline = {}
-    for discipline, count in counts.items():
-        if count <= 0:
-            continue
-        if discipline == "run" and sketch.target_running_distance_m:
-            # Price the running share off the DISTANCE the week names, not off a
-            # per-session median. Sizing it by session count alone made "4 runs,
-            # 20 km" and "4 runs, 40 km" store the same load and therefore draw
-            # the same horizon bar — which would make the ramp, the one thing the
-            # horizon exists to show, invisible.
-            by_discipline[discipline] = (
-                estimate_effort(
-                    load_model,
-                    discipline,
-                    duration_s=None,
-                    distance_m=sketch.target_running_distance_m,
-                )
-                or 0.0
-            )
-            continue
-        per_session = (
-            estimate_effort(load_model, discipline, duration_s=None, distance_m=None)
-            or 0.0
-        )
-        by_discipline[discipline] = per_session * count
-    total = sum(by_discipline.values())
-    discipline_mix = (
-        {k: round(v / total, 4) for k, v in by_discipline.items() if v > 0}
-        if total > 0
-        else {}
-    )
-
-    intent_total = sum((sketch.intent_counts or {}).values())
-    intent_mix = (
-        {
-            intent: round(count / intent_total, 4)
-            for intent, count in sketch.intent_counts.items()
-            if count > 0
-        }
-        if intent_total > 0
-        else {}
-    )
-
-    return {
-        "week_start": sketch.week_start.isoformat(),
-        "phase": sketch.phase,
-        "target_running_distance_m": sketch.target_running_distance_m,
-        "target_effort_score": round(total, 1) if total > 0 else None,
-        # Stored as the coach stated them (#980). Unlike the mixes above these
-        # are not arithmetic the app can derive: a week's long run and the job
-        # of its hard session are coaching decisions, and the whole reason they
-        # are here is that nothing else in a shape records them.
-        "long_run_distance_m": sketch.long_run_distance_m,
-        "quality_focus": sketch.quality_focus,
-        "target_duration_s": sketch.target_duration_s,
-        "target_walking_distance_m": sketch.target_walking_distance_m,
-        "discipline_mix": discipline_mix,
-        "intent_mix": intent_mix,
-    }
-
-
 def enqueue_draft(user_id, plan_id, thread_id=None, description=None) -> None:
     """Enqueue the drafting job, decoupled from the request.
 
@@ -927,6 +988,9 @@ def enqueue_draft(user_id, plan_id, thread_id=None, description=None) -> None:
             str(plan_id),
             str(thread_id) if thread_id else None,
             description or None,
+            # One job may write the season and then the weeks, so it gets its own
+            # ceiling; the stale-draft rule is derived from the same setting.
+            job_timeout=settings.SCHEDULE_JOB_TIMEOUT_SECONDS,
         )
     except Exception:  # noqa: BLE001 — enqueue is fire-and-forget
         logger.exception("failed to enqueue schedule draft for plan %s", plan_id)

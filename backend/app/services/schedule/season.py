@@ -29,8 +29,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.season import Season
 from app.models.user import User
-from app.schemas.season import DraftAttempt, DraftLog, SeasonPlan
-from app.services.coach import budget, turn
+from app.schemas.season import DraftLog, SeasonPlan
+from app.services.coach import turn
 from app.services.coach.retrieval import fetch_corpus
 from app.services.coach.stance import resolve_stance
 from app.services.readiness import build_readiness
@@ -50,6 +50,7 @@ from app.services.schedule.norms import (
 from app.services.schedule.plan_validator import (
     MAX_WEEKLY_MULTIPLE,
 )
+from app.services.schedule.run_log import attempt_cost
 from app.services.schedule.season_check import check_season
 from app.services.schedule.season_prompt import (
     FROM_CONVERSATION,
@@ -300,22 +301,6 @@ def _clean(payload: Any) -> Any:
     return payload
 
 
-def _attempt_cost(model: str, usage: Any) -> DraftAttempt:
-    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-    searches = int(getattr(usage, "web_search_requests", 0) or 0)
-    return DraftAttempt(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cost_usd=round(
-            budget.cost_usd(
-                model, input_tokens, output_tokens, web_search_requests=searches
-            ),
-            4,
-        ),
-    )
-
-
 def _retry_message(context: str, failures: List[str], previous: Optional[dict]) -> str:
     out = [context, "\n## YOUR PREVIOUS ATTEMPT WAS REJECTED"]
     out.extend(f"- {failure}" for failure in failures)
@@ -391,7 +376,7 @@ async def generate_season(
             )
 
         rewrites_left -= 1
-        attempt = _attempt_cost(client.model, usage)
+        attempt = attempt_cost(client.model, usage)
         log.attempts.append(attempt)
 
         try:

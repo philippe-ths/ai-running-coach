@@ -50,6 +50,7 @@ from app.services.schedule.horizon import (
     DEFAULT_HORIZON_WEEKS,
     MAX_HORIZON_WEEKS,
     build_horizon,
+    planned_by_challenge_week,
 )
 from app.services.schedule.week import build_week
 from app.services.weeks import resolve_week_start
@@ -131,6 +132,11 @@ _DRAFT_FAILURE_MESSAGES = {
         "Nothing has changed — your runs still sync and your reports still "
         "arrive. Ask again once the allowance resets."
     ),
+    store.FAILURE_SEASON: (
+        "Your coach could not settle a season that held together, so no plan was "
+        "written. Nothing has changed: ask again, or talk it through in a "
+        "conversation."
+    ),
     # The fallback, and the sentence every failure used to get. No "just now"
     # (#879). This is read at the moment of failure and for as long afterwards as
     # the runner has not asked for another plan, which can be days: only the
@@ -144,7 +150,7 @@ _DRAFT_FAILURE_MESSAGES = {
 }
 
 _DRAFT_MESSAGES = {
-    "drafting": "Your coach is writing your plan. This usually takes a minute.",
+    "drafting": "Your coach is planning your season and writing your weeks. This usually takes a few minutes.",
     "active": "Your plan is ready.",
     "superseded": "This plan has been replaced by a newer one.",
     "failed": _DRAFT_FAILURE_MESSAGES[store.FAILURE_UNKNOWN],
@@ -206,7 +212,12 @@ def start_draft(db: DbSession, user: CurrentUser) -> DraftStatusRead:
 
 @router.get("/draft", response_model=DraftStatusRead)
 def read_draft_status(db: DbSession, user: CurrentUser) -> DraftStatusRead:
-    """Where the runner's most recent plan stands. Polled while drafting."""
+    """Where the runner's most recent plan stands. Polled while drafting.
+
+    Asks `draft_in_flight` first, which fails an abandoned draft, so a draft no
+    worker will finish reads as failed rather than writing for ever.
+    """
+    store.draft_in_flight(db, user.id)
     return _draft_status(store.latest_plan(db, user.id))
 
 
@@ -391,9 +402,12 @@ def _challenge_statuses(db, user, plan, goal_names, today) -> list:
     starts_on = resolve_week_start(getattr(user, "profile", None))
     earliest = min(rule.start for _, rule in plan.challenges())
     facts = query_facts(db, earliest, today + timedelta(days=1), user_id=user.id)
+    planned = planned_by_challenge_week(db, user, season_plan=plan, today=today)
     out = []
     for goal_id, rule in plan.challenges():
-        weeks, streak = challenge.challenge_status(rule, facts, today, starts_on)
+        weeks, streak = challenge.challenge_status(
+            rule, facts, today, starts_on, planned_by_week=planned.get(goal_id)
+        )
         out.append(
             ChallengeStatus(
                 goal_id=goal_id,

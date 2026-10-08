@@ -411,6 +411,14 @@ class Settings(BaseSettings):
     # rq-scheduler enqueue_in calls (block-complete opener, scheduled fuller turn).
     RQ_JOB_TIMEOUT_SECONDS: int = 600
 
+    # The plan-drafting job's own ceiling (#1064). One job may now write the season
+    # (a thinking, web-searching call) and then the weeks (a second thinking call),
+    # each with one retry, which can run well past the 600s every other job needs.
+    # Applied as `job_timeout` on that enqueue only, and the stale-draft rule is
+    # derived from it (`store.DRAFT_STALE_AFTER`), so a draft is never declared
+    # abandoned while its job could still be running.
+    SCHEDULE_JOB_TIMEOUT_SECONDS: int = 1500
+
     # Worker concurrency (#594). How many jobs the RQ worker process runs at once.
     # 1 (default) is exactly today's behaviour: a single in-process Worker on the
     # "default" queue. >1 swaps in RQ's in-process WorkerPool with this many

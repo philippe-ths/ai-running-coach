@@ -177,3 +177,14 @@ def test_a_challenge_that_has_not_started_has_no_actuals_and_no_streak():
     weeks, streak = challenge.challenge_status(rule(), [_week_fact(THIS_WEEK, 10)], TODAY, MONDAY)
     assert streak == 0
     assert all(w.actual is None and w.met is None for w in weeks)
+
+
+def test_a_smart_recorded_walk_is_measured_on_its_moving_time_not_its_samples():
+    # A watch on smart recording logs a walk about every 4 s, so 2000 s of walking
+    # stores 500 heart-rate samples. Counting samples as seconds would credit the
+    # walk with a quarter of its zone time.
+    walk = fact(THIS_WEEK, kind="Walk", seconds=2000, distance_m=3000,
+                zones={"Z1": 250, "Z2": 250, "Z3": 0, "Z4": 0, "Z5": 0})
+    week = weekly_actuals([walk], THIS_WEEK, MONDAY)
+    assert week.zone_time_s(2) == pytest.approx(1000)
+    assert week.zone_time_s(1) == pytest.approx(2000)

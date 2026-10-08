@@ -12,11 +12,13 @@ whole point of creating the row before the generation rather than after.
 import asyncio
 import logging
 import uuid
+from datetime import date
 
 from app.db.session import SessionLocal
 from app.models.user import User
-from app.services.schedule import store
+from app.services.schedule import season_store, store
 from app.services.schedule.draft import draft_plan
+from app.services.schedule.season import generate_season
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,20 @@ def generate_schedule_job(
             logger.error("schedule draft: plan %s does not belong to %s", plan_id, user_id)
             return
 
+        if plan.status != store.DRAFTING:
+            # Picked up after the staleness window failed it: the runner has been
+            # told it failed and may have asked again, so it stays failed.
+            logger.warning("schedule draft: plan %s is %s; not drafting it", plan_id, plan.status)
+            return
+
+        # The weeks are written inside the runner's season, so there must be a
+        # current one first. Same job, so the runner watches one "drafting" status
+        # while the coach plans the season and then the weeks.
+        season_failure = asyncio.run(_ensure_season(db, user, thread_id))
+        if season_failure is not None:
+            store.fail_plan(db, plan, season_failure[0], kind=season_failure[1])
+            return
+
         outcome = asyncio.run(draft_plan(db, user, plan, thread_id=thread_id))
         if outcome.ok:
             logger.info("schedule draft: plan %s is now active", plan.id)
@@ -94,6 +110,49 @@ def generate_schedule_job(
             logger.exception("schedule draft: could not mark plan %s failed", plan_id)
     finally:
         db.close()
+
+
+# The season's own failure messages, mapped to the plan failure category whose
+# runner-facing sentence says the same thing, so a runner out of allowance is told
+# so rather than that "the season could not be planned".
+_SEASON_FAILURE_KIND = {
+    season_store.OVER_BUDGET_MESSAGE: store.FAILURE_OVER_BUDGET,
+    season_store.UNREACHABLE_MESSAGE: store.FAILURE_UNREACHABLE,
+}
+
+
+async def _ensure_season(db, user, thread_id) -> tuple | None:
+    """Make sure the runner has an active season written against their goals as
+    they are now. None when they do; else `(reason, failure kind)` for the plan.
+
+    Stale means the goals changed since the season was written (the fingerprint),
+    so a plan is never written under an opinion about goals the runner has since
+    edited. A season already being written is not raced: a second billed season
+    for the same goals would only supersede the first.
+    """
+    upcoming = store.list_goal_races(db, user.id, on_or_after=date.today())
+    active = season_store.active_season(db, user.id)
+    if active is not None and active.goals_fingerprint == season_store.goals_fingerprint(
+        upcoming
+    ):
+        return None
+    if not upcoming:
+        # No goals: nothing to plan a season around. The draft proceeds without
+        # one, planning for general progression as it always did.
+        return None
+    if season_store.drafting_in_flight(db, user.id) is not None:
+        return (
+            "a season is already being written",
+            store.FAILURE_UNKNOWN,
+        )
+    season = season_store.create_drafting_season(db, user.id)
+    outcome = await generate_season(db, user, season, thread_id=thread_id)
+    if outcome.ok:
+        return None
+    return (
+        outcome.message or "the season could not be planned",
+        _SEASON_FAILURE_KIND.get(outcome.message, store.FAILURE_SEASON),
+    )
 
 
 def _record_in_thread(db, thread_id, description: str | None) -> None:

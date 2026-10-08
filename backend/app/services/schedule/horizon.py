@@ -19,10 +19,18 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.models.user import User
-from app.schemas.schedule import GoalRaceRead, HorizonWeek, ScheduleHorizonRead
-from app.services.schedule import goals, store
+from app.schemas.schedule import (
+    GoalRaceRead,
+    HorizonChallenge,
+    HorizonWeek,
+    ScheduleHorizonRead,
+)
+from app.services.schedule import challenge, goals, season_store, store
+from app.services.schedule.frames import WeekFrame, build_frames
 from app.services.schedule.placement import WEEK_LENGTH_DAYS
 from app.services.schedule.planned_distance import planned_distance_m
+from app.services.schedule.shapes import shape_rule_value
+from app.services.schedule.week_check import planned_metrics, rule_value
 from app.services.weeks import resolve_week_start, week_start
 
 DEFAULT_HORIZON_WEEKS = 12
@@ -149,6 +157,112 @@ def _last_covered_week(
     return max(candidates) if candidates else None
 
 
+def planned_challenge_value(
+    frame: WeekFrame, rule: Any, week_sessions: List[Any], shape: Optional[Any]
+) -> Optional[float]:
+    """The plan's figure for one challenge in one week: the committed sessions
+    through the same metric code the check uses, else the sketched shape's, else
+    None (the plan says nothing about the week). For a zone-time rule this is an
+    ESTIMATE from the runner's own zone shares, plus what was already measured
+    this week."""
+    if any(s.commitment == "committed" for s in week_sessions):
+        return rule_value(rule, planned_metrics(week_sessions, frame))
+    if shape is not None:
+        return shape_rule_value(shape, frame, rule)
+    return None
+
+
+def horizon_challenges(
+    db: Session,
+    user: User,
+    *,
+    season_plan: Any,
+    today: date,
+    weeks: int,
+    starts_on: int,
+    sessions_by_week: Dict[date, List[Any]],
+    shapes: Dict[date, Any],
+    facts: Optional[List[Any]] = None,
+) -> Dict[date, List[HorizonChallenge]]:
+    """Each horizon week's challenge lines, from the season's rules.
+
+    `planned` comes from the plan (`planned_challenge_value`), `actual` and `met`
+    from the runner's measured weeks (`challenge.challenge_status`), so the line
+    shows what the plan promises beside what the runner's watch recorded."""
+    from app.services.schedule.draft import fetch_draft_facts
+
+    if season_plan is None or not season_plan.challenges():
+        return {}
+    if facts is None:
+        facts = fetch_draft_facts(db, user, today)
+    all_goals = store.list_goal_races(db, user.id)
+    names = {g.id: g.name for g in all_goals}
+    frames = build_frames(
+        season=season_plan, goals=all_goals, facts=facts,
+        starts_on=starts_on, today=today, horizon_weeks=weeks,
+    )
+    status = {
+        goal_id: challenge.challenge_status(rule, facts, today, starts_on)[0]
+        for goal_id, rule in season_plan.challenges()
+    }
+    out: Dict[date, List[HorizonChallenge]] = {}
+    for frame in frames:
+        for c in frame.challenges:
+            measured = next(
+                (w for w in status[c.goal_id] if w.week_start == frame.week_start), None
+            )
+            out.setdefault(frame.week_start, []).append(
+                HorizonChallenge(
+                    goal_id=c.goal_id,
+                    name=names.get(c.goal_id, c.name),
+                    index=c.index,
+                    weeks=c.weeks,
+                    metric=c.rule.metric,
+                    min_zone=c.rule.min_zone,
+                    threshold=c.rule.at_least,
+                    planned=planned_challenge_value(
+                        frame, c.rule,
+                        sessions_by_week.get(frame.week_start, []),
+                        shapes.get(frame.week_start),
+                    ),
+                    actual=measured.actual if measured else None,
+                    met=measured.met if measured else None,
+                )
+            )
+    return out
+
+
+def planned_by_challenge_week(
+    db: Session, user: User, *, season_plan: Any, today: date
+) -> Dict[Any, Dict[date, Optional[float]]]:
+    """goal id -> week start -> the active plan's figure, for every week a
+    challenge covers from this week on (capped at the longest horizon). The season
+    read uses it to put the plan's figure beside each week's threshold."""
+    if season_plan is None or not season_plan.challenges():
+        return {}
+    plan = store.get_active_plan(db, user.id)
+    if plan is None:
+        return {}
+    starts_on = resolve_week_start(getattr(user, "profile", None))
+    first_week = week_start(today, starts_on)
+    last_covered = max(rule.last_week_start for _, rule in season_plan.challenges())
+    weeks = max(1, min(MAX_HORIZON_WEEKS, (last_covered - first_week).days // 7 + 1))
+    span_end = first_week + timedelta(days=WEEK_LENGTH_DAYS * weeks - 1)
+    sessions_by_week: Dict[date, List[Any]] = {}
+    for row in store.sessions_in_range(db, user.id, first_week, span_end, plan_id=plan.id):
+        sessions_by_week.setdefault(week_start(row.window_start, starts_on), []).append(row)
+    shapes = {shape.week_start: shape for shape in store.plan_week_shapes(plan)}
+    by_week = horizon_challenges(
+        db, user, season_plan=season_plan, today=today, weeks=weeks,
+        starts_on=starts_on, sessions_by_week=sessions_by_week, shapes=shapes,
+    )
+    out: Dict[Any, Dict[date, Optional[float]]] = {}
+    for start, items in by_week.items():
+        for item in items:
+            out.setdefault(item.goal_id, {})[start] = item.planned
+    return out
+
+
 def build_horizon(
     db: Session,
     user: User,
@@ -245,6 +359,16 @@ def build_horizon(
                 )
             )
 
+    season_row = season_store.active_season(db, user.id)
+    by_week = horizon_challenges(
+        db, user,
+        season_plan=season_store.season_plan(season_row) if season_row else None,
+        today=today, weeks=weeks, starts_on=starts_on,
+        sessions_by_week=sessions_by_week, shapes=shapes,
+    )
+    for week in out:
+        week.challenges = by_week.get(week.week_start, [])
+
     loads = [w.effort_score for w in out if w.effort_score]
     races = store.list_goal_races(db, user.id, on_or_after=first_week)
 
@@ -259,4 +383,5 @@ def build_horizon(
         ],
         has_plan=plan is not None,
         peak_effort_score=max(loads) if loads else None,
+        shortfalls=list(((plan.draft_log or {}).get("shortfalls") or [])) if plan else [],
     )

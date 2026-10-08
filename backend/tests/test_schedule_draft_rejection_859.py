@@ -191,7 +191,7 @@ def test_the_conversation_the_draft_and_the_gate_name_one_ceiling(db):
     _norm, concrete, _sketched = _norm_and_ceilings(db, user)
 
     conversation = thread_turn._build_baseline_sections(db, user)["running_norm"]
-    drafting = build_draft_context(db, user, today=TODAY, weeks=12)
+    drafting = build_draft_context(db, user, today=TODAY)
     stated_in_draft = float(
         re.search(r"above ([\d.]+) km of committed running", drafting).group(1)
     )

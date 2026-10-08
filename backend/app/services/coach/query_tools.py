@@ -524,6 +524,10 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
             entry["long_run_minutes"] = round(week.long_run_duration_s / 60)
         if week.quality_focus:
             entry["quality_focus"] = week.quality_focus
+        if week.challenges:
+            from app.services.schedule.coach_view import challenge_line
+
+            entry["challenges"] = [challenge_line(c) for c in week.challenges]
         if week.coverage == "empty":
             entry["note"] = "the plan says nothing about this week"
         elif week.coverage == "sketched":
@@ -536,8 +540,16 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
     # on the horizon is never read as a booked race.
     races = [goals.for_coach(race, today) for race in horizon.races]
     written = [w for w in weeks if w["written"]]
+    from app.services.schedule.coach_view import season_section
+
     return {
         "has_plan": True,
+        **season_section(db, user, today),
+        **(
+            {"plan_is_still_short_of": horizon.shortfalls}
+            if horizon.shortfalls
+            else {}
+        ),
         "today": today.isoformat(),
         "week_count": len(weeks),
         "weeks": weeks,
