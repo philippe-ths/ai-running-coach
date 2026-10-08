@@ -582,6 +582,8 @@ TOOL_TRACE_LABELS = {
     "get_session_detail": "Pulled up a past session",
     "get_training_summary": "Tallied your recent training",
     "get_training_plan": "Read your training plan",
+    # The server-side web search (#1051). Its detail is a result count, server-derived.
+    "web_search": "Searched the web",
 }
 _DEFAULT_TRACE_LABEL = "Looked up your training data"
 

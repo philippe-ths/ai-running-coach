@@ -116,7 +116,7 @@ Selecting a prompt is a pure `COACH_PROMPT_ID` config flip with no code change, 
 A prompt whose `PROMPT_FEATURES` entry carries `TWO_STAGE` activates the two-stage Exchange; any single-shot id serves the prior path with zero code change.
 `COACH_RECEIPT_CADENCE` (bool, default off, ADR 0018) is orthogonal to `COACH_PROMPT_ID` and is ON in production.
 When on and the active prompt is two-stage, it replaces the debounced LLM opener and 3h fuller timer with an instant deterministic per-activity receipt plus one full report about `BLOCK_GAP_SECONDS` after the session; it is inert under a single-shot prompt.
-Eighteen `COACH_*_ENABLED` bools exist; most REMOVE one named item from what the coach receives, while `COACH_THREADS_ENABLED` and `COACH_PERIOD_REPORT_ENABLED` gate a surface instead.
+Twenty `COACH_*_ENABLED` bools exist; most REMOVE one named item from what the coach receives, while `COACH_THREADS_ENABLED` and `COACH_PERIOD_REPORT_ENABLED` gate a surface instead.
 `COACH_MEMORY_ENABLED` drops the `memory` pack section and disables the runner-memory update writer.
 `COACH_VOICE_BLOCK_ENABLED` off means the voice rewrite pass never runs, so every runner reads the voiceless baseline.
 `COACH_THREADS_ENABLED` off means every `/api/coach/threads` route refuses with 503 and the frontend renders no launcher, sheet, or conversational report options.
@@ -133,6 +133,7 @@ The orthogonal coach-input switch `COACH_SCHEDULE_ENABLED` (default True) drops 
 A drafted plan whose goal race falls inside the horizon is written as concrete sessions all the way to the race, bounded by the drafted contract's six-week concrete cap.
 `plan_validator` bounds each week's committed running km and, via `hours_ceilings`, its committed time across every activity, both against the runner's own typical week and with the race left out.
 `COACH_PERIOD_REPORT_ENABLED` (default True) gates every `/api/coach/period-reports` route with 503 and hides the frontend entry point.
+`COACH_EVENT_SEARCH_ENABLED` (default True, on in the prod-parity block) removes the thread turn's `web_search` tool and refuses the `add_goal` offer.
 `EXCHANGE_STAGE2_DELAY_SECONDS` (default 10800) is the fuller-turn timer and `EXCHANGE_REPLY_WINDOW_SECONDS` (default 86400) is how long a reply still triggers the fuller turn early; both are inert under a single-shot prompt.
 `RQ_JOB_TIMEOUT_SECONDS` (default 600) is the RQ death-penalty ceiling, applied as the queue `default_timeout` and as explicit `job_timeout=` on `queue.enqueue_in` calls, because a two-stage generation runs past RQ's 180s default.
 `BLOCK_GAP_SECONDS` (default 1800) is both the block grouping threshold and the block-complete debounce that gates the opener.
@@ -231,6 +232,7 @@ A handler declares the owned resource it operates on (`OwnedActivity`, `OwnedBlo
 `turn.py` is the coaching-turn envelope shared by all generation paths: the `TurnKind` lane, `resolve_model`, `build_client` returning a spend-recording `MeteredClient`, the `over_budget` gate, and `relationship_for_user`.
 `chat.py`, `threads.py`, `thread_turn.py`, `proposed_actions.py`, `screen_context.py`, `coaching_skills.py`, and `query_tools.py` are the conversational surface.
 `query_tools.get_training_plan` is the coach's only forward-looking tool, returning the block week by week from the same builder the runner's horizon screen uses, each week labelled as written or shape only.
+`event_search.py` hands thread turns the API-run `web_search` tool (three searches per round, billed per search on the budget gate), and `add_goal` is the only way a found event becomes a `GoalRace`, written on confirm through `store.create_goal_race` with no `booked` and no target time from the model.
 `voice.py`, `stance.py`, and `corpus.py` are pure domains with no LLM and no I/O; `voice_rewrite.py`, `material_distiller.py`, `receipt.py`, and `receipt_voice.py` are their generative counterparts.
 `perceived_effort.py`, `adherence.py`, `calibration.py`, `volume.py`, `salience.py`, `intensity.py`, and `recent_training.py` are the pure read-time signal builders.
 `notable.py` builds `this_run.notable`: the race, ranked best efforts with a previous best only when stored efforts cover every earlier run that long, and records more than 10% past the past-year most among at least 10 same-discipline activities.
@@ -251,9 +253,7 @@ Those four entrypoints must keep this module path, because RQ serializes a defer
 `frontend/app/` holds the routes: `page.tsx` (home), `activity/[id]`, `profile`, `trends`, `load`, `schedule`, `period-reports`, and the catch-all API proxy `api/[...path]/route.ts`.
 `frontend/app/manifest.ts` and `apple-icon.tsx` are the PWA install surface, and `middleware.ts` excludes `apple-icon` by name because that path carries no dot and would otherwise sit inside the Clerk gate.
 `frontend/components/` holds the activity panels, a `trends/` subfolder, a `load/` subfolder, a `coach/` subfolder (the sheet provider, sheet, thread switcher, launcher), and a `schedule/` subfolder.
-`frontend/lib/` holds `api.ts` (`fetchFromAPI`), `format.ts`, `useKeyboardOpen.ts`, `coachStream.ts`, and the `types/` domain types with a `types.ts` barrel.
 `docs/adr/` holds the architecture decision records, and `docs/diagrams/` holds the generated coach-pack and coach-chat flow diagrams with their drift guard.
-`Makefile` exposes `smoke`, `test`, `backend-test`, `frontend-test`, `seed-local`, `eval`, `eval-selftest`, `alembic-check`, `diagram-check`, `verify-local`, `deployed-handshake-smoke`, and `post-deploy-verify`.
 
 ## Testing Overview
 Backend tests run via `python -m pytest`; the baseline command is `make backend-test`, which excludes tests marked `integration`.

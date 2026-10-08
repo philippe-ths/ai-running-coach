@@ -54,6 +54,11 @@ _DEFAULT_PRICE = (5.0, 25.0)  # conservative: assume Opus tier when unknown
 _CACHE_READ_MULTIPLIER = 0.1
 _CACHE_WRITE_MULTIPLIER = 1.25
 
+# Anthropic bills the server-side web search tool per query ($10 per 1,000) on top of
+# tokens (#1051). Counted here so search spend is on the same per-user and global
+# caps as everything else; the tool's result tokens are already in input_tokens.
+WEB_SEARCH_USD = 0.01
+
 
 def cost_usd(
     model: str,
@@ -61,6 +66,7 @@ def cost_usd(
     output_tokens: int,
     cache_read_input_tokens: int = 0,
     cache_creation_input_tokens: int = 0,
+    web_search_requests: int = 0,
 ) -> float:
     """List-price cost of one call in USD, cache-aware (#709).
 
@@ -76,7 +82,7 @@ def cost_usd(
         + cache_read_input_tokens * price_in * _CACHE_READ_MULTIPLIER
         + cache_creation_input_tokens * price_in * _CACHE_WRITE_MULTIPLIER
         + output_tokens * price_out
-    ) / 1_000_000
+    ) / 1_000_000 + web_search_requests * WEB_SEARCH_USD
 
 
 def _now() -> datetime:
@@ -227,6 +233,7 @@ class BudgetGate:
         output_tokens: int,
         cache_read_input_tokens: int = 0,
         cache_creation_input_tokens: int = 0,
+        web_search_requests: int = 0,
     ) -> None:
         """Add one call's list-price cost to the user's and the global windows."""
         amount = cost_usd(
@@ -235,6 +242,7 @@ class BudgetGate:
             output_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
+            web_search_requests=web_search_requests,
         )
         if amount <= 0:
             return
@@ -315,6 +323,7 @@ def record(
     output_tokens: int,
     cache_read_input_tokens: int = 0,
     cache_creation_input_tokens: int = 0,
+    web_search_requests: int = 0,
 ) -> None:
     get_gate().record(
         user_id,
@@ -323,4 +332,5 @@ def record(
         output_tokens,
         cache_read_input_tokens=cache_read_input_tokens,
         cache_creation_input_tokens=cache_creation_input_tokens,
+        web_search_requests=web_search_requests,
     )
