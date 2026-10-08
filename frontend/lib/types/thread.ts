@@ -53,7 +53,8 @@ export interface ProposedActionFrame {
     | "complete_session"
     | "adjust_session"
     | "draft_plan"
-    | "amend_plan";
+    | "amend_plan"
+    | "add_goal";
   token: string;
   description: string;
   confirm_label: string;

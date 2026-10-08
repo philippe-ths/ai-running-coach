@@ -3,11 +3,9 @@
 // #830: the horizon's shell — the two filters, the fetch, and the states the
 // chart itself should never have to know about.
 //
-// Both filters sit in ONE row ABOVE the chart card rather than inside it: a
+// The range filter sits ABOVE the chart card rather than inside it: a
 // control that scopes what is drawn belongs outside the drawing. Range changes
-// refetch (the window is a server parameter); segmentation does not (it is a
-// view over data already in hand), so switching Intent/Discipline/Both never
-// costs a request.
+// refetch (the window is a server parameter); the table toggle does not (it is a view over data already in hand).
 //
 // A refetch holds the previous chart at reduced opacity instead of dropping to
 // a skeleton, so changing range does not make the page jump.
@@ -15,19 +13,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchFromAPI } from "@/lib/api";
 import type { ScheduleHorizon } from "@/lib/types/schedule";
-import HorizonChart, { type Segmentation } from "./HorizonChart";
+import HorizonChart from "./HorizonChart";
 
 const RANGES = [
   { label: "1M", weeks: 4, name: "One month" },
   { label: "2M", weeks: 8, name: "Two months" },
   { label: "3M", weeks: 12, name: "Three months" },
 ] as const;
-
-const SEGMENTATIONS: { value: Segmentation; label: string }[] = [
-  { value: "intent", label: "Intent" },
-  { value: "discipline", label: "Discipline" },
-  { value: "both", label: "Both" },
-];
 
 function SegmentedControl<T extends string | number>({
   label,
@@ -77,7 +69,6 @@ export default function HorizonView({
   refreshToken?: number;
 }) {
   const [weeks, setWeeks] = useState<number>(12);
-  const [segmentation, setSegmentation] = useState<Segmentation>("both");
   const [showTable, setShowTable] = useState(false);
   const [horizon, setHorizon] = useState<ScheduleHorizon | null>(null);
   const [loading, setLoading] = useState(true);
@@ -122,12 +113,6 @@ export default function HorizonView({
           value={weeks}
           onChange={setWeeks}
         />
-        <SegmentedControl
-          label="Split the bars by"
-          options={SEGMENTATIONS}
-          value={segmentation}
-          onChange={setSegmentation}
-        />
       </div>
 
       {error && (
@@ -149,12 +134,12 @@ export default function HorizonView({
           }`}
         >
           <h2 className="mb-1 text-sm font-semibold text-gray-700 dark:text-gray-300">
-            Load per week
+            Training load per week
           </h2>
           <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
             {horizon.has_plan
-              ? "The shape of the block: concrete for the next few weeks, sketched beyond."
-              : "You have no plan yet, so this is the shape of the weeks ahead as it stands."}
+              ? "Bar = the week's training load, against your biggest week. Concrete for the next few weeks, sketched beyond."
+              : "Bar = the week's training load, against your biggest week. You have no plan yet, so this is the shape of the weeks ahead as it stands."}
           </p>
 
           {isEmpty ? (
@@ -165,7 +150,6 @@ export default function HorizonView({
             <>
               <HorizonChart
                 horizon={horizon}
-                segmentation={segmentation}
                 showTable={showTable}
               />
               <div className="mt-4 border-t border-gray-100 pt-3 dark:border-gray-700">

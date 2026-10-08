@@ -514,8 +514,14 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
         # cannot ask a follow-up question.
         if week.running_distance_m is not None:
             entry["running_km"] = round(week.running_distance_m / 1000, 1)
+        if week.walking_distance_m is not None:
+            entry["walking_km"] = round(week.walking_distance_m / 1000, 1)
+        if week.duration_s is not None:
+            entry["hours_all_activities"] = round(week.duration_s / 3600, 1)
         if week.long_run_distance_m is not None:
             entry["long_run_km"] = round(week.long_run_distance_m / 1000, 1)
+        if week.long_run_duration_s is not None:
+            entry["long_run_minutes"] = round(week.long_run_duration_s / 60)
         if week.quality_focus:
             entry["quality_focus"] = week.quality_focus
         if week.coverage == "empty":
@@ -576,6 +582,8 @@ TOOL_TRACE_LABELS = {
     "get_session_detail": "Pulled up a past session",
     "get_training_summary": "Tallied your recent training",
     "get_training_plan": "Read your training plan",
+    # The server-side web search (#1051). Its detail is a result count, server-derived.
+    "web_search": "Searched the web",
 }
 _DEFAULT_TRACE_LABEL = "Looked up your training data"
 

@@ -46,6 +46,7 @@ from app.schemas.chat import ChatMessageRead
 from app.schemas.coach_context import CoachContextPack, unnest_pack
 from app.services.coach import coach_units, turn
 from app.services.coach.coach_framing import coach_llm_view
+from app.services.coach.event_search import SERVER_TOOL_NAMES
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.prompts import render_voice_block
 from app.services.coach.query_tools import (
@@ -177,10 +178,72 @@ def _block_attr(block, key):
 
 
 def _extract_block_text(blocks) -> str:
-    """Join the text blocks of a final message into the reply prose."""
-    return "".join(
-        _block_attr(b, "text") or "" for b in blocks if _block_attr(b, "type") == "text"
-    ).strip()
+    """Join the text blocks of a final message into the reply prose.
+
+    A web search splits the prose: narration before it ("I'll look"), then the
+    answer after its results (#1051). The first text after a search starts a new
+    paragraph, so the two never run together; the cited segments that follow it
+    are pieces of one sentence and join as before."""
+    out = ""
+    after_search = False
+    for b in blocks:
+        btype = _block_attr(b, "type")
+        if btype in _SERVER_TOOL_BLOCK_TYPES:
+            after_search = True
+        elif btype == "text":
+            text = _block_attr(b, "text") or ""
+            if after_search and out.strip() and text.strip():
+                out = out.rstrip() + "\n\n" + text.lstrip()
+            else:
+                out += text
+            after_search = after_search and not text.strip()
+    return out.strip()
+
+
+# A shortlist of events with dates and source links does not fit the plain 1024
+# cap on a model with no thinking headroom, and a cut-off reply is a failed turn.
+# llm.stream_chat_turn adds thinking_headroom on top of whichever cap is chosen.
+_CHAT_MAX_TOKENS = 1024
+_CHAT_MAX_TOKENS_WITH_SEARCH = 3072
+
+
+def _chat_max_tokens(tools) -> int:
+    if any(
+        isinstance(t, dict) and t.get("name") in SERVER_TOOL_NAMES for t in (tools or [])
+    ):
+        return _CHAT_MAX_TOKENS_WITH_SEARCH
+    return _CHAT_MAX_TOKENS
+
+
+_SERVER_TOOL_BLOCK_TYPES = frozenset({"server_tool_use", "web_search_tool_result"})
+
+
+def _block_as_param(block) -> dict:
+    """A content block as the plain dict the API accepts back, None fields dropped."""
+    if isinstance(block, dict):
+        return block
+    return block.model_dump(exclude_none=True)
+
+
+def _web_search_trace(blocks) -> List[dict]:
+    """One trace record per web search in a finished message (#1051): the label and
+    how many results came back. The query is the model's prose and the results are
+    the web's, so neither enters the trace; only the count, which the API computed."""
+    entries = []
+    results = {
+        _block_attr(b, "tool_use_id"): _block_attr(b, "content")
+        for b in blocks
+        if _block_attr(b, "type") == "web_search_tool_result"
+    }
+    for b in blocks:
+        if _block_attr(b, "type") != "server_tool_use" or _block_attr(b, "name") != "web_search":
+            continue
+        content = results.get(_block_attr(b, "id"))
+        n = len(content) if isinstance(content, list) else 0
+        entry = summarize_tool_call("web_search", {}, {})
+        entry["detail"] = f"{n} result{'s' if n != 1 else ''}" if isinstance(content, list) else "no results"
+        entries.append(entry)
+    return entries
 
 
 def _blocks_to_message_params(blocks) -> list:
@@ -202,6 +265,11 @@ def _blocks_to_message_params(blocks) -> list:
             params.append({"type": "redacted_thinking", "data": _block_attr(b, "data")})
         elif btype == "text":
             params.append({"type": "text", "text": _block_attr(b, "text") or ""})
+        elif btype in _SERVER_TOOL_BLOCK_TYPES:
+            # The API's own search call and its results (#1051). Echoed whole, the
+            # encrypted result content included: the API refuses a continuation
+            # whose search blocks were altered or dropped.
+            params.append(_block_as_param(b))
         elif btype == "tool_use":
             params.append({
                 "type": "tool_use",
@@ -388,7 +456,7 @@ async def _buffered_tool_loop(
                 system=system_prompt,
                 messages=llm_messages,
                 tools=tools_arg,
-                max_tokens=1024,
+                max_tokens=_chat_max_tokens(tools_arg),
             ):
                 if delta.final is not None:
                     final_msg = delta.final
@@ -415,6 +483,20 @@ async def _buffered_tool_loop(
                 )
                 stream_failed = True
                 break
+
+            for entry in _web_search_trace(final_msg.content_blocks):
+                tool_trace.append(entry)
+                yield ChatStreamEvent(trace_entry=entry)
+
+            if final_msg.stop_reason == "pause_turn":
+                # The API paused a long search turn (#1051). Sending the paused
+                # message back unchanged is how it resumes, and it costs a round
+                # like any other, so the loop's bound still ends the turn.
+                llm_messages.append({
+                    "role": "assistant",
+                    "content": _blocks_to_message_params(final_msg.content_blocks),
+                })
+                continue
 
             if final_msg.stop_reason == "tool_use":
                 tool_uses = [
@@ -490,13 +572,31 @@ async def _buffered_tool_loop(
                         # rather than starting over. The id is the loop's own, not
                         # the model's — a model-supplied thread id would be a
                         # route into another runner's conversation.
-                        result, frame = mint_proposed_action(
-                            db,
-                            owner_user_id,
-                            tool_input,
-                            thread_id=thread_id,
-                            prepared=prepared,
-                        )
+                        if (
+                            proposed_action is not None
+                            and tool_input.get("action_type") == "add_goal"
+                        ):
+                            # One card per reply is the contract the prompt states
+                            # and the client renders; a second offer would be minted
+                            # and never shown, and the model would believe it was.
+                            # Scoped to add_goal (#1051): other actions keep their
+                            # prior behaviour of a later card being minted unseen.
+                            result, frame = {
+                                "ok": False,
+                                "error": "one_offer_per_reply",
+                                "detail": (
+                                    "A card is already in front of the runner. Offer "
+                                    "the next one after they answer it."
+                                ),
+                            }, None
+                        else:
+                            result, frame = mint_proposed_action(
+                                db,
+                                owner_user_id,
+                                tool_input,
+                                thread_id=thread_id,
+                                prepared=prepared,
+                            )
                         if proposed_action is None and frame is not None:
                             proposed_action = frame
                         tool_results.append(

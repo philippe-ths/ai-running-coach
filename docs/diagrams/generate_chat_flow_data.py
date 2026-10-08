@@ -36,7 +36,7 @@ sys.path.insert(0, str(BACKEND))
 from app.core.config import settings  # noqa: E402
 from app.schemas.thread import ScreenPointer, ThreadMessageSend  # noqa: E402
 from app.services.coach import chat as chat_mod  # noqa: E402
-from app.services.coach import coaching_skills, proposed_actions, query_tools  # noqa: E402
+from app.services.coach import coaching_skills, event_search, proposed_actions, query_tools  # noqa: E402
 from app.services.coach import thread_turn as tt  # noqa: E402
 from app.jobs import thread_maintenance as tm  # noqa: E402
 from app.services import intents  # noqa: E402
@@ -962,6 +962,8 @@ def build() -> dict:
         "tools": {
             "data": query_tools.CHAT_TOOLS,
             "action": proposed_actions.PROPOSED_ACTION_TOOL,
+            # the API-run web search (#1051): present when COACH_EVENT_SEARCH_ENABLED
+            "search": event_search.WEB_SEARCH_TOOL,
             "skill": coaching_skills.LOAD_SKILL_TOOL,
             "status_labels": query_tools.TOOL_STATUS_LABELS,
             "trace_labels": query_tools.TOOL_TRACE_LABELS,

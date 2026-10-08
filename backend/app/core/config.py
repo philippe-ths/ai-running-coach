@@ -1,6 +1,6 @@
 import os
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The test session opts out of the env file (#752). `Settings` is a module-level
@@ -340,6 +340,12 @@ class Settings(BaseSettings):
     # renders no entry point. Off hides the feature without deleting anything:
     # stored period reports are untouched.
     COACH_PERIOD_REPORT_ENABLED: bool = True
+    # #1051: the coach's web search for races and events. Off => the thread turn is
+    # handed no search tool and the add_goal offer is refused, so the coach answers
+    # from what it knows and says so. Unlike the input switches above it adds a
+    # capability rather than a pack section, and it is the fastest lever if search
+    # cost or result quality misbehaves: search is billed per query on top of tokens.
+    COACH_EVENT_SEARCH_ENABLED: bool = True
     # #946: the model lane for a period report, the `COACH_VOICE_MODEL_ID`
     # precedent — unset falls back to COACH_MODEL_ID, so day-one behaviour is
     # byte-identical. Its own lever because a period report is runner-requested,
@@ -461,6 +467,18 @@ class Settings(BaseSettings):
     # existing data is not orphaned behind a fresh empty account. Empty disables
     # reconciliation (every verified email gets/creates its own user).
     OWNER_EMAIL: str = ""
+
+    # #555: owner-only Garmin recovery sync (sleep, overnight HRV, resting HR),
+    # through the unofficial `garminconnect` library because Garmin's official
+    # Health API is closed to new applicants. Default OFF: off, nothing is
+    # scheduled and nothing calls Garmin. `GARMIN_TOKENS` is the token dump from
+    # `scripts/garmin_login.py`, a secret set on the WORKER only (never a Garmin
+    # password, never stored in the DB, never logged). The sync runs once a day at
+    # `GARMIN_SYNC_HOUR_UTC`, after the runner's night has been processed.
+    GARMIN_SYNC_ENABLED: bool = False
+    GARMIN_TOKENS: SecretStr = SecretStr("")
+    GARMIN_SYNC_HOUR_UTC: int = 7
+    GARMIN_BACKFILL_DAYS: int = 30
 
     # Dev-only ungated mode for local browser verification (#488). Setting this
     # True forces the Clerk degrade path (the single seeded local user) so the
