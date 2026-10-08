@@ -22,6 +22,7 @@ never breaks generation — a cost cap must never become an availability risk.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -32,27 +33,48 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # Per-MTok (input, output) USD list price, kept in sync with the model the coach
-# runs (COACH_MODEL_ID). Unknown models price as Opus (the most expensive tier)
-# so a misconfiguration over-counts rather than under-counts.
+# runs (COACH_MODEL_ID). Source: https://platform.claude.com/docs/en/about-claude/pricing
+# (read 2026-10-07). An UNKNOWN model prices at the most expensive known tier so a
+# misconfiguration over-counts rather than under-counts; a dated snapshot id
+# (`claude-haiku-4-5-20251001`) prices as its undated family id.
 PRICE_PER_MTOK: Dict[str, tuple[float, float]] = {
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-opus-5": (5.0, 25.0),
     "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-4-7": (5.0, 25.0),
     "claude-opus-4-6": (5.0, 25.0),
     "claude-opus-4-5": (5.0, 25.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-sonnet-5": (2.0, 10.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-sonnet-4-5": (3.0, 15.0),
+    # Haiku 5.5 is $0.10/$0.50 up to 100k prompt tokens and $0.50/$2.50 above; the
+    # meter does not know prompt length, so it takes the higher (safe) tier.
+    "claude-haiku-5-5": (0.5, 2.5),
     "claude-haiku-4-5": (1.0, 5.0),
-    "claude-fable-5": (10.0, 50.0),
 }
-_DEFAULT_PRICE = (5.0, 25.0)  # conservative: assume Opus tier when unknown
+_DEFAULT_PRICE = max(PRICE_PER_MTOK.values())  # unknown model: most expensive known
 
 # Prompt-caching price multipliers on the INPUT price (#709/#629). Anthropic
 # bills a cache read at ~0.1x the base input price and a cache write at ~1.25x
 # for the 5-minute ephemeral TTL the coach uses (llm.py sets `cache_control:
 # {"type": "ephemeral"}` with no `ttl`, i.e. the 5-min default). A 1-hour TTL
 # would be 2.0x; if the coach ever switches TTL, bump _CACHE_WRITE_MULTIPLIER.
+# Opus 5.5 reads at 0.05x ($0.20/MTok) and Fable 5.1 at 0.025x. Sonnet 5.5 is
+# listed as both $0.20 and $0.10 in the same docs, so it stays at 0.1x (over-counts).
 _CACHE_READ_MULTIPLIER = 0.1
+_CACHE_READ_MULTIPLIER_BY_MODEL = {
+    "claude-opus-5-5": 0.05,
+    "claude-fable-5-1": 0.025,
+}
 _CACHE_WRITE_MULTIPLIER = 1.25
+_SNAPSHOT_SUFFIX = re.compile(r"-\d{8}$")
+
+
+def _price_key(model: str) -> str:
+    return _SNAPSHOT_SUFFIX.sub("", model) if isinstance(model, str) else model
 
 # Anthropic bills the server-side web search tool per query ($10 per 1,000) on top of
 # tokens (#1051). Counted here so search spend is on the same per-user and global
@@ -76,10 +98,12 @@ def cost_usd(
     input buckets are disjoint, so their costs add. Callers that pass no cache
     counts (the pre-caching path) are byte-stable with the old 3-arg pricing.
     """
-    price_in, price_out = PRICE_PER_MTOK.get(model, _DEFAULT_PRICE)
+    key = _price_key(model)
+    price_in, price_out = PRICE_PER_MTOK.get(key, _DEFAULT_PRICE)
+    read_multiplier = _CACHE_READ_MULTIPLIER_BY_MODEL.get(key, _CACHE_READ_MULTIPLIER)
     return (
         input_tokens * price_in
-        + cache_read_input_tokens * price_in * _CACHE_READ_MULTIPLIER
+        + cache_read_input_tokens * price_in * read_multiplier
         + cache_creation_input_tokens * price_in * _CACHE_WRITE_MULTIPLIER
         + output_tokens * price_out
     ) / 1_000_000 + web_search_requests * WEB_SEARCH_USD

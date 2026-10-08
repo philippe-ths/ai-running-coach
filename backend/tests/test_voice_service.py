@@ -91,7 +91,8 @@ def _fake_client(voiced: str = _VOICED):
     fake = AsyncMock()
     fake.generate_coach_message = AsyncMock(return_value=_ok_result())
     # Usage is None so the budget recorder skips it; spend metering has its own tests.
-    fake.generate_json_with_usage = AsyncMock(return_value=(voiced, None))
+    answer = f"<findings>\n- VERDICT: easy run\n</findings>\n<report>\n{voiced}\n</report>"
+    fake.generate_json_with_usage = AsyncMock(return_value=(answer, None))
     return fake
 
 
@@ -117,7 +118,7 @@ async def test_fuller_generates_voiceless_then_revoices(db, monkeypatch):
 
     rewrite = fake.generate_json_with_usage.call_args.kwargs["system"]
     assert PRESETS["roast"].name in rewrite
-    assert PRESETS["roast"].example_messages[0][:30] in rewrite
+    assert PRESETS["roast"].report_shape in rewrite
 
     report = _stored_report(db, activity)
     assert report["voiced_message"] == _VOICED

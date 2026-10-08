@@ -46,6 +46,7 @@ from app.schemas.chat import ChatMessageRead
 from app.schemas.coach_context import CoachContextPack, unnest_pack
 from app.services.coach import coach_units, turn
 from app.services.coach.coach_framing import coach_llm_view
+from app.services.coach.event_search import SERVER_TOOL_NAMES
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.prompts import render_voice_block
 from app.services.coach.query_tools import (
@@ -199,6 +200,21 @@ def _extract_block_text(blocks) -> str:
     return out.strip()
 
 
+# A shortlist of events with dates and source links does not fit the plain 1024
+# cap on a model with no thinking headroom, and a cut-off reply is a failed turn.
+# llm.stream_chat_turn adds thinking_headroom on top of whichever cap is chosen.
+_CHAT_MAX_TOKENS = 1024
+_CHAT_MAX_TOKENS_WITH_SEARCH = 3072
+
+
+def _chat_max_tokens(tools) -> int:
+    if any(
+        isinstance(t, dict) and t.get("name") in SERVER_TOOL_NAMES for t in (tools or [])
+    ):
+        return _CHAT_MAX_TOKENS_WITH_SEARCH
+    return _CHAT_MAX_TOKENS
+
+
 _SERVER_TOOL_BLOCK_TYPES = frozenset({"server_tool_use", "web_search_tool_result"})
 
 
@@ -237,7 +253,17 @@ def _blocks_to_message_params(blocks) -> list:
     params = []
     for b in blocks:
         btype = _block_attr(b, "type")
-        if btype == "text":
+        if btype == "thinking" and _block_attr(b, "signature"):
+            # Sonnet 5.5 binds thinking blocks to the conversation and wants them
+            # back unchanged; a 4.x chat turn produces none, so nothing changes there.
+            params.append({
+                "type": "thinking",
+                "thinking": _block_attr(b, "thinking") or "",
+                "signature": _block_attr(b, "signature"),
+            })
+        elif btype == "redacted_thinking" and _block_attr(b, "data"):
+            params.append({"type": "redacted_thinking", "data": _block_attr(b, "data")})
+        elif btype == "text":
             params.append({"type": "text", "text": _block_attr(b, "text") or ""})
         elif btype in _SERVER_TOOL_BLOCK_TYPES:
             # The API's own search call and its results (#1051). Echoed whole, the
@@ -430,7 +456,7 @@ async def _buffered_tool_loop(
                 system=system_prompt,
                 messages=llm_messages,
                 tools=tools_arg,
-                max_tokens=1024,
+                max_tokens=_chat_max_tokens(tools_arg),
             ):
                 if delta.final is not None:
                     final_msg = delta.final
@@ -605,7 +631,21 @@ async def _buffered_tool_loop(
                 llm_messages.append({"role": "user", "content": tool_results})
                 continue
 
-            # A plain text answer (end_turn / max_tokens): this is the reply.
+            # A plain text answer: this is the reply, unless the model ran out of
+            # tokens mid-reply. A cut-off reply is not served as if it were whole;
+            # it takes the same failure path as any other broken turn.
+            if final_msg.stop_reason == "max_tokens":
+                logger.error(
+                    "coach_turn_failed: reply truncated at max_tokens (round %s of %s)",
+                    round_idx + 1,
+                    _MAX_TOOL_ROUNDS,
+                )
+                stream_failed = True
+                stream_fail_message = (
+                    "Sorry, that reply ran too long and was cut off. "
+                    "Please ask again, or ask for a shorter answer."
+                )
+                break
             assistant_text = _extract_block_text(final_msg.content_blocks)
             break
     except Exception as e:

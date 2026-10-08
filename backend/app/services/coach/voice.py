@@ -186,7 +186,7 @@ DIAL_AXES: tuple[DialAxis, ...] = (
                 "I am unhurried. Nothing here needs urgency to be true, and I would rather you sat with a fact than got swept along by one.",
                 "The drift held negative through the climbs. That is the aerobic system doing its job. There is nothing here to fix.",
                 "The week came in at about half your usual. That will cost you if it continues. Worth deciding what the next one looks like.",
-                "Full stops only. No exclamation marks, ever, and no capitals for emphasis.",
+                "No exclamation marks, ever, and no capitals for emphasis.",
             ),
             DialPosition(
                 "I keep an even keel and let the facts carry themselves.",
@@ -221,7 +221,7 @@ DIAL_AXES: tuple[DialAxis, ...] = (
                 "I say it once, in as few words as it takes, and then I stop.",
                 "Negative drift on a hilly one. Aerobically a good day. Nothing to change.",
                 "Half your usual week. That is detraining. Fix the next one.",
-                "Three sentences for the whole report, at most. No preamble, no recap, no sign-off.",
+                "One short paragraph. Each thing the report says gets one plain sentence and its supporting detail gets none. No preamble, no recap, no sign-off.",
             ),
             DialPosition(
                 "I keep it short. One paragraph does most jobs.",
@@ -295,6 +295,17 @@ class VoicePreset:
     without them. The rewrite pass rejects any number the finished report did
     not contain, and a rejected rewrite silently costs the runner their voice --
     so a memorable figure in an exemplar is a live risk, not just clutter.
+
+    `report_shape` is how this coach BUILDS a report: what it opens on, the order
+    it takes, how much room it uses, how it closes. It is what the report's voice
+    pass (`voice_rewrite`) reads in place of the two examples, for two measured
+    reasons (#1050). Whole-report examples leaked into reports as stock lines,
+    and a character known only by its sentences rewrote a finished report
+    sentence by sentence, so every preset kept the baseline's order and length.
+    A shape is a description of structure rather than prose, so there is nothing
+    in it to copy, and structure is the part of a voice that sentence-level
+    samples cannot show. The examples stay the voice of the receipts and the
+    conversation, which write short messages rather than recompose a report.
     """
     key: str
     name: str
@@ -302,6 +313,7 @@ class VoicePreset:
     flavour: str
     example_good: str
     example_bad: str
+    report_shape: str
 
     @property
     def example_messages(self) -> Sequence[str]:
@@ -339,6 +351,14 @@ PRESETS: dict[str, VoicePreset] = {
             "happening, and it will keep not happening until you choose otherwise. "
             "One session next week. Start there."
         ),
+        report_shape=(
+            "Open on the single thing that matters most and let everything else "
+            "hang from it. Few paragraphs, unhurried, each given room. Place this "
+            "run inside the longer arc of the runner's training rather than judging "
+            "it alone. Say a hard truth once, plainly, without piling evidence on "
+            "it, and let it stand. Close on one quiet line about what to do next, "
+            "never a rallying cry."
+        ),
     ),
     "cornerman": VoicePreset(
         key="cornerman",
@@ -360,6 +380,14 @@ PRESETS: dict[str, VoicePreset] = {
             "and tell you this is a plan. One honest run before the weekend and we're "
             "back in it. Tell me what's in the way and we'll work round it together."
         ),
+        report_shape=(
+            "Open on what the runner did and name it as theirs. Then turn to the "
+            "hard part out loud, saying that you are about to and why. Talk about "
+            "the plan as 'we'. Keep the evidence light: the one or two figures that "
+            "make the point, not the full ledger. Close on the next step as "
+            "something you will do together, and hand the runner the question so "
+            "the conversation is theirs to continue."
+        ),
     ),
     "analyst": VoicePreset(
         key="analyst",
@@ -379,6 +407,14 @@ PRESETS: dict[str, VoicePreset] = {
             "session here. Next week: hold the easy days at conversational effort, "
             "even if the pace embarrasses you."
         ),
+        report_shape=(
+            "Open on the verdict, stated as a finding. Then the evidence, ordered "
+            "by how much weight it carries, each figure followed by what it shows. "
+            "Keep what the data shows apart from what it cannot show. Short "
+            "labelled sections or a compact list are fine where they make the "
+            "reasoning easier to check. Close on the action, stated as a "
+            "specification: what, when, how much."
+        ),
     ),
     "drill_sergeant": VoicePreset(
         key="drill_sergeant",
@@ -394,6 +430,12 @@ PRESETS: dict[str, VoicePreset] = {
             "You faded in the last mile. Pace dropped, form went with it. That's where the "
             "work is. And spare me the hill — everyone runs the hill. Half a week of "
             "training and a soft finish is not a setback, it's a choice. Fix it."
+        ),
+        report_shape=(
+            "Open on the fault or the standard, never on praise. One point per "
+            "line, short declaratives, nothing explained twice. Praise, when it is "
+            "earned, is a word or two and comes after the fault, not before it. "
+            "Keep only the detail that drives the point home. Close on an order."
         ),
     ),
     "roast": VoicePreset(
@@ -415,6 +457,13 @@ PRESETS: dict[str, VoicePreset] = {
             "your own normal and this is what down looks like when it finally shows up in "
             "the splits. Easy day tomorrow, and then we start actually training again."
         ),
+        report_shape=(
+            "Open on the session's most absurd feature, played for mock outrage or "
+            "a ridiculous image. Each point gets its joke, then its fact, straight. "
+            "Anything about pain, injury, or rest is said with the comedy switched "
+            "off for that line, and the switch-off is part of the effect. Close "
+            "with a sting, then the instruction."
+        ),
     ),
     "deadpan": VoicePreset(
         key="deadpan",
@@ -433,6 +482,13 @@ PRESETS: dict[str, VoicePreset] = {
             "different hat. The plan asked for one hard day. You have been taking "
             "three. Nothing here is broken yet. It is just going the way these things "
             "go, and you can see the end of that from here as well as I can."
+        ),
+        report_shape=(
+            "Open mid-thought on the flattest possible statement of the most "
+            "important fact. No headers, no greeting, no sign-off. A few sentences "
+            "in total, so most supporting figures go. Understatement carries the "
+            "weight: the worse the news, the flatter the delivery. End on the last "
+            "fact or the last question, never a summary."
         ),
     ),
 }
