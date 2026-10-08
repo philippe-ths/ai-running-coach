@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 
@@ -26,7 +26,8 @@ class StatedPB(BaseModel):
     @field_validator("on")
     @classmethod
     def _not_in_the_future(cls, v: Optional[date]) -> Optional[date]:
-        if v is not None and v > date.today():
+        # A day of slack: the server's today can trail a runner east of it.
+        if v is not None and v > date.today() + timedelta(days=1):
             raise ValueError("a PB date cannot be in the future")
         return v
 
@@ -54,27 +55,6 @@ class UserProfileBase(BaseModel):
     stimulant_use: Optional[bool] = None
     # Week start: Monday (0) or Sunday (6); null resolves to Monday (#676).
     week_starts_on: Optional[int] = None
-    # PBs the runner has told us (#1068). Null = none stated.
-    stated_pbs: Optional[List[StatedPB]] = None
-
-    @field_validator("stated_pbs")
-    @classmethod
-    def _stated_pbs_are_plausible(cls, v: Optional[List[StatedPB]]) -> Optional[List[StatedPB]]:
-        # Same intent as the weight envelope: a time outside world-record-to-walking
-        # is a unit slip (minutes typed as seconds), not a fact to hand the coach.
-        if v is None:
-            return v
-        seen = set()
-        for pb in v:
-            if pb.distance in seen:
-                raise ValueError(f"only one stated PB per distance ({pb.distance})")
-            seen.add(pb.distance)
-            low, high = STATED_TIME_BOUNDS[pb.distance]
-            if not (low <= pb.time_s <= high):
-                raise ValueError(
-                    f"{pb.distance} time must be between {low} and {high} seconds"
-                )
-        return v or None
 
     @field_validator("week_starts_on")
     @classmethod
@@ -104,10 +84,32 @@ class UserProfileBase(BaseModel):
 
 
 class UserProfileCreate(UserProfileBase):
-    pass
+    # PBs the runner has told us (#1068). Null = none stated. Validated on write
+    # only, so a stored row a later envelope would refuse never breaks a read.
+    stated_pbs: Optional[List[StatedPB]] = None
+
+    @field_validator("stated_pbs")
+    @classmethod
+    def _stated_pbs_are_plausible(cls, v: Optional[List[StatedPB]]) -> Optional[List[StatedPB]]:
+        # Same intent as the weight envelope: a time outside world-record-to-walking
+        # is a unit slip (minutes typed as seconds), not a fact to hand the coach.
+        if v is None:
+            return v
+        seen = set()
+        for pb in v:
+            if pb.distance in seen:
+                raise ValueError(f"only one stated PB per distance ({pb.distance})")
+            seen.add(pb.distance)
+            low, high = STATED_TIME_BOUNDS[pb.distance]
+            if not (low <= pb.time_s <= high):
+                raise ValueError(
+                    f"{pb.distance} time must be between {low} and {high} seconds"
+                )
+        return v or None
 
 
 class UserProfileRead(UserProfileBase):
+    stated_pbs: Optional[List[Dict[str, Any]]] = None
     user_id: UUID
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)

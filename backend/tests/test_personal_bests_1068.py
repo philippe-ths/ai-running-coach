@@ -11,6 +11,8 @@ tests do. The times are test setup (trust level 5), except the half marathon at
 from datetime import date, datetime, timedelta
 from uuid import uuid4
 
+import pytest
+
 from app.models import Activity, User, UserProfile
 from app.services import personal_bests as pbs
 from app.services.best_efforts import Effort
@@ -61,11 +63,27 @@ def test_a_later_run_too_short_for_the_distance_cannot_leave_it_open():
     assert _only(pbs.personal_bests(runs, []), "Half-Marathon")["status"] == pbs.CONFIRMED
 
 
-def test_a_fastest_held_effort_strava_did_not_rank_first_is_not_the_pb():
-    runs = [_run(date(2026, 6, 1), 10100, _effort("10K", 2900, rank=2))]
+@pytest.mark.parametrize("rank", [None, 2])
+def test_a_fastest_held_effort_strava_did_not_rank_first_is_not_the_pb(rank):
+    runs = [_run(date(2026, 6, 1), 10100, _effort("10K", 2900, rank=rank))]
     pb = _only(pbs.personal_bests(runs, []), "10K")
     assert pb["status"] == pbs.FASTER_EXISTS
     assert pb["reading"].startswith("NOT their PB")
+
+
+def test_a_stated_pb_slower_than_a_bound_is_named_as_out_of_date():
+    runs = [_run(date(2026, 6, 1), 10100, _effort("10K", 2900, rank=2))]
+    pb = _only(pbs.personal_bests(runs, [pbs.StatedPB("10K", 2950)]), "10K")
+    assert pb["status"] == pbs.FASTER_EXISTS
+    assert "They told us 49:10" in pb["reading"], pb["reading"]
+
+
+def test_on_a_tie_the_effort_strava_ranked_first_is_the_pb():
+    runs = [
+        _run(date(2026, 5, 1), 10100, _effort("10K", 2900)),
+        _run(date(2026, 6, 1), 10100, _effort("10K", 2900, rank=1)),
+    ]
+    assert _only(pbs.personal_bests(runs, []), "10K")["status"] == pbs.CONFIRMED
 
 
 def test_a_stated_pb_faster_than_any_held_effort_is_the_one_shown():
@@ -137,13 +155,28 @@ def test_the_tool_reads_the_runners_own_efforts_and_stated_pbs(db):
     assert out["strava_best_efforts_on_record_from"] == "2026-09-27"
 
 
-def test_the_tool_never_reads_another_runners_efforts(db):
+def test_the_tool_never_reads_another_runners_data(db):
     me, other = _user(db), _user(db)
     _activity(db, other, on=date(2026, 9, 27), distance_m=21200, best_efforts=HALF_PB)
+    db.add(UserProfile(
+        user_id=other.id, goal_type="general", experience_level="intermediate",
+        weekly_days_available=4, stated_pbs=[{"distance": "5K", "time_s": 1500}],
+    ))
+    db.commit()
 
     out = qt.execute_chat_tool(db, me.id, "get_personal_bests", {})
 
     assert out["personal_bests"] == []
+
+
+def test_a_trail_run_held_without_efforts_leaves_the_pb_open(db):
+    u = _user(db)
+    _activity(db, u, on=date(2026, 9, 27), distance_m=21200, best_efforts=HALF_PB)
+    _activity(db, u, on=date(2026, 10, 4), distance_m=22000, type="TrailRun")
+
+    out = qt.execute_chat_tool(db, u.id, "get_personal_bests", {})
+
+    assert _only(out["personal_bests"], "Half-Marathon")["status"] == pbs.MAY_BE_BEATEN
 
 
 def test_the_trace_names_the_distances_the_coach_saw():
@@ -186,3 +219,17 @@ def test_two_stated_pbs_at_one_distance_are_rejected(client, db):
 def test_a_stated_pb_at_a_distance_we_do_not_track_is_rejected(client, db):
     body = {**_PROFILE, "stated_pbs": [{"distance": "15K", "time_s": 4000}]}
     assert client.put("/api/profile", json=body).status_code == 422
+
+
+def test_stated_pbs_are_cleared_with_null(client, db):
+    client.put("/api/profile", json={**_PROFILE, "stated_pbs": [{"distance": "5K", "time_s": 1500}]})
+    assert client.put("/api/profile", json={**_PROFILE, "stated_pbs": None}).status_code == 200
+    assert client.get("/api/profile").json()["stated_pbs"] is None
+
+
+def test_a_stored_row_the_envelope_would_refuse_does_not_break_the_profile(client, db):
+    client.get("/api/profile")  # creates the single local profile
+    profile = db.query(UserProfile).one()
+    profile.stated_pbs = [{"distance": "15K", "time_s": 10}]
+    db.commit()
+    assert client.get("/api/profile").status_code == 200

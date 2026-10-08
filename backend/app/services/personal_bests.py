@@ -20,18 +20,23 @@ The rule holds whether Strava fixes `pr_rank` at upload (its documented reading)
 or recomputes it later: either way a rank-1 effort was never beaten by an earlier
 one, and a non-rank-1 fastest-held effort means Strava knows a faster one we lack.
 
+What the rule cannot see: a run we never stored at all (a sync gap) does not count
+as a later run held without efforts, and neither does an older, faster run uploaded
+after the PB. Either can leave a PB labelled CONFIRMED that is not.
+
 The runner can also STATE a PB (`UserProfile.stated_pbs`), for the ones our records
 cannot see. Owner decision on #1068: the faster of stated and derived is the PB the
 coach is shown, with its source named.
 
-Pure: no I/O. `coach.query_tools.get_personal_bests` owns the reads.
+`personal_bests` is pure. `for_runner` does the reads, so any surface (the coach
+tool, the schedule drafter) gets the same answer.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from app.services.best_efforts import Effort
 from app.services.coach.coach_units import duration_precise
@@ -122,8 +127,10 @@ def _derive(distance: str, runs: Sequence[HeldRun]) -> Optional[_Derived]:
     ]
     if not held:
         return None
-    # Ties go to the earlier run: that is the one that set the time.
-    best, on = min(held, key=lambda pair: (pair[0].elapsed_time_s, pair[1]))
+    # On a tie, the effort Strava ranked first, then the earlier run.
+    best, on = min(
+        held, key=lambda pair: (pair[0].elapsed_time_s, pair[0].pr_rank != 1, pair[1])
+    )
     if best.pr_rank != 1:
         return _Derived(best, on, FASTER_EXISTS, 0)
     blind = sum(
@@ -136,8 +143,9 @@ def _entry(distance: str, time_s: int, on: Optional[date], status: str) -> dict:
     return {
         "distance": distance,
         "time": duration_precise(time_s),
+        "time_s": time_s,
         "set_on": on.isoformat() if on else None,
-        "source": "you told us" if status == STATED else "Strava best effort",
+        "source": "the runner told us" if status == STATED else "Strava best effort",
         "status": status,
         "reading": _READINGS[status],
     }
@@ -148,7 +156,8 @@ def personal_bests(runs: Sequence[HeldRun], stated: Sequence[StatedPB]) -> List[
 
     The faster of a stated and a derived time wins. A FASTER_EXISTS bound is never
     the faster one in practice (the runner's real PB beats it), but if the runner's
-    stated time is slower than the bound, the bound is kept and labelled as one.
+    stated time is slower than the bound, the bound is kept, labelled as one, and the
+    stale stated time named.
     """
     stated_by = {s.distance: s for s in stated if s.distance in DISTANCES}
     out: List[dict] = []
@@ -163,7 +172,82 @@ def personal_bests(runs: Sequence[HeldRun], stated: Sequence[StatedPB]) -> List[
             out.append(_entry(distance, said.time_s, said.on, STATED))
             continue
         entry = _entry(distance, derived.effort.elapsed_time_s, derived.on, derived.status)
+        if said is not None and said.time_s > derived.effort.elapsed_time_s:
+            # What they told us is slower than what Strava measured, so it is out of
+            # date. Say so, or the coach asks for a PB the runner already gave.
+            entry["reading"] += (
+                f" They told us {duration_precise(said.time_s)}, which is slower "
+                f"than this, so their figure is out of date."
+            )
         if derived.later_runs_without_efforts:
             entry["later_runs_without_efforts"] = derived.later_runs_without_efforts
         out.append(entry)
+    return out
+
+
+# Strava's run family, as the coach's other tools count it.
+RUN_TYPES = ("run", "virtualrun", "trailrun")
+
+
+def stated_from_profile(raw: Optional[Sequence[Any]]) -> List[StatedPB]:
+    """`UserProfile.stated_pbs` as `StatedPB`s. A malformed row is skipped, never
+    guessed at, so one bad row cannot take the rest down with it."""
+    out: List[StatedPB] = []
+    for item in raw or []:
+        try:
+            on = item.get("on")
+            out.append(
+                StatedPB(
+                    distance=str(item["distance"]),
+                    time_s=int(item["time_s"]),
+                    on=date.fromisoformat(on) if on else None,
+                )
+            )
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    return out
+
+
+def for_runner(db, user_id) -> dict:
+    """This runner's PBs, with when our Strava best efforts begin and the distances
+    we hold nothing at. Owner-scoped: every read filters on `user_id`."""
+    from sqlalchemy import func
+
+    from app.models import Activity, UserProfile
+    from app.services import activity_facts as af
+    from app.services.best_efforts import efforts as parse_efforts
+
+    rows = (
+        db.query(
+            Activity.start_date,
+            Activity.start_date_local,
+            Activity.distance_m,
+            Activity.raw_summary["best_efforts"].label("best_efforts"),
+        )
+        .filter(
+            Activity.user_id == user_id,
+            Activity.is_deleted == False,  # noqa: E712
+            func.lower(Activity.type).in_(RUN_TYPES),
+        )
+        .all()
+    )
+    runs = [
+        HeldRun(
+            on=af.local_day(r.start_date, r.start_date_local),
+            distance_m=r.distance_m or 0,
+            efforts=parse_efforts({"best_efforts": r.best_efforts}),
+        )
+        for r in rows
+    ]
+    profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
+    found = personal_bests(runs, stated_from_profile(getattr(profile, "stated_pbs", None)))
+
+    covered = [r.on for r in runs if r.efforts]
+    out: dict = {
+        "personal_bests": found,
+        "strava_best_efforts_on_record_from": min(covered).isoformat() if covered else None,
+    }
+    missing = [d for d in DISTANCES if d not in {p["distance"] for p in found}]
+    if missing:
+        out["no_record_at"] = missing
     return out

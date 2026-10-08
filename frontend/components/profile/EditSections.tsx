@@ -212,7 +212,16 @@ export function AppSection({
 // time and an optional date; clearing the time removes the PB.
 type PbRow = { time: string; on: string };
 
-function rowError(key: string, row: PbRow): string | null {
+// The runner's own calendar day, not UTC: a race run this morning east of UTC is
+// still today.
+function localToday(): string {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+function rowError(key: string, row: PbRow, today: string): string | null {
+  // ISO dates compare as strings. A typed date gets past the picker's max.
+  if (row.on && row.on > today) return 'That date has not happened yet.';
   if (!row.time.trim()) return row.on ? 'Add a time, or clear the date.' : null;
   const seconds = parseDuration(row.time);
   if (seconds == null) return 'Use minutes:seconds, or hours:minutes:seconds.';
@@ -244,10 +253,12 @@ export function PersonalBestsSection({
     return byKey;
   });
 
+  const today = localToday();
+
   const update = (key: string, patch: Partial<PbRow>) => {
     const next = { ...rows, [key]: { ...rows[key], ...patch } };
     setRows(next);
-    const valid = PB_DISTANCES.every((d) => rowError(d.key, next[d.key]) == null);
+    const valid = PB_DISTANCES.every((d) => rowError(d.key, next[d.key], today) == null);
     const pbs = PB_DISTANCES.filter((d) => next[d.key].time.trim()).map((d) => ({
       distance: d.key,
       time_s: parseDuration(next[d.key].time) ?? 0,
@@ -256,13 +267,12 @@ export function PersonalBestsSection({
     onChange(pbs.length ? pbs : null, valid);
   };
 
-  const today = new Date().toISOString().slice(0, 10);
 
   return (
     <div className={`${CARD} space-y-5`}>
       {PB_DISTANCES.map((d) => {
         const row = rows[d.key];
-        const error = rowError(d.key, row);
+        const error = rowError(d.key, row, today);
         const id = `pb-${d.key.replace(/\W+/g, '-').toLowerCase()}`;
         return (
           <fieldset key={d.key} aria-describedby={error ? `${id}-error` : 'pbs-hint'}>
