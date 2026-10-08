@@ -283,20 +283,23 @@ def test_the_race_is_reported_without_a_verdict_on_whether_the_plan_suits_it(db)
 
     schedule = build_thread_schedule(db, user, today=TODAY)
 
-    assert schedule["race"] == {
-        "name": "Autumn Half",
-        "date": race.race_date.isoformat(),
-        "distance_km": 21.1,
-        "weeks_away": 4.4,
-    }
+    assert schedule["goals"] == [
+        {
+            "name": "Autumn Half",
+            "priority": "A",
+            "when": f"{race.race_date.day} {race.race_date:%B %Y} (exact date)",
+            "weeks_away": 4.4,
+            "distance_km": 21.1,
+        }
+    ]
     assert "plan_built_for_this_race" not in schedule
 
 
 
-def test_the_race_the_coach_is_told_about_is_the_runners_own_a_race(db):
+def test_every_goal_reaches_the_coach_with_the_runners_own_ranking(db):
     """`A` is the runner's own ranking of what the block is for. A parkrun three
     weeks out is not the race a marathon build is aimed at, however much nearer
-    it is."""
+    it is, so the coach is given the ranking rather than a single chosen race."""
     user = _user(db)
     _race(db, user, when=TODAY + timedelta(days=10), priority="B",
           name="Club 10k")
@@ -306,7 +309,12 @@ def test_the_race_the_coach_is_told_about_is_the_runners_own_a_race(db):
 
     schedule = build_thread_schedule(db, user, today=TODAY)
 
-    assert schedule["race"]["name"] == "Autumn Half"
+    # Both reach the coach now (#1042), soonest first; the A label is what says
+    # which one the block is for.
+    assert [(g["name"], g["priority"]) for g in schedule["goals"]] == [
+        ("Club 10k", "B"),
+        ("Autumn Half", "A"),
+    ]
 
 
 def test_a_runner_with_no_race_gets_no_race_section(db):
@@ -317,7 +325,7 @@ def test_a_runner_with_no_race_gets_no_race_section(db):
 
     schedule = build_thread_schedule(db, user, today=TODAY)
 
-    assert "race" not in schedule
+    assert "goals" not in schedule
     assert "plan_built_for_this_race" not in schedule
 
 

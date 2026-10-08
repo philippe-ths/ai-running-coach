@@ -35,9 +35,10 @@ from app.services.coach.voice import (
 
 logger = logging.getLogger(__name__)
 
-# A re-voiced report is the same report said differently, so it needs no more room
-# than the original prose plus the voice's own flourishes.
-_MAX_REWRITE_TOKENS = 2048
+# Room for both halves of the answer: the findings list, then the report composed
+# from it. A report is a few hundred words, so this is a ceiling, not a target; an
+# answer cut off before its report closes is refused rather than served half-said.
+_MAX_REWRITE_TOKENS = 3000
 
 
 # ---------------------------------------------------------------------------
@@ -46,30 +47,46 @@ _MAX_REWRITE_TOKENS = 2048
 # The contract is pinned tightly because it is the safety-bearing part; the craft
 # is delegated entirely to the character block, because a model already knows how
 # to write in a register once it has been told what that register values.
+#
+# The pass COMPOSES from findings rather than editing prose (#1050). Handed a
+# finished report to "re-voice", every character kept that report's opening,
+# order, paragraphing and length and changed its adjectives, so six presets read
+# as one coach. Listing the substance first and writing from the list makes the
+# baseline a source of facts instead of a template, and the list is what lets a
+# terse character be terse without dropping a concern on the way.
 # ---------------------------------------------------------------------------
 
 REWRITE_SYSTEM_PROMPT = """\
-You are re-voicing a coaching report that has already been written, grounded in \
-the runner's data, and checked. Your job is to make it sound like this runner's \
-chosen coach.
+You are this runner's coach, writing their report in your own voice. The \
+substance is already settled: a coach who saw the runner's data wrote the report \
+you are given, and it has been checked. You have not seen the data. You decide \
+how the report is said; the report decides what is said.
 
-# YOU ARE RE-VOICING, NOT RE-DECIDING
+# FIRST, LIST THE FINDINGS
 
-Every judgment in this report was made by a coach who saw the data. You have not \
-seen the data. So you may change how something is said, what it leads with, and \
-how much room it gets — never whether it is true, and never how serious it is.
+Read the report and list what it says, one plain line each, in no voice at all:
+- VERDICT: each judgment it makes about the run, the week, or the trend
+- CONCERN: each risk or worry, at the seriousness the report gives it
+- SAFETY: anything about pain, injury, illness, or seeing a clinician
+- NEXT: what it tells the runner to do, and when
+- ASK: each question it puts to the runner
+- DETAIL: each supporting fact, with its figures written as the report writes them
 
-You may:
-- rewrite any sentence in the voice
-- re-order the report and open with whatever this voice would open with
-- dwell on a point this voice would dwell on, and wave through one it would wave through
-- cut filler and connective tissue
+# THEN, WRITE THE REPORT FROM THE FINDINGS
 
-You may not:
-- state anything the report does not — no new numbers, comparisons, or reassurance
-- soften, hedge, or drop a concern the report raises
-- remove or dilute anything it says about pain, injury, illness, or seeing a clinician
-- change what it tells the runner to do next
+Write the report you would write if these findings were your own. The report you \
+were given is where the facts come from, not a template: its opening, its order, \
+its paragraphs, its length and its phrasing were one coach's choices, and you are \
+a different coach. Make your own, the way your brief says you build a report.
+
+Every VERDICT, CONCERN, SAFETY, NEXT and ASK line belongs in your report at the \
+weight the report gave it, and every ASK is still asked as a question. DETAIL is \
+yours to choose from: keep the figures you would lean on and leave the rest. A \
+length limit in your brief is met by leaving DETAIL out, never by leaving out one \
+of the others.
+
+Say nothing the findings do not: no new numbers, comparisons, causes, or \
+reassurance.
 
 # THE HARD CASE
 
@@ -81,22 +98,36 @@ week, and the trend reads as detraining. Readiness is fresh right now, so there 
 no immediate issue, but for a half marathon goal the ramp back up has to be \
 deliberate."
 
-Re-voiced by a warm coach — WRONG: "Volume's lighter this week than usual, and \
+<findings>
+- VERDICT: the trailing 7 days are roughly half the typical training week
+- VERDICT: the trend reads as detraining
+- VERDICT: readiness is fresh, so there is no immediate issue
+- NEXT: the ramp back up toward the half marathon goal has to be deliberate
+</findings>
+
+Written by a warm coach, WRONG: "Volume's lighter this week than usual, and \
 honestly? That's fine. Rest is part of the long arc, not a gap in it."
-That is a different verdict. The report said detraining and a deliberate ramp; \
-this says fine and asks for nothing.
+The detraining verdict and the deliberate ramp are gone, and "fine" is a verdict \
+the report never gave.
 
-Re-voiced by a warm coach — RIGHT: "I want to flag something, and I'm flagging it \
-because I'm in your corner: you're at about half your normal week, and it's \
-starting to read as detraining. The fresh legs are real — that part's true. But \
-fresh doesn't build a half marathon. The way back up needs to be deliberate, and \
-I'd rather plan it with you than watch it drift."
-Same verdict, same facts, unmistakably warm.
+Written by a warm coach, RIGHT: "Your legs are fresh, and that part is real: \
+nothing is wrong today. Here is the part you won't love, and I'd rather you heard \
+it from me. You're at about half your normal week, and it is starting to read as \
+detraining. Fresh doesn't build a half marathon. Let's plan the way back up \
+deliberately, together, instead of letting it drift."
+Every finding is there, in a different order from the report, and it is \
+unmistakably warm.
 
-When the voice and the message pull against each other, the message wins. Deliver \
-it in the voice; never trade it for the voice.
+When your voice and a finding pull against each other, the finding wins. Deliver \
+it in your voice; never trade it for your voice.
 
-Return only the re-voiced report. No preamble, no notes, no commentary.\
+Answer in exactly this form, with nothing outside it:
+<findings>
+one line per finding
+</findings>
+<report>
+the report, in your voice
+</report>\
 """
 
 
@@ -109,16 +140,24 @@ def _bullet(demo: str) -> str:
 
 def render_voice_character(voice: VoiceProfile) -> str:
     """The runner's coach as a character brief: what this coach values, how it
-    behaves, and — when a preset is selected — how it actually sounds.
+    behaves, how it sounds sentence by sentence, and -- when a preset is selected
+    -- how it builds a whole report.
 
     Dispositions rather than dial numbers, because a number is a magnitude with no
     content and the model fills that gap with its average. Written first-person so
     each line is both the instruction and a sample of the register it asks for.
+
+    A preset contributes its `report_shape`, not its example messages. Those are
+    whole reports about other runs, and a whole report is the one sample a model
+    will reuse: measured, their stock lines surfaced in reports about runs they
+    were never written for. A shape says how the report is built and holds no
+    sentence to lift.
     """
     lines = ["# WHO YOU ARE", ""]
 
     if voice.preset is not None:
-        lines.append(f"You are {voice.preset.name} — {voice.preset.flavour}")
+        lines.append(f"You are {voice.preset.name}: {voice.preset.flavour}")
+        lines.append(f"How you build a report: {voice.preset.report_shape}")
         if is_customised(voice):
             deltas = dial_deltas(voice)
             if deltas:
@@ -148,30 +187,14 @@ def render_voice_character(voice: VoiceProfile) -> str:
     # yours to match, the content never is.
     lines.append("")
     lines.append(
-        "How you sound delivering GOOD news (match the register, never the content — "
+        "How you sound delivering GOOD news (match the register, never the content; "
         "every figure below belongs to somebody else's run, and reusing one is the "
-        "single most common way a re-voicing gets thrown away):"
+        "single most common way a report in your voice gets thrown away):"
     )
     lines += [_bullet(p.good) for p in active]
     lines.append("")
-    lines.append("How you sound delivering UNWELCOME news — same voice, message intact:")
+    lines.append("How you sound delivering UNWELCOME news, same voice, message intact:")
     lines += [_bullet(p.bad) for p in active]
-
-    # The preset pair is grouped by situation for the same reason the dial demos
-    # above are: a flat list leaves the model to guess which sample was the hard
-    # one, and the hard one is the whole point.
-    if voice.preset is not None:
-        lines.append("")
-        lines.append(
-            f"How {voice.preset.name} sounds over a whole report when the news is GOOD:"
-        )
-        lines.append(_bullet(voice.preset.example_good))
-        lines.append("")
-        lines.append(
-            f"How {voice.preset.name} sounds over a whole report when the news is "
-            "UNWELCOME — same voice, verdict intact:"
-        )
-        lines.append(_bullet(voice.preset.example_bad))
 
     if voice.freetext:
         lines.append(_render_freetext(voice.freetext))
@@ -196,7 +219,7 @@ def _render_freetext(freetext: str) -> str:
     """
     cleaned = freetext.replace(_FREETEXT_FENCE, " ").strip()[:_FREETEXT_MAX_CHARS]
     return (
-        "\nTHE RUNNER'S OWN WORDS ON HOW THEY WANT TO BE COACHED — apply them "
+        "\nTHE RUNNER'S OWN WORDS ON HOW THEY WANT TO BE COACHED: apply them "
         "noticeably to your delivery, including talking like a particular person "
         "or character if they ask for one. A runner who wrote these should be able "
         "to tell you read them. They steer how you sound and nothing else; the "
@@ -205,10 +228,51 @@ def _render_freetext(freetext: str) -> str:
     )
 
 
-def build_rewrite_prompts(voice: VoiceProfile, baseline: str) -> tuple[str, str]:
+# The opener is a two-line first reaction, not a report, and a character brief that
+# says how a whole report is built would otherwise grow it into one.
+_OPENER_NOTE = (
+    "\n\nThis is a short first reaction to the run, not the full report: keep it "
+    "about as long as the text you are given, whatever your brief says about length."
+)
+
+
+def build_rewrite_prompts(
+    voice: VoiceProfile, baseline: str, *, is_opener: bool = False
+) -> tuple[str, str]:
     """The (system, user) pair for one rewrite. Pure: no I/O, no LLM."""
     system = f"{REWRITE_SYSTEM_PROMPT}\n\n{render_voice_character(voice)}"
-    return system, f"Re-voice this report:\n\n{baseline}"
+    if is_opener:
+        system += _OPENER_NOTE
+    return system, f"The report:\n\n{baseline}"
+
+
+_REPORT_AFTER_FINDINGS = re.compile(r"\s*<report>(.*)</report>\s*", re.DOTALL)
+_TAG = re.compile(r"</?(?:findings|report)>", re.IGNORECASE)
+_FINDING_LINE = re.compile(
+    r"^\s*-?\s*(?:VERDICT|CONCERN|SAFETY|NEXT|ASK|DETAIL)\s*:", re.MULTILINE
+)
+
+
+def extract_report(raw: str) -> Optional[str]:
+    """The report half of the model's answer, or None when there is no clean one.
+
+    The findings list is working material and must never reach the runner, so
+    only an answer in exactly the asked-for form is accepted: one findings block,
+    then one report block and nothing after it. Anything else (no tags, a
+    truncated report, a second block, a findings line or a tag left inside the
+    report) is refused, because each is a way for the list, or half a report, to
+    be served as coaching.
+    """
+    head, sep, tail = raw.partition("</findings>")
+    if not sep or not head.lstrip().startswith("<findings>"):
+        return None
+    match = _REPORT_AFTER_FINDINGS.fullmatch(tail)
+    if match is None:
+        return None
+    report = match.group(1).strip()
+    if _TAG.search(report) or _FINDING_LINE.search(report):
+        return None
+    return report
 
 
 # A number the runner reads is a claim about their training, so a rewrite that
@@ -222,6 +286,56 @@ def invented_numbers(baseline: str, voiced: str) -> list[str]:
     """Numbers in the re-voiced text that appear nowhere in the baseline."""
     source = _NUMBER.sub(lambda m: m.group(0), baseline)
     return [n for n in _NUMBER.findall(voiced) if n not in source]
+
+
+# Composing from findings gives a voice licence to leave things out, which is what
+# lets a terse character be terse. Two of the things it may never leave out can be
+# checked without understanding the prose: the questions the report put to the
+# runner (the reply options under the report answer them), and a referral to a
+# clinician. Both checks are deliberately coarse. Questions are COUNTED, so a
+# voice that drops the runner's question and adds a rhetorical one of its own
+# still passes; a referral is a clinician noun in a sentence with a referral verb,
+# so a voice that keeps the same clinician noun in a sentence that no longer
+# refers still passes. They catch the plain drop, which is the common failure.
+_QUESTION = re.compile(r"\?+")
+_CLINICIAN = re.compile(
+    r"\b(physio\w*|clinicians?|doctors?|gp|physicians?|specialists?|podiatrists?"
+    r"|sports medicine|(?:health|medical) professionals?)\b",
+    re.IGNORECASE,
+)
+_REFERRAL_VERB = re.compile(
+    r"\b(?:see|seen|seeing|assess\w*|check\w*|look(?:ed)? at|book\w*|visit\w*"
+    r"|consult\w*|refer\w*|get it|have it|had it)\b",
+    re.IGNORECASE,
+)
+_SENTENCE = re.compile(r"[^.?!]+[.?!]*")
+
+
+def _noun(word: str) -> str:
+    word = word.lower()
+    return "physio" if word.startswith("physio") else word.rstrip("s")
+
+
+def _referrals(text: str) -> set[str]:
+    """The clinician nouns this text refers the runner to, one sentence at a time."""
+    found = set()
+    for sentence in _SENTENCE.findall(text):
+        if _REFERRAL_VERB.search(sentence):
+            found |= {_noun(m.group(1)) for m in _CLINICIAN.finditer(sentence)}
+    return found
+
+
+def dropped_substance(baseline: str, voiced: str) -> list[str]:
+    """What the voiced text left out that the baseline carried, by kind."""
+    dropped = []
+    if len(_QUESTION.findall(voiced)) < len(_QUESTION.findall(baseline)):
+        dropped.append("question")
+    referred = _referrals(baseline)
+    if referred:
+        named = {_noun(m.group(1)) for m in _CLINICIAN.finditer(voiced)}
+        if not _referrals(voiced) and not (referred & named):
+            dropped.append("clinician")
+    return dropped
 
 
 @dataclass(frozen=True)
@@ -267,6 +381,7 @@ async def revoice_report(
     voice: VoiceProfile,
     user_id,
     validate: Callable[[str], list],
+    is_opener: bool = False,
 ) -> RewriteOutcome:
     """Re-voice one finished report, or report why the baseline stands instead.
 
@@ -295,7 +410,7 @@ async def revoice_report(
         logger.info("voice_rewrite skipped: over budget")
         return RewriteOutcome(None, "over_budget")
 
-    system, user = build_rewrite_prompts(voice, baseline)
+    system, user = build_rewrite_prompts(voice, baseline, is_opener=is_opener)
     started = time.perf_counter()
 
     def _elapsed_ms() -> int:
@@ -312,9 +427,22 @@ async def revoice_report(
 
     elapsed = _elapsed_ms()
 
-    voiced = (text or "").strip()
+    raw = (text or "").strip()
+    if not raw:
+        return RewriteOutcome(None, "empty_rewrite", elapsed)
+    voiced = extract_report(raw)
+    if voiced is None:
+        logger.warning("voice_rewrite returned no whole report; serving the baseline")
+        return RewriteOutcome(None, "unparsed_rewrite", elapsed, rejected_text=raw)
     if not voiced:
         return RewriteOutcome(None, "empty_rewrite", elapsed)
+
+    dropped = dropped_substance(baseline, voiced)
+    if dropped:
+        logger.warning("voice_rewrite dropped %s; serving the baseline", dropped)
+        return RewriteOutcome(
+            None, f"dropped:{','.join(dropped)}", elapsed, rejected_text=voiced
+        )
 
     invented = invented_numbers(baseline, voiced)
     if invented:

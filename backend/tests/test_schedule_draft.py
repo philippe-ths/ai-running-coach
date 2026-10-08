@@ -759,7 +759,7 @@ async def test_a_runner_with_no_history_is_told_to_plan_conservatively(db, monke
 
     context = client.calls[0]["user"]
     assert "Not enough history to establish what is typical" in context
-    assert "No race stated" in context
+    assert "No goal stated" in context
     assert outcome.ok is True
     # With no history the load model abstains, so the sessions carry no price.
     assert {s.target_effort_score for s in db.query(PlannedSession).all()} == {None}
@@ -912,7 +912,7 @@ async def test_the_context_tells_the_coach_to_build_backwards_from_the_race(db):
     assert "7 weeks away" in context
     # The race's own week, so phase placement is not date arithmetic done in prose.
     assert (TODAY + timedelta(days=42)).isoformat() in context
-    assert "Build the block backwards from that date" in context
+    assert "The block is built for Autumn Half" in context
     assert "built BACKWARDS from its date" in _SYSTEM_PROMPT
 
 
@@ -925,7 +925,7 @@ async def test_a_runner_with_no_race_is_planned_for_progression_not_a_guess(db):
 
     context = build_draft_context(db, user, today=TODAY, weeks=12)
 
-    assert "No race stated" in context
+    assert "No goal stated" in context
     assert "Do not invent a race" in __import__(
         "app.services.schedule.draft", fromlist=["_SYSTEM_PROMPT"]
     )._SYSTEM_PROMPT

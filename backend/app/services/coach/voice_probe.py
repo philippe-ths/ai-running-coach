@@ -523,7 +523,7 @@ def summarise(results: Sequence[ProbeResult]) -> dict:
         "applied": sum(1 for r in results if r.applied),
         "rejected_by_the_gate": sum(
             1 for r in results if not r.applied and r.outcome_reason.split(":")[0]
-            in ("invented_numbers", "policy")
+            in ("invented_numbers", "policy", "dropped")
         ),
         "skipped": sum(
             1
@@ -534,7 +534,7 @@ def summarise(results: Sequence[ProbeResult]) -> dict:
         "errors": sum(
             1
             for r in results
-            if r.outcome_reason in ("transport_error", "empty_rewrite")
+            if r.outcome_reason in ("transport_error", "empty_rewrite", "unparsed_rewrite")
         ),
         "harness_disagreements": sum(1 for r in results if r.failed_checks),
     }

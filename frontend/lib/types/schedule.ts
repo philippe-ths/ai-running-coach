@@ -194,18 +194,31 @@ export interface PreviousPlan {
 // one — only the WRITE is closed to the three the API accepts.
 export type RacePriority = "A" | "B" | "C";
 
+// A goal is held as precisely as the runner holds it (#1042): an exact
+// `race_date`, a `window_start`..`window_end` ("~March"), or neither
+// ("someday"). Distance is null for a volume block or an open-ended event.
 export interface GoalRace {
   id: string;
   name: string;
-  race_date: string;
-  distance_m: number;
+  race_date: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  distance_m: number | null;
+  target_time_s: number | null;
+  notes: string | null;
+  booked: boolean;
   priority: string;
 }
 
 export interface GoalRaceCreate {
   name: string;
-  race_date: string;
-  distance_m: number;
+  race_date: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  distance_m: number | null;
+  target_time_s: number | null;
+  notes: string | null;
+  booked: boolean;
   priority: RacePriority;
 }
 

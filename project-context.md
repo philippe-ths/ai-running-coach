@@ -44,7 +44,8 @@ It holds only facts the runner stated plus soft non-gating character, never an i
 A `StravaImport` is the resumable-state row for one historical import: `since_date`, `status`, `cursor_page`, `activities_imported`, and a nullable `error`.
 A `UserMaterial` (ADR 0017) is one runner-uploaded markdown coaching material, the product's first untrusted-input surface, scoped per `user_id`.
 It stores the untrusted `raw_text` (never placed into a prompt, never echoed over the API), a `distilled` corpus-`School`-shaped record, a `status` lifecycle (`processing`, `active`, `failed`, `archived`), a `content_hash` for dedup, and `distill_model`/`distilled_at`.
-A `GoalRace` is the runner's own stated race: `name`, `race_date`, `distance_m`, and an `A`/`B`/`C` `priority` that is the runner's ranking and never a claim about ability.
+A `GoalRace` is the runner's own stated goal: a `name`, an `A`/`B`/`C` `priority` that is the runner's ranking and never a claim about ability, and a `booked` bit.
+Its date is an exact `race_date`, an approximate `window_start`/`window_end`, or neither, and `distance_m`, `target_time_s` and the runner's `notes` are each optional.
 A `TrainingPlan` is the plan container: a nullable `goal_race_id`, a `horizon_end`, and two strict-coerced JSON columns `rules` (`List[SpacingRule]`) and `week_shapes` (`List[PlannedWeekShape]`).
 Its `status` is `drafting`, `active`, `superseded`, or `failed`, with at most one active plan per user held by the writer rather than a DB constraint.
 A `PlannedWeekShape` also carries `long_run_distance_m` and `quality_focus`, so a sketched week states the progression it was agreed on rather than only a weekly total.
@@ -64,7 +65,6 @@ The backend exposes JSON endpoints under `/api` for health, Strava OAuth, profil
 `POST /api/activities/{id}/coach-report/regenerate` enqueues `regenerate_report_job` and returns 202; the frontend polls the GET endpoint for a newer `generated_at`.
 Coach threads live under `/api/coach/threads`: list, read, rename, and delete, plus the SSE turn `POST /api/coach/threads/messages` and `POST /api/coach/threads/actions/confirm`.
 `GET`/`PUT /api/coach/voice` and `GET`/`PUT /api/coach/stance` read and write the runner's declared Voice and Stance plus the catalogs the profile UI renders from.
-Smaller reads round out the surface: `GET /api/activities/earliest-date`, `GET /api/stats/weekly`, `GET /api/auth/strava/status`, `GET`/`DELETE /api/activities/{id}/coach-chat`, and `GET /api/coach/telegram/link-status` with `DELETE /api/coach/telegram/link`.
 `GET /api/coach/feature-flags` reports the enabled-state of every coach input with a UI surface, plus `threads`, and is deliberately not itself gated.
 `POST /api/blocks/{id}/split` and `POST /api/blocks/{id}/merge` are the block corrections; both set `user_corrected`, recompute bounds and primary, and inherit exchange sentinels so nothing re-fires.
 Period reports add `POST`/`GET /api/coach/period-reports` and `GET /api/coach/period-reports/{id}`, all behind the `COACH_PERIOD_REPORT_ENABLED` router kill switch.
@@ -72,7 +72,7 @@ Coach materials add `POST`/`GET /api/coach/materials`, `GET /api/coach/materials
 `POST /api/strava/import` starts a resumable walk of Strava history from a chosen `since_date`, and `GET /api/strava/import/status` is the progress poll.
 The import takes raw data only: activity summaries plus deterministic analysis, never streams, never a coach report, and never a notification.
 `DELETE /api/account` removes the Clerk user first, then deletes every row the user owns; a failed Clerk removal touches nothing locally and returns 502.
-The schedule exposes `GET /api/schedule/week`, `GET /api/schedule/horizon`, `GET`/`POST /api/schedule/races`, and `DELETE /api/schedule/races/{race_id}`.
+The schedule exposes `GET /api/schedule/week`, `GET /api/schedule/horizon`, `GET`/`POST /api/schedule/races`, and `PUT`/`DELETE /api/schedule/races/{race_id}`.
 `POST /api/schedule/draft` asks the coach to draft a plan, creating a `drafting` row and enqueueing `generate_schedule_job`; `GET /api/schedule/draft` is the status poll.
 `GET /api/schedule/plans/previous` reports the plan the runner trained to before this one, and `POST /api/schedule/plans/{plan_id}/restore` brings it back.
 `POST`/`DELETE /api/schedule/sessions/{session_id}/complete` tick and untick a session by hand, and `POST /api/schedule/sessions/{session_id}/dismiss` declines a suggestion only.
@@ -154,7 +154,7 @@ The Strava integration is a port (`StravaPort`) with `HTTPStravaAdapter` and `In
 Analysis is a pipeline of pure-ish functions in `app/services/analysis/` composed by `_orchestrator.py`; the public surface is `analyze` and `analyze_with_streams`.
 `stages.py` holds the `ANALYSIS_STAGES` registry of thirteen `Stage` descriptors, each declaring what it READS and WRITES, with `assert_stage_contract` running at import so a stage reading an unwritten field is a startup `RuntimeError`.
 The `DerivedMetric` upsert writes all 23 columns unconditionally, so a stage that abstains overwrites the prior value.
-Race detection (`classifier.race_source`) counts a run on the local date of one of the runner's `GoalRace`s at 0.85-1.25x its distance, a stated intent containing "race", Strava's `workout_type` race marker, or "race" in the name.
+Race detection (`classifier.race_source`) counts a run on the local date of one of the runner's `GoalRace`s at 0.9-1.25x its distance, a stated intent containing "race", Strava's `workout_type` race marker, or "race" in the name.
 On a race, `risk.compute_risk_score` scores a `load_spike` as zero while keeping the flag and a reason marked as expected.
 The interval stage has two sources behind one `interval_structure` contract: `detect_intervals_from_laps` reads the runner's recorded Strava laps and takes precedence on a clear bimodal pattern, tagged `source="recorded_laps"`.
 The coach layer chains `context.py`, `llm.py`, the Pydantic schemas in `app/schemas/coach.py`, `validator.py`, `service.py`, and finally `voice_rewrite.py`.
@@ -236,6 +236,7 @@ A handler declares the owned resource it operates on (`OwnedActivity`, `OwnedBlo
 `memory_store.py` and `memory_update.py` are the runner-memory DB layer and its rewrite-from-source writer.
 `period_report_pack.py`, `period_report.py`, and `period_report_store.py` are the period-report surface.
 `backend/app/services/schedule/` is the schedule package: `disciplines.py`, `placement.py`, `rules.py`, `store.py`, `norms.py`, `week.py`, `horizon.py`, `draft.py`, `draft_contract.py`, `plan_validator.py`, `effort.py`, `completion.py`, and `coach_view.py`.
+`goals.py` is the one home of a goal's ready-by date (the exact date, else the window's start) and of the wording that tells every coach surface how exact that date is.
 `amend.py` rewrites one window of an existing plan through the same envelope, coercion and coherence gate the draft uses, splitting that into `propose_amendment` and `apply_proposal`.
 The package computes no training total of its own: actuals and windows come from `activity_facts`, the week boundary from `weeks.py`, and typical from `coach/volume.py` and its own `norms.py`.
 `backend/app/services/notifications/` holds the notifier port and adapters, the channel selection and composer, the Telegram template, the shared prose-render helpers, and the opaque tap-token codec.
@@ -258,7 +259,6 @@ Those four entrypoints must keep this module path, because RQ serializes a defer
 Backend tests run via `python -m pytest`; the baseline command is `make backend-test`, which excludes tests marked `integration`.
 The test session deliberately opts out of `backend/.env`: `tests/conftest.py` sets `RUNNING_COACH_SKIP_DOTENV` before importing the app, so a local run resolves exactly the code defaults CI resolves.
 `tests/test_settings_isolation.py` guards both halves, matching `COACH_*` settings by prefix so the growing kill-switch family needs no list maintenance.
-The opt-out covers the env FILE only; a variable exported in the developer's shell still wins.
 Backend unit and policy coverage exists for analysis, intervals, the policy validator, the coach context and schema, the two-stage exchange, blocks, the reply path, self-heal, webhooks, the end-to-end pipeline, models, playbooks, risk, Strava auth, stream metrics, sync integration, units, workout matching, and the schedule package.
 Structural route sweeps walk the route table through one shared enumeration, `backend/tests/_route_table.py`, because a sweep over an empty enumeration passes silently rather than erroring.
 `assert_enumeration_is_not_vacuous` proves the enumeration against the app's own OpenAPI document plus a hard route-count floor, and `tests/test_route_table.py` is the guard on that guard.
