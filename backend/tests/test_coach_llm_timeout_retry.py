@@ -411,6 +411,26 @@ async def test_generate_coach_message_retries_on_429_then_succeeds():
 # ---------------------------------------------------------------------------
 
 
+class _EventStream:
+    """What `messages.stream()` yields: iterating it gives the raw stream events."""
+
+    def __init__(self, events):
+        self._events = events
+
+    def __aiter__(self):
+        return self._events.__aiter__()
+
+
+class _EventStream:
+    """What `messages.stream()` yields: iterating it gives the raw stream events."""
+
+    def __init__(self, events):
+        self._events = events
+
+    def __aiter__(self):
+        return self._events.__aiter__()
+
+
 def _make_chat_streaming_ctx(outcomes):
     """`messages.stream` factory shaped for stream_chat_turn. Each entry is
     consumed per call: a BaseException raised on context entry (the admission-time
@@ -425,12 +445,11 @@ def _make_chat_streaming_ctx(outcomes):
             raise outcome
         deltas, final = outcome
 
-        async def _text_stream():
+        async def _events():
             for d in deltas:
-                yield d
+                yield SimpleNamespace(type="text", text=d)
 
-        stream = MagicMock()
-        stream.text_stream = _text_stream()
+        stream = _EventStream(_events())
         stream.get_final_message = AsyncMock(return_value=final)
         yield stream
 
@@ -567,12 +586,11 @@ async def test_stream_chat_turn_never_reissues_once_a_token_has_streamed(raised)
     async def _ctx(*args, **kwargs):
         calls["n"] += 1
 
-        async def _text_stream():
-            yield "partial"
+        async def _events():
+            yield SimpleNamespace(type="text", text="partial")
             raise raised
 
-        stream = MagicMock()
-        stream.text_stream = _text_stream()
+        stream = _EventStream(_events())
         stream.get_final_message = AsyncMock(return_value=_make_ok_message_result())
         yield stream
 

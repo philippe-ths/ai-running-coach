@@ -190,7 +190,17 @@ def _blocks_to_message_params(blocks) -> list:
     params = []
     for b in blocks:
         btype = _block_attr(b, "type")
-        if btype == "text":
+        if btype == "thinking" and _block_attr(b, "signature"):
+            # Sonnet 5.5 binds thinking blocks to the conversation and wants them
+            # back unchanged; a 4.x chat turn produces none, so nothing changes there.
+            params.append({
+                "type": "thinking",
+                "thinking": _block_attr(b, "thinking") or "",
+                "signature": _block_attr(b, "signature"),
+            })
+        elif btype == "redacted_thinking" and _block_attr(b, "data"):
+            params.append({"type": "redacted_thinking", "data": _block_attr(b, "data")})
+        elif btype == "text":
             params.append({"type": "text", "text": _block_attr(b, "text") or ""})
         elif btype == "tool_use":
             params.append({
@@ -521,7 +531,21 @@ async def _buffered_tool_loop(
                 llm_messages.append({"role": "user", "content": tool_results})
                 continue
 
-            # A plain text answer (end_turn / max_tokens): this is the reply.
+            # A plain text answer: this is the reply, unless the model ran out of
+            # tokens mid-reply. A cut-off reply is not served as if it were whole;
+            # it takes the same failure path as any other broken turn.
+            if final_msg.stop_reason == "max_tokens":
+                logger.error(
+                    "coach_turn_failed: reply truncated at max_tokens (round %s of %s)",
+                    round_idx + 1,
+                    _MAX_TOOL_ROUNDS,
+                )
+                stream_failed = True
+                stream_fail_message = (
+                    "Sorry, that reply ran too long and was cut off. "
+                    "Please ask again, or ask for a shorter answer."
+                )
+                break
             assistant_text = _extract_block_text(final_msg.content_blocks)
             break
     except Exception as e:
