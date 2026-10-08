@@ -28,6 +28,9 @@ htmlcov/
 .venv/
 venv/
 backend/.venv/
+# A worktree links its venv as a symlink, which the directory patterns above miss.
+.venv
+backend/.venv
 
 # Node / Next
 node_modules/
