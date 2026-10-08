@@ -48,6 +48,23 @@ def test_unset_chat_model_falls_back_to_the_coach_model(monkeypatch):
     assert resolve_model(TurnKind.THREAD) == "claude-sonnet-4-6"
 
 
+def test_schedule_turn_runs_on_its_own_lane_and_falls_back_when_unset(monkeypatch):
+    """#1064: a plan draft takes COACH_SCHEDULE_MODEL_ID, and with it unset it runs
+    on the coach model, so the lane changes nothing until it is configured."""
+    monkeypatch.setattr(settings, "COACH_MODEL_ID", "claude-sonnet-5-5")
+    monkeypatch.setattr(settings, "COACH_PERIOD_MODEL_ID", "claude-haiku-4-5")
+    monkeypatch.setattr(settings, "COACH_SCHEDULE_MODEL_ID", "claude-opus-5-5")
+    assert resolve_model(TurnKind.SCHEDULE) == "claude-opus-5-5"
+    monkeypatch.setattr(settings, "COACH_SCHEDULE_MODEL_ID", "")
+    assert resolve_model(TurnKind.SCHEDULE) == "claude-sonnet-5-5"
+
+
+def test_the_code_default_coach_model_is_the_5_5_family():
+    from app.core.config import Settings
+
+    assert Settings.model_fields["COACH_MODEL_ID"].default == "claude-sonnet-5-5"
+
+
 def test_build_client_meters_and_carries_the_resolved_model(monkeypatch):
     monkeypatch.setattr(settings, "COACH_MODEL_ID", "claude-sonnet-4-6")
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "k")
@@ -129,6 +146,30 @@ def test_forced_tool_call_records_its_spend(gate, monkeypatch):
     client = MeteredClient(inner, "user-A")
     asyncio.run(client.generate_structured(system="s", user="u", tool={"name": "t"}))
     assert gate.over_budget("user-A") is True
+
+
+def test_reasoned_call_records_its_tokens_and_its_searches(gate, monkeypatch):
+    """#1064: the thinking, searching call is metered by the client, and each web
+    search is priced ($0.01 a query), not just the tokens."""
+    monkeypatch.setattr(settings, "LLM_BUDGET_USER_DAILY_USD", 0.015)
+    inner = _inner("claude-opus-5-5")
+    inner.generate_structured_reasoned = AsyncMock(
+        return_value=({"a": 1}, Usage(input_tokens=0, output_tokens=0, web_search_requests=2))
+    )
+    client = MeteredClient(inner, "user-A")
+
+    result, usage = asyncio.run(client.generate_structured_reasoned(
+        system="s", user="u", tool={"name": "t"}, max_tokens=64,
+        effort="medium", web_search_max_uses=2, timeout=30.0,
+    ))
+
+    assert result == {"a": 1} and usage.web_search_requests == 2
+    # Two searches are $0.02 against a $0.015 ceiling, with no tokens at all.
+    assert gate.over_budget("user-A") is True
+    inner.generate_structured_reasoned.assert_awaited_once_with(
+        system="s", user="u", tool={"name": "t"}, max_tokens=64,
+        effort="medium", web_search_max_uses=2, timeout=30.0,
+    )
 
 
 def test_streaming_turn_records_each_round(gate, monkeypatch):

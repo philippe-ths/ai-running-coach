@@ -91,6 +91,17 @@ def forced_tool_instruction(tool_name: str) -> str:
     )
 
 
+def supports_thinking(model: str) -> bool:
+    """True when a call may ask for adaptive thinking and an `effort` (every 5.x).
+
+    4.x models think only on an explicit token budget, which this app does not use
+    for structured calls, and an unrecognised id gets the shape that is valid
+    everywhere, which is no thinking.
+    """
+    parsed = parse_model(model)
+    return bool(parsed and parsed[1] >= (5, 0))
+
+
 def thinking_headroom(model: str) -> int:
     """Extra `max_tokens` for a model that thinks by default (5.x), because thinking
     tokens count against the cap and an unpadded cap can be spent before any text.

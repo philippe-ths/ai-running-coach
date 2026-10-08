@@ -10,12 +10,15 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx2
 
+from app.core.config import settings
+from app.services.coach.event_search import WEB_SEARCH_TOOL
 from app.services.coach.model_capabilities import (
     accepts_forced_tool_choice,
     chat_thinking_kwargs,
     forced_tool_instruction,
-    thinking_headroom,
     sampling_kwargs,
+    supports_thinking,
+    thinking_headroom,
     tool_choice_kwargs,
 )
 
@@ -56,6 +59,22 @@ _MESSAGE_TIMEOUT_SECONDS = 180.0
 # if per-report cost matters more.
 _COACH_EFFORT = "high"
 
+
+# Room for a reasoned structured call to THINK, on top of the answer's own
+# `max_tokens` (#1064). Thinking tokens count against the cap, and a plan draft at
+# high effort reasons over a whole season before it writes a tool payload: the
+# default `thinking_headroom` (4096) is sized for a model that thinks a little by
+# default, and would be spent before the first session was written. 32k is about
+# what a deep pass over a 12-week plan uses with room to spare, and it is only
+# billed if used. The total is capped at the 128k output ceiling Opus 5.5 and
+# Sonnet 5.5 document, so a large `max_tokens` can never turn into a 400.
+_REASONED_THINKING_HEADROOM = 32_000
+_MAX_OUTPUT_TOKENS = 128_000
+
+# `pause_turn` continuations a reasoned call will follow. The API pauses a long
+# server-tool turn (several web searches) and expects the paused message back;
+# each continuation is a further model round, so the bound is also a spend bound.
+_MAX_PAUSE_CONTINUATIONS = 3
 
 # Initial backoff before the single retry on transient failures.
 _RETRY_BACKOFF_SECONDS = 1.0
@@ -229,6 +248,9 @@ class Usage:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    # Server-side web searches the call ran (#1064), billed per query on the budget
+    # gate exactly as the thread turn's are (`MessageResult.web_search_requests`).
+    web_search_requests: int = 0
 
 
 def _usage_from_response(response: Any) -> Usage:
@@ -239,6 +261,9 @@ def _usage_from_response(response: Any) -> Usage:
         output_tokens=getattr(usage, "output_tokens", 0) or 0,
         cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
         cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        web_search_requests=getattr(
+            getattr(usage, "server_tool_use", None), "web_search_requests", 0
+        ) or 0,
     )
 
 
@@ -466,6 +491,140 @@ class AnthropicClient:
                 if await ladder.should_retry(exc):
                     continue
                 raise
+
+    async def generate_structured_reasoned(
+        self,
+        *,
+        system: str,
+        user: str,
+        tool: Dict[str, Any],
+        max_tokens: int,
+        effort: str = "high",
+        web_search_max_uses: int = 0,
+        timeout: Optional[float] = None,
+    ) -> tuple[Dict[str, Any], Usage]:
+        """A structured call that may THINK and SEARCH THE WEB first (#1064).
+
+        `generate_structured_with_usage` is the containment lever for untrusted
+        input: a forced tool and no thinking, so the model has no room to reason.
+        This is the other end of the same seam, for a decision the model should
+        reason about (a season plan) rather than transcribe. The answer is still
+        the named tool's `input`, still validated by the caller against a strict
+        schema; everything else the model writes (thinking, prose, search queries)
+        is dropped, never read.
+
+        On a model that thinks (5.x) the request carries adaptive thinking and an
+        `effort`, with `tool_choice` auto and the tool named in the user turn,
+        because 5.5 rejects a forced choice and thinking is incompatible with one.
+        On a 4.x model it behaves as the forced, thinking-free call: a forced choice
+        is kept only when no search was asked for, since forcing the tool would
+        stop the model searching at all.
+
+        Always streamed: long thinking plus a large payload is exactly the case the
+        SDK's non-streaming guard refuses. `max_tokens` is the budget for the
+        ANSWER; thinking headroom is added on top (see `_REASONED_THINKING_HEADROOM`).
+
+        `web_search_max_uses` > 0 offers the API-run `web_search` tool (when
+        `COACH_EVENT_SEARCH_ENABLED` allows it). Results are untrusted web content:
+        the caller must treat anything the payload took from them as a claim to
+        check, never an instruction. A `pause_turn` is continued by echoing the
+        paused message back, up to `_MAX_PAUSE_CONTINUATIONS` times, usage summed.
+
+        Raises ValueError on a `max_tokens` stop (a truncated tool call must not be
+        read as an answer, #931) and when no `tool` block comes back. `timeout` is a
+        DEADLINE for the whole call, continuations included, as in the sibling.
+        """
+        tool_name = tool["name"]
+        thinks = supports_thinking(self.model)
+        searching = web_search_max_uses > 0 and settings.COACH_EVENT_SEARCH_ENABLED
+        tools: List[Dict[str, Any]] = [tool]
+        if searching:
+            tools.append({**WEB_SEARCH_TOOL, "max_uses": web_search_max_uses})
+
+        forced = accepts_forced_tool_choice(self.model) and not thinks and not searching
+        user_turn = user if forced else user + forced_tool_instruction(tool_name)
+        if thinks:
+            budget_tokens = min(max_tokens + _REASONED_THINKING_HEADROOM, _MAX_OUTPUT_TOKENS)
+            mode_kwargs: Dict[str, Any] = {
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": effort},
+                "tool_choice": {"type": "auto"},
+            }
+        else:
+            budget_tokens = max_tokens + thinking_headroom(self.model)
+            mode_kwargs = {
+                **sampling_kwargs(self.model, 0),
+                **(tool_choice_kwargs(self.model, tool_name) if forced else {"tool_choice": {"type": "auto"}}),
+            }
+
+        messages: List[Dict[str, Any]] = [{"role": "user", "content": user_turn}]
+        total = Usage()
+        continuations = 0
+        ladder = RetryLadder("anthropic_reasoned")
+        deadline = None if timeout is None else time.monotonic() + timeout
+
+        async def _one_round(left: Optional[float]) -> Any:
+            async with self.client.messages.stream(
+                model=self.model,
+                max_tokens=budget_tokens,
+                system=_cacheable_system(system),  # #629 prompt caching
+                messages=messages,
+                tools=tools,
+                timeout=min(
+                    structured_timeout_for(budget_tokens),
+                    float("inf") if left is None else left,
+                ),
+                **mode_kwargs,
+            ) as stream:
+                return await stream.get_final_message()
+
+        while True:
+            left = None if deadline is None else max(deadline - time.monotonic(), 0.0)
+            try:
+                # The SDK's own timeout is per read, so the deadline is enforced
+                # around the whole round. A budget already spent (or spent by a
+                # retry) raises TimeoutError here without sending anything.
+                final = await asyncio.wait_for(_one_round(left), timeout=left)
+            except Exception as exc:  # noqa: BLE001 — the ladder decides; it re-raises
+                if await ladder.should_retry(exc):
+                    continue
+                raise
+
+            round_usage = _usage_from_response(final)
+            total = Usage(
+                input_tokens=total.input_tokens + round_usage.input_tokens,
+                output_tokens=total.output_tokens + round_usage.output_tokens,
+                cache_read_input_tokens=total.cache_read_input_tokens
+                + round_usage.cache_read_input_tokens,
+                cache_creation_input_tokens=total.cache_creation_input_tokens
+                + round_usage.cache_creation_input_tokens,
+                web_search_requests=total.web_search_requests
+                + round_usage.web_search_requests,
+            )
+            if final.stop_reason == "max_tokens":
+                raise ValueError(
+                    f"{tool_name} tool call truncated at max_tokens={budget_tokens}; "
+                    "the tool input is incomplete and must not be read as an answer"
+                )
+            if final.stop_reason == "pause_turn" and continuations < _MAX_PAUSE_CONTINUATIONS:
+                # Imported here: chat.py imports this module.
+                from app.services.coach.chat import _blocks_to_message_params
+
+                continuations += 1
+                messages.append({
+                    "role": "assistant",
+                    "content": _blocks_to_message_params(final.content),
+                })
+                continue
+
+            for block in final.content:
+                if (
+                    getattr(block, "type", None) == "tool_use"
+                    and getattr(block, "name", None) == tool_name
+                ):
+                    tool_input = getattr(block, "input", None)
+                    return (dict(tool_input) if isinstance(tool_input, dict) else {}), total
+            raise ValueError(f"no {tool_name} tool_use block in response")
 
     async def generate_coach_message(
         self,

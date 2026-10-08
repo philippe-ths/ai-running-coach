@@ -150,3 +150,13 @@ async def test_chat_stream_yields_a_tick_for_non_text_events():
     ticks = [d for d in deltas if d.text is None and d.final is None]
     assert len(ticks) >= 2  # a thinking-only stream still gives the caller heartbeat chances
     assert deltas[-1].final is not None
+
+
+@pytest.mark.parametrize("model", FIVE_FIVE + ["claude-opus-5", "claude-fable-5-1"])
+def test_5x_models_support_thinking(model):
+    assert caps.supports_thinking(model)
+
+
+@pytest.mark.parametrize("model", LEGACY + ["mystery-model", ""])
+def test_4x_and_unrecognised_models_get_no_thinking(model):
+    assert not caps.supports_thinking(model)
