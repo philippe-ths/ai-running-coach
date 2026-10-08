@@ -203,6 +203,11 @@ class SketchedWeek(BaseModel):
     # paces would be a concrete session wearing a sketch's clothes, and the
     # runner would read a promise into a week nobody has written yet.
     quality_focus: Optional[str] = Field(default=None, max_length=80)
+    # The whole week's time across every activity, and its walking distance
+    # (#1044). A runner whose training is mostly walking has a week the running
+    # total does not describe, and the time is what the hours ceiling bounds.
+    target_duration_s: Optional[float] = Field(default=None, ge=0, le=7 * 86_400)
+    target_walking_distance_m: Optional[float] = Field(default=None, ge=0, le=500_000)
     sessions_by_discipline: Dict[str, int] = Field(default_factory=dict)
     intent_counts: Dict[str, int] = Field(default_factory=dict)
 
@@ -318,7 +323,13 @@ SESSION_PROPERTIES: Dict[str, Any] = {
             "the session."
         ),
     },
-    "target_duration_s": {"type": "integer"},
+    "target_duration_s": {
+        "type": "integer",
+        "description": (
+            "The session's time in seconds. Every session states it, 0 on a "
+            "rest day."
+        ),
+    },
     "reps_planned": {"type": "integer"},
     "rep_distance_m": {"type": "number"},
     "rest_s": {"type": "number"},
@@ -438,6 +449,7 @@ RECORD_TRAINING_PLAN_TOOL = {
                                     "intent",
                                     "discipline",
                                     "title",
+                                    "target_duration_s",
                                 ],
                                 "properties": SESSION_PROPERTIES,
                             },
@@ -460,7 +472,11 @@ RECORD_TRAINING_PLAN_TOOL = {
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["week_start"],
+                    "required": [
+                        "week_start",
+                        "target_duration_s",
+                        "target_walking_distance_m",
+                    ],
                     "properties": {
                         "week_start": {"type": "string"},
                         "phase": {
@@ -495,6 +511,20 @@ RECORD_TRAINING_PLAN_TOOL = {
                                 "paces and rest belong to a concrete session, and "
                                 "stating them here would promise a week nobody "
                                 "has written yet."
+                            ),
+                        },
+                        "target_duration_s": {
+                            "type": "number",
+                            "description": (
+                                "The week's total time in seconds, every "
+                                "activity together: runs, walks, bike, strength."
+                            ),
+                        },
+                        "target_walking_distance_m": {
+                            "type": "number",
+                            "description": (
+                                "The week's walking in metres, 0 for a runner "
+                                "who does not walk."
                             ),
                         },
                         "sessions_by_discipline": {

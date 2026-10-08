@@ -478,3 +478,21 @@ def test_zero_rest_is_left_alone_because_it_is_a_real_instruction():
     plan = DraftedPlan.model_validate(normalise(raw))
 
     assert plan.weeks[0].sessions[0].structure() == {"reps_planned": 4, "rest_s": 0}
+
+
+def test_the_tool_requires_the_time_of_every_session_and_every_sketched_week():
+    """Hours exist only when every session states its time, so time is something
+    the model must emit, not something it may leave out."""
+    from app.services.schedule.amend import RECORD_AMENDMENT_TOOL
+
+    plan = RECORD_TRAINING_PLAN_TOOL["input_schema"]["properties"]
+    session = plan["weeks"]["items"]["properties"]["sessions"]["items"]
+    sketch = plan["sketch_weeks"]["items"]
+    amend = RECORD_AMENDMENT_TOOL["input_schema"]["properties"]["weeks"]["items"][
+        "properties"
+    ]["sessions"]["items"]
+
+    assert "target_duration_s" in session["required"]
+    assert "target_duration_s" in amend["required"]
+    assert "target_duration_s" in sketch["required"]
+    assert "target_walking_distance_m" in sketch["required"]
