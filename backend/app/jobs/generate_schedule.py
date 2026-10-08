@@ -60,6 +60,12 @@ def generate_schedule_job(
             logger.error("schedule draft: plan %s does not belong to %s", plan_id, user_id)
             return
 
+        if plan.status != store.DRAFTING:
+            # Picked up after the staleness window failed it: the runner has been
+            # told it failed and may have asked again, so it stays failed.
+            logger.warning("schedule draft: plan %s is %s; not drafting it", plan_id, plan.status)
+            return
+
         outcome = asyncio.run(draft_plan(db, user, plan, thread_id=thread_id))
         if outcome.ok:
             logger.info("schedule draft: plan %s is now active", plan.id)

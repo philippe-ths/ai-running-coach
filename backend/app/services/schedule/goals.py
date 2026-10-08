@@ -18,7 +18,7 @@ Pure: no I/O.
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def ready_by(goal: Any) -> Optional[date]:
@@ -48,6 +48,32 @@ def validator_race(races: Any) -> Optional[tuple]:
     if target is None or target.race_date is None:
         return None
     return (target.race_date, target.distance_m)
+
+
+def weekly_hours_goals(races: Any) -> List[Tuple[date, date, int]]:
+    """Each weekly time target as `(first_day, last_day, seconds)`.
+
+    It holds over the goal's dates: a window from its start to its end, an exact
+    date up to that day, and no date for every week.
+    """
+    out = []
+    for goal in races:
+        seconds = getattr(goal, "weekly_duration_s", None)
+        if not seconds:
+            continue
+        first = goal.window_start or date.min
+        last = goal.window_end or goal.race_date or date.max
+        out.append((first, last, int(seconds)))
+    return out
+
+
+def race_days(races: Any) -> List[date]:
+    """The exact dates of every goal that is an event, whatever its priority."""
+    return [
+        goal.race_date
+        for goal in races
+        if goal.race_date is not None and not getattr(goal, "weekly_duration_s", None)
+    ]
 
 
 def is_upcoming(goal: Any, today: date) -> bool:
@@ -124,6 +150,8 @@ def for_coach(goal: Any, today: date) -> Dict[str, Any]:
         out["distance_km"] = round(goal.distance_m / 1000, 1)
     if goal.target_time_s:
         out["target_time"] = format_duration(goal.target_time_s)
+    if getattr(goal, "weekly_duration_s", None):
+        out["weekly_hours"] = round(goal.weekly_duration_s / 3600, 1)
     if goal.notes:
         out["their_note"] = goal.notes
     return out
@@ -144,6 +172,8 @@ def line_from(facts: Dict[str, Any], *, suffix: str = "") -> str:
     parts.append(f"{facts['distance_km']:g} km" if "distance_km" in facts else "no fixed distance")
     if "target_time" in facts:
         parts.append(f"target {facts['target_time']}")
+    if "weekly_hours" in facts:
+        parts.append(f"{facts['weekly_hours']:g} h a week, every activity together")
     line = ", ".join(parts) + suffix
     if "their_note" in facts:
         # One line per goal: a note's line breaks are flattened so a note can never

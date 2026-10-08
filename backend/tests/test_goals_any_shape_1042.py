@@ -235,7 +235,7 @@ def test_a_goal_without_an_exact_date_is_never_a_candidate_race_on_a_day(db):
         {"name": "Chatham 10k", "race_date": "2026-11-08", "distance_m": 10000, "booked": True,
          "target_time_s": 2820, "priority": "B"},
         {"name": "10h/week, any activity, zone 2+", "window_start": "2026-10-01",
-         "window_end": "2026-12-31", "notes": "Oct to Dec block"},
+         "window_end": "2026-12-31", "notes": "Oct to Dec block", "weekly_duration_s": 36000},
         {"name": "Blank note is no note", "notes": "   "},
         {"name": "Backyard ultra", "priority": "C"},
     ],

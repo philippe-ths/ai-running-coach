@@ -202,7 +202,12 @@ def start_draft(db: DbSession, user: CurrentUser) -> DraftStatusRead:
 
 @router.get("/draft", response_model=DraftStatusRead)
 def read_draft_status(db: DbSession, user: CurrentUser) -> DraftStatusRead:
-    """Where the runner's most recent plan stands. Polled while drafting."""
+    """Where the runner's most recent plan stands. Polled while drafting.
+
+    Asks `draft_in_flight` first, which fails an abandoned draft, so a draft no
+    worker will finish reads as failed rather than writing for ever.
+    """
+    store.draft_in_flight(db, user.id)
     return _draft_status(store.latest_plan(db, user.id))
 
 

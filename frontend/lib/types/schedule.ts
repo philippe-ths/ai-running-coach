@@ -205,6 +205,8 @@ export interface GoalRace {
   window_end: string | null;
   distance_m: number | null;
   target_time_s: number | null;
+  /** A weekly time target, every activity together ("10h a week"). */
+  weekly_duration_s: number | null;
   notes: string | null;
   booked: boolean;
   priority: string;
@@ -217,6 +219,8 @@ export interface GoalRaceCreate {
   window_end: string | null;
   distance_m: number | null;
   target_time_s: number | null;
+  /** A weekly time target, every activity together ("10h a week"). */
+  weekly_duration_s: number | null;
   notes: string | null;
   booked: boolean;
   priority: RacePriority;

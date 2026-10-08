@@ -19,6 +19,7 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.goal_race import GoalRace
 from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
@@ -33,10 +34,13 @@ DRAFTING = "drafting"
 FAILED = "failed"
 
 
-# How long a draft may sit in `drafting` before it is treated as abandoned.
-# Generous next to a generation that takes about a minute: the cost of waiting is
-# a slow retry, the cost of being too eager is two concurrently-billed drafts.
-DRAFT_STALE_AFTER = timedelta(minutes=15)
+# How long a draft may sit in `drafting` before it is treated as abandoned: the
+# longest RQ lets the job run, plus a margin for the queue. Past that no worker
+# is still writing it, and the generate job refuses a plan no longer drafting, so
+# a late pickup cannot activate a plan the runner was told had failed.
+DRAFT_STALE_AFTER = timedelta(seconds=settings.RQ_JOB_TIMEOUT_SECONDS) + timedelta(
+    minutes=3
+)
 
 
 def latest_plan(db: Session, user_id: uuid.UUID) -> Optional[TrainingPlan]:
@@ -500,6 +504,7 @@ GOAL_FIELDS = (
     "window_end",
     "distance_m",
     "target_time_s",
+    "weekly_duration_s",
     "notes",
     "booked",
     "priority",

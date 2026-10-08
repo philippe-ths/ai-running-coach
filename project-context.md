@@ -46,6 +46,7 @@ A `UserMaterial` (ADR 0017) is one runner-uploaded markdown coaching material, t
 It stores the untrusted `raw_text` (never placed into a prompt, never echoed over the API), a `distilled` corpus-`School`-shaped record, a `status` lifecycle (`processing`, `active`, `failed`, `archived`), a `content_hash` for dedup, and `distill_model`/`distilled_at`.
 A `GoalRace` is the runner's own stated goal: a `name`, an `A`/`B`/`C` `priority` that is the runner's ranking and never a claim about ability, and a `booked` bit.
 Its date is an exact `race_date`, an approximate `window_start`/`window_end`, or neither, and `distance_m`, `target_time_s` and the runner's `notes` are each optional.
+An optional `weekly_duration_s` makes a goal a weekly time target across every activity, held over the goal's dates.
 A `TrainingPlan` is the plan container: a nullable `goal_race_id`, a `horizon_end`, and two strict-coerced JSON columns `rules` (`List[SpacingRule]`) and `week_shapes` (`List[PlannedWeekShape]`).
 Its `status` is `drafting`, `active`, `superseded`, or `failed`, with at most one active plan per user held by the writer rather than a DB constraint.
 A `PlannedWeekShape` also carries `long_run_distance_m` and `quality_focus`, so a sketched week states the progression it was agreed on rather than only a weekly total.
@@ -80,6 +81,7 @@ The import takes raw data only: activity summaries plus deterministic analysis, 
 The Garmin source is the unofficial `garminconnect` client behind `services/recovery/garmin_adapter.py`, authenticated by the worker secret `GARMIN_TOKENS` minted by `scripts/garmin_login.py`, with refreshed tokens held in Redis only.
 The schedule exposes `GET /api/schedule/week`, `GET /api/schedule/horizon`, `GET`/`POST /api/schedule/races`, and `PUT`/`DELETE /api/schedule/races/{race_id}`.
 `POST /api/schedule/draft` asks the coach to draft a plan, creating a `drafting` row and enqueueing `generate_schedule_job`; `GET /api/schedule/draft` is the status poll.
+A `drafting` plan older than `RQ_JOB_TIMEOUT_SECONDS` plus three minutes reads as failed on the status poll, and `generate_schedule_job` refuses a plan no longer drafting.
 `GET /api/schedule/plans/previous` reports the plan the runner trained to before this one, and `POST /api/schedule/plans/{plan_id}/restore` brings it back.
 `POST`/`DELETE /api/schedule/sessions/{session_id}/complete` tick and untick a session by hand, and `POST /api/schedule/sessions/{session_id}/dismiss` declines a suggestion only.
 There is no session-create endpoint: every `PlannedSession` is written by the coach's draft, not a form.
@@ -136,6 +138,7 @@ The orthogonal coach-input switch `COACH_SCHEDULE_ENABLED` (default True) drops 
 `SCHEDULE_HORIZON_WEEKS` (default 12) and `SCHEDULE_CONCRETE_WEEKS` (default 3) are inputs to the drafting prompt as well as the horizon read.
 A drafted plan whose goal race falls inside the horizon is written as concrete sessions all the way to the race, bounded by the drafted contract's six-week concrete cap.
 `plan_validator` bounds each week's committed running km and, via `hours_ceilings`, its committed time across every activity, both against the runner's own typical week and with the race left out.
+A drafted plan, not an amendment, must also keep each week's committed walking at 0.8x the runner's typical walking when that is at least 5 km, and reach 0.9x a `weekly_duration_s` goal over its dates except race week and the week after.
 `COACH_PERIOD_REPORT_ENABLED` (default True) gates every `/api/coach/period-reports` route with 503 and hides the frontend entry point.
 `COACH_EVENT_SEARCH_ENABLED` (default True, on in the prod-parity block) removes the thread turn's `web_search` tool and refuses the `add_goal` offer.
 `EXCHANGE_STAGE2_DELAY_SECONDS` (default 10800) is the fuller-turn timer and `EXCHANGE_REPLY_WINDOW_SECONDS` (default 86400) is how long a reply still triggers the fuller turn early; both are inert under a single-shot prompt.
@@ -245,8 +248,6 @@ A handler declares the owned resource it operates on (`OwnedActivity`, `OwnedBlo
 The package computes no training total of its own: actuals and windows come from `activity_facts`, the week boundary from `weeks.py`, and typical from `coach/volume.py` and its own `norms.py`.
 `backend/app/services/notifications/` holds the notifier port and adapters, the channel selection and composer, the Telegram template, the shared prose-render helpers, and the opaque tap-token codec.
 `backend/app/services/` also holds `blocks.py`, `weeks.py`, `activity_facts.py`, `trends.py`, `training_load.py`, `readiness.py`, `laps.py`, `activity_queries.py`, `account_deletion.py`, `checkins.py`, `intents.py`, and `units/cadence.py`.
-`best_efforts.py` parses Strava's per-run `best_efforts` and their `pr_rank`, and `upsert_activity` preserves them across a summary-only re-sync as it does laps.
-`intents.py` is also the single home of the stated-intent vocabulary, rendered by the frontend from `ActivityDetailRead.intent_options` rather than a frontend copy.
 `backend/app/jobs/` holds the RQ jobs, with `process_new_activity.py` as the convergence pipeline and the job layer's four entrypoints.
 Those four entrypoints must keep this module path, because RQ serializes a deferred job as its `module.function` string.
 `backend/app/jobs/cadence/` is the post-activity cadence seam, and `batch_chain.py` is the shared self-pacing batch-chain module the maintenance jobs are built from.
@@ -260,7 +261,6 @@ Those four entrypoints must keep this module path, because RQ serializes a defer
 Backend tests run via `python -m pytest`; the baseline command is `make backend-test`, which excludes tests marked `integration`.
 The test session deliberately opts out of `backend/.env`: `tests/conftest.py` sets `RUNNING_COACH_SKIP_DOTENV` before importing the app, so a local run resolves exactly the code defaults CI resolves.
 `tests/test_settings_isolation.py` guards both halves, matching `COACH_*` settings by prefix so the growing kill-switch family needs no list maintenance.
-Backend unit and policy coverage exists for analysis, intervals, the policy validator, the coach context and schema, the two-stage exchange, blocks, the reply path, self-heal, webhooks, the end-to-end pipeline, models, playbooks, risk, Strava auth, stream metrics, sync integration, units, workout matching, and the schedule package.
 Structural route sweeps walk the route table through one shared enumeration, `backend/tests/_route_table.py`, because a sweep over an empty enumeration passes silently rather than erroring.
 `assert_enumeration_is_not_vacuous` proves the enumeration against the app's own OpenAPI document plus a hard route-count floor, and `tests/test_route_table.py` is the guard on that guard.
 `tests/test_route_ownership_802.py` fails when any route taking an owned-resource path parameter does not resolve it through `deps.py`.

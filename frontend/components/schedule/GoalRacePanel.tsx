@@ -100,6 +100,11 @@ function sayDuration(seconds: number): string {
   return [h && `${h} h`, m && `${m} min`, s && `${s} s`].filter(Boolean).join(" ");
 }
 
+/** A weekly time target: "10 h", "7.5 h". */
+function formatHours(seconds: number): string {
+  return `${Math.round((seconds / 3600) * 10) / 10} h`;
+}
+
 function monthLabel(iso: string): string {
   const d = parseIso(iso);
   return `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
@@ -158,6 +163,7 @@ function describeForCoach(goal: GoalRace): string {
   const bits = [describeWhen(goal)];
   if (goal.distance_m) bits.push(formatDistance(goal.distance_m));
   if (goal.target_time_s) bits.push(`target ${formatTarget(goal.target_time_s)}`);
+  if (goal.weekly_duration_s) bits.push(`${formatHours(goal.weekly_duration_s)} a week`);
   return `${goal.name} (${bits.join(", ")}) is my main goal. Can we build a plan towards it?`;
 }
 
@@ -362,6 +368,11 @@ function GoalRow({
         target {formatTarget(race.target_time_s)}
       </span>
     ) : null,
+    race.weekly_duration_s ? (
+      <span key="weekly" className="font-mono tabular-nums">
+        {formatHours(race.weekly_duration_s)} a week
+      </span>
+    ) : null,
     gap ? <span key="gap" className="font-mono tabular-nums">{gap}</span> : null,
   ].filter(Boolean);
 
@@ -553,6 +564,9 @@ function GoalForm({
   const [target, setTarget] = useState(
     goal?.target_time_s ? formatTarget(goal.target_time_s) : "",
   );
+  const [weeklyHours, setWeeklyHours] = useState(
+    goal?.weekly_duration_s ? `${Math.round((goal.weekly_duration_s / 3600) * 10) / 10}` : "",
+  );
   const [notes, setNotes] = useState(goal?.notes ?? "");
   const [priority, setPriority] = useState<RacePriority>(
     (goal?.priority as RacePriority) ?? defaultPriority,
@@ -584,6 +598,7 @@ function GoalForm({
       window_end: null,
       distance_m: chosenMetres,
       target_time_s: null,
+      weekly_duration_s: null,
       notes: notes.trim() || null,
       booked: false,
       priority,
@@ -624,6 +639,14 @@ function GoalForm({
         return;
       }
       body.target_time_s = seconds;
+    }
+    if (weeklyHours.trim()) {
+      const hours = Number(weeklyHours.replace(",", "."));
+      if (!Number.isFinite(hours) || hours <= 0 || hours > 100) {
+        setProblem("Write the weekly hours as a number, like 10 or 7.5.");
+        return;
+      }
+      body.weekly_duration_s = Math.round(hours * 3600);
     }
 
     setProblem(null);
@@ -833,6 +856,23 @@ function GoalForm({
               {parseTarget(target) ? `= ${sayDuration(parseTarget(target)!)}` : "h:mm:ss or mm:ss"}
             </p>
           )}
+        </div>
+        <div>
+          <label htmlFor="goal-weekly-hours" className={label}>
+            Weekly hours <span className="font-normal text-gray-400">(optional)</span>
+          </label>
+          <input
+            id="goal-weekly-hours"
+            type="text"
+            inputMode="decimal"
+            value={weeklyHours}
+            placeholder="10"
+            onChange={(e) => setWeeklyHours(e.target.value)}
+            className={`${field} w-20 font-mono tabular-nums`}
+          />
+          <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+            Every activity together, each week of the goal&apos;s dates
+          </p>
         </div>
       </div>
 

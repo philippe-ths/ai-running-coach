@@ -55,14 +55,17 @@ from app.services.schedule.draft_contract import (
 from app.services.schedule.effort import build_load_model, estimate_effort
 from app.services.schedule.norms import (
     running_norm_weekly_m,
+    walking_norm_weekly_m,
     weekly_hours_norm_s,
     weekly_norms_by_discipline,
 )
 from app.services.schedule.plan_validator import (
     VOLUME_CEILING,
     hours_ceilings,
+    hours_goal_floor_s,
     validate_drafted_plan,
     volume_ceilings,
+    walking_floor,
 )
 from app.services.weeks import resolve_week_start, week_start
 
@@ -437,6 +440,24 @@ one. The runner's week "
                 "- None of these has a date, so they are directions, not deadlines: "
                 "plan for progression towards them."
             )
+        # The floors a whole plan is held to, said from the functions the gate
+        # calls so the stated bound is the enforced one. An amendment is not
+        # held to them, so it is not told them.
+        if state_horizon:
+            norm_s = weekly_hours_norm_s(facts, today)
+            for first, last, goal_s in goals.weekly_hours_goals(races):
+                span = "every week"
+                if first > today:
+                    span += f" from {first.isoformat()}"
+                if last != date.max:
+                    span += f" until {last.isoformat()}"
+                floor_h = math.ceil(hours_goal_floor_s(goal_s, norm_s) / 360) / 10
+                parts.append(
+                    f"- A weekly time goal: {span}, a week under {floor_h:.1f} h "
+                    "of committed time, every activity together, is rejected (pro rata "
+                    "for the days left this week), except race week and the week "
+                    "after. The plan counts time, not heart-rate zone."
+                )
     else:
         parts.append("\n## THEIR GOALS\nNo goal stated. Plan for general progression.")
 
@@ -487,6 +508,15 @@ one. The runner's week "
                 f"activity together, is rejected outright; a sketched week may reach "
                 f"{sketched_h:.1f} h. A limit, not a target."
             )
+            walking_m = walking_norm_weekly_m(facts, today)
+            floor_m = walking_floor(walking_m)
+            if floor_m is not None and state_horizon:
+                parts.append(
+                    f"- Their walking is part of the week to keep: plan it at about "
+                    f"their usual {walking_m / 1000:.0f} km. A week under "
+                    f"{math.ceil(floor_m / 1000)} km of committed walking is rejected, "
+                    f"race week included (pro rata for the days left this week)."
+                )
         # The number that actually bounds a running plan, given explicitly. The
         # all-activity figure above is the one a coach is most likely to misread
         # as running volume — for a runner who walks a lot it is more than double
@@ -760,7 +790,21 @@ async def draft_plan(
             horizon_weeks=weeks,
             race=race_arg,
             norm_weekly_s=weekly_hours_norm_s(facts, today),
+            norm_weekly_walking_m=walking_norm_weekly_m(facts, today),
+            hours_goals=goals.weekly_hours_goals(races),
+            race_days=goals.race_days(races),
         )
+        if not check.ok and check.only_floors and rewrites_left == 0:
+            # The last attempt is coherent and only short of a floor. Failing it
+            # would leave the runner with no plan, which serves them worse than
+            # a plan that says where it falls short.
+            logger.warning(
+                "schedule draft: accepted short of its floors: %s", check.failures
+            )
+            _persist(db, user, plan, drafted, load_model, model_id=client.model)
+            summary = " ".join(filter(None, [drafted.summary, *check.shortfalls]))
+            return DraftOutcome(ok=True, plan_id=plan.id, summary=summary)
+
         if not check.ok:
             logger.info("schedule draft: rejected: %s", check.failures)
             failures = check.failures

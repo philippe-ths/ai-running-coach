@@ -94,6 +94,15 @@ def weekly_norms_by_discipline(
     return sorted(norms, key=lambda n: n.moving_time_s, reverse=True)
 
 
+def walking_norm_weekly_m(facts: Sequence[Any], as_of: date) -> Optional[float]:
+    """The runner's typical weekly walking distance, or None."""
+    walk = next(
+        (n for n in weekly_norms_by_discipline(facts, as_of) if n.discipline == "walk"),
+        None,
+    )
+    return walk.distance_m if walk is not None else None
+
+
 def weekly_hours_norm_s(facts: Sequence[Any], as_of: date) -> Optional[float]:
     """The runner's typical weekly moving time across every activity, or None."""
     norms = weekly_norms_by_discipline(facts, as_of)

@@ -60,6 +60,11 @@ class GoalRace(Base):
     # Null for a goal with no fixed distance (a volume block, a backyard ultra).
     distance_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     target_time_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # A goal that is a weekly time target ("10h a week, October to December"):
+    # the time each week should reach, every activity together, over the goal's
+    # dates. Typed so the plan validator can hold a plan to it rather than
+    # parsing the name.
+    weekly_duration_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # The runner's own words for the coach. Reaches prompts quoted as theirs.
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     booked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())

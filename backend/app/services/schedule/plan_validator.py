@@ -27,6 +27,7 @@ no schedule, because the runner would act on it. So the draft is retried once
 with the failures fed back, and then abandoned visibly.
 """
 
+import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import List, Optional, Sequence
@@ -64,6 +65,11 @@ ABSURD_SESSIONS_PER_DAY = 4
 # out which is the string-matching that goes wrong the first time the wording is
 # improved.
 VOLUME_CEILING = "volume_ceiling"
+
+# The code a floor rejection carries (`_validate_floors`). A floor asks a plan
+# to keep what this runner does; it is not coherence, so the draft holds it hard
+# on the first attempt and accepts a final attempt short of it, saying so.
+FLOOR = "floor"
 
 # How far past the configured horizon a plan may reach before it is nonsense.
 # The count caps in `draft_contract` bound how MANY weeks a plan holds, not how
@@ -106,6 +112,55 @@ def hours_ceilings(norm_weekly_s: Optional[float]) -> Optional[tuple]:
     return (norm_weekly_s * MAX_WEEKLY_MULTIPLE, norm_weekly_s * MAX_SKETCH_MULTIPLE)
 
 
+# Floors, the other side of the ceilings: what a plan for THIS runner must keep.
+# The ceilings stop a plan that has lost the plot; these stop one written for
+# somebody else. Prompt wording alone moved a 30 km-a-week walker's drafted walking
+# from one walk to three and no further, so the gate holds it.
+#
+# Their walking is part of their life rather than training load to periodise, so
+# a plan keeps most of it every week, race week included. Below a few km a week
+# it is not a habit the plan has to carry.
+WALKING_FLOOR_MULTIPLE = 0.8
+MATERIAL_WALKING_M = 5000.0
+
+# A weekly time goal ("10h a week, October to December") is met when a week
+# reaches most of it: a plan is a prescription, not a stopwatch.
+HOURS_GOAL_SHARE = 0.9
+
+
+def walking_floor(norm_weekly_walking_m: Optional[float]) -> Optional[float]:
+    """The committed walking a whole week must keep, or None when walking is not
+    a material part of this runner's week."""
+    if not norm_weekly_walking_m or norm_weekly_walking_m < MATERIAL_WALKING_M:
+        return None
+    return norm_weekly_walking_m * WALKING_FLOOR_MULTIPLE
+
+
+def hours_goal_floor_s(
+    goal_s: float, norm_weekly_s: Optional[float]
+) -> float:
+    """The time a whole week must reach for a weekly time goal of `goal_s`.
+
+    Never above the concrete hours ceiling, so a goal can never demand a week the
+    other gate rejects.
+    """
+    floor = goal_s * HOURS_GOAL_SHARE
+    ceilings = hours_ceilings(norm_weekly_s)
+    return min(floor, ceilings[0]) if ceilings else floor
+
+
+def share_of_week_left(week_start_date: date, today: date) -> float:
+    """How much of a week is still ahead: 1.0 for a future week, 4/7 on a
+    Thursday of a Monday week."""
+    first = max(week_start_date, today)
+    days = (week_start_date + timedelta(days=6) - first).days + 1
+    return max(0, min(days, 7)) / 7
+
+
+def _day(d: date) -> str:
+    return f"{d.day} {d:%b}"
+
+
 def _hours(seconds: float) -> str:
     return f"{seconds / 3600:.1f} h"
 
@@ -140,12 +195,24 @@ class PlanCheck:
     # failures a caller acts on differently. Everything else stays prose: a code
     # nothing reads is a vocabulary to maintain for nothing.
     codes: List[str] = field(default_factory=list)
+    # One runner-facing sentence per FLOOR failure, for a plan accepted short.
+    shortfalls: List[str] = field(default_factory=list)
 
-    def fail(self, message: str, *, code: Optional[str] = None) -> None:
+    def fail(
+        self, message: str, *, code: Optional[str] = None, shortfall: Optional[str] = None
+    ) -> None:
         self.ok = False
         self.failures.append(message)
         if code is not None:
             self.codes.append(code)
+        if shortfall is not None:
+            self.shortfalls.append(shortfall)
+
+    @property
+    def only_floors(self) -> bool:
+        """Every failure is a floor: the plan is coherent, just short of the
+        runner's usual walking or their weekly time goal."""
+        return not self.ok and self.codes.count(FLOOR) == len(self.failures)
 
 
 @dataclass(frozen=True)
@@ -176,11 +243,17 @@ def validate_drafted_plan(
     horizon_weeks: Optional[int] = None,
     race: Optional[tuple] = None,
     norm_weekly_s: Optional[float] = None,
+    norm_weekly_walking_m: Optional[float] = None,
+    hours_goals: Sequence[tuple] = (),
+    race_days: Sequence[date] = (),
 ) -> PlanCheck:
     """Everything that must hold before a drafted plan reaches the store.
 
     `race` is `(date, distance_m)` for the goal race, when one falls inside the
     plan. It exists for the volume ceiling alone: see `_validate_volume`.
+
+    `hours_goals` are `goals.weekly_hours_goals`, `race_days` every event's exact
+    date; both feed the floors (`_validate_floors`).
     """
     check = PlanCheck()
     current_week = week_start(today, starts_on)
@@ -216,6 +289,22 @@ def validate_drafted_plan(
         _validate_hours(
             check, week.week_start, committed_duration_s(week.sessions, race), norm_weekly_s
         )
+        _validate_floors(
+            check,
+            "week",
+            week.week_start,
+            today=today,
+            walked_m=sum(
+                planned_distance_m(session)
+                for session in week.sessions
+                if session.discipline == "walk" and session.commitment == "committed"
+            ),
+            planned_s=committed_duration_s(week.sessions, race),
+            norm_weekly_walking_m=norm_weekly_walking_m,
+            norm_weekly_s=norm_weekly_s,
+            hours_goals=hours_goals,
+            race_weeks=_race_weeks(race_days, starts_on),
+        )
 
     for sketch in plan.sketch_weeks:
         if sketch.week_start != week_start(sketch.week_start, starts_on):
@@ -250,8 +339,88 @@ def validate_drafted_plan(
             norm_weekly_s,
             sketched=True,
         )
+        _validate_floors(
+            check,
+            "sketched week",
+            sketch.week_start,
+            today=today,
+            walked_m=sketch.target_walking_distance_m or 0.0,
+            planned_s=sketch.target_duration_s or 0.0,
+            norm_weekly_walking_m=norm_weekly_walking_m,
+            norm_weekly_s=norm_weekly_s,
+            hours_goals=hours_goals,
+            race_weeks=_race_weeks(race_days, starts_on),
+        )
 
     return check
+
+
+def _race_weeks(race_days: Sequence[date], starts_on: int) -> set:
+    """The week of each race and the week after it."""
+    weeks = set()
+    for day in race_days:
+        start = week_start(day, starts_on)
+        weeks.update({start, start + timedelta(days=7)})
+    return weeks
+
+
+def _validate_floors(
+    check: PlanCheck,
+    label: str,
+    week_start_date: date,
+    *,
+    today: date,
+    walked_m: float,
+    planned_s: float,
+    norm_weekly_walking_m: Optional[float],
+    norm_weekly_s: Optional[float],
+    hours_goals: Sequence[tuple],
+    race_weeks: set,
+) -> None:
+    """The runner's usual walking, and their weekly time goal, kept in the plan.
+
+    A week already under way is held to the share of it still ahead. The failure
+    states the runner's own numbers, because it is fed back to the rewrite.
+    """
+    share = share_of_week_left(week_start_date, today)
+    partial = " for the days left in it" if share < 1 else ""
+
+    floor = walking_floor(norm_weekly_walking_m)
+    if floor is not None and walked_m + 1 < floor * share:
+        check.fail(
+            f"{label} {week_start_date} plans {walked_m / 1000:.1f} km of committed "
+            f"walking; this runner usually walks {norm_weekly_walking_m / 1000:.0f} "
+            f"km a week, so it needs at least "
+            f"{math.ceil(floor * share / 1000)} km{partial}",
+            code=FLOOR,
+            shortfall=(
+                f"Walking is planned at {walked_m / 1000:.0f} km in the week of "
+                f"{_day(week_start_date)}, under your usual "
+                f"{norm_weekly_walking_m / 1000:.0f} km."
+            ),
+        )
+
+    # Race week and the week after are the race's: the goal resumes after them.
+    if week_start_date in race_weeks:
+        return
+    midweek = week_start_date + timedelta(days=3)
+    applying = [s for first, last, s in hours_goals if first <= midweek <= last]
+    if not applying:
+        return
+    needed = hours_goal_floor_s(max(applying), norm_weekly_s) * share
+    if planned_s + 60 < needed:
+        check.fail(
+            f"{label} {week_start_date} plans {_hours(planned_s)} of training, every "
+            f"activity together; the runner's goal is {max(applying) / 3600:g} h a "
+            f"week over these dates, so it needs at least "
+            f"{math.ceil(needed / 360) / 10:.1f} h{partial}",
+            code=FLOOR,
+            shortfall=(
+                f"The week of {_day(week_start_date)} is planned at "
+                f"{_hours(planned_s)}, under your {max(applying) / 3600:g} h a "
+                f"week goal."
+            ),
+        )
 
 
 def validate_amendment(

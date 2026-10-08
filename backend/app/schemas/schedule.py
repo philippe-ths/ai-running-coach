@@ -438,6 +438,7 @@ class GoalRaceRead(BaseModel):
     window_end: Optional[date] = None
     distance_m: Optional[float] = None
     target_time_s: Optional[int] = None
+    weekly_duration_s: Optional[int] = None
     notes: Optional[str] = None
     booked: bool = False
     priority: str
@@ -474,6 +475,9 @@ class GoalRaceCreate(BaseModel):
     # Up to a week: long enough for a multi-day ultra, short enough to catch a
     # unit slip (minutes typed where seconds were meant).
     target_time_s: Optional[int] = Field(default=None, gt=0, le=7 * 24 * 3600)
+    # A weekly time target, every activity together ("10h a week"). Capped at
+    # 100 h: past that it is a unit slip, not a training week.
+    weekly_duration_s: Optional[int] = Field(default=None, gt=0, le=100 * 3600)
     notes: Optional[str] = Field(default=None, max_length=2000)
     booked: bool = False
     priority: Literal["A", "B", "C"] = "A"

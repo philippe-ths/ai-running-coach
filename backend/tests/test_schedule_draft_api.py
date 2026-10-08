@@ -225,7 +225,8 @@ def test_a_runner_who_has_never_had_a_plan_is_told_so_plainly(db, client):
 )
 def test_each_status_reports_its_own_runner_facing_message(db, client, status, expected):
     user = _seed_user(db)
-    plan = _seed_plan(db, user, status=status, made_at=datetime(2026, 8, 9, 9, 0))
+    # Made just now: a drafting row past the staleness window reads as failed.
+    plan = _seed_plan(db, user, status=status, made_at=datetime.now(timezone.utc))
     _act_as(user)
 
     body = client.get("/api/schedule/draft").json()
@@ -340,8 +341,9 @@ def test_the_poll_reports_the_newest_plan_not_the_one_still_serving_the_week(
     db, client
 ):
     user = _seed_user(db)
-    _seed_plan(db, user, status="active", made_at=datetime(2026, 8, 1, 9, 0))
-    drafting = _seed_plan(db, user, status="drafting", made_at=datetime(2026, 8, 9, 9, 0))
+    now = datetime.now(timezone.utc)
+    _seed_plan(db, user, status="active", made_at=now - timedelta(days=8))
+    drafting = _seed_plan(db, user, status="drafting", made_at=now)
     _act_as(user)
 
     body = client.get("/api/schedule/draft").json()
