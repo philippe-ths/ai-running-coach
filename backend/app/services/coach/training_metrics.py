@@ -84,8 +84,15 @@ def _zone_time_s(fact, min_zone: int) -> Optional[float]:
     return sum(s for zone, s in by_zone.items() if zone >= min_zone)
 
 
+# Cadence in steps per minute means something only on foot: a ride's crank rpm
+# doubled by the per-leg rule would read as a running cadence.
+FOOT_TYPES = frozenset({"run", "virtualrun", "trailrun", "walk", "hike"})
+
+
 def _cadence(fact, _z) -> Optional[float]:
     if not fact.avg_cadence:
+        return None
+    if (fact.user_intent or fact.activity_type or "").lower() not in FOOT_TYPES:
         return None
     return normalize_cadence_spm(fact.user_intent or fact.activity_type, fact.avg_cadence)
 
@@ -125,7 +132,7 @@ METRICS: Tuple[Metric, ...] = (
     Metric("max_hr_bpm", "highest heart rate reached", "bpm", MAX,
            lambda f, _z: f.max_hr or None, ("max_hr",)),
     Metric("avg_pace_per_km", "average pace", "min:sec per km", PACE,
-           _pace_pair, ("average_speed_mps",), default_type="run"),
+           _pace_pair, ("distance_m", "moving_time_s"), default_type="run"),
     Metric("avg_cadence_spm", "average cadence", "steps per minute", TIME_WEIGHTED_MEAN,
            _cadence, ("avg_cadence",), default_type="run"),
     Metric("hr_drift_pct", "heart-rate drift within a session", "%", MEAN,
@@ -147,6 +154,10 @@ METRICS: Tuple[Metric, ...] = (
            _flag("is_hilly"), ("is_hilly",)),
     Metric("races", "races", "sessions", SUM,
            _flag("is_race"), ("is_race",)),
+    Metric("avg_rpe", "how hard sessions felt, as the runner rated them (RPE 1-10)", "RPE", MEAN,
+           lambda f, _z: f.rpe, ("rpe",)),
+    Metric("highest_pain_score", "the highest pain the runner reported (0-10)", "pain score", MAX,
+           lambda f, _z: f.pain_score, ("pain_score",)),
 )
 
 BY_KEY: Dict[str, Metric] = {m.key: m for m in METRICS}
@@ -166,6 +177,7 @@ STORED_FIELDS_EXCLUDED: Dict[str, str] = {
     "activity_type": "served as each session's type and as the type filter",
     "type": "served as each session's type and as the type filter",
     "user_intent": "served through each session's type (the runner's own correction)",
+    "average_speed_mps": "the same quantity as pace, which avg_pace_per_km computes from distance and moving time",
     "name": "served per session by list_activities_in_range",
     "raw_summary": "Strava's raw payload; average_temp is the one field read from it",
     "is_deleted": "deleted sessions are never served",
@@ -183,7 +195,11 @@ STORED_FIELDS_EXCLUDED: Dict[str, str] = {
     "risk_level": "served per session by get_session_detail",
     "risk_score": "served per session by get_session_detail, as its level and reasons",
     "risk_reasons": "served per session by get_session_detail",
-    # structured analyses not yet served to chat (see #1071)
+    # the runner's check-in
+    "pain_location": "served per session by get_session_detail",
+    "notes": "served per session by get_session_detail",
+    "sleep_quality": "withheld from the coach by the COACH_SLEEP_QUALITY_ENABLED kill switch",
+    # structured analyses not yet served to chat (#1072)
     "stops_analysis": "a structured analysis, not a measure; not yet served to chat",
     "efficiency_analysis": "a structured analysis, not a measure; not yet served to chat",
     "workout_match": "a structured analysis, not a measure; not yet served to chat",
@@ -192,6 +208,21 @@ STORED_FIELDS_EXCLUDED: Dict[str, str] = {
     "discount_signals": "a structured analysis, not a measure; not yet served to chat",
     "flags": "internal analysis flags, not a measure",
     "stream_view": "the per-second view the session charts draw; too large for chat",
+}
+
+# Every other table keyed to an activity, with where it is served or why not. The
+# completeness test discovers these from the schema, so a new per-activity table
+# fails the build until it is listed here or its fields are read above.
+ACTIVITY_TABLES: Dict[str, str] = {
+    "activities": "fields",
+    "derived_metrics": "fields",
+    "check_ins": "fields",
+    "activity_streams": "per-second streams; served as splits by get_session_detail",
+    "blocks": "grouping of sessions into one outing, not a measure",
+    "coach_chat_messages": "the conversation itself, which the coach already holds",
+    "coach_reports": "the coach's own written reports, not a training measure",
+    "planned_sessions": "the plan, served by get_training_plan",
+    "coach_threads": "the conversation itself, which the coach already holds",
 }
 
 

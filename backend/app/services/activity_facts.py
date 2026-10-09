@@ -132,6 +132,9 @@ class ActivityFact:
         # reach every measure (`coach.training_metrics`). Opt-in with the session
         # shape: None on the lean scans.
         "name", "max_hr", "is_hilly", "is_race", "pace_variability",
+        # #1071: the runner's check-in. Never projected here (a session can hold
+        # more than one row); the chat tools attach the latest one.
+        "rpe", "pain_score",
     )
 
     def __init__(self, activity: Activity):
@@ -186,6 +189,8 @@ class ActivityFact:
         self.pace_variability = (
             activity.metrics.pace_variability if activity.metrics else None
         )
+        self.rpe = activity.check_in.rpe if activity.check_in else None
+        self.pain_score = activity.check_in.pain_score if activity.check_in else None
 
     @classmethod
     def from_row(cls, row) -> "ActivityFact":
@@ -226,6 +231,8 @@ class ActivityFact:
         self.is_hilly = getattr(row, "is_hilly", None)
         self.is_race = getattr(row, "is_race", None)
         self.pace_variability = getattr(row, "pace_variability", None)
+        self.rpe = None
+        self.pain_score = None
         return self
 
     @property

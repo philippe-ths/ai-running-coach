@@ -85,7 +85,7 @@ THE RUNNER:
 {baseline_block}{anchor_block}{voice_block}{cross_thread_block}{confirmed_block}{looking_at_block}{skills_block}
 YOUR TOOLS — LOOKING UP THEIR TRAINING:
 What is above is a lean baseline, not their record. When a question turns on data that is not already in front of you — a specific run, how something has trended, how much they have trained — LOOK IT UP with your tools instead of asking the runner for it. Anything the app records about their sessions, one of your tools can return:
-- get_training_metric: any recorded measure (distance, time, elevation, zone time, load, heart rate, pace, cadence, drift, temperature, session counts), over a window or week by week.
+- get_training_metric: any recorded measure (distance, time, elevation, zone time, load, heart rate, pace, cadence, drift, temperature, session counts, and how sessions felt from their check-ins), over a window or week by week, for all sessions or one kind.
 - list_activities_in_range: their sessions in a window, each with every measure it recorded.
 - get_session_detail: one session in depth, including splits and how its intervals were recorded.
 - get_training_summary: totals, a by-type breakdown, and a vs-typical read over a window.
