@@ -692,11 +692,12 @@ def _migration_gap(current: set[str], heads: set[str]) -> str | None:
     if current == heads:
         return None
     return (
-        f"the local database is not at the latest migration "
+        f"the local database is not at this branch's migration head "
         f"(at {sorted(current) or ['nothing']}, head is {sorted(heads)}).\n"
         f"  A capture against it degrades silently: screens resolve to nothing\n"
         f"  while every check stays green.\n"
-        f"  Migrate it first: cd backend && alembic upgrade head"
+        f"  Migrate it first: cd backend && alembic upgrade head\n"
+        f"  (if it is ahead, from a newer branch, downgrade to the head above)"
     )
 
 
