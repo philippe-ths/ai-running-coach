@@ -7,7 +7,7 @@
 // that is the same prescription over the same days. A pinned session is never
 // merged: its day is part of what it is.
 
-import type { PlannedSession } from "@/lib/types/schedule";
+import type { PlannedSession, SessionIntent, SpacingRuleRead } from "@/lib/types/schedule";
 import { daysBetween, formatDayChip, weekdayShort } from "./dates";
 
 export interface SessionGroup {
@@ -92,4 +92,41 @@ export function placementChip(
   if (start <= weekStart && end >= weekEnd) return "Any day";
   if (start === end) return formatDayChip(start);
   return `${weekdayShort(start)}–${weekdayShort(end)}`;
+}
+
+/**
+ * How often, and where, in words: "Once, any one day Tue–Thu" or "3 times,
+ * any days this week". A range alone does not say whether it holds one
+ * session or several, and that is the first thing a runner asks of it.
+ */
+export function rangeSentence(group: SessionGroup, weekStart: string, weekEnd: string): string {
+  const n = group.sessions.length;
+  const chip = placementChip(group.first, weekStart, weekEnd);
+  // A window narrowed to a single day ("Fri 9") is a day, not a range.
+  if (/\d/.test(chip)) return n === 1 ? `Once, on ${chip}` : `${n} times, on ${chip}`;
+  const where = chip === "Any day" ? "this week" : chip;
+  if (n === 1) return chip === "Any day" ? "Once, any day this week" : `Once, any one day ${where}`;
+  return `${n} times, any days ${where}`;
+}
+
+/**
+ * The week's rules that name this session's intent, in the server's own words.
+ *
+ * Nothing is evaluated here: the statement is the server's rendering of the
+ * predicate it enforces (#844), and this only decides which statements to put
+ * beside which session. "At most N a day" names no intent, so it rides only on
+ * a repeated session, the one place it changes what the runner can do.
+ */
+export function rulesFor(
+  intent: SessionIntent,
+  count: number,
+  rules: SpacingRuleRead[],
+): string[] {
+  return rules
+    .filter((r) =>
+      r.kind === "max_sessions_per_day"
+        ? count > 1
+        : [r.intent, r.before_intent, r.target_intent, r.intent_a, r.intent_b].includes(intent),
+    )
+    .map((r) => r.statement);
 }

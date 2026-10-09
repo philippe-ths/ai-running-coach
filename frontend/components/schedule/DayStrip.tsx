@@ -72,14 +72,38 @@ function layoutBars(groups: SessionGroup[], weekStart: string): Bar[] {
   });
 }
 
+/**
+ * A SET DAY is a solid bar: the session is that day. A RANGE is an outlined,
+ * tinted track: the session goes on any day inside it, and the dots inside say
+ * how many sessions it holds, one dot each, filled once done. Rest is an
+ * absence, so it is only a dashed outline with nothing in it.
+ */
 function barClass(group: SessionGroup): string {
   const s = group.first;
   const intent = safeIntent(s.intent);
+  if (intent === "rest") return intentPip("rest");
   if (s.commitment === "suggested") {
     return `border border-dashed border-current bg-transparent ${INTENT_TEXT[intent]}`;
   }
-  const allDone = group.doneCount === group.sessions.length;
-  return `${intentPip(intent)} ${allDone ? "" : "opacity-70"}`;
+  if (s.placement !== "pinned") {
+    return `border-[1.5px] border-current ${INTENT_TEXT[intent]}`;
+  }
+  return `${intentPip(intent)} ${s.status === "done" ? "" : "opacity-70"}`;
+}
+
+function SessionDots({ group }: { group: SessionGroup }) {
+  return (
+    <span className="relative flex shrink-0 items-center gap-0.5">
+      {group.sessions.map((s) => (
+        <span
+          key={s.id}
+          className={`h-1.5 w-1.5 rounded-full border border-current ${
+            s.status === "done" ? "bg-current" : ""
+          }`}
+        />
+      ))}
+    </span>
+  );
 }
 
 export default function DayStrip({
@@ -172,40 +196,50 @@ export default function DayStrip({
           >
             {bars.map((b) => {
               const wide = b.end > b.start;
-              const n = b.group.sessions.length;
               const s = b.group.first;
+              const range = s.placement !== "pinned";
+              const isRest = safeIntent(s.intent) === "rest";
               return (
                 <div
                   key={b.group.key}
                   title={barTitle(b.group)}
                   style={{ gridColumn: `${b.start + 1} / ${b.end + 2}`, gridRow: b.lane + 1 }}
-                  className={`mx-0.5 flex min-w-0 items-center rounded-full px-1.5 text-[10px] font-semibold leading-none ${
+                  className={`relative mx-0.5 flex min-w-0 items-center overflow-hidden rounded-full px-1.5 text-[10px] font-semibold leading-none ${
                     wide ? "justify-between gap-1" : "justify-center"
                   } ${barClass(b.group)}`}
                 >
-                  {wide ? (
+                  {range && s.commitment === "committed" && (
+                    <span aria-hidden="true" className="absolute inset-0 bg-current opacity-20" />
+                  )}
+                  {isRest ? null : range ? (
                     <>
-                      <span className="truncate">
-                        {s.title}
-                        {n > 1 && ` ×${n}`}
-                      </span>
-                      {n > 1 && (
-                        <span className="shrink-0 font-mono tabular-nums">
-                          {b.group.doneCount}/{n}
-                        </span>
-                      )}
+                      {wide && <span className="relative truncate">{s.title}</span>}
+                      <SessionDots group={b.group} />
                     </>
                   ) : (
-                    <span className="truncate font-mono tabular-nums">
-                      {narrowLabel(s)}
-                      {n > 1 && <sup>{n}</sup>}
-                    </span>
+                    <span className="truncate font-mono tabular-nums">{narrowLabel(s)}</span>
                   )}
                 </div>
               );
             })}
           </div>
         )}
+      </div>
+
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-gray-500 dark:text-gray-400">
+        <span className="flex items-center gap-1.5">
+          <span aria-hidden="true" className="h-2.5 w-5 rounded-full bg-gray-400 dark:bg-gray-500" />
+          Set day
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden="true"
+            className="relative flex h-2.5 w-8 items-center justify-end overflow-hidden rounded-full border border-current px-0.5"
+          >
+            <span className="h-1 w-1 rounded-full bg-current" />
+          </span>
+          Any day in range, one dot per session
+        </span>
       </div>
 
       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">

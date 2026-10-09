@@ -14,8 +14,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ChevronDown, Loader2 } from "lucide-react";
-import type { LoggedActivity, PlannedSession } from "@/lib/types/schedule";
+import { CheckCircle2, ChevronDown, Loader2, Scale } from "lucide-react";
+import type { LoggedActivity, PlannedSession, SpacingRuleRead } from "@/lib/types/schedule";
 import { formatDistanceKm, formatDuration, formatPace } from "@/lib/format";
 import {
   DISCIPLINE_LABEL,
@@ -26,7 +26,7 @@ import {
   safeIntent,
 } from "./palette";
 import { formatDayChip, todayIso, weekDays, weekdayShort } from "./dates";
-import { groupSessions, placementChip, type SessionGroup } from "./agenda";
+import { groupSessions, placementChip, rangeSentence, rulesFor, type SessionGroup } from "./agenda";
 
 
 /**
@@ -135,12 +135,14 @@ function AgendaRow({
   weekEnd,
   showChip,
   actualById,
+  rules,
   handlers,
 }: {
   group: SessionGroup;
   weekStart: string;
   weekEnd: string;
   showChip: boolean;
+  rules: SpacingRuleRead[];
   actualById: Map<string, LoggedActivity>;
   handlers: Handlers;
 }) {
@@ -169,7 +171,11 @@ function AgendaRow({
         ? `Mark one ${first.title} done (${doneCount} of ${n} done)`
         : `Mark one ${first.title} not done (all ${n} done)`;
 
+  const isRange = first.placement !== "pinned";
+  const ruleLines = rulesFor(intent, n, rules);
+
   const hasMore =
+    ruleLines.length > 0 ||
     !!first.detail ||
     !!reps ||
     (first.has_narrowed && first.placement !== "pinned") ||
@@ -214,7 +220,14 @@ function AgendaRow({
               )}
               {showChip && (
                 <span className="normal-case tracking-normal text-gray-500 dark:text-gray-400">
-                  {placementChip(first, weekStart, weekEnd)}
+                  {isRange
+                    ? rangeSentence(group, weekStart, weekEnd)
+                    : placementChip(first, weekStart, weekEnd)}
+                </span>
+              )}
+              {ruleLines.length > 0 && (
+                <span className="normal-case tracking-normal text-gray-500 dark:text-gray-400">
+                  · {ruleLines.length} {ruleLines.length === 1 ? "rule" : "rules"}
                 </span>
               )}
               {isSuggestion && (
@@ -276,6 +289,25 @@ function AgendaRow({
             <p className="font-mono tabular-nums text-gray-600 dark:text-gray-300">{reps}</p>
           )}
           {first.detail && <p className="text-gray-600 dark:text-gray-400">{first.detail}</p>}
+          {/* What the runner can and cannot do with it: where it may go, and
+              the plan's rules that name it. */}
+          {isRange && (
+            <p className="text-gray-600 dark:text-gray-400">
+              {n === 1
+                ? `One session. Do it on any one day ${placementChip(first, weekStart, weekEnd) === "Any day" ? "this week" : placementChip(first, weekStart, weekEnd)}, whichever suits you.`
+                : `${n} separate sessions. Spread them over ${placementChip(first, weekStart, weekEnd) === "Any day" ? "the week" : placementChip(first, weekStart, weekEnd)}, on whichever days suit you.`}
+            </p>
+          )}
+          {ruleLines.length > 0 && (
+            <ul className="space-y-1">
+              {ruleLines.map((line) => (
+                <li key={line} className="flex items-start gap-1.5 text-gray-600 dark:text-gray-400">
+                  <Scale size={12} aria-hidden="true" className="mt-0.5 shrink-0 text-gray-400" />
+                  {line}
+                </li>
+              ))}
+            </ul>
+          )}
           {first.has_narrowed && first.placement !== "pinned" && (
             <p className="text-[11px] text-gray-400 dark:text-gray-500">
               Window narrowed from {weekdayShort(first.window_start)}–{weekdayShort(first.window_end)}
@@ -360,14 +392,31 @@ function Group({
   props: AgendaProps;
 }) {
   if (!groups.length) return null;
+  // Rest is an absence, not a session: no card, no tick, nothing to mark done.
+  // A day that is only rest says so in its heading.
+  const rests = groups.filter((g) => safeIntent(g.first.intent) === "rest");
+  const sessions = groups.filter((g) => safeIntent(g.first.intent) !== "rest");
+  const restDetail = rests.map((g) => g.first.detail).find(Boolean);
   return (
     <div>
       <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
         {heading}
+        {rests.length > 0 && (
+          <span className="ml-2 font-normal normal-case tracking-normal text-stone-500 dark:text-stone-400">
+            Rest day
+            {rests[0].first.placement !== "pinned" &&
+              `, ${rangeSentence(rests[0], props.weekStart, props.weekEnd).toLowerCase()}`}
+          </span>
+        )}
       </h3>
-      {note && <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">{note}</p>}
+      {restDetail && (
+        <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">{restDetail}</p>
+      )}
+      {note && sessions.length > 0 && (
+        <p className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">{note}</p>
+      )}
       <ul className="space-y-1.5">
-        {groups.map((g) => (
+        {sessions.map((g) => (
           <AgendaRow
             key={g.key}
             group={g}
@@ -375,6 +424,7 @@ function Group({
             weekEnd={props.weekEnd}
             showChip={showChip}
             actualById={props.actualById}
+            rules={props.rules}
             handlers={props}
           />
         ))}
@@ -389,6 +439,7 @@ interface AgendaProps extends Handlers {
   weekStart: string;
   weekEnd: string;
   actualById: Map<string, LoggedActivity>;
+  rules: SpacingRuleRead[];
 }
 
 export default function WeekAgenda(props: AgendaProps) {

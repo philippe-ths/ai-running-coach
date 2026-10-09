@@ -347,6 +347,7 @@ export default function SchedulePage() {
             weekStart={week.week_start}
             weekEnd={week.week_end}
             actualById={actualById}
+            rules={week.rules}
             pendingId={pendingId}
             onComplete={onComplete}
             onUncomplete={onUncomplete}
