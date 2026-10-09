@@ -128,6 +128,13 @@ class ActivityFact:
         # projection extracts THIS ONE SCALAR in SQL (see `query_facts`) rather than
         # undeferring the blob — the N+1 #359/#367 removed. None when unrecorded.
         "average_temp",
+        # #1071: the rest of what the app stores per activity, so the chat coach can
+        # reach every measure (`coach.training_metrics`). Opt-in with the session
+        # shape: None on the lean scans.
+        "name", "max_hr", "is_hilly", "is_race", "pace_variability",
+        # #1071: the runner's check-in. Never projected here (a session can hold
+        # more than one row); the chat tools attach the latest one.
+        "rpe", "pain_score",
     )
 
     def __init__(self, activity: Activity):
@@ -175,6 +182,15 @@ class ActivityFact:
         self.average_temp: Optional[float] = coerce_temp(
             (activity.raw_summary or {}).get("average_temp")
         )
+        self.name = activity.name
+        self.max_hr = activity.max_hr
+        self.is_hilly = activity.metrics.is_hilly if activity.metrics else None
+        self.is_race = activity.metrics.is_race if activity.metrics else None
+        self.pace_variability = (
+            activity.metrics.pace_variability if activity.metrics else None
+        )
+        self.rpe = activity.check_in.rpe if activity.check_in else None
+        self.pain_score = activity.check_in.pain_score if activity.check_in else None
 
     @classmethod
     def from_row(cls, row) -> "ActivityFact":
@@ -210,6 +226,13 @@ class ActivityFact:
         self.interval_structure = getattr(row, "interval_structure", None)
         self.duration_class = getattr(row, "duration_class", None)
         self.hr_drift = getattr(row, "hr_drift", None)
+        self.name = getattr(row, "name", None)
+        self.max_hr = getattr(row, "max_hr", None)
+        self.is_hilly = getattr(row, "is_hilly", None)
+        self.is_race = getattr(row, "is_race", None)
+        self.pace_variability = getattr(row, "pace_variability", None)
+        self.rpe = None
+        self.pain_score = None
         return self
 
     @property
@@ -412,6 +435,11 @@ def query_facts(
                     DerivedMetric.interval_structure,
                     DerivedMetric.duration_class,
                     DerivedMetric.hr_drift,
+                    Activity.name,
+                    Activity.max_hr,
+                    DerivedMetric.is_hilly,
+                    DerivedMetric.is_race,
+                    DerivedMetric.pace_variability,
                 )
                 if include_session_shape
                 else ()

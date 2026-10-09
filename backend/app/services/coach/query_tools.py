@@ -7,15 +7,23 @@ to ask the runner for data we already store ("Can't you see from the data?", the
 2026-07-09 review, finding #1). These are the on-demand read tools that let the
 chat coach FETCH that data instead of asking for it.
 
-Three narrow, purpose-built tools returning coach-framed derived views (pace not
-m/s, effort labels, totals not raw rows), never a general query surface — a small
-sharp set the model reaches for confidently rather than a query language it must
-compose (KB: tool-deference, complex-mcp):
+The model chooses; the server computes (#1071, ADR 0033). Every tool takes a
+few fixed options (a named window, a modality, a metric from a fixed list) and
+returns coach-framed derived views (pace not m/s, effort labels, totals not raw
+rows), never a query the model composes: models are fluent in temporal and
+statistical language and unreliable at the arithmetic behind it (KB:
+tool-deference, complex-mcp). That rule limits how the coach ASKS, not what it
+can REACH. Anything the app stores per activity is reachable through
+`get_training_metric` and the per-session tools, and
+`test_training_metrics_1071.py` fails the build when a stored field is neither
+served nor excluded with a reason in `training_metrics`.
+
   - list_activities_in_range: a bounded per-session enumeration over a window
   - get_session_detail:       one named session's deep detail (by activity_id)
-  - get_training_summary:      a precomputed all-types aggregate over a window
+  - get_training_summary:     a precomputed all-types aggregate over a window
+  - get_training_metric:      any stored measure over a window, whole or per week/month
 
-Two invariants hold across all three, and the tests pin both:
+Two invariants hold across all of them, and the tests pin both:
   1. Owner scoping is SERVER-HELD. Every query filters on a `user_id` resolved
      from the chatted activity, never from the model. A model-supplied activity_id
      can only narrow WITHIN the owner's own data; a cross-user id returns empty.
@@ -45,12 +53,13 @@ from sqlalchemy.orm import Session, joinedload
 from app.services.schedule import goals
 from app.models import Activity, UserProfile
 from app.models.derived_metric import DerivedMetric
-from app.services.coach import coach_units
+from app.services.coach import coach_units, training_metrics
 from app.services.analysis.splits import calculate_splits
 from app.services.units.cadence import normalize_cadence_spm
 from app.services.coach.recent_training import _interval_shape
 from app.services.coach.volume import build_volume_report
 from app.services.activity_facts import query_facts as _query_activity_facts
+from app.services.schedule.norms import zone_seconds
 from app.services.weeks import MONDAY, resolve_week_start, week_start
 
 logger = logging.getLogger(__name__)
@@ -96,8 +105,17 @@ LIST_WINDOWS = tuple(_ROLLING_DAYS_RANGEKEY) + (
     "last_month",
     "this_year",
     "all_time",
+) + (
+    # #1071: whole calendar weeks ending with this one, so a week-by-week read
+    # never opens on a clipped week.
+    "last_4_weeks",
+    "last_8_weeks",
+    "last_12_weeks",
 )
 SUMMARY_WINDOWS = tuple(_ROLLING_DAYS_RANGEKEY) + ("all_time",)
+
+
+_WHOLE_WEEKS = {"last_4_weeks": 4, "last_8_weeks": 8, "last_12_weeks": 12}
 
 
 def _first_of_month(d: date) -> date:
@@ -139,6 +157,14 @@ def resolve_window(
         this_start = week_start(today, week_starts_on)
         start = this_start - timedelta(days=7)
         return ResolvedWindow(start, this_start, f"last week ({start.isoformat()} to {(this_start - timedelta(days=1)).isoformat()})", None)
+    if window in _WHOLE_WEEKS:
+        weeks = _WHOLE_WEEKS[window]
+        start = week_start(today, week_starts_on) - timedelta(days=7 * (weeks - 1))
+        return ResolvedWindow(
+            start, end_excl,
+            f"the last {weeks} calendar weeks, this one included ({start.isoformat()} to {today.isoformat()})",
+            None,
+        )
     if window == "this_month":
         start = _first_of_month(today)
         return ResolvedWindow(start, end_excl, f"this month ({start.isoformat()} to {today.isoformat()})", None)
@@ -234,6 +260,38 @@ def _coverage(db: Session, owner_user_id, resolved: ResolvedWindow) -> dict:
 
 # --- tool executions (all owner-scoped) --------------------------------------
 
+# Measures the list entry already carries in its own framing (or as a label).
+_LISTED_ELSEWHERE = {
+    "sessions", "distance_km", "moving_time_h", "avg_pace_per_km",
+    "sessions_by_effort", "interval_sessions", "long_sessions", "zone_time_h",
+}
+
+
+# A measure named for its aggregate reads oddly on one session ("avg_rpe": 7).
+_PER_SESSION_NAME = {"avg_rpe": "rpe", "highest_pain_score": "pain_score"}
+
+
+def _session_measures(fact) -> dict:
+    """Every registry measure one session recorded (#1071), so no stored figure is
+    out of the coach's reach. Absent keys mean the session did not record it."""
+    out: dict = {}
+    for spec in training_metrics.METRICS:
+        if spec.key in _LISTED_ELSEWHERE:
+            continue
+        value = training_metrics.session_value(spec, fact)
+        if value is None:
+            continue
+        if spec.key in ("hilly_sessions", "races"):
+            if value:
+                out["hilly" if spec.key == "hilly_sessions" else "race"] = True
+            continue
+        out[_PER_SESSION_NAME.get(spec.key, spec.key)] = value
+    by_zone = zone_seconds(fact)
+    if by_zone:
+        out["minutes_by_hr_zone"] = {f"Z{z}": round(sec / 60) for z, sec in sorted(by_zone.items())}
+    return out
+
+
 def list_activities_in_range(
     db: Session, owner_user_id, *, window: str, type_filter: Optional[str], today: date
 ) -> dict:
@@ -254,6 +312,7 @@ def list_activities_in_range(
     facts = sorted(facts, key=lambda f: f.local_date, reverse=True)
     total = len(facts)
     shown = facts[:_MAX_LIST_ACTIVITIES]
+    _attach_check_ins(db, owner_user_id, shown)
 
     activities = []
     for f in shown:
@@ -269,6 +328,8 @@ def list_activities_in_range(
             "structure": f.structure,
             "interval_shape": _interval_shape(f.interval_structure),
             "long_run": True if f.duration_class == "long" else None,
+            "name": f.name,
+            **_session_measures(f),
         })
 
     return {
@@ -353,7 +414,32 @@ def get_session_detail(db: Session, owner_user_id, *, activity_id: str, today: d
         "structure": m.structure if m else None,
         "interval": interval,
         "splits": splits_summary,
+        # #1071: the rest of what the app stores for this session.
+        **_detail_extras(activity, m),
     }
+
+
+def _detail_extras(activity, m: Optional[DerivedMetric]) -> dict:
+    from app.services.activity_facts import ActivityFact
+
+    fact = ActivityFact(activity)
+    # The detail already states cadence, drift, HR and load in its own keys.
+    already = {"avg_cadence_spm", "hr_drift_pct", "avg_hr_bpm", "training_load"}
+    out = {"name": activity.name}
+    out.update({k: v for k, v in _session_measures(fact).items() if k not in already})
+    check_in = activity.check_in
+    if check_in is not None:
+        if check_in.pain_location:
+            out["pain_location"] = check_in.pain_location
+        if check_in.notes:
+            out["runner_notes"] = check_in.notes
+    if m is not None:
+        out["analysis_confidence"] = m.confidence
+        if m.confidence_reasons:
+            out["analysis_confidence_reasons"] = list(m.confidence_reasons)
+        if m.risk_level:
+            out["session_risk"] = {"level": m.risk_level, "reasons": list(m.risk_reasons or [])}
+    return out
 
 
 def _fmt_seconds_per_km(sec_per_km: Optional[float]) -> Optional[str]:
@@ -445,11 +531,186 @@ def _vs_typical(report) -> dict:
     return {"has_baseline": True, "baseline_label": report.baseline_label, "metrics": metrics}
 
 
-# --- tool schemas + dispatch -------------------------------------------------
+# --- get_training_metric (#1071) ------------------------------------------------
 
-# The status label shown in chat while each tool runs (the ephemeral "fetching"
-# affordance, #648). Coach-framed, so it reads as a competent coach checking the
-# record rather than a spinner.
+# Bounds a breakdown: 60 weeks or 60 months is more than any chat answer reads.
+_MAX_PERIODS = 60
+
+# Narrows a measure to one kind of session, so "heart rate on my long runs" is
+# one call rather than a list the coach filters by eye.
+_SESSION_KINDS = {
+    "long": lambda f: f.duration_class == "long",
+    "intervals": lambda f: f.structure == "intervals",
+    "races": lambda f: bool(f.is_race),
+    "hilly": lambda f: bool(f.is_hilly),
+}
+
+_RUN_TYPES = {t.lower() for t in _TYPE_FILTER["run"]}
+
+
+def _attach_check_ins(db: Session, owner_user_id, facts: List[Any]) -> None:
+    """Fill each fact's check-in fields from the runner's latest check-in for that
+    session. Not joined into the shared projection: a session can hold more than
+    one check-in row, and a join would duplicate the session."""
+    from app.models import CheckIn
+
+    by_id = {f.activity_id: f for f in facts}
+    if not by_id:
+        return
+    rows = (
+        db.query(CheckIn)
+        .join(Activity, Activity.id == CheckIn.activity_id)
+        .filter(Activity.user_id == owner_user_id, CheckIn.activity_id.in_(list(by_id)))
+        .order_by(CheckIn.created_at.asc())
+        .all()
+    )
+    for row in rows:  # ascending, so the latest check-in wins
+        fact = by_id[row.activity_id]
+        fact.rpe = row.rpe
+        fact.pain_score = row.pain_score
+
+
+def _zones_note(db: Session, owner_user_id) -> dict:
+    from app.services.coach.context import zones_calibration
+
+    profile = db.query(UserProfile).filter(UserProfile.user_id == owner_user_id).first()
+    calibrated, basis = zones_calibration(profile)
+    out = {"zones_calibrated": calibrated, "zones_basis": basis}
+    if not calibrated:
+        out["zones_note"] = (
+            "This runner's heart-rate zones are not calibrated, so zone figures are "
+            "measured against default zones. Describe them as effort, not as zone numbers."
+        )
+    return out
+
+
+def _is_full_period(lo: date, hi: date, group_by: str, week_starts_on: int) -> bool:
+    if group_by == "week":
+        return lo == week_start(lo, week_starts_on) and (hi - lo).days == 7
+    if group_by == "month":
+        return lo.day == 1 and hi.day == 1 and (hi - lo).days >= 28
+    return True
+
+
+def get_training_metric(
+    db: Session, owner_user_id, *, metric: str, window: str,
+    group_by: Optional[str], type_filter: Optional[str], min_zone: Any,
+    session_kind: Optional[str], today: date,
+) -> dict:
+    """Any stored measure of the runner's training over a named window, whole or
+    broken down by calendar week or month. The server picks how the measure
+    combines and reports, for each period, how many sessions recorded it."""
+    spec = training_metrics.BY_KEY.get(metric) if isinstance(metric, str) else None
+    if spec is None:
+        return {"error": "unknown_metric", "metric": str(metric), "allowed": list(training_metrics.BY_KEY)}
+    group_by = group_by or "none"
+    if group_by not in ("none", "week", "month"):
+        return {"error": "unknown_group_by", "group_by": group_by, "allowed": ["none", "week", "month"]}
+    if min_zone is None:
+        zone = 2
+    elif isinstance(min_zone, int) and not isinstance(min_zone, bool) and 1 <= min_zone <= 5:
+        zone = min_zone
+    else:
+        return {"error": "invalid_min_zone", "min_zone": str(min_zone), "allowed": [1, 2, 3, 4, 5]}
+    session_kind = session_kind or "all"
+    if session_kind != "all" and session_kind not in _SESSION_KINDS:
+        return {"error": "unknown_session_kind", "session_kind": session_kind,
+                "allowed": ["all", *_SESSION_KINDS]}
+
+    week_starts_on = _owner_week_start(db, owner_user_id)
+    resolved = resolve_window(window, today, week_starts_on)
+    if resolved is None:
+        return {"error": "unknown_window", "window": window, "allowed": list(LIST_WINDOWS)}
+
+    effective_filter = type_filter if type_filter not in (None, "") else spec.default_type
+    types = _resolve_type_filter(effective_filter, db, owner_user_id)
+    facts = _query_activity_facts(
+        db, resolved.start, resolved.end, types=types,
+        user_id=owner_user_id, include_session_shape=True,
+    )
+    if session_kind != "all":
+        facts = [f for f in facts if _SESSION_KINDS[session_kind](f)]
+    _attach_check_ins(db, owner_user_id, facts)
+
+    coverage = _coverage(db, owner_user_id, resolved)
+    records_begin = (
+        date.fromisoformat(coverage["records_begin"]) if coverage.get("records_begin") else None
+    )
+    start = resolved.start or records_begin or today
+    spans = training_metrics.periods(start, resolved.end, group_by, week_starts_on)
+    if len(spans) > _MAX_PERIODS:
+        return {
+            "error": "too_many_periods",
+            "periods": len(spans),
+            "limit": _MAX_PERIODS,
+            "hint": (
+                "use a shorter window" if group_by == "month"
+                else "use a shorter window or group_by month"
+            ),
+        }
+
+    # A runner who also rides asking for "mileage" may mean either. Summed measures
+    # over every activity type state the runs-only figure alongside, never merged.
+    show_runs_only = (
+        spec.combine == training_metrics.SUM
+        and not types
+        and any((f.activity_type or "").lower() not in _RUN_TYPES for f in facts)
+    )
+
+    def _measured(in_period: List[Any]) -> dict:
+        out = training_metrics.measure(spec, in_period, zone)
+        if show_runs_only:
+            runs = [f for f in in_period if (f.activity_type or "").lower() in _RUN_TYPES]
+            out["runs_only"] = training_metrics.measure(spec, runs, zone)["value"]
+        return out
+
+    out: dict = {
+        "metric": spec.key,
+        "measures": spec.description,
+        "unit": spec.unit,
+        "how_combined": training_metrics.HOW_COMBINED[spec.combine],
+        "source": "measured from the runner's recorded sessions",
+        "window": {
+            "label": resolved.label,
+            "type_filter": effective_filter or "all",
+            "session_kind": session_kind,
+            **coverage,
+        },
+    }
+    if spec.default_type and type_filter in (None, ""):
+        out["window"]["type_note"] = f"{spec.default_type}s only by default for this measure"
+    if spec.key == "zone_time_h":
+        out["min_zone"] = zone
+        out.update(_zones_note(db, owner_user_id))
+
+    out["whole_window"] = _measured(facts)
+    if group_by != "none":
+        rows = []
+        for lo, hi in spans:
+            row: dict = {"from": lo.isoformat(), "to": (hi - timedelta(days=1)).isoformat()}
+            if records_begin is not None and hi <= records_begin:
+                # Before the app holds any record: unknown, not a week off.
+                row.update({"value": None, "before_records": True})
+                rows.append(row)
+                continue
+            row.update(_measured([f for f in facts if lo <= f.local_date < hi]))
+            if lo <= today < hi:
+                row["in_progress"] = True
+            elif not _is_full_period(lo, hi, group_by, week_starts_on):
+                row["partial_period"] = f"covers {(hi - lo).days} days, clipped by the window"
+            if records_begin is not None and lo < records_begin < hi:
+                row["records_begin_mid_period"] = records_begin.isoformat()
+            rows.append(row)
+        out["group_by"] = group_by
+        out["periods"] = rows
+    if any("sessions_with_data" in r for r in [out["whole_window"], *out.get("periods", [])]):
+        out["missing_data_note"] = (
+            "sessions_with_data is lower than sessions where some sessions did not "
+            "record this measure. Those sessions are left out of the figure, not counted as zero."
+        )
+    return out
+
+
 def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = None) -> dict:
     """The runner's whole training block, week by week (#973).
 
@@ -584,12 +845,18 @@ def get_personal_bests(db: Session, owner_user_id) -> dict:
     return for_runner(db, owner_user_id)
 
 
+# --- tool schemas + dispatch -------------------------------------------------
+
+# The status label shown in chat while each tool runs (the ephemeral "fetching"
+# affordance, #648). Coach-framed, so it reads as a competent coach checking the
+# record rather than a spinner.
 TOOL_STATUS_LABELS = {
     "list_activities_in_range": "Checking your training history…",
     "get_session_detail": "Pulling up that session…",
     "get_training_summary": "Tallying your recent training…",
     "get_training_plan": "Reading your training plan…",
     "get_personal_bests": "Looking up your personal bests…",
+    "get_training_metric": "Measuring your training…",
 }
 
 
@@ -604,6 +871,7 @@ TOOL_TRACE_LABELS = {
     "get_training_summary": "Tallied your recent training",
     "get_training_plan": "Read your training plan",
     "get_personal_bests": "Looked up your personal bests",
+    "get_training_metric": "Measured your training",
     # The server-side web search (#1051). Its detail is a result count, server-derived.
     "web_search": "Searched the web",
 }
@@ -628,6 +896,9 @@ WINDOW_TRACE_LABELS = {
     "last_month": "last month",
     "this_year": "this year",
     "all_time": "all time",
+    "last_4_weeks": "last 4 weeks",
+    "last_8_weeks": "last 8 weeks",
+    "last_12_weeks": "last 12 weeks",
 }
 
 
@@ -686,7 +957,16 @@ def summarize_tool_call(
     def _int(value):
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
-    if name in ("list_activities_in_range", "get_training_summary"):
+    if name == "get_training_metric":
+        detail = _window_detail(tool_input)
+        what = training_metrics.BY_KEY.get(tool_input.get("metric"))
+        if what is not None and what.key == "zone_time_h":
+            noun = f"zone {result.get('min_zone', 2)}+ time"
+        else:
+            noun = what.description if what is not None else None
+        entry["detail"] = f"{noun}, {detail}" if noun and detail else detail
+        entry["count"] = _int((result.get("whole_window") or {}).get("sessions"))
+    elif name in ("list_activities_in_range", "get_training_summary"):
         entry["detail"] = _window_detail(tool_input)
         if name == "list_activities_in_range":
             entry["count"] = _int(result.get("count"))
@@ -824,6 +1104,63 @@ CHAT_TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "get_training_metric",
+        "description": (
+            "Measure ANY recorded aspect of the runner's training over a named window, "
+            "as one figure or broken down by calendar week or month: distance, time, "
+            "elevation, time at or above a heart-rate zone, training load, average or "
+            "highest heart rate, pace, cadence, heart-rate drift, pace variability, "
+            "temperature, sessions by effort, counts of interval, long, hilly and race "
+            "sessions, and how hard sessions felt and any pain, from the runner's own "
+            "check-ins. Use it whenever a question turns on a number from their record "
+            "that your other tools do not state directly, for example 'how much zone 2+ "
+            "did I do each week' (zone_time_h, last_4_weeks, by week) or 'has my "
+            "long-run heart rate come down this year' (avg_hr_bpm, this_year, by month, "
+            "session_kind long). The server combines the figure and says how; each period also says "
+            "how many sessions recorded the measure, so a missing heart-rate strap reads "
+            "as missing data, never as an easy week. Pick the window by name; never "
+            "compute dates."
+        ),
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "metric": {
+                    "type": "string",
+                    "enum": list(training_metrics.BY_KEY),
+                    "description": "What to measure.",
+                },
+                "window": {
+                    "type": "string",
+                    "enum": list(LIST_WINDOWS),
+                    "description": "The named time window, chosen to match the runner's phrasing. The last_N_weeks windows are whole calendar weeks, the right choice for a week-by-week read.",
+                },
+                "group_by": {
+                    "type": "string",
+                    "enum": ["none", "week", "month"],
+                    "description": "One figure for the whole window (none, the default), or one per calendar week or month.",
+                },
+                "type_filter": {
+                    "type": "string",
+                    "enum": ["all", "run", "ride", "strength", "swim", "walk"],
+                    "description": "Optional modality filter. Pace and cadence default to runs; everything else defaults to all activity.",
+                },
+                "session_kind": {
+                    "type": "string",
+                    "enum": ["all", "long", "intervals", "races", "hilly"],
+                    "description": "Optional: measure only one kind of session. Defaults to all.",
+                },
+                "min_zone": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5,
+                    "description": "For zone_time_h only: the lowest heart-rate zone counted (2 = zone 2 or above). Defaults to 2.",
+                },
+            },
+            "required": ["metric", "window"],
+        },
+    },
+    {
         "name": "get_personal_bests",
         "description": (
             "Read this runner's personal bests at 1 mile, 5K, 10K, half marathon "
@@ -871,6 +1208,17 @@ def execute_chat_tool(
                 db, owner_user_id,
                 window=tool_input.get("window", ""),
                 type_filter=tool_input.get("type_filter"),
+                today=today,
+            )
+        if name == "get_training_metric":
+            return get_training_metric(
+                db, owner_user_id,
+                metric=tool_input.get("metric", ""),
+                window=tool_input.get("window", ""),
+                group_by=tool_input.get("group_by"),
+                type_filter=tool_input.get("type_filter"),
+                min_zone=tool_input.get("min_zone"),
+                session_kind=tool_input.get("session_kind"),
                 today=today,
             )
         if name == "get_training_plan":
