@@ -231,6 +231,7 @@ A handler declares the owned resource it operates on (`OwnedActivity`, `OwnedBlo
 `backend/app/services/coach/` owns the LLM coach; each module has one job and the module map is its `__init__.py`.
 `turn.py` is the coaching-turn envelope shared by all generation paths: the `TurnKind` lane, `resolve_model`, `build_client` returning a spend-recording `MeteredClient`, the `over_budget` gate, and `relationship_for_user`.
 `chat.py`, `threads.py`, `thread_turn.py`, `proposed_actions.py`, `screen_context.py`, `coaching_skills.py`, and `query_tools.py` are the conversational surface.
+`training_metrics.py` declares every measure `query_tools.get_training_metric` serves and how each combines, and its test fails when a stored per-activity field is neither read by a measure nor listed in `STORED_FIELDS_EXCLUDED`.
 `query_tools.get_training_plan` is the coach's only forward-looking tool, returning the block week by week from the same builder the runner's horizon screen uses, each week labelled as written or shape only.
 `event_search.py` hands thread turns the API-run `web_search` tool (three searches per round, billed per search on the budget gate), and `add_goal` is the only way a found event becomes a `GoalRace`, written on confirm through `store.create_goal_race` with no `booked` and no target time from the model.
 `voice.py`, `stance.py`, and `corpus.py` are pure domains with no LLM and no I/O; `voice_rewrite.py`, `material_distiller.py`, `receipt.py`, and `receipt_voice.py` are their generative counterparts.
@@ -269,7 +270,6 @@ Frontend regression runs via `npm run test`, which invokes `next lint` then `nex
 Frontend smoke runs via `npm run smoke` (`frontend/scripts/smoke.mjs`), booting a mock API and a Next dev server on dynamically chosen free ports and verifying core routes load.
 `make alembic-check` brings a throwaway Postgres to head then runs `alembic check`, catching the model/migration drift `make backend-test` is structurally blind to because the suite builds its schema with `create_all`.
 The eval harness scores each report from its stored `report` and `context_pack` against sixteen rubric assertions, aggregates a scorecard scoped to the current `(prompt_id, schema_version)`, and flags regressions across versions.
-It scores the fuller turn only: opener-only rows are skipped and counted, never scored.
 `make diagram-check` guards both generated diagrams against the declarations they were produced from, covering pack sections, `DerivedMetric` coverage, kill-switch and prompt parity, the nested pack key set, generator call signatures, and the chat turn's tools, skills, action kinds, screen keys, and prompt slots.
 `backend/tests/test_diagram_drift.py` tests that wiring itself, because every comparison is a pure function that would stay green if the guard simply stopped calling it.
 CI runs `.github/workflows/deploy.yml` on push and pull requests to `main`, with `backend-test`, `frontend-test`, `alembic-check`, and a push-only `post-deploy-verify` job.
