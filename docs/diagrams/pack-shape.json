@@ -1,5 +1,5 @@
 {
- "_note": "Every key the coach context pack can carry, to full nesting depth, as dotted paths, recorded when flow-nodes.js was last regenerated. Read by docs/diagrams/check_diagram_drift.py (#763) so a field added INSIDE an existing pack section cannot ship with the diagram unregenerated. Rewritten by generate_flow_nodes_data.py \u2014 do not hand-edit.",
+ "_note": "Every key the coach context pack can carry, to full nesting depth, as dotted paths, and the report coach's record_coach_tail tool verbatim, recorded when flow-nodes.js was last regenerated. Read by docs/diagrams/check_diagram_drift.py (#763, #962) so a field added INSIDE an existing pack section, or a change to what the report model is told to output, cannot ship with the diagram unregenerated. Rewritten by generate_flow_nodes_data.py \u2014 do not hand-edit.",
  "paths": [
   "activity",
   "activity.avg_cadence",
@@ -612,5 +612,189 @@
   "training_volume.rolling_7d.metrics.norm_weekly_recent",
   "training_volume.rolling_7d.metrics.pct_vs_norm",
   "training_volume.rolling_7d.window"
- ]
+ ],
+ "report_tail_tool": {
+  "name": "record_coach_tail",
+  "description": "Record the structured bookkeeping tail for the coaching message you just wrote. The tail carries affordances and memory hooks only \u2014 it must not contain anything the message did not already say. Call this exactly once, after the prose message.",
+  "input_schema": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "headline",
+    "next_steps",
+    "risks",
+    "questions"
+   ],
+   "properties": {
+    "headline": {
+     "type": "string",
+     "description": "A short verdict label for this run (<= 80 chars)."
+    },
+    "next_steps": {
+     "type": "array",
+     "description": "0-3 concrete next steps, each restating advice already in the message.",
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "action",
+       "details",
+       "why"
+      ],
+      "properties": {
+       "action": {
+        "type": "string"
+       },
+       "details": {
+        "type": "string"
+       },
+       "why": {
+        "type": "string"
+       },
+       "evidence": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "field",
+          "value"
+         ],
+         "properties": {
+          "field": {
+           "type": "string"
+          },
+          "value": {
+           "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+           ]
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "risks": {
+     "type": "array",
+     "description": "Risk-flag declarations; flag must be an exact name from the metrics flags array.",
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "flag",
+       "explanation",
+       "mitigation"
+      ],
+      "properties": {
+       "flag": {
+        "type": "string"
+       },
+       "explanation": {
+        "type": "string"
+       },
+       "mitigation": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "questions": {
+     "type": "array",
+     "description": "0-4 follow-up questions with optional typed tappable options.",
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "question",
+       "reason",
+       "options"
+      ],
+      "properties": {
+       "question": {
+        "type": "string"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "options": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "id",
+          "label",
+          "kind"
+         ],
+         "properties": {
+          "id": {
+           "type": "string"
+          },
+          "label": {
+           "type": "string"
+          },
+          "kind": {
+           "type": "string",
+           "enum": [
+            "rpe",
+            "pain",
+            "reply",
+            "dispute",
+            "custom"
+           ]
+          },
+          "payload": {
+           "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+           ]
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "offer": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "action_type"
+     ],
+     "description": "OPTIONAL. Offer ONE change to the runner's SCHEDULE, for them to confirm with a tap on this report. Use it only when your message has already argued for that change \u2014 the offer is the message's affordance, never a substitute for saying why. Offering is not doing: this puts a card under your report and nothing is written unless the runner taps it, so never write as though the change has been made. Omit it entirely for a report that does not conclude the plan should change, which is most of them. Only ids the pack put in front of you: an id you did not read in right_now.schedule is dropped.",
+     "properties": {
+      "action_type": {
+       "type": "string",
+       "enum": [
+        "adjust_session"
+       ],
+       "description": "adjust_session: correct how far or how long ONE planned session should be. It is the only change offerable from a report. Marking a session done and redrafting the block are offered in the conversation instead, where you can ask the runner first \u2014 a report about one run is the wrong place for either."
+      },
+      "planned_session_id": {
+       "type": "string",
+       "description": "Required for adjust_session and complete_session: the session_id of a session in right_now.schedule. Never invent one."
+      },
+      "target_distance_m": {
+       "type": "number",
+       "description": "adjust_session only: what the WHOLE session should be, in metres, door to door. Give this or target_duration_s, not both."
+      },
+      "target_duration_s": {
+       "type": "integer",
+       "description": "adjust_session only: what the whole session should be, in seconds, when it is prescribed by time rather than distance."
+      }
+     }
+    },
+    "schedule_fuller_turn": {
+     "type": "boolean",
+     "description": "OPENER MODE ONLY: true if this run warrants a fuller follow-up coaching turn (something substantive to say once the runner has had a moment); false or omitted for an unremarkable run. Ignored in fuller mode."
+    }
+   }
+  }
+ }
 }
