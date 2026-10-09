@@ -819,10 +819,11 @@ function GoalForm({
           <label htmlFor="goal-target" className={label}>
             Target time <span className="font-normal text-gray-400">(optional)</span>
           </label>
+          {/* No inputMode="numeric": the iOS number pad has no colon, so a
+              time like 1:40:00 could not be typed. */}
           <input
             id="goal-target"
             type="text"
-            inputMode="numeric"
             value={target}
             placeholder="1:40:00"
             onChange={(e) => setTarget(e.target.value)}
