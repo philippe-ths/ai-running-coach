@@ -1,27 +1,85 @@
-// #830: the seven-day strip.
+// #830: the seven-day strip, drawn as a timeline.
 //
-// A pinned session's pip sits on its day and carries that day's INTENT as
-// colour. Discipline rides inside the pip as a LETTER, never as a second
-// colour. A floating session has no day yet, so it is not on the strip at all —
-// it waits in the "still to place" band below, which is the honest rendering of
-// a session whose day is not decided.
+// Every session is a BAR across the days it can happen: a pinned session is one
+// day wide, a floating one spans its window. That puts the whole week on the
+// strip, where it used to show only pinned days and park every floating
+// session in a separate "still to place" band of dots. Repeated floating
+// sessions are one bar ("Brisk walk ×7"), matching the agenda below.
+//
+// Intent is the bar's colour, as everywhere on the schedule. A narrow bar
+// carries the discipline letter, or a run's km; a wide one has the title. A
+// suggestion is drawn as an outline, the same dashed language as its card.
 
+import type { ReactNode } from "react";
 import type { LoggedActivity, PlannedSession } from "@/lib/types/schedule";
 import {
   DISCIPLINE_LABEL,
   DISCIPLINE_LETTER,
   INTENT_FILL,
   INTENT_LABEL,
+  INTENT_TEXT,
   intentPip,
   safeDiscipline,
   safeIntent,
 } from "./palette";
 import { dayOfMonth, formatDayChip, weekDays, weekdayInitial } from "./dates";
+import { daySpan, groupSessions, type SessionGroup } from "./agenda";
 
-function pipTitle(s: PlannedSession): string {
+interface Bar {
+  group: SessionGroup;
+  start: number;
+  end: number;
+  lane: number;
+}
+
+function barTitle(group: SessionGroup): string {
+  const s = group.first;
   const intent = INTENT_LABEL[safeIntent(s.intent)];
-  const discipline = DISCIPLINE_LABEL[safeDiscipline(s.discipline)];
-  return `${s.title} — ${intent} ${discipline.toLowerCase()}`;
+  const discipline = DISCIPLINE_LABEL[safeDiscipline(s.discipline)].toLowerCase();
+  const n = group.sessions.length;
+  const count = n > 1 ? ` ×${n}, ${group.doneCount} done` : s.status === "done" ? ", done" : "";
+  return `${s.title}: ${intent} ${discipline}${count}`;
+}
+
+/**
+ * A one-day bar has room for a few characters. A run carries no letter (it is
+ * the default discipline), so it shows its planned km instead: the number a
+ * runner most wants at a glance. Anything else keeps its discipline letter.
+ */
+function narrowLabel(s: PlannedSession): string {
+  const discipline = safeDiscipline(s.discipline);
+  if (discipline === "run" && s.planned_distance_m > 0) {
+    return (s.planned_distance_m / 1000).toFixed(s.planned_distance_m < 10000 ? 1 : 0);
+  }
+  return DISCIPLINE_LETTER[discipline];
+}
+
+/** Greedy interval packing: each bar takes the first lane free on its days. */
+function layoutBars(groups: SessionGroup[], weekStart: string): Bar[] {
+  const spans = groups
+    .map((group) => ({ group, ...daySpan(group.first, weekStart) }))
+    .sort((a, b) => a.start - b.start || b.end - b.start - (a.end - a.start));
+  const laneEnds: number[] = [];
+  return spans.map((span) => {
+    let lane = laneEnds.findIndex((end) => end < span.start);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(span.end);
+    } else {
+      laneEnds[lane] = span.end;
+    }
+    return { ...span, lane };
+  });
+}
+
+function barClass(group: SessionGroup): string {
+  const s = group.first;
+  const intent = safeIntent(s.intent);
+  if (s.commitment === "suggested") {
+    return `border border-dashed border-current bg-transparent ${INTENT_TEXT[intent]}`;
+  }
+  const allDone = group.doneCount === group.sessions.length;
+  return `${intentPip(intent)} ${allDone ? "" : "opacity-70"}`;
 }
 
 export default function DayStrip({
@@ -29,118 +87,128 @@ export default function DayStrip({
   sessions,
   logged,
   today,
+  header,
 }: {
   weekStart: string;
   sessions: PlannedSession[];
   logged: LoggedActivity[];
   today: string;
+  /** The week navigator, so changing week is right where the week is read. */
+  header?: ReactNode;
 }) {
   const days = weekDays(weekStart);
-
-  const pinnedByDay = new Map<string, PlannedSession[]>();
-  for (const s of sessions) {
-    if (s.placement !== "pinned" || s.status === "dismissed") continue;
-    const list = pinnedByDay.get(s.window_start) ?? [];
-    list.push(s);
-    pinnedByDay.set(s.window_start, list);
-  }
+  const groups = groupSessions(sessions.filter((s) => s.status !== "dismissed"));
+  const bars = layoutBars(groups, weekStart);
+  const laneCount = bars.reduce((max, b) => Math.max(max, b.lane + 1), 0);
+  const todayIndex = days.indexOf(today);
 
   const loggedByDay = new Map<string, number>();
   for (const a of logged) {
     loggedByDay.set(a.local_date, (loggedByDay.get(a.local_date) ?? 0) + 1);
   }
 
-  const floating = sessions.filter(
-    (s) => s.placement !== "pinned" && s.status === "upcoming" && s.commitment === "committed",
-  );
-
-  // The text alternative: the whole strip as one sentence per day that has
-  // anything on it.
-  const summary = days
-    .map((day) => {
-      const pinned = pinnedByDay.get(day) ?? [];
-      const count = loggedByDay.get(day) ?? 0;
-      if (!pinned.length && !count) return null;
-      const planned = pinned.map((s) => pipTitle(s)).join(", ");
-      const loggedText = count ? `${count} logged` : "";
-      return `${formatDayChip(day)}: ${[planned, loggedText].filter(Boolean).join("; ")}`;
-    })
-    .filter(Boolean)
-    .join(". ");
+  // The text alternative: one sentence per bar, then what was logged.
+  const summary = [
+    ...bars.map((b) => {
+      const when =
+        b.start === b.end
+          ? formatDayChip(days[b.start])
+          : `${formatDayChip(days[b.start])} to ${formatDayChip(days[b.end])}`;
+      return `${when}: ${barTitle(b.group)}`;
+    }),
+    ...days
+      .filter((d) => loggedByDay.get(d))
+      .map((d) => `${formatDayChip(d)}: ${loggedByDay.get(d)} logged`),
+  ].join(". ");
 
   return (
-    <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <section className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:p-4">
+      {header}
       <h2 className="sr-only">The week, day by day</h2>
       <p className="sr-only">{summary || "Nothing planned or logged this week yet."}</p>
 
-      <ol className="grid grid-cols-7 gap-1" aria-hidden="true">
-        {days.map((day) => {
-          const pinned = pinnedByDay.get(day) ?? [];
-          const loggedCount = loggedByDay.get(day) ?? 0;
-          const isToday = day === today;
-          return (
-            <li
-              key={day}
-              className={`flex flex-col items-center gap-1 rounded-md py-2 ${
-                isToday
-                  ? "ring-2 ring-gray-900 dark:ring-gray-100"
-                  : "ring-1 ring-transparent"
-              }`}
-            >
-              <span className="text-[10px] font-medium uppercase text-gray-400 dark:text-gray-500">
+      <div className="relative" aria-hidden="true">
+        {todayIndex >= 0 && (
+          <div
+            className="absolute inset-y-0 rounded-md bg-gray-100 dark:bg-gray-700/60"
+            style={{ left: `${(todayIndex / 7) * 100}%`, width: `${100 / 7}%` }}
+          />
+        )}
+
+        <ol className="relative grid grid-cols-7">
+          {days.map((day, i) => (
+            <li key={day} className="flex flex-col items-center gap-0.5 pb-2 pt-1.5">
+              <span
+                className={`text-[10px] font-medium uppercase ${
+                  i === todayIndex
+                    ? "text-gray-900 dark:text-gray-100"
+                    : "text-gray-400 dark:text-gray-500"
+                }`}
+              >
                 {weekdayInitial(day)}
               </span>
-              <span className="font-mono text-xs tabular-nums text-gray-600 dark:text-gray-300">
+              <span
+                className={`font-mono text-xs tabular-nums ${
+                  i === todayIndex
+                    ? "font-semibold text-gray-900 dark:text-gray-50"
+                    : "text-gray-600 dark:text-gray-300"
+                }`}
+              >
                 {dayOfMonth(day)}
               </span>
-              <span className="flex min-h-[1.5rem] flex-col items-center gap-1">
-                {pinned.map((s) => (
-                  <span
-                    key={s.id}
-                    title={pipTitle(s)}
-                    className={`flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold leading-none ${intentPip(
-                      safeIntent(s.intent),
-                    )} ${s.status === "done" ? "" : "opacity-70"}`}
-                  >
-                    {DISCIPLINE_LETTER[safeDiscipline(s.discipline)]}
-                  </span>
-                ))}
-              </span>
               <span
-                className={`h-0.5 w-5 rounded-full ${
-                  loggedCount > 0
-                    ? "bg-gray-400 dark:bg-gray-500"
-                    : "bg-transparent"
+                className={`h-0.5 w-4 rounded-full ${
+                  loggedByDay.get(day) ? "bg-gray-400 dark:bg-gray-500" : "bg-transparent"
                 }`}
-                title={loggedCount > 0 ? `${loggedCount} logged` : undefined}
               />
             </li>
-          );
-        })}
-      </ol>
+          ))}
+        </ol>
 
-      {floating.length > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-dashed border-gray-300 px-3 py-2 dark:border-gray-600">
-          <span className="text-xs text-gray-500 dark:text-gray-400">
-            {floating.length} session{floating.length === 1 ? "" : "s"} still to place
-          </span>
-          <span className="flex items-center gap-1">
-            {floating.map((s) => (
-              <span
-                key={s.id}
-                title={pipTitle(s)}
-                className={`h-2.5 w-2.5 rounded-full ${
-                  safeIntent(s.intent) === "rest"
-                    ? "border border-dashed border-stone-400 dark:border-stone-500"
-                    : INTENT_FILL[safeIntent(s.intent)]
-                }`}
-              />
-            ))}
-          </span>
-        </div>
-      )}
+        {laneCount > 0 && (
+          <div
+            className="relative grid grid-cols-7 gap-y-1 pb-2"
+            style={{ gridTemplateRows: `repeat(${laneCount}, 1.25rem)` }}
+          >
+            {bars.map((b) => {
+              const wide = b.end > b.start;
+              const n = b.group.sessions.length;
+              const s = b.group.first;
+              return (
+                <div
+                  key={b.group.key}
+                  title={barTitle(b.group)}
+                  style={{ gridColumn: `${b.start + 1} / ${b.end + 2}`, gridRow: b.lane + 1 }}
+                  className={`mx-0.5 flex min-w-0 items-center rounded-full px-1.5 text-[10px] font-semibold leading-none ${
+                    wide ? "justify-between gap-1" : "justify-center"
+                  } ${barClass(b.group)}`}
+                >
+                  {wide ? (
+                    <>
+                      <span className="truncate">
+                        {s.title}
+                        {n > 1 && ` ×${n}`}
+                      </span>
+                      {n > 1 && (
+                        <span className="shrink-0 font-mono tabular-nums">
+                          {b.group.doneCount}/{n}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="truncate font-mono tabular-nums">
+                      {narrowLabel(s)}
+                      {n > 1 && <sup>{n}</sup>}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
-      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1">
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
         {(Object.keys(INTENT_LABEL) as (keyof typeof INTENT_LABEL)[]).map((intent) => (
           <span
             key={intent}

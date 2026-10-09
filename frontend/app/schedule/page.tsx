@@ -18,7 +18,7 @@ import { useCoachSheet } from "@/components/coach/CoachSheetContext";
 import type { LoggedActivity, PlannedSession, ScheduleWeek } from "@/lib/types/schedule";
 import WeekHeader from "@/components/schedule/WeekHeader";
 import DayStrip from "@/components/schedule/DayStrip";
-import SessionCard from "@/components/schedule/SessionCard";
+import WeekAgenda from "@/components/schedule/WeekAgenda";
 import RulesPanel from "@/components/schedule/RulesPanel";
 import LoggedList from "@/components/schedule/LoggedList";
 import EmptyWeek from "@/components/schedule/EmptyWeek";
@@ -30,7 +30,7 @@ import PreviousPlanBanner from "@/components/schedule/PreviousPlanBanner";
 import HorizonView from "@/components/schedule/HorizonView";
 import GoalRacePanel from "@/components/schedule/GoalRacePanel";
 import SeasonPanel from "@/components/schedule/SeasonPanel";
-import { addDaysIso, todayIso } from "@/components/schedule/dates";
+import { addDaysIso, formatDayMonth, todayIso } from "@/components/schedule/dates";
 
 type View = "week" | "horizon";
 
@@ -195,11 +195,51 @@ export default function SchedulePage() {
     return map;
   }, [week]);
 
-  const label = week
-    ? week.is_current_week
-      ? "This week"
-      : `${formatDateLabel(week.week_start)} – ${formatDateLabel(week.week_end)}`
-    : "This week";
+  const range = week ? `${formatDayMonth(week.week_start)} – ${formatDayMonth(week.week_end)}` : "";
+
+  // Lives inside the strip, so stepping between weeks happens where the week
+  // is read rather than a screen's scroll above it. When there is no strip (an
+  // empty week, loading, an error) it stands alone in the same place.
+  const weekNav = (
+    <div className="mb-1 flex items-center justify-between gap-2">
+      <button
+        type="button"
+        aria-label="Previous week"
+        onClick={() => week && setWeekParam(addDaysIso(week.week_start, -7))}
+        disabled={!week}
+        className="rounded-md p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700/50"
+      >
+        <ChevronLeft size={20} aria-hidden="true" />
+      </button>
+      <div className="flex min-w-0 flex-col items-center">
+        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          {!week || week.is_current_week ? "This week" : range}
+        </span>
+        {week && week.is_current_week ? (
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">{range}</span>
+        ) : (
+          week && (
+            <button
+              type="button"
+              onClick={() => setWeekParam(null)}
+              className="text-[11px] font-medium text-blue-700 hover:underline dark:text-blue-400"
+            >
+              Back to this week
+            </button>
+          )
+        )}
+      </div>
+      <button
+        type="button"
+        aria-label="Next week"
+        onClick={() => week && setWeekParam(addDaysIso(week.week_start, 7))}
+        disabled={!week}
+        className="rounded-md p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700/50"
+      >
+        <ChevronRight size={20} aria-hidden="true" />
+      </button>
+    </div>
+  );
 
   const freeMode = !!week && week.headline.planned_sessions === 0;
   const isEmpty =
@@ -231,46 +271,7 @@ export default function SchedulePage() {
             The week ahead, and how it is going.
           </p>
         </div>
-        {view === "week" && (
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              aria-label="Previous week"
-              onClick={() => week && setWeekParam(addDaysIso(week.week_start, -7))}
-              disabled={!week}
-              className="rounded-md p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700/50"
-            >
-              <ChevronLeft size={18} aria-hidden="true" />
-            </button>
-            <span className="min-w-[8rem] text-center text-sm font-medium text-gray-600 dark:text-gray-400">
-              {label}
-            </span>
-            <button
-              type="button"
-              aria-label="Next week"
-              onClick={() => week && setWeekParam(addDaysIso(week.week_start, 7))}
-              disabled={!week}
-              className="rounded-md p-2 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:text-gray-400 dark:hover:bg-gray-700/50"
-            >
-              <ChevronRight size={18} aria-hidden="true" />
-            </button>
-          </div>
-        )}
       </header>
-
-      {/* Above the tabs, deliberately: the race the plan is built towards belongs
-          to the whole schedule, not to one of its two views. */}
-      <GoalRacePanel
-        hasPlan={!!week?.has_plan}
-        onChanged={onRaceChanged}
-        onAskCoach={coach.enabled ? coach.openWith : undefined}
-      />
-
-      {/* #1064: the coach's read of those goals together. Under the goals it is
-          about and above the tabs, because it frames both views: the week and the
-          horizon follow from it. A season landing changes the plan under both,
-          so it is told the way a draft landing is. */}
-      <SeasonPanel refreshToken={raceToken} onSeasonReady={onPlanChanged} />
 
       <ViewTabs view={view} onChange={setView} />
 
@@ -282,6 +283,8 @@ export default function SchedulePage() {
 
       {view === "week" && (
         <div id="panel-week" role="tabpanel" aria-labelledby="tab-week" className="space-y-6">
+      {(!week || isEmpty) && weekNav}
+
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
           {error}
@@ -324,76 +327,39 @@ export default function SchedulePage() {
 
       {week && !isEmpty && (
         <>
-          <WeekHeader
-            week={week}
-            freeMode={freeMode}
-            onAskCoach={coach.enabled ? askCoach : undefined}
-          />
-
-          {/* #981: this stands in for the missing "Planned" section below,
-              right where the runner would otherwise look for it. */}
-          {planRunsOut && (
-            <PlanRunsOutBanner onAskCoach={coach.enabled ? askForNextWeeks : undefined} />
-          )}
-
           <DayStrip
             weekStart={week.week_start}
             sessions={live}
             logged={week.logged}
             today={todayIso()}
+            header={weekNav}
           />
 
-          {committed.length > 0 && (
-            <section>
-              <h2 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
-                Planned
-              </h2>
-              <ul className="space-y-2">
-                {committed.map((s) => (
-                  <SessionCard
-                    key={s.id}
-                    session={s}
-                    actual={
-                      s.completed_activity_id
-                        ? actualById.get(s.completed_activity_id)
-                        : undefined
-                    }
-                    weekStart={week.week_start}
-                    weekEnd={week.week_end}
-                    pending={pendingId === s.id}
-                    onComplete={onComplete}
-                    onUncomplete={onUncomplete}
-                    onDismiss={onDismiss}
-                  />
-                ))}
-              </ul>
-            </section>
+          {/* #981: this stands in for the missing planned sessions below,
+              right where the runner would otherwise look for them. */}
+          {planRunsOut && (
+            <PlanRunsOutBanner onAskCoach={coach.enabled ? askForNextWeeks : undefined} />
           )}
 
-          {suggested.length > 0 && (
-            <section>
-              <h2 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
-                Suggested
-              </h2>
-              <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
-                Offers, not commitments. Declining one changes nothing else.
-              </p>
-              <ul className="space-y-2">
-                {suggested.map((s) => (
-                  <SessionCard
-                    key={s.id}
-                    session={s}
-                    weekStart={week.week_start}
-                    weekEnd={week.week_end}
-                    pending={pendingId === s.id}
-                    onComplete={onComplete}
-                    onUncomplete={onUncomplete}
-                    onDismiss={onDismiss}
-                  />
-                ))}
-              </ul>
-            </section>
-          )}
+          <WeekAgenda
+            committed={committed}
+            suggested={suggested}
+            weekStart={week.week_start}
+            weekEnd={week.week_end}
+            actualById={actualById}
+            pendingId={pendingId}
+            onComplete={onComplete}
+            onUncomplete={onUncomplete}
+            onDismiss={onDismiss}
+          />
+
+          {/* How the week is going, after what is in it: the strip and the
+              sessions are what the runner opens this screen for. */}
+          <WeekHeader
+            week={week}
+            freeMode={freeMode}
+            onAskCoach={coach.enabled ? askCoach : undefined}
+          />
 
           <RulesPanel rules={week.rules} violations={week.violations} />
 
@@ -402,6 +368,20 @@ export default function SchedulePage() {
       )}
         </div>
       )}
+
+      {/* Below both views, deliberately: the race the plan is built towards
+          belongs to the whole schedule, not to one of its two views, but it
+          changes rarely and used to push the week a full screen down. */}
+      <GoalRacePanel
+        hasPlan={!!week?.has_plan}
+        onChanged={onRaceChanged}
+        onAskCoach={coach.enabled ? coach.openWith : undefined}
+      />
+
+      {/* #1064: the coach's read of those goals together, under the goals it is
+          about. A season landing changes the plan under both views, so it is
+          told the way a draft landing is. */}
+      <SeasonPanel refreshToken={raceToken} onSeasonReady={onPlanChanged} />
     </div>
   );
 }

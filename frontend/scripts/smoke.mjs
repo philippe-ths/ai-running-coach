@@ -1027,11 +1027,11 @@ const routesToCheck = [
   // view being dropped from the page.
   { path: "/schedule", expectedText: "Next 3 months" },
   // The goal-race panel belongs to the whole schedule, so it is server-rendered
-  // above the tabs in both views. Its races arrive client-side; the heading is
+  // below the tabs in both views. Its races arrive client-side; the heading is
   // what proves the surface is there at all.
   // (The heading has read "Goals" since #1042 made a goal more than a race.)
   { path: "/schedule", expectedText: "Goals" },
-  // #1064: the season card sits under the goals, above the tabs.
+  // #1064: the season card sits under the goals, below both views.
   { path: "/schedule", expectedText: "Your season" },
   // #964: the legal pages. These prove the routes BOOT and render their content.
   // They do NOT prove the pages are publicly reachable, which is the property
