@@ -19,6 +19,7 @@ export default function SectionScreen({
   backHref = '/profile',
   onSave,
   saving = false,
+  saveDisabled = false,
   children,
 }: {
   title: string;
@@ -26,6 +27,8 @@ export default function SectionScreen({
   backHref?: string;
   onSave?: () => void;
   saving?: boolean;
+  // Holds the save while the screen has input it cannot send (#1068).
+  saveDisabled?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -45,7 +48,7 @@ export default function SectionScreen({
           <button
             type="submit"
             onClick={onSave}
-            disabled={saving}
+            disabled={saving || saveDisabled}
             className="flex min-h-[44px] items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-blue-600 transition-colors hover:bg-blue-50 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-400 dark:hover:bg-blue-900/30"
           >
             {saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}

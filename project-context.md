@@ -12,6 +12,7 @@ The core flow is: connect Strava, sync activities, deep-process a run, then read
 A `User` owns a `UserProfile`, a linked `StravaAccount` (OAuth tokens, athlete id), and a nullable `telegram_chat_id` for per-user notification routing (ADR 0023).
 `UserProfile` holds goal, experience, weekly volume, max HR, races, injuries, the Strava-sourced HR-zone lower bounds `hr_zones`/`hr_zones_source`, the runner's `week_starts_on` (Monday 0 or Sunday 6, null resolving to Monday), and the stated build `weight_kg`/`height_cm`.
 `weight_kg`/`height_cm` are nullable floats meaning NOT STATED rather than average, envelope-validated at the API so a unit slip never reaches the coach as a fact.
+`stated_pbs` is a nullable JSON list of PBs the runner stated, each a Strava best-effort distance label, `time_s`, and an optional date, envelope-validated at the API.
 An `Activity` is one Strava activity owned by a `User`, identified by `strava_activity_id`.
 An `ActivityStream` holds per-sample time-series data (HR, pace, cadence, power) for an `Activity`.
 A `DerivedMetric` row attaches one set of computed signals to one `Activity`: the five orthogonal classification axes, effort score, pace variability, HR drift, time-in-zones, stops, efficiency, intervals, flags, confidence, risk, discount signals, and a consolidated stream view.
@@ -235,8 +236,6 @@ A handler declares the owned resource it operates on (`OwnedActivity`, `OwnedBlo
 `voice.py`, `stance.py`, and `corpus.py` are pure domains with no LLM and no I/O; `voice_rewrite.py`, `material_distiller.py`, `receipt.py`, and `receipt_voice.py` are their generative counterparts.
 `perceived_effort.py`, `adherence.py`, `calibration.py`, `volume.py`, `salience.py`, `intensity.py`, and `recent_training.py` are the pure read-time signal builders.
 `notable.py` builds `this_run.notable`: the race, ranked best efforts with a previous best only when stored efforts cover every earlier run that long, and records more than 10% past the past-year most among at least 10 same-discipline activities.
-`memory_store.py` and `memory_update.py` are the runner-memory DB layer and its rewrite-from-source writer.
-`period_report_pack.py`, `period_report.py`, and `period_report_store.py` are the period-report surface.
 `backend/app/services/schedule/` is the schedule package: `disciplines.py`, `placement.py`, `rules.py`, `store.py`, `norms.py`, `week.py`, `horizon.py`, `draft.py`, `draft_contract.py`, `plan_validator.py`, `effort.py`, `completion.py`, and `coach_view.py`.
 `goals.py` is the one home of a goal's ready-by date (the exact date, else the window's start) and of the wording that tells every coach surface how exact that date is.
 `season.py`, `season_prompt.py`, `season_check.py` and `season_store.py` generate, check and store the season, and `challenge.py` is the rule arithmetic (current level, earliest start, weekly status).
@@ -246,6 +245,7 @@ The package computes no training total of its own: actuals and windows come from
 `backend/app/services/notifications/` holds the notifier port and adapters, the channel selection and composer, the Telegram template, the shared prose-render helpers, and the opaque tap-token codec.
 `backend/app/services/` also holds `blocks.py`, `weeks.py`, `activity_facts.py`, `trends.py`, `training_load.py`, `readiness.py`, `laps.py`, `activity_queries.py`, `account_deletion.py`, `checkins.py`, `intents.py`, and `units/cadence.py`.
 `best_efforts.py` parses Strava's per-run `best_efforts` and their `pr_rank`, and `upsert_activity` preserves them across a summary-only re-sync as it does laps.
+`personal_bests.py` labels the fastest stored effort per standard distance confirmed, may-be-beaten or faster-exists from its `pr_rank` and later-run coverage, and `query_tools.get_personal_bests` returns the faster of it and a stated PB.
 `intents.py` is also the single home of the stated-intent vocabulary, rendered by the frontend from `ActivityDetailRead.intent_options` rather than a frontend copy.
 `backend/app/jobs/` holds the RQ jobs, with `process_new_activity.py` as the convergence pipeline and the job layer's four entrypoints.
 Those four entrypoints must keep this module path, because RQ serializes a deferred job as its `module.function` string.

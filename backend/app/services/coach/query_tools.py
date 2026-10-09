@@ -576,11 +576,20 @@ def get_training_plan(db: Session, owner_user_id, *, today: Optional[date] = Non
     }
 
 
+def get_personal_bests(db: Session, owner_user_id) -> dict:
+    """The runner's PBs at the distances runners race (#1068), each labelled with
+    how far it can be trusted; see `app.services.personal_bests`."""
+    from app.services.personal_bests import for_runner
+
+    return for_runner(db, owner_user_id)
+
+
 TOOL_STATUS_LABELS = {
     "list_activities_in_range": "Checking your training history…",
     "get_session_detail": "Pulling up that session…",
     "get_training_summary": "Tallying your recent training…",
     "get_training_plan": "Reading your training plan…",
+    "get_personal_bests": "Looking up your personal bests…",
 }
 
 
@@ -594,6 +603,7 @@ TOOL_TRACE_LABELS = {
     "get_session_detail": "Pulled up a past session",
     "get_training_summary": "Tallied your recent training",
     "get_training_plan": "Read your training plan",
+    "get_personal_bests": "Looked up your personal bests",
     # The server-side web search (#1051). Its detail is a result count, server-derived.
     "web_search": "Searched the web",
 }
@@ -701,6 +711,17 @@ def summarize_tool_call(
         if isinstance(through, str):
             parts.append(f"to {through}")
         entry["detail"] = ", ".join(parts) or None
+    elif name == "get_personal_bests":
+        # The distances the coach actually saw, in the detail for the same reason
+        # as the plan: a bare count renders as "sessions".
+        from app.services.personal_bests import DISPLAY_NAMES
+
+        found = [
+            DISPLAY_NAMES.get(p.get("distance"), p.get("distance"))
+            for p in (result.get("personal_bests") or [])
+            if isinstance(p, dict) and isinstance(p.get("distance"), str)
+        ]
+        entry["detail"] = ", ".join(found) or "none on record"
     return entry
 
 
@@ -802,6 +823,24 @@ CHAT_TOOLS: List[Dict[str, Any]] = [
             "required": ["window"],
         },
     },
+    {
+        "name": "get_personal_bests",
+        "description": (
+            "Read this runner's personal bests at 1 mile, 5K, 10K, half marathon "
+            "and marathon. Use it whenever an answer turns on what they have "
+            "already run at a distance: race pacing, whether a goal time is "
+            "realistic, how a run compares with their best, or a direct question "
+            "about their PBs. Each entry carries a reading saying how far its "
+            "time can be trusted: follow it, above all when it says the time is "
+            "NOT their PB. A distance in no_record_at has nothing on record: ask "
+            "them rather than estimating it from their runs."
+        ),
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+        },
+    },
 ]
 
 
@@ -836,6 +875,8 @@ def execute_chat_tool(
             )
         if name == "get_training_plan":
             return get_training_plan(db, owner_user_id, today=today)
+        if name == "get_personal_bests":
+            return get_personal_bests(db, owner_user_id)
         return {"error": "unknown_tool", "tool": name}
     except Exception as exc:  # graceful degrade — the coach answers from what it has
         logger.warning("chat tool %s failed: %s", name, exc)

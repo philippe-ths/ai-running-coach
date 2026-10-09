@@ -17,6 +17,7 @@ import {
   AppSection,
   BodySection,
   HealthSection,
+  PersonalBestsSection,
   TrainingSection,
 } from '@/components/profile/EditSections';
 import {
@@ -24,6 +25,8 @@ import {
   EMPTY_PROFILE_FORM,
   ProfileForm,
   profileFromApi,
+  StatedPb,
+  storedPbsValid,
 } from '@/components/profile/profileForm';
 import { useCoachFeatureFlags } from '@/lib/useCoachFeatureFlags';
 import { fetchFromAPI } from '@/lib/api';
@@ -62,6 +65,8 @@ function ProfileScreens() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
+  // #1068: a PB row that does not parse holds the save rather than dropping it.
+  const [pbsValid, setPbsValid] = useState(true);
 
   useEffect(() => {
     fetchFromAPI('/api/profile')
@@ -82,10 +87,16 @@ function ProfileScreens() {
   useEffect(() => {
     setDraft(profile);
     setError(null);
+    setPbsValid(storedPbsValid(profile.stated_pbs, new Date().toLocaleDateString('en-CA')));
   }, [section, profile]);
 
   const set = useCallback((name: keyof ProfileForm, value: string) => {
     setDraft((prev) => ({ ...prev, [name]: coerceField(name, value) }));
+  }, []);
+
+  const setPbs = useCallback((pbs: StatedPb[] | null, valid: boolean) => {
+    setDraft((prev) => ({ ...prev, stated_pbs: pbs }));
+    setPbsValid(valid);
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -95,9 +106,14 @@ function ProfileScreens() {
       // The whole object, exactly as the flat form posted it: PUT /api/profile
       // validates against UserProfileCreate, which requires goal_type,
       // experience_level and weekly_days_available on every request.
+      // Except the stated PBs (#1068): only their own screen sends them, so a
+      // stored PB the rules now refuse blocks that screen alone, where its row
+      // says why. Left out, the backend keeps what is stored.
+      // (JSON.stringify drops an undefined key.)
+      const body = section === 'pbs' ? draft : { ...draft, stated_pbs: undefined };
       const updated = await fetchFromAPI('/api/profile', {
         method: 'PUT',
-        body: JSON.stringify(draft),
+        body: JSON.stringify(body),
       });
       setProfile(updated ? profileFromApi(updated) : draft);
       setJustSaved(true);
@@ -110,7 +126,7 @@ function ProfileScreens() {
     } finally {
       setSaving(false);
     }
-  }, [draft, router]);
+  }, [draft, router, section]);
 
   useEffect(() => {
     if (!justSaved) return;
@@ -154,6 +170,20 @@ function ProfileScreens() {
         >
           {errorBanner}
           <BodySection form={draft} onChange={set} />
+        </SectionScreen>
+      );
+
+    case 'pbs':
+      return (
+        <SectionScreen
+          title="Personal bests"
+          description="So the coach can pace races and judge goal times from what you have actually run."
+          onSave={handleSave}
+          saving={saving}
+          saveDisabled={!pbsValid}
+        >
+          {errorBanner}
+          <PersonalBestsSection form={draft} onChange={setPbs} />
         </SectionScreen>
       );
 
