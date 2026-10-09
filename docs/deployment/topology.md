@@ -135,6 +135,26 @@ The no-runaway-spend rule requires hard caps. These are platform dashboard setti
 not readable via the project-scoped Railway token. Verify in the Railway workspace usage limits and in
 Vercel before relying on them.
 
+### Limits that change behaviour without an error (#976)
+
+Each setting below makes the app quietly do less once a limit is reached, or leaves a door open when
+unset. None raises an exception, so a symptom that looks like a bug may be one of these working as
+configured. Check this table, the `llm_budget_*` / Strava budget log lines, and the Railway values for
+**each service** before debugging code. Defaults are from `backend/app/core/config.py`.
+
+| Setting | Default | What happens at the limit, or when unset |
+| --- | --- | --- |
+| `LLM_BUDGET_USER_DAILY_USD`, `_USER_MONTHLY_USD`, `_GLOBAL_DAILY_USD`, `_GLOBAL_MONTHLY_USD` | `0` (window off) | When any window is reached, coach generation falls back to the deterministic report (`is_fallback=True`) and chat replies with `THREAD_BUDGET_PAUSED_MESSAGE`. Nothing is logged as an error, only `llm_budget_exceeded` as a warning. |
+| `LLM_BUDGET_PROD_DEFAULT_GLOBAL_DAILY_USD` | `50.0` | **Armed in production even when nothing is configured**: with `APP_ENV=production`, no explicit window set and the cap not disabled, this becomes the global daily ceiling. `0` turns the backstop off. |
+| `LLM_BUDGET_DISABLED` | `false` | Turns off only the production backstop above. Explicit windows still apply. |
+| `STRAVA_BUDGET_GLOBAL_PER_15MIN`, `_PER_DAY` | `0` (no explicit ceiling) | When reached, background Strava jobs (import, stream backfill, self-heal) re-enqueue after `STRAVA_BUDGET_BACKOFF_SECONDS` (60) instead of calling Strava. Live webhook ingestion is never gated. |
+| `STRAVA_BUDGET_PROD_DEFAULT_PER_15MIN`, `_PER_DAY` | `75`, `800` | **Armed in production by default**, the same pattern as the LLM backstop, set below Strava's ~100 / ~1000 app limits. Inert outside production. `STRAVA_BUDGET_DISABLED=true` turns both off. |
+| `STRAVA_WEBHOOK_SUBSCRIPTION_ID` | `0` (unenforced) | Strava does not sign webhooks, so this is the strongest check on an inbound event. At `0` it is skipped, and an event is accepted on the owner being a connected athlete alone, whose ids are public. Set it to the live subscription id on `web`. |
+| `WORKER_POOL_SIZE` | `1` | How many RQ jobs the worker runs at once. At `1`, one long coach generation queues every job behind it. The production value is set on Railway `worker` and is not visible from the repo. |
+| `COACH_REGEN_COOLDOWN_SECONDS` | `60` | A "Regenerate" within this window of the last one for the same activity enqueues nothing and answers `{"status": "cooldown"}`, so repeated taps cannot multiply spend. Fails open if Redis is unreachable. |
+| `MAX_REQUEST_BODY_BYTES` | `1048576` (1 MiB) | Any request body over this is rejected at the app edge. |
+| `USER_MATERIAL_MAX_BYTES`, `USER_MATERIAL_MAX_COUNT` | `262144` (256 KB), `50` | A coach-material upload over the size, or past the count of non-archived materials, is refused. |
+
 ## Local development
 
 `docker compose` provides only the datastores; the app processes run on the host.
