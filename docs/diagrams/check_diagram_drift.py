@@ -37,6 +37,12 @@ LIVE code:
      regenerated. See _declared_pack_key_paths for why the declaration — not the captured
      DATA.pack — is the source, and why that is what keeps this check quiet.
 
+  4b. REPORT TAIL TOOL (#962). The report coach is handed one tool, `record_coach_tail`,
+     and its name, description and property prose are the report's whole output contract.
+     It is recorded verbatim in pack-shape.json and compared verbatim, the way check 6
+     pins the chat tools: #944 added a ~700-character `offer` property and this guard
+     stayed green.
+
   5. GENERATOR CALL SIGNATURES (#840). The generators call into backend/app to build their
      capture, so they rot when a callee's signature changes: generate_flow_nodes_data.py
      passed a `voice=` argument that #822 had removed and raised TypeError for four days
@@ -253,6 +259,63 @@ def _recorded_pack_key_paths() -> list[str] | None:
     return sorted(paths) if isinstance(paths, list) else None
 
 
+def _declared_report_tail_tool() -> dict:
+    """The report coach's whole structured output contract, as the model receives it.
+
+    The report LLM is handed exactly one tool, `record_coach_tail`, and its name,
+    description and every property's prose are instructions the model reads on every
+    report. JSON round-trip so the comparison sees what the API is sent, not Python
+    tuple-versus-list differences.
+
+    Not versioned per prompt, unlike the system prompt (prompt_clauses.py, archived in
+    prompt_archive.py): it is one hand-frozen dict shared by every prompt id. That is why
+    it is pinned here, beside the pack shape, rather than captured per prompt — the
+    omission before #962 was an oversight, not a choice."""
+    from app.services.coach.output_contract import (  # lazy: needs the app importable
+        RECORD_COACH_TAIL_TOOL,
+    )
+
+    return json.loads(json.dumps(RECORD_COACH_TAIL_TOOL))
+
+
+def _recorded_report_tail_tool() -> dict | None:
+    """The tail tool recorded in pack-shape.json, or None if absent (itself drift)."""
+    if not _PACK_SHAPE.is_file():
+        return None
+    try:
+        blob = json.loads(_PACK_SHAPE.read_text())
+    except ValueError:
+        return None
+    tool = blob.get("report_tail_tool") if isinstance(blob, dict) else None
+    return tool if isinstance(tool, dict) else None
+
+
+def _report_tail_tool_problems(declared: dict, recorded: dict | None) -> list[str]:
+    """Diff the live tail tool against the recorded one, verbatim. Pure.
+
+    Verbatim, not by shape: #944 added an `offer` property with ~700 characters of
+    instruction, and a later edit can rewrite that prose without changing any key."""
+    if not declared:
+        return [
+            "EXTRACTOR BROKE: the report tail tool read back empty from the code. The "
+            "report-contract pin cannot be trusted — fix it."
+        ]
+    if recorded is None:
+        return [
+            f"{_PACK_SHAPE.name} records no report tail tool, so the report coach's output "
+            "contract (record_coach_tail) is unpinned. Regenerate the diagram: "
+            "python docs/diagrams/generate_flow_nodes_data.py"
+        ]
+    if declared == recorded:
+        return []
+    return [
+        "The report coach's tail tool (record_coach_tail) — what every report's model is "
+        f"told to output — has changed, but {_PACK_SHAPE.name} still records the old one: "
+        f"{_difference_hint(declared, recorded)}. Regenerate the diagram in this same change "
+        "(python docs/diagrams/generate_flow_nodes_data.py)."
+    ]
+
+
 def write_pack_shape(paths: list[str] | None = None) -> Path:
     """Rewrite pack-shape.json from the live declaration. Called by the generator, so
     regenerating the diagram is the ONE supported way to refresh the lockfile — there is
@@ -264,12 +327,15 @@ def write_pack_shape(paths: list[str] | None = None) -> Path:
             {
                 "_note": (
                     "Every key the coach context pack can carry, to full nesting depth, as "
-                    "dotted paths, recorded when flow-nodes.js was last regenerated. Read by "
-                    "docs/diagrams/check_diagram_drift.py (#763) so a field added INSIDE an "
-                    "existing pack section cannot ship with the diagram unregenerated. "
+                    "dotted paths, and the report coach's record_coach_tail tool verbatim, "
+                    "recorded when flow-nodes.js was last regenerated. Read by "
+                    "docs/diagrams/check_diagram_drift.py (#763, #962) so a field added "
+                    "INSIDE an existing pack section, or a change to what the report model "
+                    "is told to output, cannot ship with the diagram unregenerated. "
                     "Rewritten by generate_flow_nodes_data.py — do not hand-edit."
                 ),
                 "paths": paths,
+                "report_tail_tool": _declared_report_tail_tool(),
             },
             indent=1,
         )
@@ -1430,6 +1496,13 @@ def check_drift() -> list[str]:
     else:
         problems.extend(_pack_shape_problems(declared_paths, _recorded_pack_key_paths()))
 
+    # 4b. Report tail tool (#962): the report coach's output contract, verbatim. The chat
+    #     tools were pinned by check 6 while this one, which every report's model is
+    #     handed, was not looked at at all.
+    problems.extend(
+        _report_tail_tool_problems(_declared_report_tail_tool(), _recorded_report_tail_tool())
+    )
+
     # 5. Generator call signatures (#840): a generator that cannot execute must fail a
     #    check rather than pass silently.
     for generator in _GENERATORS:
@@ -1487,7 +1560,7 @@ def main() -> int:
               file=sys.stderr)
         return 1
     print("ai-flow-graph diagram is in sync with the code (pack sections + nested pack keys "
-          "+ DerivedMetric columns + kill-switch parity), the coach-chat diagram is in sync "
+          "+ the report tail tool + DerivedMetric columns + kill-switch parity), the coach-chat diagram is in sync "
           "(tools + skills + actions + screens + which of them resolve a view + prompt "
           "slots + baseline sections + the prompt/tool/skill text itself + capture "
           "parity), and the generators still bind.")

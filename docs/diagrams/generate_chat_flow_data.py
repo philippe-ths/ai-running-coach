@@ -680,6 +680,40 @@ def _capture_thread(db, user, thread, chat_mod_ref) -> dict:
     }
 
 
+def _migration_gap(current: set[str], heads: set[str]) -> str | None:
+    """Why a database is not at alembic head, or None if it is. Pure (#918).
+
+    A database behind head does not fail the capture outright: the first query
+    touching a missing column aborts the Postgres transaction, every later query
+    in it fails, the per-thread catch swallows each failure, and the capture is
+    written with most turns resolving no screen. That artifact looks plausible
+    and the drift guard passes it, so the check has to happen before capturing.
+    """
+    if current == heads:
+        return None
+    return (
+        f"the local database is not at this branch's migration head "
+        f"(at {sorted(current) or ['nothing']}, head is {sorted(heads)}).\n"
+        f"  A capture against it degrades silently: screens resolve to nothing\n"
+        f"  while every check stays green.\n"
+        f"  Migrate it first: cd backend && alembic upgrade head\n"
+        f"  (if it is ahead, from a newer branch, downgrade to the head above)"
+    )
+
+
+def _db_migration_gap(db) -> str | None:
+    """Compare the session's database revision against the repository's head."""
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(BACKEND / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND / "alembic"))
+    heads = set(ScriptDirectory.from_config(cfg).get_heads())
+    current = set(MigrationContext.configure(db.connection()).get_current_heads())
+    return _migration_gap(current, heads)
+
+
 def _capture_assembled() -> dict:
     """Capture ONE real turn end to end: every builder's real output, the real
     assembled prompt, the real tool results, and the real stored reply.
@@ -704,6 +738,9 @@ def _capture_assembled() -> dict:
 
         db = SessionLocal()
         try:
+            behind = _db_migration_gap(db)
+            if behind:
+                return {"ok": False, "reason": behind, "behind_migrations": True}
             # The runner to trace: the one with the most conversation, i.e. the
             # deployment owner on a seeded snapshot. Picking by "richest single
             # turn" instead would land on whichever user happened to have one good
@@ -1044,6 +1081,24 @@ def _committed_capture(target_text: str) -> dict | None:
     return {key: blob[key] for key in _CAPTURE_KEYS if key in blob}
 
 
+def _screen_resolution_summary(conversations: list[dict]) -> str:
+    """How many turns asked from a screen got a view back, as one console line.
+
+    #918: a capture whose screen resolution collapsed is internally consistent,
+    so no check can call it wrong. This puts the count where the person who ran
+    the generator reads, and in the diff of the summary they paste.
+    """
+    asked = [
+        t for conv in conversations for t in conv.get("turns") or []
+        if t.get("role") == "user" and t.get("asked_from")
+    ]
+    resolved = sum(1 for t in asked if t.get("screen_view"))
+    line = f"{resolved} of {len(asked)} runner turns asked from a screen"
+    if asked and not resolved:
+        line += "  <-- NONE resolved: is the database migrated and seeded?"
+    return line
+
+
 class CaptureRefused(Exception):
     """Raised rather than writing a diagram that shows less than the one it replaces."""
 
@@ -1062,6 +1117,11 @@ def plan_capture(assembled: dict | None, target_text: str) -> dict:
     if (assembled or {}).get("ok"):
         return {}
     reason = (assembled or {}).get("reason")
+    if (assembled or {}).get("behind_migrations"):
+        # Not the #870 no-database case: the developer has a database and means
+        # to capture from it. Keeping the committed capture would print a NOTE
+        # and exit 0, which reads as a successful regenerate. Refuse instead.
+        raise CaptureRefused(f"refusing to capture: {reason}")
     preserved = _committed_capture(target_text)
     if preserved is None:
         raise CaptureRefused(
@@ -1104,7 +1164,8 @@ def main() -> None:
     # impossible without a production snapshot, for no gain. What must never
     # happen is a real capture being replaced by an empty one.
     try:
-        data.update(plan_capture(data.get("assembled"), TARGET.read_text(encoding="utf-8")))
+        preserved = plan_capture(data.get("assembled"), TARGET.read_text(encoding="utf-8"))
+        data.update(preserved)
     except CaptureRefused as refusal:
         sys.exit(str(refusal))
 
@@ -1139,6 +1200,8 @@ def main() -> None:
           f"({data['skill_cost']['catalogue_chars']} chars catalogue / "
           f"{data['skill_cost']['procedure_chars']} held back)")
     if cap.get("ok"):
+        if not preserved:  # a kept capture's count would describe an earlier run
+            print(f"  screens resolved  {_screen_resolution_summary(cap.get('conversations') or [])}")
         present = [k for k, v in cap["present"].items() if v]
         print(f"  assembled capture {cap['chars']} chars; slots present: {', '.join(present) or 'none'}")
     else:

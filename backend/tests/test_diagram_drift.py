@@ -48,6 +48,9 @@ from check_diagram_drift import (  # noqa: E402
     _pack_shape_problems,
     _recorded_chat_surface,
     _recorded_pack_key_paths,
+    _declared_report_tail_tool,
+    _recorded_report_tail_tool,
+    _report_tail_tool_problems,
     check_drift,
 )
 
@@ -100,6 +103,39 @@ def test_the_nested_pack_key_check_reports_a_key_the_pack_no_longer_declares():
     problems = _pack_shape_problems(declared, declared + ["profile.retired_field"])
 
     assert problems and "profile.retired_field" in problems[0]
+
+
+def test_the_report_tail_tool_check_fails_when_its_prose_is_rewritten():
+    """SENSITIVITY (#962). #944 added an `offer` property to record_coach_tail and the guard
+    stayed green. The pin is verbatim, so rewording one property's description, with no key
+    added or removed, must fail it."""
+    recorded = _recorded_report_tail_tool()
+    assert recorded is not None
+    declared = copy.deepcopy(_declared_report_tail_tool())
+    declared["input_schema"]["properties"]["headline"]["description"] += " Be bold."
+
+    problems = _report_tail_tool_problems(declared, recorded)
+
+    assert problems and "record_coach_tail" in problems[0], problems
+
+
+def test_the_report_tail_tool_check_reports_a_missing_record():
+    problems = _report_tail_tool_problems(_declared_report_tail_tool(), None)
+
+    assert problems and "records no report tail tool" in problems[0]
+
+
+def test_check_drift_actually_runs_the_report_tail_tool_check(monkeypatch):
+    """The guard on the guard: the comparison above is pure, so it would stay green if
+    check_drift() stopped calling it. Make the LIVE tool disagree and assert the top-level
+    check reports it."""
+    tool = copy.deepcopy(_declared_report_tail_tool())
+    tool["description"] += " Also offer a schedule change."
+    monkeypatch.setattr(check_diagram_drift, "_declared_report_tail_tool", lambda: tool)
+
+    problems = check_drift()
+
+    assert any("record_coach_tail" in p for p in problems), problems
 
 
 def test_the_diagram_generators_still_bind_against_the_functions_they_call():
