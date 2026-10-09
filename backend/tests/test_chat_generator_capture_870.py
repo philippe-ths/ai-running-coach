@@ -112,3 +112,48 @@ def test_the_committed_diagram_holds_a_real_capture_this_reader_can_find():
     )
     assert kept["assembled"]["ok"] is True
     assert kept["meta"]["coach_prompt_id"]
+
+
+# --- #918: a database behind migrations refuses rather than degrading ---------
+
+
+def test_a_database_behind_migrations_refuses_even_with_a_capture_to_keep():
+    """Unlike the no-database case, keeping the committed capture here would
+    exit 0 and read as a successful regenerate, so it must refuse outright."""
+    reason = gen._migration_gap({"a4c8e1f9b263"}, {"f3a9d27c6b18"})
+
+    with pytest.raises(gen.CaptureRefused) as refused:
+        gen.plan_capture(
+            {"ok": False, "reason": reason, "behind_migrations": True}, _blob_line(_REAL)
+        )
+
+    message = str(refused.value)
+    assert "a4c8e1f9b263" in message and "f3a9d27c6b18" in message
+    assert "alembic upgrade head" in message
+
+
+def test_a_database_at_head_has_no_migration_gap():
+    assert gen._migration_gap({"f3a9d27c6b18"}, {"f3a9d27c6b18"}) is None
+
+
+def _turn(asked_from, view):
+    return {"role": "user", "asked_from": asked_from, "screen_view": view}
+
+
+def test_a_collapsed_screen_resolution_is_named_in_the_console_summary():
+    """The #918 artifact: turns asked from a screen, none of which got a view."""
+    degraded = [{"turns": [_turn("schedule", None), _turn("trends", None)]}]
+
+    line = gen._screen_resolution_summary(degraded)
+
+    assert line.startswith("0 of 2")
+    assert "NONE resolved" in line
+
+
+def test_a_healthy_capture_reports_its_count_without_a_warning():
+    healthy = [{"turns": [_turn("schedule", {"label": "x"}), _turn("home", None),
+                          {"role": "assistant", "asked_from": None, "screen_view": None}]}]
+
+    line = gen._screen_resolution_summary(healthy)
+
+    assert line.startswith("1 of 2") and "NONE" not in line
