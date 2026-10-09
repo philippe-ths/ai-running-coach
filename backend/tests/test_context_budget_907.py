@@ -19,9 +19,9 @@ fusing sentences — which is why the line count stayed flat while the character
 count tripled. `MAX_LINE_CHARS` is the rule that had no teeth: it is what makes
 fusing fail instead of succeed.
 
-The budgets carry deliberate headroom over the trimmed file so a genuinely new
-subsystem can land without forcing an immediate trim. When one is hit, the fix
-is to drop low-value detail, not to raise the number — the skill's own rule is
+The byte budget is the workflow's 6,000-token limit itself, not headroom over
+the current file. When it is hit, the fix is to drop low-value detail, not to
+raise the number — the skill's own rule is
 "if the file approaches 300 lines, drop low-value detail before adding new
 content". Raising a budget here should be a decision someone argues for, which
 is why it costs a code change.
@@ -33,8 +33,10 @@ _PROJECT_CONTEXT = Path(__file__).resolve().parents[2] / "project-context.md"
 
 # The owning skill's stated cap.
 MAX_LINES = 300
-# Headroom over the trimmed file (45,992 chars at the time of writing).
-MAX_CHARS = 55_000
+# The workflow's budget: 6,000 tokens, counted as UTF-8 bytes / 4. The first
+# version of this guard set 55,000 chars, "headroom" over an already-oversized
+# file, which let it sit at ~12,000 tokens with this test green (#1069).
+MAX_BYTES = 24_000
 # The anti-fusing rule. The longest legitimate line is the pack-section list at
 # 492 chars; anything past this is several facts wearing one line as a costume.
 MAX_LINE_CHARS = 600
@@ -53,13 +55,14 @@ def test_the_file_stays_under_the_line_cap():
     )
 
 
-def test_the_file_stays_under_the_character_budget():
-    text = _text()
-    assert len(text) <= MAX_CHARS, (
-        f"project-context.md is {len(text)} chars, over its {MAX_CHARS} budget "
-        f"(~{len(text) // 4}k tokens loaded into every session). The line cap "
-        "alone never caught this, because the file tripled in size while the "
-        "line count stayed flat."
+def test_the_file_stays_under_the_token_budget():
+    size = len(_text().encode("utf-8"))
+    assert size <= MAX_BYTES, (
+        f"project-context.md is {size} bytes (~{size // 4} tokens), over its "
+        f"{MAX_BYTES}-byte (~{MAX_BYTES // 4}-token) budget, and it loads into "
+        "every session. Choose which line leaves rather than raising the budget. "
+        "The line cap alone never caught this, because the file tripled in size "
+        "while the line count stayed flat."
     )
 
 
