@@ -1012,6 +1012,7 @@ def _persist(
                     ),
                     structure=session.structure(),
                     alternatives=session.alternatives_json(),
+                    activity_type=session.activity_type,
                 )
             )
 

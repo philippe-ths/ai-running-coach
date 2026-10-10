@@ -32,7 +32,7 @@ import {
 } from "./palette";
 import { dayOfMonth, formatDayChip, weekDays, weekdayInitial } from "./dates";
 import { groupSessions, optionDays } from "./agenda";
-import DisciplineIcon from "./DisciplineIcon";
+import SportIcon, { sportOf } from "./SportIcon";
 
 const MAX_CHIPS = 3;
 
@@ -84,6 +84,7 @@ function asDone(s: PlannedSession): PlannedSession {
     title: alt.title,
     intent: alt.intent,
     discipline: alt.discipline,
+    activity_type: alt.activity_type ?? null,
     planned_distance_m: alt.planned_distance_m,
     target_duration_s: alt.target_duration_s ?? null,
   };
@@ -224,7 +225,23 @@ export default function DayStrip({
   const hasChoice = allChips.some(
     (c) => c.kind === "set" && (c.session.alternatives?.length ?? 0) > 0,
   );
-  const sports = Array.from(new Set(allChips.map((c) => safeDiscipline(c.session.discipline))));
+  // A done session shows the sport actually recorded (#1089).
+  const recordedType = new Map<string, string>();
+  for (const a of logged) if (a.activity_id) recordedType.set(a.activity_id, a.activity_type);
+  const typeOf = (c: Chip) =>
+    (c.kind === "done" && c.session.completed_activity_id
+      ? recordedType.get(c.session.completed_activity_id)
+      : undefined) ?? c.session.activity_type;
+  const sports = Array.from(
+    new Map(
+      allChips
+        .filter((c) => safeIntent(c.session.intent) !== "rest")
+        .map((c) => {
+          const sport = sportOf(typeOf(c), safeDiscipline(c.session.discipline));
+          return [sport.key, sport] as const;
+        }),
+    ).values(),
+  );
   const intents = Array.from(new Set(allChips.map((c) => safeIntent(c.session.intent))));
 
   const loggedByDay = new Map<string, number>();
@@ -303,7 +320,10 @@ export default function DayStrip({
                   )}`}
                 >
                   {safeIntent(chip.session.intent) !== "rest" && (
-                    <DisciplineIcon discipline={safeDiscipline(chip.session.discipline)} />
+                    <SportIcon
+                      activityType={typeOf(chip)}
+                      discipline={safeDiscipline(chip.session.discipline)}
+                    />
                   )}
                   {chip.kind === "done" && "✓"}
                   {chip.kind === "set" && (chip.session.alternatives?.length ?? 0) > 0 && (
@@ -354,10 +374,10 @@ export default function DayStrip({
       </div>
       {sports.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-gray-500 dark:text-gray-400">
-          {sports.map((d) => (
-            <span key={d} className="flex items-center gap-1">
-              <DisciplineIcon discipline={d} />
-              {DISCIPLINE_LABEL[d]}
+          {sports.map(({ key, label, Icon }) => (
+            <span key={key} className="flex items-center gap-1">
+              <Icon size={12} strokeWidth={2.25} />
+              {label}
             </span>
           ))}
         </div>

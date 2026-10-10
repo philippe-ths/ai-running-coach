@@ -28,6 +28,20 @@ from app.services.schedule.planned_distance import (
 
 SessionIntent = Literal["rest", "easy", "long", "quality", "strength"]
 Discipline = Literal["run", "walk", "bike", "strength", "row", "other"]
+# #1089: the exact sport, in Strava's sport names, finer than the discipline. It
+# names what a session IS (a swim, a yoga class) so the screen can show it; the
+# discipline stays the bucket the rules, colours and load are read from.
+SportType = Literal[
+    "AlpineSki", "BackcountrySki", "Badminton", "Canoeing", "Crossfit", "EBikeRide",
+    "Elliptical", "EMountainBikeRide", "Golf", "GravelRide", "Handcycle",
+    "HighIntensityIntervalTraining", "Hike", "IceSkate", "InlineSkate", "Kayaking",
+    "Kitesurf", "MountainBikeRide", "NordicSki", "Pickleball", "Pilates", "Racquetball",
+    "Ride", "RockClimbing", "RollerSki", "Rowing", "Run", "Sail", "Skateboard",
+    "Snowboard", "Snowshoe", "Soccer", "Squash", "StairStepper", "StandUpPaddling",
+    "Surfing", "Swim", "TableTennis", "Tennis", "TrailRun", "Velomobile", "VirtualRide",
+    "VirtualRow", "VirtualRun", "Walk", "WeightTraining", "Wheelchair", "Windsurf",
+    "Workout", "Yoga",
+]
 Commitment = Literal["committed", "suggested"]
 
 # Derived, never stored: see models/planned_session.py.
@@ -76,6 +90,8 @@ class SessionAlternative(BaseModel):
 
     intent: SessionIntent
     discipline: Discipline
+    # Read leniently: an unknown sport only loses its icon, never the option.
+    activity_type: Optional[str] = None
     title: str
     detail: Optional[str] = None
     target_distance_m: Optional[float] = None
@@ -284,6 +300,8 @@ class PlannedSessionRead(BaseModel):
 
     intent: SessionIntent
     discipline: Discipline
+    # #1089: the exact sport, when the coach named one.
+    activity_type: Optional[str] = None
     commitment: Commitment
     status: SessionStatus
 

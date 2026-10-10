@@ -23,7 +23,6 @@ import type {
 } from "@/lib/types/schedule";
 import { formatDistanceKm, formatDuration, formatPace } from "@/lib/format";
 import {
-  DISCIPLINE_LABEL,
   INTENT_LABEL,
   INTENT_TEXT,
   intentStripe,
@@ -32,6 +31,7 @@ import {
 } from "./palette";
 import { formatDayChip, todayIso, weekDays, weekdayShort } from "./dates";
 import { groupSessions, placementChip, rangeSentence, rulesFor, type SessionGroup } from "./agenda";
+import { sportName } from "./SportIcon";
 
 
 /**
@@ -174,6 +174,7 @@ function AgendaRow({
   const n = sessions.length;
   const intent = safeIntent(first.intent);
   const discipline = safeDiscipline(first.discipline);
+  const sport = sportName(first.activity_type, discipline);
   const isSuggestion = first.commitment === "suggested";
   const allDone = doneCount === n;
   const target = targetLine(first);
@@ -242,8 +243,8 @@ function AgendaRow({
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] font-medium uppercase tracking-wider">
               <span className={INTENT_TEXT[intent]}>{INTENT_LABEL[intent]}</span>
-              {DISCIPLINE_LABEL[discipline] !== INTENT_LABEL[intent] && (
-                <span className="text-gray-400 dark:text-gray-500">{DISCIPLINE_LABEL[discipline]}</span>
+              {sport !== INTENT_LABEL[intent] && (
+                <span className="text-gray-400 dark:text-gray-500">{sport}</span>
               )}
               {showChip && (
                 <span className="normal-case tracking-normal text-gray-500 dark:text-gray-400">

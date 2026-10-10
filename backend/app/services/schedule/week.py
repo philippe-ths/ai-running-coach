@@ -124,6 +124,7 @@ def _to_session_read(
             ),
             intent=session.intent,
             discipline=session.discipline,
+            activity_type=getattr(session, "activity_type", None),
             commitment=session.commitment,
             status=session_status(session, today),
             title=session.title,

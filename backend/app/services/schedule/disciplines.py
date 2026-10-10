@@ -47,6 +47,22 @@ def discipline_for_activity_type(activity_type: Any) -> str:
     return _DISCIPLINE_BY_TYPE.get(raw, "other")
 
 
+_RUN_TYPES = {"run", "trailrun", "virtualrun"}
+
+
+def sport_fits_discipline(activity_type: str, discipline: str) -> bool:
+    """Whether a named sport can sit in a discipline (#1089).
+
+    A sport the mapping is sure about must match it: a "Ride" is never a run
+    session. A trail or treadmill run fits `run` as well as the `other` the
+    strict run boundary puts it in, since a planned trail run is still a run.
+    """
+    raw = (activity_type or "").strip().lower()
+    if raw in _RUN_TYPES:
+        return discipline in ("run", "other")
+    return discipline_for_activity_type(activity_type) == discipline
+
+
 def discipline_for_fact(fact: Any) -> str:
     """Same, for a fact from the stream — routed through `is_run` so the run
     boundary is decided in exactly one place."""
