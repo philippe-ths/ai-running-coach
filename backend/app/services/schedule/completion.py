@@ -50,19 +50,53 @@ def _activity_local_day(activity: Any) -> date:
     )
 
 
-def _closeness(session: PlannedSession, activity: Any) -> float:
-    """How well this activity fills this session, as a ratio of what was asked.
+def _options(session: PlannedSession) -> List[dict]:
+    """The ways this slot can be filled, as dicts: the session itself first, then
+    its alternatives (#1082). The index of each is its `done_option`."""
+    main = {
+        "discipline": session.discipline,
+        "target_distance_m": session.target_distance_m,
+        "target_duration_s": session.target_duration_s,
+    }
+    alternatives = [
+        alt for alt in (getattr(session, "alternatives", None) or []) if isinstance(alt, dict)
+    ]
+    return [main] + alternatives
 
-    1.0 is exactly the prescription. A session with no target at all sits at 1.0
+
+def _option_closeness(option: dict, activity: Any) -> float:
+    """How well this activity fills one option, as a ratio of what was asked.
+
+    1.0 is exactly the prescription. An option with no target at all sits at 1.0
     too: there is nothing to be far from.
     """
-    if session.target_distance_m:
+    if option.get("target_distance_m"):
         actual = getattr(activity, "distance_m", 0) or 0
-        return actual / session.target_distance_m
-    if session.target_duration_s:
+        return actual / option["target_distance_m"]
+    if option.get("target_duration_s"):
         actual = getattr(activity, "moving_time_s", 0) or 0
-        return actual / session.target_duration_s
+        return actual / option["target_duration_s"]
     return 1.0
+
+
+def matching_option(session: PlannedSession, activity: Any) -> Optional[int]:
+    """Which option of this slot the activity is: the one of its discipline it
+    fills most exactly, or None when no option is that discipline."""
+    discipline = discipline_for_activity_type(getattr(activity, "type", None))
+    fits = [
+        (abs(_option_closeness(option, activity) - 1.0), index)
+        for index, option in enumerate(_options(session))
+        if option.get("discipline") == discipline
+    ]
+    return min(fits)[1] if fits else None
+
+
+def _closeness(session: PlannedSession, activity: Any) -> float:
+    """How well this activity fills the option of this slot it matches."""
+    index = matching_option(session, activity)
+    if index is None:
+        return 0.0
+    return _option_closeness(_options(session)[index], activity)
 
 
 def open_sessions_for(db: Session, activity: Any) -> List[PlannedSession]:
@@ -88,7 +122,8 @@ def open_sessions_for(db: Session, activity: Any) -> List[PlannedSession]:
             PlannedSession.window_end >= day,
         )
         .all()
-        if session.discipline == discipline and session.intent != "rest"
+        if session.intent != "rest"
+        and any(option.get("discipline") == discipline for option in _options(session))
     ]
 
 
@@ -153,11 +188,17 @@ def complete_planned_session(
     source: str,
     activity: Any = None,
     when: Optional[datetime] = None,
+    option: Optional[int] = None,
 ) -> PlannedSession:
     """The ONE write. Every route to "done" ends here."""
     session.completed_at = when or datetime.now(timezone.utc)
     session.completion_source = source
     session.completed_activity_id = getattr(activity, "id", None) if activity else None
+    # #1082: which option filled the slot. Given by the runner's tap, or read off
+    # the activity; a tap that names none is the session itself.
+    if option is None and activity is not None:
+        option = matching_option(session, activity)
+    session.done_option = option if option is not None else 0
     # Finishing something settles it; a suggestion the runner acted on is no
     # longer a suggestion they might dismiss.
     session.dismissed_at = None
@@ -171,6 +212,7 @@ def clear_completion(db: Session, session: PlannedSession) -> PlannedSession:
     session.completed_at = None
     session.completion_source = None
     session.completed_activity_id = None
+    session.done_option = None
     db.commit()
     db.refresh(session)
     return session

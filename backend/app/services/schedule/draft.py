@@ -77,6 +77,7 @@ from app.services.schedule.plan_validator import (
     volume_ceilings,
 )
 from app.services.schedule.repair import repair_weeks
+from app.services.schedule.runner_rules import runner_rules
 from app.services.schedule.run_log import attempt_cost, output_failure
 from app.services.schedule.shapes import write_shapes
 from app.services.weeks import resolve_week_start, week_start
@@ -239,6 +240,19 @@ and `target_intent`. `min_days_between` needs `intent_a`, `intent_b` and `days`.
 `preferred_days` needs `intent` and `weekdays`. `max_sessions_per_day` needs \
 `count`. The tool description carries a worked example of each.
 
+# CHOICES AND PREFERENCES
+
+A session may offer `alternatives`: other ways to fill the same slot that you \
+would accept just as well, such as an easy bike in place of an easy run for a \
+runner who does both. The session itself is your recommendation and the slot is \
+still one activity. Offer a choice only where this runner genuinely has one; most \
+sessions have none, and a plan full of choices hands the planning back to them.
+
+`preferences` say how you want a flexible week arranged among the arrangements \
+your rules allow. They forbid nothing. The app uses them to recommend each day's \
+sessions and order, and tells the runner which preference the order comes from, \
+so state only the ones you would defend for this runner.
+
 """
     + WRITING_A_SESSION
     + "Answer only by calling record_training_plan."
@@ -314,6 +328,12 @@ def _profile_lines(user: User, profile: Any) -> List[str]:
         ("Goal", getattr(profile, "goal_type", None)),
         ("Experience", getattr(profile, "experience_level", None)),
         ("Days available each week", getattr(profile, "weekly_days_available", None)),
+        (
+            # #1080: the runner's own limit. Enforced on every plan, so the coach
+            # is told it is theirs and that walks count, not left to guess.
+            "Most activities in a day (their own setting, enforced; walks count)",
+            getattr(profile, "max_activities_per_day", None),
+        ),
         ("Current weekly km (stated)", getattr(profile, "current_weekly_km", None)),
         ("Max HR", getattr(profile, "max_hr", None)),
         ("Injury notes", getattr(profile, "injury_notes", None)),
@@ -677,10 +697,12 @@ def _retry_message(context: str, failures: List[str], previous: Optional[dict]) 
     return "\n".join(out)
 
 
-def _repair(drafted: DraftedPlan, check, frames_by_week: dict) -> tuple:
+def _repair(
+    drafted: DraftedPlan, check, frames_by_week: dict, own_rules: Sequence[Any] = ()
+) -> tuple:
     """Close the numeric shortfalls the check found, week by week."""
     weeks, notes = repair_weeks(
-        drafted.weeks, check, frames_by_week, rules=drafted.rules
+        drafted.weeks, check, frames_by_week, rules=list(drafted.rules) + list(own_rules)
     )
     return drafted.model_copy(update={"weeks": weeks}), notes
 
@@ -719,6 +741,9 @@ async def draft_plan(
     today = today or date.today()
     weeks = settings.SCHEDULE_HORIZON_WEEKS
     starts_on = resolve_week_start(getattr(user, "profile", None))
+    # The runner's own rules (#1080) are not the coach's to write, so they are
+    # held over the draft here rather than appearing in `drafted.rules`.
+    own_rules = runner_rules(getattr(user, "profile", None))
 
     if turn.over_budget(user.id):
         return DraftOutcome(
@@ -795,6 +820,7 @@ async def draft_plan(
             norm_weekly_s=norm_hours,
             frames=concrete_frames,
             expected_weeks=expected,
+            runner_rules=own_rules,
         )
 
     def kind_of(check) -> str:
@@ -881,7 +907,7 @@ async def draft_plan(
             # The retry is spent and the plan is coherent, just short of a number.
             # Close what the ceilings allow in code, then store what is left as a
             # shortfall rather than failing a plan whose only fault is arithmetic.
-            repaired, notes = _repair(drafted, check, frames_by_week)
+            repaired, notes = _repair(drafted, check, frames_by_week, own_rules)
             final = validate(repaired)
             if final.ok or final.only_numeric:
                 log.repairs = notes
@@ -951,6 +977,7 @@ def _persist(
     log.shortfalls = list(log.shortfalls) + shape_shortfalls
 
     plan.rules = [rule.model_dump(mode="json") for rule in drafted.rules]
+    plan.preferences = [pref.model_dump(mode="json") for pref in drafted.preferences] or None
     plan.week_shapes = shapes + store.concrete_week_phases(weeks)
     reach = [w.week_start for w in weeks] + [s["week_start"] for s in shapes]
     reach = [d if isinstance(d, date) else date.fromisoformat(d) for d in reach]
@@ -984,6 +1011,7 @@ def _persist(
                         distance_m=session.target_distance_m,
                     ),
                     structure=session.structure(),
+                    alternatives=session.alternatives_json(),
                 )
             )
 

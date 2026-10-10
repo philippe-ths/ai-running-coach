@@ -349,7 +349,11 @@ def delete_race(race: OwnedGoalRace, db: DbSession) -> None:
 
 
 @router.post("/sessions/{session_id}/complete", status_code=204)
-def complete_session(session: OwnedPlannedSession, db: DbSession) -> None:
+def complete_session(
+    session: OwnedPlannedSession,
+    db: DbSession,
+    option: Optional[int] = Query(default=None, ge=0),
+) -> None:
     """Tick a session off by hand.
 
     One of three routes to the same write — the other two are the auto-match from
@@ -364,7 +368,14 @@ def complete_session(session: OwnedPlannedSession, db: DbSession) -> None:
     carry a discipline outside the closed set) cannot make a SUCCESSFUL write
     answer with a serialization error.
     """
-    completion.complete_planned_session(db, session, source=completion.MANUAL)
+    # #1082: `option` says which way the slot was filled: 0 the session itself,
+    # n its n-th alternative. One past the options there are is refused rather
+    # than stored, so `done_option` can always be read back as an option.
+    if option is not None and option > len(session.alternatives or []):
+        raise HTTPException(status_code=422, detail="This session has no such option.")
+    completion.complete_planned_session(
+        db, session, source=completion.MANUAL, option=option
+    )
 
 
 @router.delete("/sessions/{session_id}/complete", status_code=204)

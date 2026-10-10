@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
 from app.services.personal_bests import DISTANCES, STATED_TIME_BOUNDS
+from app.services.schedule.runner_rules import ABSURD_SESSIONS_PER_DAY
 from app.services.weeks import MONDAY, SUNDAY
 
 
@@ -55,12 +56,25 @@ class UserProfileBase(BaseModel):
     stimulant_use: Optional[bool] = None
     # Week start: Monday (0) or Sunday (6); null resolves to Monday (#676).
     week_starts_on: Optional[int] = None
+    # Most activities in a day, walks included; null = no limit (#1080).
+    max_activities_per_day: Optional[int] = None
 
     @field_validator("week_starts_on")
     @classmethod
     def _week_start_is_monday_or_sunday(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and v not in (MONDAY, SUNDAY):
             raise ValueError("week_starts_on must be 0 (Monday) or 6 (Sunday)")
+        return v
+
+    @field_validator("max_activities_per_day")
+    @classmethod
+    def _daily_limit_in_range(cls, v: Optional[int]) -> Optional[int]:
+        # Capped at the plan checker's own absurdity ceiling: a setting above it
+        # would promise days the checker rejects anyway.
+        if v is not None and not 1 <= v <= ABSURD_SESSIONS_PER_DAY:
+            raise ValueError(
+                f"max_activities_per_day must be between 1 and {ABSURD_SESSIONS_PER_DAY}"
+            )
         return v
 
     @field_validator("weight_kg")

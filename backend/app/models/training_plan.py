@@ -65,6 +65,9 @@ class TrainingPlan(Base):
     # read as SKETCHED. That distinction is derived, never stored, so it cannot
     # drift away from what is actually there.
     week_shapes: Mapped[list] = mapped_column(JSON, default=list)
+    # List[PlanPreference] (#1082): how the coach wants a flexible week arranged.
+    # Rewritten wholesale on every draft, like `rules`; null on older plans.
+    preferences: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     # Provenance. "coach" for a generated plan, "runner" for one the runner's own
     # confirmed edits produced. `model_id` is the model the draft actually ran on.

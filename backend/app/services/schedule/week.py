@@ -31,7 +31,12 @@ from app.schemas.schedule import (
     LoggedActivityRead,
     PlannedSessionRead,
     RuleViolation,
+    DroppedSession,
+    RecommendedDay,
+    RecommendedItem,
     RunningVsNorm,
+    SessionAlternative,
+    WeekRecommendationRead,
     ScheduleWeekRead,
     SpacingRuleRead,
     WeekHeadline,
@@ -47,6 +52,7 @@ from app.services.schedule import store
 from app.services.schedule.disciplines import discipline_for_fact
 from app.services.schedule.placement import (
     WEEK_LENGTH_DAYS,
+    PlacedSession,
     candidate_days,
     derive_placement,
     effective_window,
@@ -54,8 +60,13 @@ from app.services.schedule.placement import (
     session_status,
 )
 from app.services.schedule.norms import running_vs_norm
+from app.services.schedule.planned_distance import planned_distance_m
 from app.services.schedule.rule_text import describe_rule
-from app.services.schedule.rules import check_rules
+from app.services.schedule import recommend_store
+from app.services.schedule.preferences import describe_preference, plan_preferences
+from app.services.schedule.recommend import alternative_notes, recommend_week
+from app.services.schedule.rules import check_rules, open_days
+from app.services.schedule.runner_rules import with_runner_rules
 from app.services.weeks import days_into_week, resolve_week_start, week_start
 
 # The disciplines a week is reported in, in a fixed order so the mix bar does not
@@ -68,6 +79,22 @@ DISCIPLINE_ORDER = ("run", "walk", "bike", "strength", "row", "other")
 # its 12-week baseline over history BEFORE the current 7 days, so the fetch has to
 # reach past both.
 _NORM_LOOKBACK_DAYS = BASELINE_WEEKS * 7 + 14
+
+
+def _alternatives(session: Any) -> List[SessionAlternative]:
+    """The session's stored alternatives, any off-shape one dropped (#1082).
+
+    One bad option must not take the whole session off the week, which is what
+    letting its `ValidationError` reach `PlannedSessionRead` would do.
+    """
+    kept: List[SessionAlternative] = []
+    for raw in getattr(session, "alternatives", None) or []:
+        try:
+            alt = SessionAlternative.model_validate(raw)
+            kept.append(alt.model_copy(update={"planned_distance_m": planned_distance_m(alt)}))
+        except ValidationError:
+            logger.warning("schedule: dropping off-shape alternative on session %s", session.id)
+    return kept
 
 
 def _to_session_read(
@@ -109,6 +136,9 @@ def _to_session_read(
             completed_activity_id=session.completed_activity_id,
             completion_source=session.completion_source,
             dismissed_at=session.dismissed_at,
+            alternatives=_alternatives(session),
+            done_option=session.done_option,
+            alternative_notes=alternative_notes(session, _alternatives(session)),
         )
     except ValidationError:
         logger.warning(
@@ -120,6 +150,74 @@ def _to_session_read(
             session.commitment,
         )
         return None
+
+
+def _done_on(row: Any, fact_day_by_activity: dict) -> Optional[date]:
+    """The day a done session used up, kept inside its own window (#1081).
+
+    A session matched to an activity was done on that activity's day. One ticked
+    by hand carries only the moment of the tick, which is the best the app knows:
+    a walk ticked on Thursday for Tuesday counts on Thursday unless that is
+    outside its window, where it is held to the nearest day it could have been.
+    """
+    if getattr(row, "completed_at", None) is None:
+        return None
+    day = fact_day_by_activity.get(getattr(row, "completed_activity_id", None))
+    if day is None:
+        day = row.completed_at.date()
+    return min(max(day, row.window_start), row.window_end)
+
+
+def _done_intent(row: Any) -> str:
+    """The intent of the option actually done (#1082): an easy row done in place
+    of strength is held to the rules as easy, not as the strength it replaced."""
+    option = getattr(row, "done_option", None) or 0
+    alternatives = getattr(row, "alternatives", None) or []
+    if 0 < option <= len(alternatives) and isinstance(alternatives[option - 1], dict):
+        return alternatives[option - 1].get("intent") or row.intent
+    return row.intent
+
+
+def _recommend(db, user, plan, start, today, is_current, committed_open, rules, fixed):
+    """The recommended week (#1082), stored for the current week so the next read
+    can keep sessions where they were and say what moved."""
+    row = recommend_store.load(db, user.id, start, plan.id) if is_current else None
+    rec = recommend_week(
+        committed_open,
+        rules,
+        plan_preferences(plan),
+        today,
+        fixed=fixed,
+        previous=recommend_store.previous_days(row),
+    )
+    titles = {str(r.id): r.title for r in committed_open}
+    if is_current:
+        row = recommend_store.save(
+            db, row, user_id=user.id, week_start=start, plan_id=plan.id,
+            rec=rec, titles=titles, today=today,
+        )
+    days: dict = {}
+    for placement in rec.placements.values():
+        days.setdefault(placement.day, []).append(placement)
+    return WeekRecommendationRead(
+        days=[
+            RecommendedDay(
+                day=day,
+                items=[
+                    RecommendedItem(session_id=p.session_id, order=p.order, reason=p.reason)
+                    for p in sorted(items, key=lambda p: (p.order is None, p.order or 0, titles.get(str(p.session_id), "")))
+                ],
+            )
+            for day, items in sorted(days.items())
+        ],
+        dropped=[DroppedSession(session_id=sid, reason=why) for sid, why in rec.dropped.items()],
+        changes=[
+            text
+            for text in (recommend_store.describe_change(c) for c in (row.changes if row else []))
+            if text
+        ],
+        preferences=[describe_preference(p) for p in plan_preferences(plan)],
+    )
 
 
 def _to_logged_read(fact: Any) -> LoggedActivityRead:
@@ -243,7 +341,8 @@ def build_week(
         ),
     )
 
-    rules = store.plan_rules(plan)
+    # The runner's own rules (#1080) are checked and shown beside the plan's.
+    rules = with_runner_rules(store.plan_rules(plan), profile)
     # The runner-facing STATEMENT is derived here, from kind + arguments, never
     # from the coach's own `label` (#844) — see rule_text.py.
     rules_read = [
@@ -258,8 +357,83 @@ def build_week(
         for row in rows
         if session_status(row, today) == "upcoming" and candidate_days(row, today)
     ]
-    _, raw_violations = check_rules(open_rows, rules, today)
+    # #1081: a done session cannot move, but it still occupies the day it was
+    # done, so it takes part in every rule without being searched over.
+    fact_day_by_activity = {
+        getattr(fact, "activity_id", None): fact.local_date for fact in week_facts
+    }
+    done_on_by_id = {}
+    fixed: List[PlacedSession] = []
+    for row in rows:
+        if session_status(row, today) != "done":
+            continue
+        day = _done_on(row, fact_day_by_activity)
+        done_on_by_id[row.id] = day
+        fixed.append(PlacedSession(session_id=row.id, intent=_done_intent(row), day=day))
+    _, raw_violations = check_rules(open_rows, rules, today, fixed=fixed)
     violations = [RuleViolation(**v) for v in raw_violations]
+
+    # #1081: the days each floating session can still go on. Asked of the same
+    # search the violations come from, so an option shown is never one the
+    # checker would reject. None means the search ran out of budget, and the
+    # client falls back to the effective window.
+    # Suggestions are left out: an offer the runner may decline must not take a
+    # day away from a session they agreed to.
+    committed_open = [row for row in open_rows if row.commitment == "committed"]
+    # #1083: an activity that matched no session is an extra. It still used up
+    # one of its day's activities under the runner's limit, so the day's
+    # remaining options and the recommendation both see it.
+    credited = {row.completed_activity_id for row in rows if row.completed_activity_id}
+    uncredited = [
+        fact
+        for fact in week_facts
+        if getattr(fact, "activity_id", None) not in credited and fact.local_date <= today
+    ]
+    # A session ticked by hand carries no activity, but the runner may have
+    # recorded it too. Each such session claims one recorded activity of its
+    # discipline on its day, so the same walk is not counted twice.
+    for row in rows:
+        if session_status(row, today) != "done" or row.completed_activity_id:
+            continue
+        day = done_on_by_id.get(row.id)
+        claim = next(
+            (
+                f
+                for f in uncredited
+                if f.local_date == day and discipline_for_fact(f) == row.discipline
+            ),
+            None,
+        )
+        if claim is not None:
+            uncredited.remove(claim)
+    extras = [
+        PlacedSession(session_id=f"extra-{fact.activity_id}", intent="easy", day=fact.local_date)
+        for fact in uncredited
+    ]
+    open_by_id = (
+        open_days(committed_open, rules, today, fixed=fixed + extras) if committed_open else {}
+    )
+    recommendation = (
+        _recommend(db, user, plan, start, today, is_current, committed_open, rules, fixed + extras)
+        if plan is not None and end >= today
+        else None
+    )
+    sessions = [
+        s.model_copy(
+            update={
+                "done_on": done_on_by_id.get(s.id),
+                "open_days": (
+                    open_by_id.get(s.id)
+                    if open_by_id is not None
+                    and s.placement != "pinned"
+                    and s.status == "upcoming"
+                    and s.commitment == "committed"
+                    else None
+                ),
+            }
+        )
+        for s in sessions
+    ]
 
     norm = None
     running_norm = None
@@ -282,6 +456,7 @@ def build_week(
         by_discipline=_by_discipline(sessions, logged),
         rules=rules_read,
         violations=violations,
+        recommendation=recommendation,
         norm=norm,
         running_norm=running_norm,
     )

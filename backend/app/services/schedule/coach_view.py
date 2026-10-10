@@ -55,7 +55,7 @@ from app.services.schedule.placement import (
     effective_window,
     session_status,
 )
-from app.services.schedule.rule_text import describe_rule
+from app.services.schedule.runner_rules import describe_for_coach, with_runner_rules
 from app.services.weeks import resolve_week_start, week_start
 
 logger = logging.getLogger(__name__)
@@ -350,7 +350,10 @@ def build_schedule_context(
     # predicate forbidding exactly that). Feeding the label here would leave the
     # runner reading one rule and the coach reasoning from another, which is
     # worse than the two being wrong together.
-    rules = [describe_rule(rule) for rule in store.plan_rules(plan)][:MAX_RULES]
+    rules = [
+        describe_for_coach(rule)
+        for rule in with_runner_rules(store.plan_rules(plan), profile)
+    ][:MAX_RULES]
 
     if not (planned_for or upcoming or next_week or rules):
         # Nothing to say. An empty section is tokens spent on silence.
@@ -629,6 +632,9 @@ def build_thread_schedule(
         # same violation into the next block, which is the original defect one
         # surface further in.
         "rules_in_play": [
-            describe_rule(rule) for rule in store.plan_rules(plan)
+            describe_for_coach(rule)
+            for rule in with_runner_rules(
+                store.plan_rules(plan), getattr(user, "profile", None)
+            )
         ][:MAX_RULES],
     }

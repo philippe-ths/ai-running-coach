@@ -46,6 +46,45 @@ RuleKind = Literal[
 # --- rules -----------------------------------------------------------------
 
 
+# #1082: how the coach wants a flexible week arranged, as a closed vocabulary.
+# Unlike a SpacingRule these never forbid anything: they rank the legal
+# arrangements the rules allow, so the week can be recommended rather than only
+# checked. Each kind has one fixed reason the runner reads, written in code, so a
+# recommendation can never claim more than its preference says.
+PreferenceKind = Literal[
+    "spread_hard_days",
+    "easy_day_before_long",
+    "strength_after_run",
+    "spread_repeats",
+]
+
+
+class PlanPreference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: PreferenceKind
+
+
+class SessionAlternative(BaseModel):
+    """Another way to fill the same slot (#1082): "easy run, or easy bike".
+
+    The slot is still one activity. Its main session is the recommended option;
+    an alternative is what the runner may do instead, sized in its own units.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: SessionIntent
+    discipline: Discipline
+    title: str
+    detail: Optional[str] = None
+    target_distance_m: Optional[float] = None
+    target_duration_s: Optional[int] = None
+    # How far it goes, by the one definition every reader asks
+    # (`planned_distance.py`, #887), so the screen never works it out itself.
+    planned_distance_m: float = 0.0
+
+
 class SpacingRule(BaseModel):
     """One spacing constraint the week must satisfy.
 
@@ -260,6 +299,25 @@ class PlannedSessionRead(BaseModel):
     completion_source: Optional[str] = None
     dismissed_at: Optional[datetime] = None
 
+    # #1082. Other ways to fill this slot, recommended option first being the
+    # session itself. `done_option` is which one was done: 0 the session itself,
+    # n the n-th alternative; None while not done or when not recorded.
+    alternatives: List[SessionAlternative] = Field(default_factory=list)
+    done_option: Optional[int] = None
+    # One fixed-wording note per alternative, saying what taking it instead
+    # gives or costs ("+20 min toward the week's time", "kinder on the legs").
+    alternative_notes: List[str] = Field(default_factory=list)
+
+    # #1081. The day a done session used up: its matched activity's date, or the
+    # day it was ticked by hand, kept inside its window. None unless done.
+    done_on: Optional[date] = None
+    # #1081. For an upcoming committed session that floats, the days it can
+    # still go on with the rest of the week legal under every rule, done
+    # sessions holding their days. None when not computed (a pinned, done or
+    # suggested session, or a week the search could not settle in budget), in
+    # which case the effective window is the honest fallback.
+    open_days: Optional[List[date]] = None
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def planned_distance_m(self) -> float:
@@ -359,6 +417,45 @@ class RunningVsNorm(BaseModel):
     deadband_pct: float
 
 
+class RecommendedItem(BaseModel):
+    """One session on its recommended day (#1082)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: UUID
+    # Its place in the day's order, or None when the order does not matter.
+    order: Optional[int] = None
+    # Fixed wording for why it sits where it does in the day, if anything does.
+    reason: Optional[str] = None
+
+
+class RecommendedDay(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    day: date
+    items: List[RecommendedItem] = Field(default_factory=list)
+
+
+class DroppedSession(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: UUID
+    reason: str
+
+
+class WeekRecommendationRead(BaseModel):
+    """What to do each day still to come, and what moved to get here (#1082)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    days: List[RecommendedDay] = Field(default_factory=list)
+    dropped: List[DroppedSession] = Field(default_factory=list)
+    # Every move this week, in plain words, oldest first.
+    changes: List[str] = Field(default_factory=list)
+    # The plan's preferences as the runner reads them.
+    preferences: List[str] = Field(default_factory=list)
+
+
 class ScheduleWeekRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -378,6 +475,9 @@ class ScheduleWeekRead(BaseModel):
     by_discipline: List[DisciplineLoad] = Field(default_factory=list)
     rules: List[SpacingRuleRead] = Field(default_factory=list)
     violations: List[RuleViolation] = Field(default_factory=list)
+    # #1082: the recommended days for this week or a later one; None for a past
+    # week, a week with no plan, or one the search could not settle.
+    recommendation: Optional[WeekRecommendationRead] = None
 
     # The runner's own typical week, straight from the existing volume builder —
     # `norm_weekly` is ALL-ACTIVITY by that definition, with `current_runs`

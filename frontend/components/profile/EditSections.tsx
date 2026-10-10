@@ -194,6 +194,29 @@ export function AppSection({
         </FieldHint>
       </div>
 
+      {/* #1080: the runner's own limit. The empty value is "no limit", which
+          coerceField turns into null. */}
+      <div className={`${CARD} space-y-1`}>
+        <SegmentedControl
+          legend="Most activities in a day"
+          name="max_activities_per_day"
+          value={form.max_activities_per_day ?? ''}
+          onChange={(v) => onChange('max_activities_per_day', v)}
+          hintId="max_activities_per_day-hint"
+          options={[
+            { value: '', label: 'None' },
+            { value: 1, label: '1' },
+            { value: 2, label: '2' },
+            { value: 3, label: '3' },
+            { value: 4, label: '4' },
+          ]}
+        />
+        <FieldHint id="max_activities_per_day-hint">
+          Walks count like any other activity. Your coach plans every week within
+          this.
+        </FieldHint>
+      </div>
+
       {/* Appearance is a device preference, not profile data: it saves itself
           the moment you pick it and is not part of the profile's Save. */}
       <div className={CARD}>
