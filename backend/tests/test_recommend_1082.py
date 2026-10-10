@@ -7,6 +7,7 @@ extras and hand ticks use up their day exactly once.
 """
 
 import random
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -164,6 +165,23 @@ def test_strength_goes_on_a_run_day_when_the_coach_prefers_it():
     assert rec.placements["gym"].day == D(2)
     assert rec.placements["run"].order == 1
     assert (rec.placements["gym"].order, rec.placements["gym"].reason) == (2, REASON_HARDEST_LAST)
+
+
+def test_a_week_without_a_limit_spreads_evenly_instead_of_piling_up():
+    # The runner's real week (#1087): walks, easy runs, a bike and strength over
+    # Tue-Sat with the long run on Sunday, and no daily limit.
+    sessions = [_S(f"w{i}", "easy", "walk", "Walk", D(1), D(5)) for i in range(5)]
+    sessions += [_S(f"r{i}", "easy", "run", "Easy run", D(1), D(3)) for i in range(3)]
+    sessions += [
+        _S("bike", "easy", "bike", "Easy bike", D(1), D(5)),
+        _S("gym", "strength", "strength", "Strength", D(1), D(5)),
+        _S("long", "long", "run", "Long run", D(6), D(6)),
+    ]
+
+    rec = recommend_week(sessions, [], [], MON)
+
+    per_day = Counter(p.day for p in rec.placements.values() if p.session_id != "long")
+    assert max(per_day.values()) - min(per_day.values()) <= 1, per_day
 
 
 def test_repeats_are_spread_when_the_coach_prefers_it():

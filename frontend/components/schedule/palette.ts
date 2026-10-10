@@ -121,17 +121,6 @@ export const INTENT_ORDER: SessionIntent[] = [
   "rest",
 ];
 
-// The letter carried inside a pip, so discipline never needs a second colour.
-// Run has none: it is the default sport, and "R" is owed to Row.
-export const DISCIPLINE_LETTER: Record<Discipline, string> = {
-  run: "",
-  walk: "W",
-  bike: "B",
-  strength: "S",
-  row: "R",
-  other: "·",
-};
-
 /** An unknown value from an LLM-written plan degrades rather than crashing. */
 export function safeIntent(value: string): SessionIntent {
   return (value in INTENT_LABEL ? value : "easy") as SessionIntent;

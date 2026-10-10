@@ -19,7 +19,7 @@ import type { LoggedActivity, PlannedSession, ScheduleWeek } from "@/lib/types/s
 import WeekHeader from "@/components/schedule/WeekHeader";
 import DayStrip from "@/components/schedule/DayStrip";
 import WeekAgenda from "@/components/schedule/WeekAgenda";
-import TodayCard from "@/components/schedule/TodayCard";
+import DayCard from "@/components/schedule/DayCard";
 import RulesPanel from "@/components/schedule/RulesPanel";
 import LoggedList from "@/components/schedule/LoggedList";
 import EmptyWeek from "@/components/schedule/EmptyWeek";
@@ -59,6 +59,9 @@ export default function SchedulePage() {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  // #1087: the day shown in full under the strip. Outside the week on screen it
+  // falls back to today, or to the week's first recommended day.
+  const [pickedDay, setPickedDay] = useState<string | null>(null);
   // Bumped when a goal race is added or removed. The week is refetched directly;
   // the horizon owns its own fetch, so it is told through this token — the race
   // marker is part of the horizon payload, not something the client can draw.
@@ -202,6 +205,14 @@ export default function SchedulePage() {
     return map;
   }, [week]);
 
+  const shownDay = !week
+    ? todayIso()
+    : pickedDay && pickedDay >= week.week_start && pickedDay <= week.week_end
+      ? pickedDay
+      : week.is_current_week
+        ? todayIso()
+        : week.recommendation?.days[0]?.day ?? week.week_start;
+
   const range = week ? `${formatDayMonth(week.week_start)} – ${formatDayMonth(week.week_end)}` : "";
 
   // Lives inside the strip, so stepping between weeks happens where the week
@@ -342,18 +353,20 @@ export default function SchedulePage() {
             today={todayIso()}
             header={weekNav}
             recommendation={week.recommendation}
+            isCurrentWeek={week.is_current_week}
+            selected={shownDay}
+            onSelectDay={setPickedDay}
           />
 
-          {/* #1082: today first, as the recommendation has it. */}
-          {week.is_current_week && (
-            <TodayCard
-              week={week}
-              today={todayIso()}
-              pendingId={pendingId}
-              onComplete={onComplete}
-              onUncomplete={onUncomplete}
-            />
-          )}
+          {/* #1082, #1087: the chosen day in full, today unless another is tapped. */}
+          <DayCard
+            week={week}
+            day={shownDay}
+            today={todayIso()}
+            pendingId={pendingId}
+            onComplete={onComplete}
+            onUncomplete={onUncomplete}
+          />
 
           {/* #981: this stands in for the missing planned sessions below,
               right where the runner would otherwise look for them. */}
@@ -368,7 +381,8 @@ export default function SchedulePage() {
             weekEnd={week.week_end}
             actualById={actualById}
             rules={week.rules}
-            hideDay={week.is_current_week && week.recommendation ? todayIso() : undefined}
+            recommendation={week.recommendation}
+            hideDay={shownDay}
             pendingId={pendingId}
             onComplete={onComplete}
             onUncomplete={onUncomplete}

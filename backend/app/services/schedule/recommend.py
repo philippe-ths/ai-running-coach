@@ -16,9 +16,9 @@ How a week is chosen
 3. Among the legal weeks, the one with the lowest cost wins. The cost is the
    coach's preferences (`TrainingPlan.preferences`) plus a large charge for every
    session moved off the day it was last recommended, so re-planning moves as
-   little as possible, plus a small charge for stacking a day, so load spreads
-   when nothing else decides, and a little more for the same sport twice in a
-   day.
+   little as possible, plus a charge for stacking a day that grows with every
+   activity already there, so load spreads evenly when nothing else decides,
+   and a little more for the same sport twice in a day.
 
 Every cost term only grows as sessions are added, so the cost of a partial week
 is a lower bound for any week that completes it, which is what makes the
@@ -128,8 +128,10 @@ def _cost(placed: Sequence[Tuple[Any, date]], fixed: Sequence[PlacedSession],
             cost += MOVE_COST
     for day, sessions in days.items():
         count = len(sessions) + len(fixed_by_day.get(day, []))
-        cost += STACK_COST * max(0, count - 1)
-        sports = Counter(s.discipline for s in sessions if s.discipline != "walk")
+        # Each activity costs as many as were already on the day, so a busy
+        # day always costs more to add to than a quiet one and the week evens out.
+        cost += STACK_COST * count * (count - 1) // 2
+        sports = Counter(s.discipline for s in sessions)
         cost += DOUBLE_SPORT_COST * sum(n - 1 for n in sports.values())
 
     def intents_on(day: date) -> List[str]:
