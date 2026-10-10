@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.schedule import PlanPreference, SpacingRule
+from app.services.schedule.preferences import PREFERENCE_TEXT
 
 MAX_CONCRETE_WEEKS = 6
 # Three a day: a walk, a run and a gym session is a real day for some runners,
@@ -353,8 +354,7 @@ SESSION_PROPERTIES: Dict[str, Any] = {
             "options you would accept in its place on the same day, at the same "
             "or lower effort; never a quality or long session in place of an "
             "easy one. Each states its own intent, discipline, title and how "
-            "far or how long. Leave it out when there is no real choice; most "
-            "sessions have none."
+            "far or how long."
         ),
         "items": {
             "type": "object",
@@ -464,13 +464,8 @@ RECORD_TRAINING_PLAN_TOOL = {
                     "recommends the one that best follows them, and tells the runner "
                     "which preference a day's order comes from. Give each kind at "
                     "most once, and only the ones you mean:\n"
-                    "- spread_hard_days: keep quality and long sessions on days apart.\n"
-                    "- easy_day_before_long: the day before the long run holds only "
-                    "easy sessions or rest.\n"
-                    "- strength_after_run: put strength on a day that has a run, "
-                    "after the run.\n"
-                    "- spread_repeats: put repeats of the same session on different "
-                    "days."
+                    # One wording for each kind, shared with what the runner sees.
+                    + "\n".join(f"- {kind}: {text}" for kind, text in PREFERENCE_TEXT.items())
                 ),
                 "items": {
                     "type": "object",
@@ -479,12 +474,7 @@ RECORD_TRAINING_PLAN_TOOL = {
                     "properties": {
                         "kind": {
                             "type": "string",
-                            "enum": [
-                                "spread_hard_days",
-                                "easy_day_before_long",
-                                "strength_after_run",
-                                "spread_repeats",
-                            ],
+                            "enum": list(PREFERENCE_TEXT),
                         }
                     },
                 },

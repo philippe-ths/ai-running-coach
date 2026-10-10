@@ -193,3 +193,12 @@ def test_rules_see_the_option_that_was_done(db):
     assert _done_intent(session) == "strength"
     session.done_option = 0
     assert _done_intent(session) == "easy"
+
+
+def test_every_preference_kind_has_one_wording():
+    from typing import get_args
+
+    from app.schemas.schedule import PreferenceKind
+    from app.services.schedule.preferences import PREFERENCE_TEXT
+
+    assert set(get_args(PreferenceKind)) == set(PREFERENCE_TEXT)
