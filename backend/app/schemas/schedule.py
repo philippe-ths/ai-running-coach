@@ -46,6 +46,42 @@ RuleKind = Literal[
 # --- rules -----------------------------------------------------------------
 
 
+# #1082: how the coach wants a flexible week arranged, as a closed vocabulary.
+# Unlike a SpacingRule these never forbid anything: they rank the legal
+# arrangements the rules allow, so the week can be recommended rather than only
+# checked. Each kind has one fixed reason the runner reads, written in code, so a
+# recommendation can never claim more than its preference says.
+PreferenceKind = Literal[
+    "spread_hard_days",
+    "easy_day_before_long",
+    "strength_after_run",
+    "spread_repeats",
+]
+
+
+class PlanPreference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: PreferenceKind
+
+
+class SessionAlternative(BaseModel):
+    """Another way to fill the same slot (#1082): "easy run, or easy bike".
+
+    The slot is still one activity. Its main session is the recommended option;
+    an alternative is what the runner may do instead, sized in its own units.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: SessionIntent
+    discipline: Discipline
+    title: str
+    detail: Optional[str] = None
+    target_distance_m: Optional[float] = None
+    target_duration_s: Optional[int] = None
+
+
 class SpacingRule(BaseModel):
     """One spacing constraint the week must satisfy.
 
@@ -259,6 +295,12 @@ class PlannedSessionRead(BaseModel):
     completed_activity_id: Optional[UUID] = None
     completion_source: Optional[str] = None
     dismissed_at: Optional[datetime] = None
+
+    # #1082. Other ways to fill this slot, recommended option first being the
+    # session itself. `done_option` is which one was done: 0 the session itself,
+    # n the n-th alternative; None while not done or when not recorded.
+    alternatives: List[SessionAlternative] = Field(default_factory=list)
+    done_option: Optional[int] = None
 
     # #1081. The day a done session used up: its matched activity's date, or the
     # day it was ticked by hand, kept inside its window. None unless done.

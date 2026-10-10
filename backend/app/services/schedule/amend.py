@@ -55,6 +55,7 @@ from app.services.schedule.effort import build_load_model, estimate_effort
 from app.services.schedule.frames import build_frames
 from app.services.schedule.norms import running_norm_weekly_m, weekly_hours_norm_s
 from app.services.schedule.plan_validator import VOLUME_CEILING, validate_amendment
+from app.services.schedule.preferences import describe_preference, plan_preferences
 from app.services.schedule.repair import repair_weeks
 from app.services.schedule.runner_rules import describe_for_coach, with_runner_rules
 from app.services.schedule.week_check import says_week
@@ -457,6 +458,12 @@ def build_amend_context(
     if rules:
         parts.append("\n## THE PLAN'S RULES (unchanged, and still enforced)")
         parts.extend(f"- {describe_for_coach(rule)}" for rule in rules)
+
+    # #1082: the plan's preferences hold for the amendment too; it keeps them.
+    prefs = plan_preferences(plan)
+    if prefs:
+        parts.append("\n## THE PLAN'S PREFERENCES (unchanged; they rank, never forbid)")
+        parts.extend(f"- {describe_preference(pref)}" for pref in prefs)
 
     shape = _shape_lines(plan, start, end, starts_on)
     if shape:
@@ -990,6 +997,7 @@ def _apply(
                         distance_m=session.target_distance_m,
                     ),
                     structure=session.structure(),
+                    alternatives=session.alternatives_json(),
                 )
             )
             added.append(f"{session.window_start.strftime('%a')} {session.title}")

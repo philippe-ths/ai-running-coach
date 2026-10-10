@@ -240,6 +240,19 @@ and `target_intent`. `min_days_between` needs `intent_a`, `intent_b` and `days`.
 `preferred_days` needs `intent` and `weekdays`. `max_sessions_per_day` needs \
 `count`. The tool description carries a worked example of each.
 
+# CHOICES AND PREFERENCES
+
+A session may offer `alternatives`: other ways to fill the same slot that you \
+would accept just as well, such as an easy bike in place of an easy run for a \
+runner who does both. The session itself is your recommendation and the slot is \
+still one activity. Offer a choice only where this runner genuinely has one; most \
+sessions have none, and a plan full of choices hands the planning back to them.
+
+`preferences` say how you want a flexible week arranged among the arrangements \
+your rules allow. They forbid nothing. The app uses them to recommend each day's \
+sessions and order, and tells the runner which preference the order comes from, \
+so state only the ones you would defend for this runner.
+
 """
     + WRITING_A_SESSION
     + "Answer only by calling record_training_plan."
@@ -964,6 +977,7 @@ def _persist(
     log.shortfalls = list(log.shortfalls) + shape_shortfalls
 
     plan.rules = [rule.model_dump(mode="json") for rule in drafted.rules]
+    plan.preferences = [pref.model_dump(mode="json") for pref in drafted.preferences] or None
     plan.week_shapes = shapes + store.concrete_week_phases(weeks)
     reach = [w.week_start for w in weeks] + [s["week_start"] for s in shapes]
     reach = [d if isinstance(d, date) else date.fromisoformat(d) for d in reach]
@@ -997,6 +1011,7 @@ def _persist(
                         distance_m=session.target_distance_m,
                     ),
                     structure=session.structure(),
+                    alternatives=session.alternatives_json(),
                 )
             )
 

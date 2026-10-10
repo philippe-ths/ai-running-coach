@@ -32,6 +32,7 @@ A `GoalRace` is the runner's stated goal, whose `A`/`B`/`C` `priority` is the ru
 A `TrainingPlan` holds rules and week shapes, with at most one `active` plan per user enforced by the writer rather than a DB constraint.
 `UserProfile.max_activities_per_day` is the runner's own daily limit, walks included, merged into a plan's rules wherever they are checked rather than stored on the plan, which a redraft rewrites.
 The week view sends each floating committed session's `open_days` from `rules.open_days`, with every done session fixed on its `done_on` day.
+A `PlannedSession` may carry `alternatives` (other ways to fill the same slot) and records the `done_option` used, while `TrainingPlan.preferences` ranks legal arrangements without forbidding any.
 `superseded_at` on a plan is written only by `activate_plan`, so a superseded plan stays restorable.
 A `Season` is the coach's read of every goal, stale only when `goals_fingerprint` changes on a goal edit, addition or deletion.
 A `PlannedSession` stores an inclusive `[window_start, window_end]`, and placement and the effective window are derived at read time, never stored.

@@ -108,6 +108,11 @@ class PlannedSession(Base):
 
     # {"reps_planned": int, "rep_distance_m": float, "rest_s": float} or None.
     structure: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # #1082: other ways to fill this slot, as List[SessionAlternative]. Null or
+    # empty for a session with no choice. `done_option` records which option was
+    # done (0 the session itself, n the n-th alternative).
+    alternatives: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    done_option: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # --- completion (written by the completion slice, not by this one) ---
     completed_at: Mapped[Optional[datetime]] = mapped_column(

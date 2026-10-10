@@ -32,6 +32,7 @@ from app.schemas.schedule import (
     PlannedSessionRead,
     RuleViolation,
     RunningVsNorm,
+    SessionAlternative,
     ScheduleWeekRead,
     SpacingRuleRead,
     WeekHeadline,
@@ -70,6 +71,21 @@ DISCIPLINE_ORDER = ("run", "walk", "bike", "strength", "row", "other")
 # its 12-week baseline over history BEFORE the current 7 days, so the fetch has to
 # reach past both.
 _NORM_LOOKBACK_DAYS = BASELINE_WEEKS * 7 + 14
+
+
+def _alternatives(session: Any) -> List[SessionAlternative]:
+    """The session's stored alternatives, any off-shape one dropped (#1082).
+
+    One bad option must not take the whole session off the week, which is what
+    letting its `ValidationError` reach `PlannedSessionRead` would do.
+    """
+    kept: List[SessionAlternative] = []
+    for raw in getattr(session, "alternatives", None) or []:
+        try:
+            kept.append(SessionAlternative.model_validate(raw))
+        except ValidationError:
+            logger.warning("schedule: dropping off-shape alternative on session %s", session.id)
+    return kept
 
 
 def _to_session_read(
@@ -111,6 +127,8 @@ def _to_session_read(
             completed_activity_id=session.completed_activity_id,
             completion_source=session.completion_source,
             dismissed_at=session.dismissed_at,
+            alternatives=_alternatives(session),
+            done_option=session.done_option,
         )
     except ValidationError:
         logger.warning(
@@ -138,6 +156,16 @@ def _done_on(row: Any, fact_day_by_activity: dict) -> Optional[date]:
     if day is None:
         day = row.completed_at.date()
     return min(max(day, row.window_start), row.window_end)
+
+
+def _done_intent(row: Any) -> str:
+    """The intent of the option actually done (#1082): an easy row done in place
+    of strength is held to the rules as easy, not as the strength it replaced."""
+    option = getattr(row, "done_option", None) or 0
+    alternatives = getattr(row, "alternatives", None) or []
+    if 0 < option <= len(alternatives) and isinstance(alternatives[option - 1], dict):
+        return alternatives[option - 1].get("intent") or row.intent
+    return row.intent
 
 
 def _to_logged_read(fact: Any) -> LoggedActivityRead:
@@ -289,7 +317,7 @@ def build_week(
             continue
         day = _done_on(row, fact_day_by_activity)
         done_on_by_id[row.id] = day
-        fixed.append(PlacedSession(session_id=row.id, intent=row.intent, day=day))
+        fixed.append(PlacedSession(session_id=row.id, intent=_done_intent(row), day=day))
     _, raw_violations = check_rules(open_rows, rules, today, fixed=fixed)
     violations = [RuleViolation(**v) for v in raw_violations]
 

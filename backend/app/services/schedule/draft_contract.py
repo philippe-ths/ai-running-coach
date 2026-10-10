@@ -25,13 +25,17 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.schedule import SpacingRule
+from app.schemas.schedule import PlanPreference, SpacingRule
 
 MAX_CONCRETE_WEEKS = 6
 # Three a day: a walk, a run and a gym session is a real day for some runners,
 # and a high-volume week of everything they do can pass fourteen.
 MAX_SESSIONS_PER_WEEK = 21
 MAX_RULES = 8
+# #1082: a slot offers at most three options, the session and two others, and a
+# plan states at most one of each preference kind.
+MAX_ALTERNATIVES = 2
+MAX_PREFERENCES = 4
 SUMMARY_MAX_CHARS = 2000
 
 
@@ -66,6 +70,27 @@ def normalise(raw: dict) -> dict:
 DETAIL_MAX_LENGTH = 400
 
 
+class DraftedAlternative(BaseModel):
+    """Another way to fill the same slot (#1082)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["easy", "long", "quality", "strength"]
+    discipline: Literal["run", "walk", "bike", "strength", "row", "other"]
+    title: str = Field(min_length=1, max_length=120)
+    detail: Optional[str] = Field(default=None, max_length=DETAIL_MAX_LENGTH)
+    target_distance_m: Optional[float] = Field(default=None, ge=0, le=200_000)
+    target_duration_s: Optional[int] = Field(default=None, ge=0, le=86_400)
+
+    @model_validator(mode="after")
+    def _sized(self) -> "DraftedAlternative":
+        # An option nobody can size is one the runner cannot weigh against the
+        # session it stands in for, nor the challenge count.
+        if not self.target_distance_m and not self.target_duration_s:
+            raise ValueError("an alternative states how far or how long it is")
+        return self
+
+
 class DraftedSession(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -86,6 +111,11 @@ class DraftedSession(BaseModel):
     # belongs to could not be added up; asked for in metres it simply adds.
     warmup_distance_m: Optional[float] = Field(default=None, gt=0, le=50_000)
     cooldown_distance_m: Optional[float] = Field(default=None, gt=0, le=50_000)
+    # #1082: other ways to fill this slot. The session itself is the recommended
+    # option; these are what the runner may do instead, one of them, not all.
+    alternatives: List[DraftedAlternative] = Field(
+        default_factory=list, max_length=MAX_ALTERNATIVES
+    )
 
     @model_validator(mode="after")
     def _validate_shape(self) -> "DraftedSession":
@@ -131,7 +161,27 @@ class DraftedSession(BaseModel):
             )
         if has_rep_args and not has_reps:
             raise ValueError("rep_distance_m and rest_s need reps_planned")
+        if self.alternatives:
+            # A choice belongs to a slot the runner has agreed to: a rest day has
+            # nothing to swap, and a suggestion is already optional.
+            if self.intent == "rest" or self.commitment != "committed":
+                raise ValueError("alternatives belong to a committed, non-rest session")
+            # An option may not be harder than the session it stands in for: an
+            # easy run's alternative cannot be intervals.
+            hard = {"quality", "long"}
+            for alt in self.alternatives:
+                if alt.intent in hard and alt.intent != self.intent:
+                    raise ValueError(
+                        f"alternative {alt.title!r} is a {alt.intent} session in "
+                        f"place of a {self.intent} one"
+                    )
         return self
+
+    def alternatives_json(self) -> Optional[List[Dict[str, Any]]]:
+        """The alternatives as stored on the row, or None when there are none."""
+        if not self.alternatives:
+            return None
+        return [alt.model_dump(mode="json", exclude_none=True) for alt in self.alternatives]
 
     def structure(self) -> Optional[Dict[str, float]]:
         """How this session is built, or None when it is not built out of parts.
@@ -173,6 +223,11 @@ class DraftedPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rules: List[SpacingRule] = Field(default_factory=list, max_length=MAX_RULES)
+    # #1082: how to arrange the flexible week among the legal ones. Optional, and
+    # never a reason to reject a plan: it ranks, it does not forbid.
+    preferences: List[PlanPreference] = Field(
+        default_factory=list, max_length=MAX_PREFERENCES
+    )
     weeks: List[DraftedWeek] = Field(default_factory=list, max_length=MAX_CONCRETE_WEEKS)
     # Generous, and TRUNCATED rather than rejected (see `normalise`). A live run
     # threw an entire valid twelve-week plan away because the blurb explaining it
@@ -287,6 +342,40 @@ SESSION_PROPERTIES: Dict[str, Any] = {
             "minutes, for the same reason."
         ),
     },
+    "alternatives": {
+        "type": "array",
+        "maxItems": MAX_ALTERNATIVES,
+        "description": (
+            "Other ways to fill THIS slot, when the runner could equally do "
+            "something else instead, e.g. an easy run or an easy bike. The "
+            "session itself is the recommended option. The slot is still ONE "
+            "activity: the runner does one option, never all of them. List only "
+            "options you would accept in its place on the same day, at the same "
+            "or lower effort; never a quality or long session in place of an "
+            "easy one. Each states its own intent, discipline, title and how "
+            "far or how long. Leave it out when there is no real choice; most "
+            "sessions have none."
+        ),
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["intent", "discipline", "title"],
+            "properties": {
+                "intent": {
+                    "type": "string",
+                    "enum": ["easy", "long", "quality", "strength"],
+                },
+                "discipline": {
+                    "type": "string",
+                    "enum": ["run", "walk", "bike", "strength", "row", "other"],
+                },
+                "title": {"type": "string"},
+                "detail": {"type": "string", "maxLength": DETAIL_MAX_LENGTH},
+                "target_distance_m": {"type": "number"},
+                "target_duration_s": {"type": "integer"},
+            },
+        },
+    },
 }
 
 
@@ -363,6 +452,40 @@ RECORD_TRAINING_PLAN_TOOL = {
                             "description": "0 = Monday .. 6 = Sunday.",
                         },
                         "count": {"type": "integer"},
+                    },
+                },
+            },
+            "preferences": {
+                "type": "array",
+                "maxItems": MAX_PREFERENCES,
+                "description": (
+                    "How you want each flexible week arranged. Unlike rules these "
+                    "forbid nothing: among the arrangements the rules allow, the app "
+                    "recommends the one that best follows them, and tells the runner "
+                    "which preference a day's order comes from. Give each kind at "
+                    "most once, and only the ones you mean:\n"
+                    "- spread_hard_days: keep quality and long sessions on days apart.\n"
+                    "- easy_day_before_long: the day before the long run holds only "
+                    "easy sessions or rest.\n"
+                    "- strength_after_run: put strength on a day that has a run, "
+                    "after the run.\n"
+                    "- spread_repeats: put repeats of the same session on different "
+                    "days."
+                ),
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["kind"],
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": [
+                                "spread_hard_days",
+                                "easy_day_before_long",
+                                "strength_after_run",
+                                "spread_repeats",
+                            ],
+                        }
                     },
                 },
             },
