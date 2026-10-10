@@ -12,8 +12,8 @@
 // easy runs over the week are one "easy run could go here" per day, and the
 // pool line under the strip says how many are still to place.
 //
-// Intent is the chip's colour, as everywhere on the schedule. A run shows its
-// planned km; anything else its discipline letter.
+// Intent is the chip's colour, as everywhere on the schedule; the sport is an
+// icon (#1087). Tapping a day shows it in full under the strip.
 
 import type { ReactNode } from "react";
 import type {
@@ -24,7 +24,6 @@ import type {
 } from "@/lib/types/schedule";
 import {
   DISCIPLINE_LABEL,
-  DISCIPLINE_LETTER,
   INTENT_FILL,
   INTENT_LABEL,
   INTENT_TEXT,
@@ -33,6 +32,7 @@ import {
 } from "./palette";
 import { dayOfMonth, formatDayChip, weekDays, weekdayInitial } from "./dates";
 import { groupSessions, optionDays } from "./agenda";
+import DisciplineIcon from "./DisciplineIcon";
 
 const MAX_CHIPS = 3;
 
@@ -48,19 +48,6 @@ interface Chip {
   session: PlannedSession;
   kind: ChipKind;
   order?: number | null;
-}
-
-/** What fits on a chip: a run's km, otherwise the discipline's letter. */
-function chipLabel(s: PlannedSession): string {
-  const discipline = safeDiscipline(s.discipline);
-  if (discipline === "run") {
-    if (s.planned_distance_m > 0) {
-      return (s.planned_distance_m / 1000).toFixed(s.planned_distance_m < 10000 ? 1 : 0);
-    }
-    if (s.target_duration_s) return `${Math.round(s.target_duration_s / 60)}'`;
-    return "Run";
-  }
-  return DISCIPLINE_LETTER[discipline];
 }
 
 function chipTitle(chip: Chip): string {
@@ -169,6 +156,7 @@ function chipsByDay(
 
 /** "5 to place · 4 days left · any order", or "one each" when the limit is one. */
 function poolLine(
+  isCurrentWeek: boolean,
   rec: WeekRecommendation | null | undefined,
   sessions: PlannedSession[],
   rules: SpacingRuleRead[],
@@ -184,7 +172,8 @@ function poolLine(
   // With a recommendation every session left counts, pinned ones included.
   if (rec) {
     const left = toDo.length - (rec.dropped?.length ?? 0);
-    return left > 0 ? `${left} still to do this week` : null;
+    if (left <= 0) return null;
+    return isCurrentWeek ? `${left} still to do this week` : `${left} planned`;
   }
   const floating = toDo.filter((s) => s.placement !== "pinned");
   if (!floating.length) return null;
@@ -209,6 +198,9 @@ export default function DayStrip({
   today,
   header,
   recommendation,
+  isCurrentWeek,
+  selected,
+  onSelectDay,
 }: {
   weekStart: string;
   sessions: PlannedSession[];
@@ -218,11 +210,22 @@ export default function DayStrip({
   /** The week navigator, so changing week is right where the week is read. */
   header?: ReactNode;
   recommendation?: WeekRecommendation | null;
+  isCurrentWeek: boolean;
+  /** The day shown in full under the strip; tapping a day picks it. */
+  selected?: string;
+  onSelectDay?: (day: string) => void;
 }) {
   const days = weekDays(weekStart);
   const byDay = chipsByDay(sessions, days[0], days[6], recommendation);
   const todayIndex = days.indexOf(today);
-  const pool = poolLine(recommendation, sessions, rules, today, days);
+  const pool = poolLine(isCurrentWeek, recommendation, sessions, rules, today, days);
+  const allChips: Chip[] = [];
+  byDay.forEach((list) => allChips.push(...list));
+  const hasChoice = allChips.some(
+    (c) => c.kind === "set" && (c.session.alternatives?.length ?? 0) > 0,
+  );
+  const sports = Array.from(new Set(allChips.map((c) => safeDiscipline(c.session.discipline))));
+  const intents = Array.from(new Set(allChips.map((c) => safeIntent(c.session.intent))));
 
   const loggedByDay = new Map<string, number>();
   for (const a of logged) {
@@ -247,7 +250,7 @@ export default function DayStrip({
         {[summary || "Nothing planned this week yet.", pool].filter(Boolean).join(". ")}
       </p>
 
-      <ol className="grid grid-cols-7" aria-hidden="true">
+      <ol className="grid grid-cols-7">
         {days.map((day, i) => {
           const chips = byDay.get(day) ?? [];
           const shown = chips.slice(0, MAX_CHIPS);
@@ -256,10 +259,19 @@ export default function DayStrip({
           return (
             <li
               key={day}
-              className={`flex min-h-[7.5rem] flex-col items-center gap-1 px-0.5 pb-2 pt-1.5 ${
-                isToday ? "rounded-md bg-gray-100 dark:bg-gray-700/60" : ""
-              } ${i > 0 ? "border-l border-dashed border-gray-100 dark:border-gray-700/70" : ""}`}
+              className={i > 0 ? "border-l border-dashed border-gray-100 dark:border-gray-700/70" : ""}
             >
+              <button
+                type="button"
+                onClick={() => onSelectDay?.(day)}
+                aria-pressed={day === selected}
+                aria-label={`Show ${formatDayChip(day)}`}
+                className={`flex min-h-[7.5rem] w-full flex-col items-center gap-1 rounded-md px-0.5 pb-2 pt-1.5 ${
+                  day === selected
+                    ? "bg-gray-100 ring-2 ring-inset ring-gray-900 dark:bg-gray-700/60 dark:ring-gray-100"
+                    : "hover:bg-gray-50 dark:hover:bg-gray-700/30"
+                }`}
+              >
               <span
                 className={`text-[10px] font-medium uppercase ${
                   isToday ? "text-gray-900 dark:text-gray-100" : "text-gray-400 dark:text-gray-500"
@@ -285,12 +297,15 @@ export default function DayStrip({
                 <span
                   key={chip.key}
                   title={chipTitle(chip)}
-                  className={`flex h-5 w-full max-w-[2.75rem] items-center justify-center rounded-full font-mono text-[10px] font-semibold leading-none tabular-nums ${chipClass(
+                  aria-hidden="true"
+                  className={`flex h-5 w-full max-w-[2.75rem] items-center justify-center gap-0.5 rounded-full text-[10px] font-semibold leading-none ${chipClass(
                     chip,
                   )}`}
                 >
-                  {safeIntent(chip.session.intent) === "rest" ? "" : chipLabel(chip.session)}
-                  {chip.kind === "done" && " ✓"}
+                  {safeIntent(chip.session.intent) !== "rest" && (
+                    <DisciplineIcon discipline={safeDiscipline(chip.session.discipline)} />
+                  )}
+                  {chip.kind === "done" && "✓"}
                   {chip.kind === "set" && (chip.session.alternatives?.length ?? 0) > 0 && (
                     <span className="ml-0.5 font-sans text-[8px] font-normal opacity-70">or</span>
                   )}
@@ -301,6 +316,7 @@ export default function DayStrip({
                   +{hidden}
                 </span>
               )}
+              </button>
             </li>
           );
         })}
@@ -330,14 +346,24 @@ export default function DayStrip({
             Could go here
           </span>
         )}
-        {recommendation && (
+        {hasChoice && (
           <span className="flex items-center gap-1.5">
-            <span className="font-semibold">or</span> = a choice, see Today
+            <span className="font-semibold">or</span> = a choice, tap the day
           </span>
         )}
       </div>
+      {sports.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-gray-500 dark:text-gray-400">
+          {sports.map((d) => (
+            <span key={d} className="flex items-center gap-1">
+              <DisciplineIcon discipline={d} />
+              {DISCIPLINE_LABEL[d]}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-        {(Object.keys(INTENT_LABEL) as (keyof typeof INTENT_LABEL)[]).map((intent) => (
+        {intents.map((intent) => (
           <span
             key={intent}
             className="flex items-center gap-1.5 text-[10px] text-gray-400 dark:text-gray-500"

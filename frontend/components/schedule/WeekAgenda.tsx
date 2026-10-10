@@ -15,7 +15,12 @@
 import { useState } from "react";
 import Link from "next/link";
 import { CheckCircle2, ChevronDown, Loader2, Scale } from "lucide-react";
-import type { LoggedActivity, PlannedSession, SpacingRuleRead } from "@/lib/types/schedule";
+import type {
+  LoggedActivity,
+  PlannedSession,
+  SpacingRuleRead,
+  WeekRecommendation,
+} from "@/lib/types/schedule";
 import { formatDistanceKm, formatDuration, formatPace } from "@/lib/format";
 import {
   DISCIPLINE_LABEL,
@@ -497,15 +502,32 @@ interface AgendaProps extends Handlers {
   weekEnd: string;
   actualById: Map<string, LoggedActivity>;
   rules: SpacingRuleRead[];
-  /** A day already shown in full above (today, in the Today card). */
+  recommendation?: WeekRecommendation | null;
+  /** The day already shown in full above, in the day card. */
   hideDay?: string;
 }
 
 export default function WeekAgenda(props: AgendaProps) {
   const { committed, suggested, weekStart } = props;
   const today = todayIso();
-  const pinned = committed.filter((s) => s.placement === "pinned");
-  const flexible = groupSessions(committed.filter((s) => s.placement !== "pinned"));
+  // #1087: with a recommendation, a flexible session sits under its recommended
+  // day (or the day it was done), so the list and the strip tell one story.
+  // What has no day (dropped, missed) stays under "Flexible this week".
+  const recDay = new Map<string, { day: string; order: number }>();
+  for (const d of props.recommendation?.days ?? []) {
+    d.items.forEach((item, i) => recDay.set(item.session_id, { day: d.day, order: i }));
+  }
+  const dayOf = (s: PlannedSession): string | undefined => {
+    if (s.placement === "pinned") return s.window_start;
+    if (!props.recommendation) return undefined;
+    if (s.status === "done") return s.done_on ?? undefined;
+    return recDay.get(s.id)?.day;
+  };
+  const onDay = (day: string) =>
+    committed
+      .filter((s) => dayOf(s) === day)
+      .sort((a, b) => (recDay.get(a.id)?.order ?? -1) - (recDay.get(b.id)?.order ?? -1));
+  const flexible = groupSessions(committed.filter((s) => !dayOf(s)));
 
   return (
     <section className="space-y-4">
@@ -516,7 +538,7 @@ export default function WeekAgenda(props: AgendaProps) {
         <Group
           key={day}
           heading={day === today ? `Today · ${formatDayChip(day)}` : formatDayChip(day)}
-          groups={groupSessions(pinned.filter((s) => s.window_start === day))}
+          groups={groupSessions(onDay(day))}
           showChip={false}
           props={props}
         />
