@@ -7,7 +7,8 @@
 import Link from "next/link";
 import type { LoggedActivity } from "@/lib/types/schedule";
 import { formatDistanceKm, formatDuration } from "@/lib/format";
-import { DISCIPLINE_LABEL, safeDiscipline } from "./palette";
+import { safeDiscipline } from "./palette";
+import SportIcon from "./SportIcon";
 import { formatDayChip } from "./dates";
 
 function measure(a: LoggedActivity): string {
@@ -34,13 +35,20 @@ export default function LoggedList({ logged }: { logged: LoggedActivity[] }) {
           {logged.map((a, i) => {
             const row = (
               <div className="flex items-center justify-between gap-3 py-2.5">
-                <div className="min-w-0">
-                  <div className="truncate text-sm text-gray-900 dark:text-gray-100">
-                    {a.activity_type}
-                  </div>
-                  <div className="text-[11px] text-gray-400 dark:text-gray-500">
-                    {formatDayChip(a.local_date)} ·{" "}
-                    {DISCIPLINE_LABEL[safeDiscipline(a.discipline)]}
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <SportIcon
+                    activityType={a.activity_type}
+                    discipline={safeDiscipline(a.discipline)}
+                    size={16}
+                    className="shrink-0 text-gray-500 dark:text-gray-400"
+                  />
+                  <div className="min-w-0">
+                    <div className="truncate text-sm text-gray-900 dark:text-gray-100">
+                      {a.activity_type}
+                    </div>
+                    <div className="text-[11px] text-gray-400 dark:text-gray-500">
+                      {formatDayChip(a.local_date)}
+                    </div>
                   </div>
                 </div>
                 <span className="shrink-0 font-mono text-xs tabular-nums text-gray-600 dark:text-gray-300">

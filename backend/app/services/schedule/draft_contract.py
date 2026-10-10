@@ -21,11 +21,12 @@ plan is a number a model typed.
 """
 
 from datetime import date
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.schedule import PlanPreference, SpacingRule
+from app.schemas.schedule import PlanPreference, SpacingRule, SportType
+from app.services.schedule.disciplines import sport_fits_discipline
 from app.services.schedule.preferences import PREFERENCE_TEXT
 
 MAX_CONCRETE_WEEKS = 6
@@ -71,6 +72,14 @@ def normalise(raw: dict) -> dict:
 DETAIL_MAX_LENGTH = 400
 
 
+def _check_sport(activity_type: Optional[str], discipline: str, title: str) -> None:
+    """A named sport must belong to the discipline the rules read (#1089)."""
+    if activity_type and not sport_fits_discipline(activity_type, discipline):
+        raise ValueError(
+            f"{title!r}: activity_type {activity_type} does not fit discipline {discipline}"
+        )
+
+
 class DraftedAlternative(BaseModel):
     """Another way to fill the same slot (#1082)."""
 
@@ -78,6 +87,7 @@ class DraftedAlternative(BaseModel):
 
     intent: Literal["easy", "long", "quality", "strength"]
     discipline: Literal["run", "walk", "bike", "strength", "row", "other"]
+    activity_type: Optional[SportType] = None
     title: str = Field(min_length=1, max_length=120)
     detail: Optional[str] = Field(default=None, max_length=DETAIL_MAX_LENGTH)
     target_distance_m: Optional[float] = Field(default=None, ge=0, le=200_000)
@@ -85,6 +95,7 @@ class DraftedAlternative(BaseModel):
 
     @model_validator(mode="after")
     def _sized(self) -> "DraftedAlternative":
+        _check_sport(self.activity_type, self.discipline, self.title)
         # An option nobody can size is one the runner cannot weigh against the
         # session it stands in for, nor the challenge count.
         if not self.target_distance_m and not self.target_duration_s:
@@ -99,6 +110,8 @@ class DraftedSession(BaseModel):
     window_end: date
     intent: Literal["rest", "easy", "long", "quality", "strength"]
     discipline: Literal["run", "walk", "bike", "strength", "row", "other"]
+    # #1089: the exact sport, for the screen. Rules and load read the discipline.
+    activity_type: Optional[SportType] = None
     commitment: Literal["committed", "suggested"] = "committed"
     title: str = Field(min_length=1, max_length=120)
     detail: Optional[str] = Field(default=None, max_length=DETAIL_MAX_LENGTH)
@@ -122,6 +135,7 @@ class DraftedSession(BaseModel):
     def _validate_shape(self) -> "DraftedSession":
         if self.window_start > self.window_end:
             raise ValueError("window_start is after window_end")
+        _check_sport(self.activity_type, self.discipline, self.title)
         # Rep structure is guarded symmetrically: on the intent, and on the count.
         # Guarding only `reps_planned` let `rest_s` ride an easy run, and let a
         # quality session give a rest interval with no count — which `structure()`
@@ -242,6 +256,12 @@ class DraftedPlan(BaseModel):
 # exactly the contract a drafted one is; two copies of this schema would drift,
 # and the drift would be a coach allowed to write something through one door
 # that the other rejects.
+_SPORT_DESCRIPTION = (
+    "The exact sport, in Strava's names, so the runner sees what it is: Swim, "
+    "Yoga, Hike, TrailRun. It must belong to the discipline (a Swim is `other`, "
+    "a Hike is `walk`). Leave it out when the discipline already says it."
+)
+
 SESSION_PROPERTIES: Dict[str, Any] = {
     "window_start": {
         "type": "string",
@@ -280,6 +300,11 @@ SESSION_PROPERTIES: Dict[str, Any] = {
             "row",
             "other",
         ],
+    },
+    "activity_type": {
+        "type": "string",
+        "enum": list(get_args(SportType)),
+        "description": _SPORT_DESCRIPTION,
     },
     "commitment": {
         "type": "string",
@@ -368,6 +393,11 @@ SESSION_PROPERTIES: Dict[str, Any] = {
                 "discipline": {
                     "type": "string",
                     "enum": ["run", "walk", "bike", "strength", "row", "other"],
+                },
+                "activity_type": {
+                    "type": "string",
+                    "enum": list(get_args(SportType)),
+                    "description": _SPORT_DESCRIPTION,
                 },
                 "title": {"type": "string"},
                 "detail": {"type": "string", "maxLength": DETAIL_MAX_LENGTH},

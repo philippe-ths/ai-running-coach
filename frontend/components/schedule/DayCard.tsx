@@ -18,13 +18,16 @@ import type {
   SessionAlternative,
 } from "@/lib/types/schedule";
 import { formatDistanceKm, formatDuration } from "@/lib/format";
-import { INTENT_FILL, safeIntent } from "./palette";
+import { INTENT_TEXT, safeDiscipline, safeIntent } from "./palette";
+import SportIcon from "./SportIcon";
 import { formatDayChip } from "./dates";
 
 interface Option {
   index: number;
   title: string;
   intent: string;
+  discipline: string;
+  activityType: string | null;
   measure: string | null;
   note: string | null;
 }
@@ -39,11 +42,21 @@ function measure(o: { target_duration_s?: number | null; planned_distance_m: num
 function optionsOf(s: PlannedSession): Option[] {
   const alts: SessionAlternative[] = s.alternatives ?? [];
   return [
-    { index: 0, title: s.title, intent: s.intent, measure: measure(s), note: null },
+    {
+      index: 0,
+      title: s.title,
+      intent: s.intent,
+      discipline: s.discipline,
+      activityType: s.activity_type ?? null,
+      measure: measure(s),
+      note: null,
+    },
     ...alts.map((a, i) => ({
       index: i + 1,
       title: a.title,
       intent: a.intent,
+      discipline: a.discipline,
+      activityType: a.activity_type ?? null,
       measure: measure(a),
       note: s.alternative_notes?.[i] ?? null,
     })),
@@ -178,9 +191,11 @@ export default function DayCard({
                             : "border border-dashed border-gray-300 dark:border-gray-600"
                       }`}
                     >
-                      <span
-                        aria-hidden="true"
-                        className={`h-2 w-2 shrink-0 rounded-full ${INTENT_FILL[safeIntent(o.intent)]}`}
+                      <SportIcon
+                        activityType={o.activityType}
+                        discipline={safeDiscipline(o.discipline)}
+                        size={14}
+                        className={`shrink-0 ${INTENT_TEXT[safeIntent(o.intent)]}`}
                       />
                       <span className="min-w-0 flex-1">
                         <span className="flex flex-wrap items-baseline gap-x-2">

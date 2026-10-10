@@ -74,6 +74,8 @@ export interface PlannedSession {
   has_narrowed: boolean;
   intent: SessionIntent;
   discipline: Discipline;
+  /** #1089: the exact sport in Strava's names, when the coach named one. */
+  activity_type?: string | null;
   commitment: Commitment;
   status: SessionStatus;
   title: string;
@@ -109,6 +111,7 @@ export interface PlannedSession {
 export interface SessionAlternative {
   intent: SessionIntent;
   discipline: Discipline;
+  activity_type?: string | null;
   title: string;
   detail?: string | null;
   target_distance_m?: number | null;

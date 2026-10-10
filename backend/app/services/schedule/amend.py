@@ -998,6 +998,7 @@ def _apply(
                     ),
                     structure=session.structure(),
                     alternatives=session.alternatives_json(),
+                    activity_type=session.activity_type,
                 )
             )
             added.append(f"{session.window_start.strftime('%a')} {session.title}")

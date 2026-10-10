@@ -106,6 +106,10 @@ class PlannedSession(Base):
     # indoor bike have no distance.
     target_effort_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # #1089: the exact sport in Strava's names ("Swim", "Yoga"), finer than the
+    # discipline. Only the screen reads it; rules and load read the discipline.
+    activity_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+
     # {"reps_planned": int, "rep_distance_m": float, "rest_s": float} or None.
     structure: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     # #1082: other ways to fill this slot, as List[SessionAlternative]. Null or
