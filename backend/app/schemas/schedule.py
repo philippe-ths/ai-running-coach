@@ -301,6 +301,9 @@ class PlannedSessionRead(BaseModel):
     # n the n-th alternative; None while not done or when not recorded.
     alternatives: List[SessionAlternative] = Field(default_factory=list)
     done_option: Optional[int] = None
+    # One fixed-wording note per alternative, saying what taking it instead
+    # gives or costs ("+20 min toward the week's time", "kinder on the legs").
+    alternative_notes: List[str] = Field(default_factory=list)
 
     # #1081. The day a done session used up: its matched activity's date, or the
     # day it was ticked by hand, kept inside its window. None unless done.
@@ -411,6 +414,45 @@ class RunningVsNorm(BaseModel):
     deadband_pct: float
 
 
+class RecommendedItem(BaseModel):
+    """One session on its recommended day (#1082)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: UUID
+    # Its place in the day's order, or None when the order does not matter.
+    order: Optional[int] = None
+    # Fixed wording for why it sits where it does in the day, if anything does.
+    reason: Optional[str] = None
+
+
+class RecommendedDay(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    day: date
+    items: List[RecommendedItem] = Field(default_factory=list)
+
+
+class DroppedSession(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: UUID
+    reason: str
+
+
+class WeekRecommendationRead(BaseModel):
+    """What to do each day still to come, and what moved to get here (#1082)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    days: List[RecommendedDay] = Field(default_factory=list)
+    dropped: List[DroppedSession] = Field(default_factory=list)
+    # Every move this week, in plain words, oldest first.
+    changes: List[str] = Field(default_factory=list)
+    # The plan's preferences as the runner reads them.
+    preferences: List[str] = Field(default_factory=list)
+
+
 class ScheduleWeekRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -430,6 +472,9 @@ class ScheduleWeekRead(BaseModel):
     by_discipline: List[DisciplineLoad] = Field(default_factory=list)
     rules: List[SpacingRuleRead] = Field(default_factory=list)
     violations: List[RuleViolation] = Field(default_factory=list)
+    # #1082: the recommended days for this week or a later one; None for a past
+    # week, a week with no plan, or one the search could not settle.
+    recommendation: Optional[WeekRecommendationRead] = None
 
     # The runner's own typical week, straight from the existing volume builder —
     # `norm_weekly` is ALL-ACTIVITY by that definition, with `current_runs`

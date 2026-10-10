@@ -31,8 +31,12 @@ from app.schemas.schedule import (
     LoggedActivityRead,
     PlannedSessionRead,
     RuleViolation,
+    DroppedSession,
+    RecommendedDay,
+    RecommendedItem,
     RunningVsNorm,
     SessionAlternative,
+    WeekRecommendationRead,
     ScheduleWeekRead,
     SpacingRuleRead,
     WeekHeadline,
@@ -57,6 +61,9 @@ from app.services.schedule.placement import (
 )
 from app.services.schedule.norms import running_vs_norm
 from app.services.schedule.rule_text import describe_rule
+from app.services.schedule import recommend_store
+from app.services.schedule.preferences import describe_preference, plan_preferences
+from app.services.schedule.recommend import alternative_notes, recommend_week
 from app.services.schedule.rules import check_rules, open_days
 from app.services.schedule.runner_rules import with_runner_rules
 from app.services.weeks import days_into_week, resolve_week_start, week_start
@@ -129,6 +136,7 @@ def _to_session_read(
             dismissed_at=session.dismissed_at,
             alternatives=_alternatives(session),
             done_option=session.done_option,
+            alternative_notes=alternative_notes(session, _alternatives(session)),
         )
     except ValidationError:
         logger.warning(
@@ -166,6 +174,48 @@ def _done_intent(row: Any) -> str:
     if 0 < option <= len(alternatives) and isinstance(alternatives[option - 1], dict):
         return alternatives[option - 1].get("intent") or row.intent
     return row.intent
+
+
+def _recommend(db, user, plan, start, today, is_current, committed_open, rules, fixed):
+    """The recommended week (#1082), stored for the current week so the next read
+    can keep sessions where they were and say what moved."""
+    row = recommend_store.load(db, user.id, start, plan.id) if is_current else None
+    rec = recommend_week(
+        committed_open,
+        rules,
+        plan_preferences(plan),
+        today,
+        fixed=fixed,
+        previous=recommend_store.previous_days(row),
+    )
+    titles = {str(r.id): r.title for r in committed_open}
+    if is_current:
+        row = recommend_store.save(
+            db, row, user_id=user.id, week_start=start, plan_id=plan.id,
+            rec=rec, titles=titles, today=today,
+        )
+    days: dict = {}
+    for placement in rec.placements.values():
+        days.setdefault(placement.day, []).append(placement)
+    return WeekRecommendationRead(
+        days=[
+            RecommendedDay(
+                day=day,
+                items=[
+                    RecommendedItem(session_id=p.session_id, order=p.order, reason=p.reason)
+                    for p in sorted(items, key=lambda p: (p.order is None, p.order or 0, titles.get(str(p.session_id), "")))
+                ],
+            )
+            for day, items in sorted(days.items())
+        ],
+        dropped=[DroppedSession(session_id=sid, reason=why) for sid, why in rec.dropped.items()],
+        changes=[
+            text
+            for text in (recommend_store.describe_change(c) for c in (row.changes if row else []))
+            if text
+        ],
+        preferences=[describe_preference(p) for p in plan_preferences(plan)],
+    )
 
 
 def _to_logged_read(fact: Any) -> LoggedActivityRead:
@@ -328,8 +378,43 @@ def build_week(
     # Suggestions are left out: an offer the runner may decline must not take a
     # day away from a session they agreed to.
     committed_open = [row for row in open_rows if row.commitment == "committed"]
+    # #1083: an activity that matched no session is an extra. It still used up
+    # one of its day's activities under the runner's limit, so the day's
+    # remaining options and the recommendation both see it.
+    credited = {row.completed_activity_id for row in rows if row.completed_activity_id}
+    uncredited = [
+        fact
+        for fact in week_facts
+        if getattr(fact, "activity_id", None) not in credited and fact.local_date <= today
+    ]
+    # A session ticked by hand carries no activity, but the runner may have
+    # recorded it too. Each such session claims one recorded activity of its
+    # discipline on its day, so the same walk is not counted twice.
+    for row in rows:
+        if session_status(row, today) != "done" or row.completed_activity_id:
+            continue
+        day = done_on_by_id.get(row.id)
+        claim = next(
+            (
+                f
+                for f in uncredited
+                if f.local_date == day and discipline_for_fact(f) == row.discipline
+            ),
+            None,
+        )
+        if claim is not None:
+            uncredited.remove(claim)
+    extras = [
+        PlacedSession(session_id=f"extra-{fact.activity_id}", intent="easy", day=fact.local_date)
+        for fact in uncredited
+    ]
     open_by_id = (
-        open_days(committed_open, rules, today, fixed=fixed) if committed_open else {}
+        open_days(committed_open, rules, today, fixed=fixed + extras) if committed_open else {}
+    )
+    recommendation = (
+        _recommend(db, user, plan, start, today, is_current, committed_open, rules, fixed + extras)
+        if plan is not None and end >= today
+        else None
     )
     sessions = [
         s.model_copy(
@@ -369,6 +454,7 @@ def build_week(
         by_discipline=_by_discipline(sessions, logged),
         rules=rules_read,
         violations=violations,
+        recommendation=recommendation,
         norm=norm,
         running_norm=running_norm,
     )
