@@ -331,6 +331,7 @@ export default function SchedulePage() {
             weekStart={week.week_start}
             sessions={live}
             logged={week.logged}
+            rules={week.rules}
             today={todayIso()}
             header={weekNav}
           />

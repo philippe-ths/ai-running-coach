@@ -47,6 +47,7 @@ from app.services.schedule import store
 from app.services.schedule.disciplines import discipline_for_fact
 from app.services.schedule.placement import (
     WEEK_LENGTH_DAYS,
+    PlacedSession,
     candidate_days,
     derive_placement,
     effective_window,
@@ -55,7 +56,7 @@ from app.services.schedule.placement import (
 )
 from app.services.schedule.norms import running_vs_norm
 from app.services.schedule.rule_text import describe_rule
-from app.services.schedule.rules import check_rules
+from app.services.schedule.rules import check_rules, open_days
 from app.services.schedule.runner_rules import with_runner_rules
 from app.services.weeks import days_into_week, resolve_week_start, week_start
 
@@ -121,6 +122,22 @@ def _to_session_read(
             session.commitment,
         )
         return None
+
+
+def _done_on(row: Any, fact_day_by_activity: dict) -> Optional[date]:
+    """The day a done session used up, kept inside its own window (#1081).
+
+    A session matched to an activity was done on that activity's day. One ticked
+    by hand carries only the moment of the tick, which is the best the app knows:
+    a walk ticked on Thursday for Tuesday counts on Thursday unless that is
+    outside its window, where it is held to the nearest day it could have been.
+    """
+    if getattr(row, "completed_at", None) is None:
+        return None
+    day = fact_day_by_activity.get(getattr(row, "completed_activity_id", None))
+    if day is None:
+        day = row.completed_at.date()
+    return min(max(day, row.window_start), row.window_end)
 
 
 def _to_logged_read(fact: Any) -> LoggedActivityRead:
@@ -260,8 +277,48 @@ def build_week(
         for row in rows
         if session_status(row, today) == "upcoming" and candidate_days(row, today)
     ]
-    _, raw_violations = check_rules(open_rows, rules, today)
+    # #1081: a done session cannot move, but it still occupies the day it was
+    # done, so it takes part in every rule without being searched over.
+    fact_day_by_activity = {
+        getattr(fact, "activity_id", None): fact.local_date for fact in week_facts
+    }
+    done_on_by_id = {}
+    fixed: List[PlacedSession] = []
+    for row in rows:
+        if session_status(row, today) != "done":
+            continue
+        day = _done_on(row, fact_day_by_activity)
+        done_on_by_id[row.id] = day
+        fixed.append(PlacedSession(session_id=row.id, intent=row.intent, day=day))
+    _, raw_violations = check_rules(open_rows, rules, today, fixed=fixed)
     violations = [RuleViolation(**v) for v in raw_violations]
+
+    # #1081: the days each floating session can still go on. Asked of the same
+    # search the violations come from, so an option shown is never one the
+    # checker would reject. None means the search ran out of budget, and the
+    # client falls back to the effective window.
+    # Suggestions are left out: an offer the runner may decline must not take a
+    # day away from a session they agreed to.
+    committed_open = [row for row in open_rows if row.commitment == "committed"]
+    open_by_id = (
+        open_days(committed_open, rules, today, fixed=fixed) if committed_open else {}
+    )
+    sessions = [
+        s.model_copy(
+            update={
+                "done_on": done_on_by_id.get(s.id),
+                "open_days": (
+                    open_by_id.get(s.id)
+                    if open_by_id is not None
+                    and s.placement != "pinned"
+                    and s.status == "upcoming"
+                    and s.commitment == "committed"
+                    else None
+                ),
+            }
+        )
+        for s in sessions
+    ]
 
     norm = None
     running_norm = None

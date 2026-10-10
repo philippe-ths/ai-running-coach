@@ -23,8 +23,8 @@ export const INTENT_LABEL: Record<SessionIntent, string> = {
 // #843: three dark twins sat above the 0.67 lightness ceiling for a dark surface
 // (emerald-500 0.696, orange-500 0.705, violet-400 0.709) and each moved down one
 // step. The LIGHT values are untouched, so the four rounds of wireframe review
-// that produced them stand. This was not only polish: `intentPip` prints the
-// discipline letter in WHITE on these fills, and all three were under the 3:1
+// that produced them stand. This was not only polish: the day strip prints a
+// done session's label in WHITE on these fills, and all three were under the 3:1
 // floor for a graphical object against it (2.54 / 2.80 / 2.72). They now read
 // 3.77 / 3.56 / 4.23, and adjacent-pair separation improved with them
 // (worst deutan ΔE 21.1 -> 22.7).
@@ -56,13 +56,6 @@ export function intentStripe(intent: SessionIntent): string {
   return INTENT_FILL[intent];
 }
 
-/** The day strip's pip. Rest reads as an absence, so it is hollow and dashed. */
-export function intentPip(intent: SessionIntent): string {
-  if (intent === "rest") {
-    return "border-2 border-dashed border-stone-400 dark:border-stone-500 text-stone-500 dark:text-stone-400";
-  }
-  return `${INTENT_FILL[intent]} text-white`;
-}
 
 export const DISCIPLINE_LABEL: Record<Discipline, string> = {
   run: "Run",

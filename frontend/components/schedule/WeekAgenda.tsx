@@ -294,8 +294,10 @@ function AgendaRow({
           {isRange && (
             <p className="text-gray-600 dark:text-gray-400">
               {n === 1
-                ? `One session. Do it on any one day ${placementChip(first, weekStart, weekEnd) === "Any day" ? "this week" : placementChip(first, weekStart, weekEnd)}, whichever suits you.`
-                : `${n} separate sessions. Spread them over ${placementChip(first, weekStart, weekEnd) === "Any day" ? "the week" : placementChip(first, weekStart, weekEnd)}, on whichever days suit you.`}
+                ? "One session, on whichever of its days suits you."
+                : `${n} separate sessions, on whichever of their days suit you.`}{" "}
+              The days shown are the ones still open: days gone, days a done
+              session used, and days the rules close are left out.
             </p>
           )}
           {ruleLines.length > 0 && (

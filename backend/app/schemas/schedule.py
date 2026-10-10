@@ -260,6 +260,16 @@ class PlannedSessionRead(BaseModel):
     completion_source: Optional[str] = None
     dismissed_at: Optional[datetime] = None
 
+    # #1081. The day a done session used up: its matched activity's date, or the
+    # day it was ticked by hand, kept inside its window. None unless done.
+    done_on: Optional[date] = None
+    # #1081. For an upcoming committed session that floats, the days it can
+    # still go on with the rest of the week legal under every rule, done
+    # sessions holding their days. None when not computed (a pinned, done or
+    # suggested session, or a week the search could not settle in budget), in
+    # which case the effective window is the honest fallback.
+    open_days: Optional[List[date]] = None
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def planned_distance_m(self) -> float:

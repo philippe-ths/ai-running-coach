@@ -91,6 +91,13 @@ export interface PlannedSession {
   completed_activity_id: string | null;
   completion_source: string | null;
   dismissed_at: string | null;
+  // #1081: the day a done session used up (its activity's day, or the day it
+  // was ticked by hand), null unless done.
+  done_on?: string | null;
+  // #1081: for a floating committed session still to do, the days it can go on
+  // with the rest of the week legal. Null when not computed; the effective
+  // window is then the fallback.
+  open_days?: string[] | null;
 }
 
 export interface LoggedActivity {

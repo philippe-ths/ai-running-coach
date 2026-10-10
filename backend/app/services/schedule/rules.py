@@ -29,12 +29,15 @@ which days the runner has a free morning, not about where their week boundary
 falls.
 """
 
+import logging
 from collections import Counter
 from datetime import timedelta
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from app.services.schedule.placement import PlacedSession, candidate_days
 from app.services.schedule.rule_text import describe_rule
+
+logger = logging.getLogger(__name__)
 
 # A predicate reports the first violation it finds as a runner-readable detail,
 # or None when the rule holds for the placements it can see.
@@ -156,16 +159,44 @@ def violations_for(
     return found
 
 
+class SearchBudgetExceeded(Exception):
+    """The search ran past its node budget without settling the question."""
+
+
+class SearchBudget:
+    """Placements a search may still try, shared across several searches."""
+
+    def __init__(self, placements: int):
+        self.left = placements
+
+    def spend(self) -> None:
+        self.left -= 1
+        if self.left < 0:
+            raise SearchBudgetExceeded()
+
+
 def find_assignment(
-    sessions: Sequence[Any], rules: Sequence[Any], today: Any = None
+    sessions: Sequence[Any],
+    rules: Sequence[Any],
+    today: Any = None,
+    *,
+    fixed: Sequence[PlacedSession] = (),
+    budget: Optional[SearchBudget] = None,
 ) -> Optional[List[PlacedSession]]:
     """One legal day per session, or None when the rules cannot all hold.
 
     Smallest domain first, and each partial assignment is tested against every
     rule whose predicate can already see a violation — sound because the
     predicates are monotone.
+
+    `fixed` are sessions already on a day that cannot move — a session done on
+    the day it was done (#1081). They take part in every rule but are never
+    searched over, and they are not in the returned list. `budget` caps the
+    number of placements tried; past it `SearchBudgetExceeded` is raised rather
+    than a wrong answer returned.
     """
     checkable = [r for r in rules if r.kind in PREDICATES]
+    fixed = list(fixed)
 
     domains: List[Tuple[Any, List]] = []
     for session in sessions:
@@ -179,14 +210,49 @@ def find_assignment(
             continue
         domains.append((session, days))
 
-    domains.sort(key=lambda pair: len(pair[1]))
-    placed: List[PlacedSession] = []
+    # Smallest domain first, with interchangeable sessions side by side.
+    # Every predicate reads only a placement's intent and day, never which
+    # session it is, so two sessions with the same intent and the same days are
+    # interchangeable: any legal week with them swapped is the same week. Trying
+    # them in one order only (each on a day no earlier than its twin's) removes
+    # that symmetry. Without it, a week that cannot fit (seven identical walks
+    # against a tight daily limit) tried every ordering of the walks before
+    # giving up, which ran for minutes (#1081).
+    def twin_key(pair: Tuple[Any, List]) -> Tuple:
+        return (pair[0].intent, tuple(pair[1]))
+
+    domains.sort(key=lambda pair: (len(pair[1]), twin_key(pair)))
+    placed: List[PlacedSession] = list(fixed)
+
+    # The tightest "at most N a day", if any. Used to stop a branch as soon as
+    # the sessions still to place cannot fit in the room left on their days,
+    # rather than discovering it by trying every arrangement of them: a week
+    # with more activities than the runner's limit allows fails at once.
+    caps = [r.count for r in checkable if r.kind == "max_sessions_per_day" and r.count]
+    cap = min(caps) if caps else None
+
+    def room_for_the_rest(index: int) -> bool:
+        if cap is None:
+            return True
+        rest = [(s, d) for s, d in domains[index:] if s.intent != "rest"]
+        if not rest:
+            return True
+        used = Counter(p.day for p in placed if p.intent != "rest")
+        days = set().union(*(set(d) for _, d in rest))
+        return len(rest) <= sum(max(0, cap - used[day]) for day in days)
 
     def backtrack(index: int) -> bool:
         if index == len(domains):
             return True
+        if not room_for_the_rest(index):
+            return False
         session, days = domains[index]
+        if index > 0 and twin_key(domains[index - 1]) == twin_key(domains[index]):
+            floor = placed[-1].day
+            days = [day for day in days if day >= floor]
         for day in days:
+            if budget is not None:
+                budget.spend()
             placed.append(
                 PlacedSession(
                     session_id=getattr(session, "id", id(session)),
@@ -200,11 +266,15 @@ def find_assignment(
             placed.pop()
         return False
 
-    return list(placed) if backtrack(0) else None
+    return list(placed[len(fixed):]) if backtrack(0) else None
 
 
 def check_rules(
-    sessions: Sequence[Any], rules: Sequence[Any], today: Any = None
+    sessions: Sequence[Any],
+    rules: Sequence[Any],
+    today: Any = None,
+    *,
+    fixed: Sequence[PlacedSession] = (),
 ) -> Tuple[bool, List[Dict[str, str]]]:
     """(satisfiable, violations) for a week's sessions against its rules.
 
@@ -213,6 +283,21 @@ def check_rules(
     the whole set. When no single removal helps, the rules are jointly
     impossible and all of them are reported, which is the truthful answer.
     """
+    try:
+        return _check_rules(sessions, rules, today, fixed, SearchBudget(CHECK_RULES_BUDGET))
+    except SearchBudgetExceeded:
+        # A week too tangled to settle in budget reports no violations rather
+        # than hanging the request that asked. Logged, because it means the
+        # search needs another pruning rule, not that the week is fine.
+        logger.warning("schedule: rule check ran out of budget; reporting no violations")
+        return True, []
+
+
+# How many placements one rule check may try across all its searches.
+CHECK_RULES_BUDGET = 60000
+
+
+def _check_rules(sessions, rules, today, fixed, budget):
     rules = list(rules)
     sessions = list(sessions)
 
@@ -230,13 +315,13 @@ def check_rules(
     if not sessions:
         return (not unknown), unknown
 
-    if find_assignment(sessions, rules, today) is not None:
+    if find_assignment(sessions, rules, today, fixed=fixed, budget=budget) is not None:
         return (not unknown), unknown
 
     implicated = []
     for index, rule in enumerate(rules):
         without = rules[:index] + rules[index + 1 :]
-        if find_assignment(sessions, without, today) is not None:
+        if find_assignment(sessions, without, today, fixed=fixed, budget=budget) is not None:
             implicated.append(
                 {
                     "kind": rule.kind,
@@ -261,3 +346,59 @@ def check_rules(
         ]
 
     return False, unknown + implicated
+
+
+# How many placements one week's open-days question may try in total. A real
+# week settles in a few hundred; the cap exists for the pathological one, where
+# many identical sessions against a tight daily limit make a failing search
+# explore every symmetric arrangement.
+OPEN_DAYS_BUDGET = 20000
+
+
+class _OnDay:
+    """A session held to one candidate day, for asking "can it go here?"."""
+
+    def __init__(self, session: Any, day: Any):
+        self.id = getattr(session, "id", id(session))
+        self.intent = session.intent
+        self.window_start = day
+        self.window_end = day
+
+
+def open_days(
+    sessions: Sequence[Any],
+    rules: Sequence[Any],
+    today: Any,
+    *,
+    fixed: Sequence[PlacedSession] = (),
+    placements: int = OPEN_DAYS_BUDGET,
+) -> Optional[Dict[Any, List]]:
+    """For each session, the days it can still go on with the rest of the week
+    still legal, or None when the question could not be settled in budget.
+
+    A day is open for a session when a full legal arrangement exists with that
+    session on it: every other session still finds a day, `fixed` sessions keep
+    theirs, and every rule holds. This is the same search the plan is held to,
+    asked once per candidate day, so the options shown can never be ones the
+    checker would reject (#1081).
+
+    A week that cannot be arranged at all leaves each session its own candidate
+    days: the violation is reported separately, and showing nothing open would
+    hide the sessions rather than explain the clash.
+    """
+    movable = [s for s in sessions if candidate_days(s, today)]
+    budget = SearchBudget(placements)
+    try:
+        if find_assignment(movable, rules, today, fixed=fixed, budget=budget) is None:
+            return {getattr(s, "id", id(s)): candidate_days(s, today) for s in movable}
+        result: Dict[Any, List] = {}
+        for session in movable:
+            days = []
+            for day in candidate_days(session, today):
+                trial = [_OnDay(s, day) if s is session else s for s in movable]
+                if find_assignment(trial, rules, today, fixed=fixed, budget=budget) is not None:
+                    days.append(day)
+            result[getattr(session, "id", id(session))] = days
+        return result
+    except SearchBudgetExceeded:
+        return None
