@@ -60,6 +60,7 @@ from app.services.schedule.placement import (
     session_status,
 )
 from app.services.schedule.norms import running_vs_norm
+from app.services.schedule.planned_distance import planned_distance_m
 from app.services.schedule.rule_text import describe_rule
 from app.services.schedule import recommend_store
 from app.services.schedule.preferences import describe_preference, plan_preferences
@@ -89,7 +90,8 @@ def _alternatives(session: Any) -> List[SessionAlternative]:
     kept: List[SessionAlternative] = []
     for raw in getattr(session, "alternatives", None) or []:
         try:
-            kept.append(SessionAlternative.model_validate(raw))
+            alt = SessionAlternative.model_validate(raw)
+            kept.append(alt.model_copy(update={"planned_distance_m": planned_distance_m(alt)}))
         except ValidationError:
             logger.warning("schedule: dropping off-shape alternative on session %s", session.id)
     return kept

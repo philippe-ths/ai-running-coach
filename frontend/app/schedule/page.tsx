@@ -19,6 +19,7 @@ import type { LoggedActivity, PlannedSession, ScheduleWeek } from "@/lib/types/s
 import WeekHeader from "@/components/schedule/WeekHeader";
 import DayStrip from "@/components/schedule/DayStrip";
 import WeekAgenda from "@/components/schedule/WeekAgenda";
+import TodayCard from "@/components/schedule/TodayCard";
 import RulesPanel from "@/components/schedule/RulesPanel";
 import LoggedList from "@/components/schedule/LoggedList";
 import EmptyWeek from "@/components/schedule/EmptyWeek";
@@ -136,8 +137,14 @@ export default function SchedulePage() {
     [load, weekParam],
   );
 
+  // #1082: a slot with alternatives is ticked as the option actually done.
   const onComplete = useCallback(
-    (id: string) => runAction(id, `/api/schedule/sessions/${id}/complete`, "POST"),
+    (id: string, option?: number) =>
+      runAction(
+        id,
+        `/api/schedule/sessions/${id}/complete${option !== undefined ? `?option=${option}` : ""}`,
+        "POST",
+      ),
     [runAction],
   );
   const onUncomplete = useCallback(
@@ -334,7 +341,19 @@ export default function SchedulePage() {
             rules={week.rules}
             today={todayIso()}
             header={weekNav}
+            recommendation={week.recommendation}
           />
+
+          {/* #1082: today first, as the recommendation has it. */}
+          {week.is_current_week && (
+            <TodayCard
+              week={week}
+              today={todayIso()}
+              pendingId={pendingId}
+              onComplete={onComplete}
+              onUncomplete={onUncomplete}
+            />
+          )}
 
           {/* #981: this stands in for the missing planned sessions below,
               right where the runner would otherwise look for them. */}
@@ -349,6 +368,7 @@ export default function SchedulePage() {
             weekEnd={week.week_end}
             actualById={actualById}
             rules={week.rules}
+            hideDay={week.is_current_week && week.recommendation ? todayIso() : undefined}
             pendingId={pendingId}
             onComplete={onComplete}
             onUncomplete={onUncomplete}

@@ -77,6 +77,24 @@ function repLine(session: PlannedSession): string | null {
   return `${reps} × ${Math.round(distance)} m`;
 }
 
+/**
+ * #1083: a session done well short of what was asked still fills its slot and
+ * counts what was actually done; it only says so. "Short" is under half of the
+ * option that was done, the same line the matcher uses to recognise a session.
+ */
+function wellShort(s: PlannedSession, actual: LoggedActivity): boolean {
+  const index = s.done_option ?? 0;
+  const option = index > 0 ? s.alternatives?.[index - 1] : s;
+  if (!option) return false;
+  if (option.planned_distance_m > 0 && actual.distance_m > 0) {
+    return actual.distance_m < option.planned_distance_m / 2;
+  }
+  if (option.target_duration_s && actual.moving_time_s > 0) {
+    return actual.moving_time_s < option.target_duration_s / 2;
+  }
+  return false;
+}
+
 function actualLine(actual: LoggedActivity): string {
   const parts: string[] = [];
   if (actual.distance_m > 0) parts.push(formatDistanceKm(actual.distance_m));
@@ -91,7 +109,7 @@ function actualLine(actual: LoggedActivity): string {
 
 interface Handlers {
   pendingId: string | null;
-  onComplete: (id: string) => void;
+  onComplete: (id: string, option?: number) => void;
   onUncomplete: (id: string) => void;
   onDismiss: (id: string) => void;
 }
@@ -175,6 +193,7 @@ function AgendaRow({
   const ruleLines = rulesFor(intent, n, rules);
 
   const hasMore =
+    (first.alternatives?.length ?? 0) > 0 ||
     ruleLines.length > 0 ||
     !!first.detail ||
     !!reps ||
@@ -206,7 +225,10 @@ function AgendaRow({
                 allDone ? "text-gray-500 line-through dark:text-gray-400" : "text-gray-900 dark:text-gray-100"
               }`}
             >
-              {first.title}
+              {/* #1082: a single slot done another way is named by what was done. */}
+              {n === 1 && allDone && (first.done_option ?? 0) > 0
+                ? first.alternatives?.[(first.done_option ?? 1) - 1]?.title ?? first.title
+                : first.title}
               {n > 1 && (
                 <span className="ml-1 font-mono text-xs font-medium text-gray-500 dark:text-gray-400">
                   ×{n}
@@ -289,6 +311,38 @@ function AgendaRow({
             <p className="font-mono tabular-nums text-gray-600 dark:text-gray-300">{reps}</p>
           )}
           {first.detail && <p className="text-gray-600 dark:text-gray-400">{first.detail}</p>}
+          {/* #1082: the other ways to fill this slot, each with its note. Doing
+              one instead is a tick that names it. */}
+          {(first.alternatives?.length ?? 0) > 0 && (
+            <div className="space-y-1">
+              <p className="font-medium text-gray-600 dark:text-gray-300">Or instead:</p>
+              {first.alternatives!.map((alt, i) => {
+                const next = sessions.find((s) => s.status !== "done");
+                return (
+                  <div key={`${alt.title}-${i}`} className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
+                    <span className="min-w-0 flex-1">
+                      {alt.title}
+                      {first.alternative_notes?.[i] && (
+                        <span className="block text-[11px] italic text-gray-500 dark:text-gray-400">
+                          {first.alternative_notes[i]}
+                        </span>
+                      )}
+                    </span>
+                    {!isSuggestion && next && (
+                      <button
+                        type="button"
+                        disabled={next.id === handlers.pendingId}
+                        onClick={() => handlers.onComplete(next.id, i + 1)}
+                        className="shrink-0 text-xs font-medium text-blue-700 hover:underline disabled:opacity-40 dark:text-blue-400"
+                      >
+                        Did this instead
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {/* What the runner can and cannot do with it: where it may go, and
               the plan's rules that name it. */}
           {isRange && (
@@ -329,6 +383,7 @@ function AgendaRow({
                     actual ? (
                       <>
                         Actual: <span className="font-mono tabular-nums">{actualLine(actual)}</span>
+                        {wellShort(s, actual) && " · shorter than planned"}
                         {actual.activity_id && (
                           <>
                             {" · "}
@@ -442,6 +497,8 @@ interface AgendaProps extends Handlers {
   weekEnd: string;
   actualById: Map<string, LoggedActivity>;
   rules: SpacingRuleRead[];
+  /** A day already shown in full above (today, in the Today card). */
+  hideDay?: string;
 }
 
 export default function WeekAgenda(props: AgendaProps) {
@@ -453,7 +510,9 @@ export default function WeekAgenda(props: AgendaProps) {
   return (
     <section className="space-y-4">
       <h2 className="sr-only">Sessions this week</h2>
-      {weekDays(weekStart).map((day) => (
+      {weekDays(weekStart)
+        .filter((day) => day !== props.hideDay)
+        .map((day) => (
         <Group
           key={day}
           heading={day === today ? `Today · ${formatDayChip(day)}` : formatDayChip(day)}

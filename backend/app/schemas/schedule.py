@@ -80,6 +80,9 @@ class SessionAlternative(BaseModel):
     detail: Optional[str] = None
     target_distance_m: Optional[float] = None
     target_duration_s: Optional[int] = None
+    # How far it goes, by the one definition every reader asks
+    # (`planned_distance.py`, #887), so the screen never works it out itself.
+    planned_distance_m: float = 0.0
 
 
 class SpacingRule(BaseModel):

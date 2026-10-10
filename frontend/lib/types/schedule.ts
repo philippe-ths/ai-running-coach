@@ -98,6 +98,42 @@ export interface PlannedSession {
   // with the rest of the week legal. Null when not computed; the effective
   // window is then the fallback.
   open_days?: string[] | null;
+  // #1082: other ways to fill this slot, the session itself being the
+  // recommended option; which one was done (0 = the session itself); and one
+  // fixed-wording note per alternative on what taking it gives or costs.
+  alternatives?: SessionAlternative[];
+  done_option?: number | null;
+  alternative_notes?: string[];
+}
+
+export interface SessionAlternative {
+  intent: SessionIntent;
+  discipline: Discipline;
+  title: string;
+  detail?: string | null;
+  target_distance_m?: number | null;
+  target_duration_s?: number | null;
+  // The server's planned distance (#887); the screen never derives it.
+  planned_distance_m: number;
+}
+
+// #1082: what to do each day still to come, and what moved to get here.
+export interface RecommendedItem {
+  session_id: string;
+  order: number | null;
+  reason: string | null;
+}
+
+export interface RecommendedDay {
+  day: string;
+  items: RecommendedItem[];
+}
+
+export interface WeekRecommendation {
+  days: RecommendedDay[];
+  dropped: { session_id: string; reason: string }[];
+  changes: string[];
+  preferences: string[];
 }
 
 export interface LoggedActivity {
@@ -160,6 +196,8 @@ export interface ScheduleWeek {
   by_discipline: DisciplineLoad[];
   rules: SpacingRuleRead[];
   violations: RuleViolation[];
+  // #1082: null for a past week, no plan, or a week the search could not settle.
+  recommendation?: WeekRecommendation | null;
   // The runner's own typical week, from the same builder Trends uses. Present
   // only for the current week, where "as of today" means anything.
   norm: VolumeMetricVsNorm[] | null;

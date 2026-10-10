@@ -16,7 +16,12 @@
 // planned km; anything else its discipline letter.
 
 import type { ReactNode } from "react";
-import type { LoggedActivity, PlannedSession, SpacingRuleRead } from "@/lib/types/schedule";
+import type {
+  LoggedActivity,
+  PlannedSession,
+  SpacingRuleRead,
+  WeekRecommendation,
+} from "@/lib/types/schedule";
 import {
   DISCIPLINE_LABEL,
   DISCIPLINE_LETTER,
@@ -33,10 +38,16 @@ const MAX_CHIPS = 3;
 
 type ChipKind = "done" | "set" | "option" | "offer";
 
+// #1082: with a recommendation, each session still to do sits on its
+// recommended day as a "set" chip (planned, outlined), carrying its place in
+// the day's order when that matters and an "or" mark when the slot offers a
+// choice. Options per day (#1081) are the fallback when there is none.
+
 interface Chip {
   key: string;
   session: PlannedSession;
   kind: ChipKind;
+  order?: number | null;
 }
 
 /** What fits on a chip: a run's km, otherwise the discipline's letter. */
@@ -76,8 +87,28 @@ function chipClass(chip: Chip): string {
   return `border-[1.5px] border-dashed border-current ${INTENT_TEXT[intent]}`;
 }
 
+/** A done session as the option actually done (#1082): a bike done in place of
+ * a run shows as the bike. */
+function asDone(s: PlannedSession): PlannedSession {
+  const alt = (s.done_option ?? 0) > 0 ? s.alternatives?.[(s.done_option ?? 1) - 1] : undefined;
+  if (!alt) return s;
+  return {
+    ...s,
+    title: alt.title,
+    intent: alt.intent,
+    discipline: alt.discipline,
+    planned_distance_m: alt.planned_distance_m,
+    target_duration_s: alt.target_duration_s ?? null,
+  };
+}
+
 /** Every chip, by the ISO day it belongs on. */
-function chipsByDay(sessions: PlannedSession[], weekStart: string, weekEnd: string) {
+function chipsByDay(
+  sessions: PlannedSession[],
+  weekStart: string,
+  weekEnd: string,
+  rec?: WeekRecommendation | null,
+) {
   const byDay = new Map<string, Chip[]>();
   const add = (day: string | null | undefined, chip: Chip) => {
     if (!day || day < weekStart || day > weekEnd) return;
@@ -86,10 +117,23 @@ function chipsByDay(sessions: PlannedSession[], weekStart: string, weekEnd: stri
     byDay.set(day, list);
   };
 
+  const placed = new Set<string>();
+  const dropped = new Set((rec?.dropped ?? []).map((d) => d.session_id));
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  for (const day of rec?.days ?? []) {
+    for (const item of day.items) {
+      const s = byId.get(item.session_id);
+      if (!s) continue;
+      placed.add(s.id);
+      add(day.day, { key: `${s.id}-rec`, session: s, kind: "set", order: item.order });
+    }
+  }
+
   for (const s of sessions) {
     if (s.status === "dismissed" || s.status === "missed") continue;
+    if (placed.has(s.id) || dropped.has(s.id)) continue;
     if (s.status === "done") {
-      add(s.done_on ?? s.window_start, { key: `${s.id}-done`, session: s, kind: "done" });
+      add(s.done_on ?? s.window_start, { key: `${s.id}-done`, session: asDone(s), kind: "done" });
     } else if (s.placement === "pinned") {
       add(s.window_start, {
         key: s.id,
@@ -101,7 +145,12 @@ function chipsByDay(sessions: PlannedSession[], weekStart: string, weekEnd: stri
 
   // Floating sessions still to do: one option per group per open day.
   const floating = sessions.filter(
-    (s) => s.status === "upcoming" && s.placement !== "pinned" && s.commitment === "committed",
+    (s) =>
+      s.status === "upcoming" &&
+      s.placement !== "pinned" &&
+      s.commitment === "committed" &&
+      !placed.has(s.id) &&
+      !dropped.has(s.id),
   );
   for (const group of groupSessions(floating)) {
     for (const day of optionDays(group)) {
@@ -109,13 +158,18 @@ function chipsByDay(sessions: PlannedSession[], weekStart: string, weekEnd: stri
     }
   }
 
-  const order: Record<ChipKind, number> = { done: 0, set: 1, option: 2, offer: 3 };
-  byDay.forEach((list) => list.sort((a, b) => order[a.kind] - order[b.kind]));
+  const rank: Record<ChipKind, number> = { done: 0, set: 1, option: 2, offer: 3 };
+  byDay.forEach((list) =>
+    list.sort(
+      (a, b) => rank[a.kind] - rank[b.kind] || (a.order ?? 99) - (b.order ?? 99),
+    ),
+  );
   return byDay;
 }
 
 /** "5 to place · 4 days left · any order", or "one each" when the limit is one. */
 function poolLine(
+  rec: WeekRecommendation | null | undefined,
   sessions: PlannedSession[],
   rules: SpacingRuleRead[],
   today: string,
@@ -129,6 +183,10 @@ function poolLine(
       safeIntent(s.intent) !== "rest",
   );
   if (!floating.length) return null;
+  if (rec) {
+    const left = floating.length - (rec.dropped?.length ?? 0);
+    return `${left} still to do this week`;
+  }
   const open = new Set<string>();
   for (const group of groupSessions(floating)) optionDays(group).forEach((d) => open.add(d));
   const daysLeft = days.filter((d) => d >= today && open.has(d)).length;
@@ -149,6 +207,7 @@ export default function DayStrip({
   rules,
   today,
   header,
+  recommendation,
 }: {
   weekStart: string;
   sessions: PlannedSession[];
@@ -157,11 +216,12 @@ export default function DayStrip({
   today: string;
   /** The week navigator, so changing week is right where the week is read. */
   header?: ReactNode;
+  recommendation?: WeekRecommendation | null;
 }) {
   const days = weekDays(weekStart);
-  const byDay = chipsByDay(sessions, days[0], days[6]);
+  const byDay = chipsByDay(sessions, days[0], days[6], recommendation);
   const todayIndex = days.indexOf(today);
-  const pool = poolLine(sessions, rules, today, days);
+  const pool = poolLine(recommendation, sessions, rules, today, days);
 
   const loggedByDay = new Map<string, number>();
   for (const a of logged) {
@@ -230,6 +290,9 @@ export default function DayStrip({
                 >
                   {safeIntent(chip.session.intent) === "rest" ? "" : chipLabel(chip.session)}
                   {chip.kind === "done" && " ✓"}
+                  {chip.kind === "set" && (chip.session.alternatives?.length ?? 0) > 0 && (
+                    <span className="ml-0.5 font-sans text-[8px] font-normal opacity-70">or</span>
+                  )}
                 </span>
               ))}
               {hidden > 0 && (
@@ -255,15 +318,22 @@ export default function DayStrip({
         </span>
         <span className="flex items-center gap-1.5">
           <span aria-hidden="true" className="h-2.5 w-5 rounded-full border-2 border-gray-400 dark:border-gray-500" />
-          Set day
+          Planned
         </span>
-        <span className="flex items-center gap-1.5">
-          <span
-            aria-hidden="true"
-            className="h-2.5 w-5 rounded-full border-[1.5px] border-dashed border-gray-400 dark:border-gray-500"
-          />
-          Could go here
-        </span>
+        {!recommendation && (
+          <span className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="h-2.5 w-5 rounded-full border-[1.5px] border-dashed border-gray-400 dark:border-gray-500"
+            />
+            Could go here
+          </span>
+        )}
+        {recommendation && (
+          <span className="flex items-center gap-1.5">
+            <span className="font-semibold">or</span> = a choice, see Today
+          </span>
+        )}
       </div>
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
         {(Object.keys(INTENT_LABEL) as (keyof typeof INTENT_LABEL)[]).map((intent) => (

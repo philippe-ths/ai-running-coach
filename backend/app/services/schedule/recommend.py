@@ -17,7 +17,8 @@ How a week is chosen
    coach's preferences (`TrainingPlan.preferences`) plus a large charge for every
    session moved off the day it was last recommended, so re-planning moves as
    little as possible, plus a small charge for stacking a day, so load spreads
-   when nothing else decides.
+   when nothing else decides, and a little more for the same sport twice in a
+   day.
 
 Every cost term only grows as sessions are added, so the cost of a partial week
 is a lower bound for any week that completes it, which is what makes the
@@ -74,6 +75,9 @@ def drop_priority(session: Any) -> int:
 MOVE_COST = 100
 PREFERENCE_COST = 10
 STACK_COST = 1
+# The same sport twice in a day (an easy run on the long run's day) costs more
+# than plain stacking: it is rarely what a coach means, preference or not.
+DOUBLE_SPORT_COST = 3
 
 RECOMMEND_BUDGET = 40000
 
@@ -124,6 +128,8 @@ def _cost(placed: Sequence[Tuple[Any, date]], fixed: Sequence[PlacedSession],
     for day, sessions in days.items():
         count = len(sessions) + len(fixed_by_day.get(day, []))
         cost += STACK_COST * max(0, count - 1)
+        sports = Counter(s.discipline for s in sessions if s.discipline != "walk")
+        cost += DOUBLE_SPORT_COST * sum(n - 1 for n in sports.values())
 
     def intents_on(day: date) -> List[str]:
         return [s.intent for s in days.get(day, [])] + fixed_by_day.get(day, [])
