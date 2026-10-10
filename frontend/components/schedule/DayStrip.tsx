@@ -175,18 +175,19 @@ function poolLine(
   today: string,
   days: string[],
 ): string | null {
-  const floating = sessions.filter(
+  const toDo = sessions.filter(
     (s) =>
       s.status === "upcoming" &&
-      s.placement !== "pinned" &&
       s.commitment === "committed" &&
       safeIntent(s.intent) !== "rest",
   );
-  if (!floating.length) return null;
+  // With a recommendation every session left counts, pinned ones included.
   if (rec) {
-    const left = floating.length - (rec.dropped?.length ?? 0);
-    return `${left} still to do this week`;
+    const left = toDo.length - (rec.dropped?.length ?? 0);
+    return left > 0 ? `${left} still to do this week` : null;
   }
+  const floating = toDo.filter((s) => s.placement !== "pinned");
+  if (!floating.length) return null;
   const open = new Set<string>();
   for (const group of groupSessions(floating)) optionDays(group).forEach((d) => open.add(d));
   const daysLeft = days.filter((d) => d >= today && open.has(d)).length;
