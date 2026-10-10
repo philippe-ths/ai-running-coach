@@ -6,7 +6,7 @@
 // its note on what taking it gives or costs. Doing any one fills the slot, so
 // each option carries its own tick and the tick names the option.
 //
-// Only a day where the order matters is numbered; a walk reads "any time".
+// A day with more than one activity is numbered, easiest first, walks included.
 // What moved this week, and anything that no longer fits, sits under the card
 // in the house's amber "notable" tone: information, not an alarm.
 

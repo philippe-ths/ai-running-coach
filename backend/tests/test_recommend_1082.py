@@ -2,7 +2,7 @@
 
 Held to: every recommendation is legal under the rules; what does not fit is
 dropped by the runner's priority; an unchanged week stays put and a missed day
-says what moved; preferences and the day's order come with fixed reasons;
+says what moved; preferences hold and each day builds up to its hardest session;
 extras and hand ticks use up their day exactly once.
 """
 
@@ -15,9 +15,8 @@ from app.models.week_recommendation import WeekRecommendation
 from app.schemas.schedule import PlanPreference, SpacingRule
 from app.services.schedule.placement import PlacedSession
 from app.services.schedule.recommend import (
-    REASON_ANY_TIME,
-    REASON_KEY_FIRST,
-    REASON_RUN_BEFORE_STRENGTH,
+    REASON_HARDEST_LAST,
+    REASON_START_EASY,
     alternative_notes,
     recommend_week,
 )
@@ -164,7 +163,7 @@ def test_strength_goes_on_a_run_day_when_the_coach_prefers_it():
 
     assert rec.placements["gym"].day == D(2)
     assert rec.placements["run"].order == 1
-    assert (rec.placements["gym"].order, rec.placements["gym"].reason) == (2, REASON_RUN_BEFORE_STRENGTH)
+    assert (rec.placements["gym"].order, rec.placements["gym"].reason) == (2, REASON_HARDEST_LAST)
 
 
 def test_repeats_are_spread_when_the_coach_prefers_it():
@@ -175,29 +174,22 @@ def test_repeats_are_spread_when_the_coach_prefers_it():
     assert len({p.day for p in rec.placements.values()}) == 3
 
 
-def test_a_hard_session_leads_its_day_and_a_walk_is_any_time():
+def test_a_day_builds_up_to_its_hardest_session_walks_included():
     sessions = [
-        _S("walk", "easy", "walk", "Walk", D(1), D(1)),
-        _S("easy", "easy", "run", "Easy run", D(1), D(1)),
         _S("ints", "quality", "run", "Intervals", D(1), D(1)),
-    ]
-
-    rec = recommend_week(sessions, [], [], MON)
-
-    assert (rec.placements["ints"].order, rec.placements["ints"].reason) == (1, REASON_KEY_FIRST)
-    assert rec.placements["easy"].order == 2
-    assert (rec.placements["walk"].order, rec.placements["walk"].reason) == (None, REASON_ANY_TIME)
-
-
-def test_a_day_where_order_does_not_matter_has_no_numbers():
-    sessions = [
+        _S("easy", "easy", "run", "Easy run", D(1), D(1)),
         _S("walk", "easy", "walk", "Walk", D(1), D(1)),
-        _S("bike", "easy", "bike", "Easy bike", D(1), D(1)),
+        _S("solo", "easy", "bike", "Easy bike", D(2), D(2)),
     ]
 
     rec = recommend_week(sessions, [], [], MON)
 
-    assert {p.order for p in rec.placements.values()} == {None}
+    order = {sid: (p.order, p.reason) for sid, p in rec.placements.items()}
+    assert order["walk"] == (1, REASON_START_EASY)
+    assert order["easy"] == (2, None)
+    assert order["ints"] == (3, REASON_HARDEST_LAST)
+    # A day with one activity has nothing to order.
+    assert order["solo"] == (None, None)
 
 
 def test_an_alternative_says_what_taking_it_gives_or_costs():

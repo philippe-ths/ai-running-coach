@@ -27,9 +27,11 @@ the best week found so far stands, and failing that the plain legal week.
 
 Why each day is ordered
 -----------------------
-Within a day, a hard session (quality or long) goes first and a run goes before
-strength. A walk goes "any time". A day shows numbers only when one of those
-orderings actually applies; otherwise it is "any order" and says so.
+Within a day, the runner builds up: easiest first, hardest last, on the same
+scale as dropping (walk, other easy sport, easy run, strength, quality, long), so
+the shower comes after the hardest session. A walk is an activity like any
+other and takes its place in the order. Every day with more than one activity
+is numbered.
 
 Every reason the runner reads is fixed wording, here or in `preferences.py`,
 tied to the preference or ordering it comes from, never free text.
@@ -81,9 +83,8 @@ DOUBLE_SPORT_COST = 3
 
 RECOMMEND_BUDGET = 40000
 
-REASON_KEY_FIRST = "Key session first, while you're fresh."
-REASON_RUN_BEFORE_STRENGTH = "Run first, then strength."
-REASON_ANY_TIME = "Any time today."
+REASON_START_EASY = "Start easy and build up."
+REASON_HARDEST_LAST = "Hardest last, then you're done."
 REASON_DROPPED = "Doesn't fit in the days left this week, so it's dropped."
 
 
@@ -229,46 +230,17 @@ def _best_week(cands: List[_Cand], rules, fixed, prefs, prev, today: date, budge
     return [(by_id[sid].session, day) for sid, day in day_of.items()]
 
 
-def _day_order(sessions: List[Any], prefs: set) -> List[Tuple[Any, Optional[int], Optional[str]]]:
-    """Each session of one day with its place in the order and the reason, or no
-    number when the order does not matter."""
-    def rank(s) -> int:
-        if s.intent in HARD:
-            return 0
-        if s.discipline == "run":
-            return 1
-        if s.intent == "strength":
-            return 2
-        if s.discipline == "walk":
-            return 9
-        return 3
-
-    ordered = sorted(sessions, key=lambda s: (rank(s), s.title))
-    work = [s for s in ordered if s.discipline != "walk"]
-    has_hard = any(s.intent in HARD for s in work)
-    run_and_strength = any(s.discipline == "run" for s in work) and any(
-        s.intent == "strength" for s in work
-    )
-    numbered = len(work) > 1 and (has_hard or run_and_strength)
-
-    out = []
-    n = 0
-    for s in ordered:
-        if s.discipline == "walk":
-            out.append((s, None, REASON_ANY_TIME if numbered or len(ordered) > 1 else None))
-            continue
-        if not numbered:
-            out.append((s, None, None))
-            continue
-        n += 1
-        if s.intent in HARD:
-            reason = REASON_KEY_FIRST
-        elif s.intent == "strength" and run_and_strength:
-            reason = REASON_RUN_BEFORE_STRENGTH
-        else:
-            reason = None
-        out.append((s, n, reason))
-    return out
+def _day_order(sessions: List[Any]) -> List[Tuple[Any, Optional[int], Optional[str]]]:
+    """Each session of one day with its place in the order and the reason: built
+    up from the easiest to the hardest, numbered when there is more than one."""
+    ordered = sorted(sessions, key=lambda s: (drop_priority(s), str(s.title), str(s.id)))
+    if len(ordered) < 2:
+        return [(s, None, None) for s in ordered]
+    last = len(ordered)
+    return [
+        (s, n, REASON_START_EASY if n == 1 else REASON_HARDEST_LAST if n == last else None)
+        for n, s in enumerate(ordered, start=1)
+    ]
 
 
 def recommend_week(
@@ -331,7 +303,7 @@ def recommend_week(
     for session, day in week:
         by_day.setdefault(day, []).append(session)
     for day, day_sessions in by_day.items():
-        for session, order, reason in _day_order(day_sessions, prefs):
+        for session, order, reason in _day_order(day_sessions):
             result.placements[session.id] = Placement(
                 session_id=session.id, day=day, order=order, reason=reason
             )
