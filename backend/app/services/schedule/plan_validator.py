@@ -34,6 +34,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 from app.services.schedule.placement import validate_session_window
 from app.services.schedule.planned_distance import planned_distance_m
 from app.services.schedule.rules import check_rules
+# The absurdity floor on sessions in a day lives with the runner's own rules,
+# which it also caps (#1080).
+from app.services.schedule.runner_rules import ABSURD_SESSIONS_PER_DAY
 from app.services.schedule.week_check import NUMERIC_CODES, WeekFailure, check_week
 from app.services.weeks import MONDAY, week_start
 
@@ -53,13 +56,6 @@ MAX_WEEKLY_MULTIPLE = 2.0
 # what it is not for.
 MAX_SKETCH_MULTIPLE = 3.0
 
-# An absurdity floor on how many sessions may land on one day. Every other
-# nonsense has a floor; without this one a week could pin all twenty-one permitted
-# sessions to a Tuesday unless the coach happened to write a rule against it, and
-# "the model polices itself" is not a check. Deliberately high: three sessions in
-# a day is a real thing this runner does (a walk, a run and a gym session), so
-# this catches the impossible rather than expressing an opinion.
-ABSURD_SESSIONS_PER_DAY = 4
 
 # The code a volume-ceiling rejection carries, so the caller can tell a plan that
 # ramps absurdly from one whose week cannot be arranged WITHOUT reading the
@@ -214,6 +210,7 @@ def validate_drafted_plan(
     norm_weekly_s: Optional[float] = None,
     frames: Sequence["WeekFrame"] = (),
     expected_weeks: Optional[Sequence[date]] = None,
+    runner_rules: Sequence[Any] = (),
 ) -> PlanCheck:
     """Everything that must hold before a drafted plan reaches the store.
 
@@ -262,7 +259,7 @@ def validate_drafted_plan(
         _within_horizon(week.week_start, "week")
 
         _validate_sessions(check, week, today, starts_on)
-        _validate_rules_are_satisfiable(check, plan, week, starts_on)
+        _validate_rules_are_satisfiable(check, plan, week, starts_on, runner_rules)
         _validate_volume(check, week, norm_weekly_running_m, race=race, starts_on=starts_on)
         _validate_hours(
             check, week.week_start, committed_duration_s(week.sessions, race), norm_weekly_s
@@ -504,7 +501,7 @@ def _validate_sessions(check: PlanCheck, week, today: date, starts_on: int) -> N
 
 
 def _validate_rules_are_satisfiable(
-    check: PlanCheck, plan, week, starts_on: int
+    check: PlanCheck, plan, week, starts_on: int, runner_rules: Sequence[Any] = ()
 ) -> None:
     """The plan's own rules must admit at least one legal arrangement.
 
@@ -530,8 +527,10 @@ def _validate_rules_are_satisfiable(
     # The implicit density floor rides along with the coach's own rules, so a
     # week has to be arrangeable without stacking a day absurdly high whether or
     # not the coach thought to forbid it.
+    # The runner's own rules (#1080) bind the coach's plan as well: they are not
+    # the coach's to write, so they arrive here rather than in `plan.rules`.
     satisfiable, violations = check_rules(
-        placeable, list(plan.rules) + [_ImplicitRule()], None
+        placeable, list(plan.rules) + list(runner_rules) + [_ImplicitRule()], None
     )
     if not satisfiable:
         for violation in violations:

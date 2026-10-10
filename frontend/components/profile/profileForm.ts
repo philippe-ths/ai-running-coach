@@ -24,6 +24,7 @@ export type ProfileForm = {
   weight_kg: number | null;
   height_cm: number | null;
   week_starts_on: number; // 0=Monday (default), 6=Sunday (#676)
+  max_activities_per_day: number | null; // #1080: null = no limit of their own
   stated_pbs: StatedPb[] | null; // #1068: null = none stated
 };
 
@@ -41,12 +42,13 @@ export const EMPTY_PROFILE_FORM: ProfileForm = {
   weight_kg: null,
   height_cm: null,
   week_starts_on: 0,
+  max_activities_per_day: null,
   stated_pbs: null,
 };
 
 // #742: clearing a body field must send null ("not stated"), never 0 -- the
 // coach pack drops an unstated build rather than reading it as a real figure.
-const NULLABLE_NUMERIC = ['weight_kg', 'height_cm'];
+const NULLABLE_NUMERIC = ['weight_kg', 'height_cm', 'max_activities_per_day'];
 const NUMERIC = [
   'weekly_days_available',
   'current_weekly_km',
@@ -82,6 +84,7 @@ export function profileFromApi(data: Record<string, unknown> | null): ProfileFor
     weight_kg: (data.weight_kg as number | null) ?? null,
     height_cm: (data.height_cm as number | null) ?? null,
     week_starts_on: (data.week_starts_on as number) ?? 0,
+    max_activities_per_day: (data.max_activities_per_day as number | null) ?? null,
     stated_pbs: shownPbs(data.stated_pbs as StatedPb[] | null),
   };
 }

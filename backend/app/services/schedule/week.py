@@ -56,6 +56,7 @@ from app.services.schedule.placement import (
 from app.services.schedule.norms import running_vs_norm
 from app.services.schedule.rule_text import describe_rule
 from app.services.schedule.rules import check_rules
+from app.services.schedule.runner_rules import with_runner_rules
 from app.services.weeks import days_into_week, resolve_week_start, week_start
 
 # The disciplines a week is reported in, in a fixed order so the mix bar does not
@@ -243,7 +244,8 @@ def build_week(
         ),
     )
 
-    rules = store.plan_rules(plan)
+    # The runner's own rules (#1080) are checked and shown beside the plan's.
+    rules = with_runner_rules(store.plan_rules(plan), profile)
     # The runner-facing STATEMENT is derived here, from kind + arguments, never
     # from the coach's own `label` (#844) — see rule_text.py.
     rules_read = [

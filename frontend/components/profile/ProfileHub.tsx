@@ -201,6 +201,11 @@ export default function ProfileHub({ form }: { form: ProfileForm }) {
           name="Week starts on"
           value={form.week_starts_on === 6 ? 'Sunday' : 'Monday'}
         />
+        <SettingRow
+          href="/profile?s=app"
+          name="Most activities in a day"
+          value={form.max_activities_per_day ? `${form.max_activities_per_day}` : 'No limit'}
+        />
         <SettingRow href="/profile?s=app" name="Appearance" value={themeValue} />
       </SettingGroup>
     </div>

@@ -68,6 +68,12 @@ class UserProfile(Base):
     # the coach pack and the Trends API (#676). The product offers only Monday or
     # Sunday; the single week-boundary definition in services/weeks.py is general.
     week_starts_on: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # The most activities the runner will do in a day, walks included (#1080).
+    # The runner's own setting: every plan the coach drafts or amends is held to
+    # it as a `max_sessions_per_day` rule, merged in at check time rather than
+    # stored on the plan, because a redraft rewrites the plan's rules wholesale.
+    # Null means no limit of their own.
+    max_activities_per_day: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

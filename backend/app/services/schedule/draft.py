@@ -77,6 +77,7 @@ from app.services.schedule.plan_validator import (
     volume_ceilings,
 )
 from app.services.schedule.repair import repair_weeks
+from app.services.schedule.runner_rules import runner_rules
 from app.services.schedule.run_log import attempt_cost, output_failure
 from app.services.schedule.shapes import write_shapes
 from app.services.weeks import resolve_week_start, week_start
@@ -314,6 +315,12 @@ def _profile_lines(user: User, profile: Any) -> List[str]:
         ("Goal", getattr(profile, "goal_type", None)),
         ("Experience", getattr(profile, "experience_level", None)),
         ("Days available each week", getattr(profile, "weekly_days_available", None)),
+        (
+            # #1080: the runner's own limit. Enforced on every plan, so the coach
+            # is told it is theirs and that walks count, not left to guess.
+            "Most activities in a day (their own setting, enforced; walks count)",
+            getattr(profile, "max_activities_per_day", None),
+        ),
         ("Current weekly km (stated)", getattr(profile, "current_weekly_km", None)),
         ("Max HR", getattr(profile, "max_hr", None)),
         ("Injury notes", getattr(profile, "injury_notes", None)),
@@ -677,10 +684,12 @@ def _retry_message(context: str, failures: List[str], previous: Optional[dict]) 
     return "\n".join(out)
 
 
-def _repair(drafted: DraftedPlan, check, frames_by_week: dict) -> tuple:
+def _repair(
+    drafted: DraftedPlan, check, frames_by_week: dict, own_rules: Sequence[Any] = ()
+) -> tuple:
     """Close the numeric shortfalls the check found, week by week."""
     weeks, notes = repair_weeks(
-        drafted.weeks, check, frames_by_week, rules=drafted.rules
+        drafted.weeks, check, frames_by_week, rules=list(drafted.rules) + list(own_rules)
     )
     return drafted.model_copy(update={"weeks": weeks}), notes
 
@@ -719,6 +728,9 @@ async def draft_plan(
     today = today or date.today()
     weeks = settings.SCHEDULE_HORIZON_WEEKS
     starts_on = resolve_week_start(getattr(user, "profile", None))
+    # The runner's own rules (#1080) are not the coach's to write, so they are
+    # held over the draft here rather than appearing in `drafted.rules`.
+    own_rules = runner_rules(getattr(user, "profile", None))
 
     if turn.over_budget(user.id):
         return DraftOutcome(
@@ -795,6 +807,7 @@ async def draft_plan(
             norm_weekly_s=norm_hours,
             frames=concrete_frames,
             expected_weeks=expected,
+            runner_rules=own_rules,
         )
 
     def kind_of(check) -> str:
@@ -881,7 +894,7 @@ async def draft_plan(
             # The retry is spent and the plan is coherent, just short of a number.
             # Close what the ceilings allow in code, then store what is left as a
             # shortfall rather than failing a plan whose only fault is arithmetic.
-            repaired, notes = _repair(drafted, check, frames_by_week)
+            repaired, notes = _repair(drafted, check, frames_by_week, own_rules)
             final = validate(repaired)
             if final.ok or final.only_numeric:
                 log.repairs = notes

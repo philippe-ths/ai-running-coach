@@ -13,6 +13,7 @@ export interface UserProfile {
   weight_kg?: number | null;
   height_cm?: number | null;
   week_starts_on?: number;  // 0=Monday (default), 6=Sunday (#676)
+  max_activities_per_day?: number | null;  // #1080: walks count; null = no limit
   upcoming_races: { name: string; date: string; distance_km: number }[];
   injury_notes?: string;
   updated_at: string;
