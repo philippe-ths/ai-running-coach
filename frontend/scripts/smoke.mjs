@@ -1373,10 +1373,15 @@ async function main() {
   // overriding it, server-side fetches escape to the real, Clerk-gated backend
   // (401) instead of the mock, 500-ing /activity/42 (#538). CI has no .env.local
   // so this is invisible there, but it breaks local `make smoke`.
+  //
+  // NEXT_PUBLIC_API_BASE_URL stays empty, as in production: client fetches then
+  // go to relative /api/* and through the Next proxy to BACKEND_URL. Pointing it
+  // at the mock sends a browser cross-origin to a server with no CORS, so under
+  // SMOKE_HOLD every client-rendered panel showed its error state (#1076).
   const smokeEnv = {
     ...process.env,
     BACKEND_URL: MOCK_API_BASE_URL,
-    NEXT_PUBLIC_API_BASE_URL: MOCK_API_BASE_URL,
+    NEXT_PUBLIC_API_BASE_URL: "",
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "",
     CLERK_SECRET_KEY: "",
   };
