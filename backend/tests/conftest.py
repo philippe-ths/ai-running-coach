@@ -83,6 +83,41 @@ def _isolate_llm_budget():
     yield
     budget.set_gate(None)
 
+
+@pytest.fixture(autouse=True)
+def _refuse_real_strava_requests(request, monkeypatch):
+    """Fail any test that would send a real HTTP request to Strava (#1078).
+
+    A test that forgets to inject a Strava port falls through to the HTTP
+    adapter, and its result then depends on how a live request with a fake
+    token fails. Patching the real transports leaves `httpx.MockTransport`
+    untouched, so adapter tests that mock the wire still run.
+    """
+    if request.node.get_closest_marker("integration"):
+        return
+    import httpx
+
+    def _refuse(req):
+        if req.url.host.endswith("strava.com"):
+            raise RuntimeError(
+                f"Test sent a real request to Strava: {req.method} {req.url}. "
+                "Inject an InMemoryStravaAdapter."
+            )
+
+    sync_send = httpx.HTTPTransport.handle_request
+    async_send = httpx.AsyncHTTPTransport.handle_async_request
+
+    def _sync(self, req):
+        _refuse(req)
+        return sync_send(self, req)
+
+    async def _async(self, req):
+        _refuse(req)
+        return await async_send(self, req)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", _sync)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", _async)
+
 # Use an in-memory SQLite database for tests, or a separate test DB
 # For simplicity with SQLAlchemy features, an in-memory SQLite is easiest 
 # but might have dialect differences with Postgres.

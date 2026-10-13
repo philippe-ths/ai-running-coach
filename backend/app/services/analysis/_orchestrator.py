@@ -2,7 +2,7 @@ import logging
 import sys
 import uuid
 from dataclasses import fields as dataclass_fields
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from sqlalchemy.orm import Session, undefer
 from sqlalchemy import select
 
@@ -30,6 +30,9 @@ from app.services.analysis.stages import (
     assert_stage_contract,
     run_stages,
 )
+
+if TYPE_CHECKING:
+    from app.services.strava_ingestion import StravaPort
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +124,13 @@ def _extract_planned_workout(planned_session) -> dict | None:
         return None
     return structure
 
-async def analyze_with_streams(db: Session, activity_id: str) -> Optional[DerivedMetric]:
+async def analyze_with_streams(
+    db: Session, activity_id: str, port: Optional["StravaPort"] = None
+) -> Optional[DerivedMetric]:
     """
     Explicitly fetches streams and re-runs analysis.
+
+    `port` is the Strava port to fetch through; None uses the process default.
     """
     activity_uuid = _coerce_uuid(activity_id)
     activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
@@ -134,7 +141,7 @@ async def analyze_with_streams(db: Session, activity_id: str) -> Optional[Derive
     if account:
         from app.services.strava_ingestion import get_strava_port, refetch_streams
 
-        await refetch_streams(db, account, activity, get_strava_port())
+        await refetch_streams(db, account, activity, port or get_strava_port())
 
     # Run normal processing (which now picks up streams)
     return analyze(db, activity_id)
