@@ -80,7 +80,7 @@ async def process_new_activity(
     activity = await ingest_activity_by_id(
         db, account, strava_port, strava_activity_id
     )
-    await analyze_with_streams(db, str(activity.id))
+    await analyze_with_streams(db, str(activity.id), strava_port)
 
     # #830: tick off whatever planned session this run satisfies, before the
     # cadence speaks. Guarded because the schedule is an addition to the
