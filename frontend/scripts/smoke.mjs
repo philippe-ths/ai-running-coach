@@ -1177,6 +1177,31 @@ function createMockApiServer() {
       return sendJson(res, 200, mockScheduleDraft);
     }
 
+    // #1092: the schedule polls these on mount. Answered as an idle backend
+    // would: no amendment in flight, and every flag at its code default (True).
+    if (pathname === "/api/schedule/amendment" && req.method === "GET") {
+      return sendJson(res, 200, {
+        status: null,
+        start: null,
+        end: null,
+        changes: [],
+        detail: null,
+      });
+    }
+
+    if (pathname === "/api/coach/feature-flags") {
+      return sendJson(res, 200, {
+        voice: true,
+        stance: true,
+        user_materials: true,
+        sleep_quality: true,
+        stops_analysis: true,
+        memory: true,
+        threads: true,
+        schedule: true,
+      });
+    }
+
     // #857: the previous-plan offer and the restore. The restore answers 204
     // and SWAPS which plan is on offer, so the mock holds the property the real
     // endpoint holds: going back is itself something you can go back from.
