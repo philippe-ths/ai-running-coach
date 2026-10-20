@@ -42,6 +42,7 @@ artifacts, never re-derive"; these tools derive.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -57,19 +58,18 @@ from app.services.coach.volume import build_volume_report
 from app.services.activity_facts import query_facts as _query_activity_facts
 from app.services.weeks import week_start
 
-# Re-imported so everything importable from this module still is (#1102).
+# Re-imported so every name other modules, tests and the diagram generator
+# import from here still resolves (#1102).
 from app.services.coach.query_tools_windows import (  # noqa: F401
     LIST_WINDOWS,
     SUMMARY_WINDOWS,
     ResolvedWindow,
     _LISTED_ELSEWHERE,
     _MAX_LIST_ACTIVITIES,
-    _MAX_SPLIT_ROWS,
     _PER_SESSION_NAME,
     _ROLLING_DAYS_RANGEKEY,
     _TYPE_FILTER,
     _WHOLE_WEEKS,
-    _as_uuid,
     _coverage,
     _duration,
     _first_of_month,
@@ -146,6 +146,18 @@ def list_activities_in_range(
         "showing": len(activities),
         "activities": activities,
     }
+
+
+# The per-km splits summary in a session detail is capped, as a list result is,
+# so a wide window cannot flood the context.
+_MAX_SPLIT_ROWS = 30
+
+
+def _as_uuid(value) -> Optional[uuid.UUID]:
+    try:
+        return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 def get_session_detail(db: Session, owner_user_id, *, activity_id: str, today: date) -> dict:

@@ -842,7 +842,7 @@ const NODES = [
    from `t_plan` so the diagram shows that difference rather than implying a
    fourth way of reading history. */
 { id:'tool_plan', layer:'loop', kind:'code', tag:'tool',
-  title:'get_training_plan', path:'query_tools.py',
+  title:'get_training_plan', path:'query_tools_plan.py',
   from:['loop','t_plan'],
   body:()=> toolNodeBody('get_training_plan') },
 
@@ -851,7 +851,7 @@ const NODES = [
    records alone cannot see a PB set on a run we hold without its efforts. Each
    PB comes back labelled with how far it can be trusted. */
 { id:'tool_pbs', layer:'loop', kind:'code', tag:'tool',
-  title:'get_personal_bests', path:'query_tools.py',
+  title:'get_personal_bests', path:'query_tools_plan.py',
   from:['loop','t_activity','t_profile'],
   body:()=> toolNodeBody('get_personal_bests') },
 
@@ -889,7 +889,7 @@ const NODES = [
     return any ? head('offered') : none('No action was offered in this conversation.'); } },
 
 { id:'affordance', layer:'loop', kind:'source', tag:'stream frame',
-  title:'Status + tool-trace frames', path:'query_tools.summarize_tool_call',
+  title:'Status + tool-trace frames', path:'query_tools_labels.summarize_tool_call',
   from:['tool_list','tool_detail','tool_summary'],
   body:()=> { const a=selectedTurn(); if(!a) return none('no capture');
     const calls=(a.tools_used||[]);

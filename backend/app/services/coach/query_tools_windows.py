@@ -5,7 +5,6 @@ Split out of `query_tools.py` (#1102); `query_tools` re-imports every name here.
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Dict, List, Optional
@@ -19,12 +18,9 @@ from app.services.schedule.norms import zone_seconds
 from app.services.weeks import MONDAY, resolve_week_start, week_start
 
 
-
 # A single list result is bounded so a wide window cannot flood the context. An
 # over-cap result says so (`showing` < `count`) rather than truncating silently.
 _MAX_LIST_ACTIVITIES = 40
-# The per-km splits summary in a session detail is capped for the same reason.
-_MAX_SPLIT_ROWS = 30
 
 
 # --- named relative windows (server-resolved) --------------------------------
@@ -179,13 +175,6 @@ def _duration(seconds: Optional[float]) -> Optional[str]:
 def _pace(distance_m: Optional[float], moving_time_s: Optional[float]) -> Optional[str]:
     """Average pace as 'm:ss/km', or None when it cannot be computed."""
     return coach_units.pace(distance_m, moving_time_s)
-
-
-def _as_uuid(value) -> Optional[uuid.UUID]:
-    try:
-        return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
-    except (ValueError, TypeError, AttributeError):
-        return None
 
 
 def _records_begin(db: Session, owner_user_id) -> Optional[date]:
