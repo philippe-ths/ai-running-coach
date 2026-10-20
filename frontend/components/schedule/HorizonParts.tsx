@@ -1,3 +1,7 @@
+// The horizon chart's presentational pieces: bands, challenge lines, the week
+// detail, the legend and the numbers table. Split out of HorizonChart.tsx
+// (#1097), whose header explains the design they implement.
+
 import type { GoalRace, HorizonChallenge, HorizonWeek, ScheduleHorizon } from "@/lib/types/schedule";
 import { formatDateLabel } from "@/lib/format";
 import {

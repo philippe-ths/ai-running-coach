@@ -1,3 +1,7 @@
+// The horizon chart's pure helpers: segments, number formatting, coverage text
+// and challenge readings. Split out of HorizonChart.tsx (#1097), whose header
+// explains the design they implement.
+
 import type {
   GoalRace,
   HorizonChallenge,
@@ -102,7 +106,7 @@ export function longRun(week: HorizonWeek): string | null {
 }
 
 /** Km for the row: whole numbers, since the row is a glance, not a log. */
-export function kmShort(metres: number | null | undefined): string {
+function kmShort(metres: number | null | undefined): string {
   return String(Math.round((metres ?? 0) / 1000));
 }
 
