@@ -86,6 +86,11 @@ def main() -> None:
     from app.jobs.garmin_sync import start_chain_if_needed
 
     start_chain_if_needed()
+    # Re-analyse every runner once when this deploy changed what analysis stores
+    # (no-op unless ANALYSIS_VERSION moved; a Redis marker per version).
+    from app.jobs.reanalyze_history import reanalyze_if_analysis_changed
+
+    reanalyze_if_analysis_changed()
     logger.info(
         "Worker booting; listening on %s (WORKER_POOL_SIZE=%d)",
         ",".join(LISTEN),

@@ -40,6 +40,7 @@ from app.jobs import batch_chain
 from app.models import Activity, ActivityStream
 from app.services.analysis import analyze
 from app.services.analysis.baseline import recompute_runner_baseline
+from app.services.analysis.version import ANALYSIS_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -187,34 +188,47 @@ def reanalyze_history_batch(
     return result
 
 
-def _schedule_next_batch(cursor: int, user_id: Optional[str] = None) -> None:
+def _schedule_next_batch(
+    cursor: int, user_id: Optional[str] = None, batch_size: Optional[int] = None
+) -> None:
     """Schedule the next batch after the configured pause. Carries the advanced
-    `cursor` and `user_id` so the self-paced chain resumes strictly past where it
-    stopped and stays scoped to the triggering runner (#470). The chain mechanics
-    live in `batch_chain.schedule_after` (#698)."""
+    `cursor`, `user_id` and `batch_size` so the self-paced chain resumes strictly
+    past where it stopped, stays scoped to the triggering runner (#470), and keeps
+    its batch size. The chain mechanics live in `batch_chain.schedule_after` (#698)."""
     batch_chain.schedule_after(
-        reanalyze_history_job, settings.REANALYZE_BATCH_PAUSE_SECONDS, cursor, user_id
+        reanalyze_history_job,
+        settings.REANALYZE_BATCH_PAUSE_SECONDS,
+        cursor,
+        user_id,
+        batch_size,
     )
 
 
 def reanalyze_history_job(
-    cursor: Optional[int] = None, user_id: Optional[str] = None
+    cursor: Optional[int] = None,
+    user_id: Optional[str] = None,
+    batch_size: Optional[int] = None,
 ) -> None:
     """RQ entrypoint. Runs one batch; if work remains, schedules the next.
 
     `user_id` scopes the eligible set to one runner (#470); the user-triggered
     path always supplies it, while an unscoped call still re-analyzes globally.
+    `batch_size` defaults to `REANALYZE_BATCH_SIZE`; a successor already queued
+    before it existed carries two arguments and gets the default.
     """
     db = SessionLocal()
     try:
         result = reanalyze_history_batch(
-            db, limit=settings.REANALYZE_BATCH_SIZE, cursor=cursor, user_id=user_id
+            db,
+            limit=batch_size or settings.REANALYZE_BATCH_SIZE,
+            cursor=cursor,
+            user_id=user_id,
         )
     finally:
         db.close()
 
     if result.next_cursor is not None:
-        _schedule_next_batch(result.next_cursor, user_id)
+        _schedule_next_batch(result.next_cursor, user_id, batch_size)
         logger.info(
             "Re-analysis scheduled next batch in %ds (%d remaining)",
             settings.REANALYZE_BATCH_PAUSE_SECONDS,
@@ -243,3 +257,43 @@ def enqueue_reanalyze(db: Session, user_id) -> int:
             result_ttl=batch_chain.CHAIN_RESULT_TTL,
         )
     return eligible
+
+
+_APPLIED_KEY = "analysis_version_applied:{}"
+
+
+def reanalyze_if_analysis_changed() -> bool:
+    """Worker-boot hook: re-analyse every runner once per `ANALYSIS_VERSION`.
+
+    A Redis marker per version stops a restart from starting a second pass. A
+    lost marker costs one repeat pass, which is safe because re-analysis is
+    idempotent. Never stops the worker from booting. True if a pass started.
+    """
+    from app.core.queue import redis_conn
+
+    key = _APPLIED_KEY.format(ANALYSIS_VERSION)
+    try:
+        if not redis_conn.set(key, "1", nx=True):
+            return False
+    except Exception as exc:  # noqa: BLE001 - never stop the worker from booting
+        logger.warning("analysis version check failed: %s", type(exc).__name__)
+        return False
+    try:
+        queue.enqueue(
+            reanalyze_history_job,
+            None,  # cursor: start from the newest activity
+            None,  # user_id: every runner
+            settings.AUTO_REANALYZE_BATCH_SIZE,
+            job_id=f"{_REANALYZE_JOB_ID}_v{ANALYSIS_VERSION}",
+            result_ttl=batch_chain.CHAIN_RESULT_TTL,
+        )
+    except Exception as exc:  # noqa: BLE001 - never stop the worker from booting
+        # Release the marker so the next boot tries again.
+        try:
+            redis_conn.delete(key)
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning("analysis version re-analysis not queued: %s", type(exc).__name__)
+        return False
+    logger.info("analysis version %d: re-analysing every runner", ANALYSIS_VERSION)
+    return True

@@ -184,6 +184,10 @@ class Settings(BaseSettings):
     # batch can be large and the pause short.
     REANALYZE_BATCH_SIZE: int = 100
     REANALYZE_BATCH_PAUSE_SECONDS: int = 5
+    # The automatic pass after an ANALYSIS_VERSION bump covers every runner and
+    # nobody is waiting on it, so it takes smaller batches: a runner's new
+    # activity never queues long behind one on the single worker.
+    AUTO_REANALYZE_BATCH_SIZE: int = 20
 
     # Historical Strava import (#239). A self-pacing background job walks a
     # runner's Strava history backward in time, ingesting one page of activity
