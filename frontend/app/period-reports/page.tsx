@@ -6,7 +6,7 @@
 // (ActivityTypeFilter / DateRangeFilter) rather than inventing a second picker.
 
 import { useCallback, useEffect, useState } from 'react';
-import { format } from 'date-fns';
+import { format, formatDistanceToNow } from 'date-fns';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Loader2, NotebookPen } from 'lucide-react';
@@ -187,7 +187,11 @@ export default function PeriodReportsPage() {
                       )}
                     </div>
                     <span className={`text-xs font-medium whitespace-nowrap ${STATUS_CLASS[r.status] ?? ''}`}>
-                      {STATUS_LABEL[r.status] ?? r.status}
+                      {/* #974: a failed row persists, so its age is what tells
+                          a fresh failure from one left over from an old outage. */}
+                      {r.status === 'failed' && r.failed_at
+                        ? `Failed ${formatDistanceToNow(new Date(r.failed_at), { addSuffix: true })}`
+                        : STATUS_LABEL[r.status] ?? r.status}
                     </span>
                   </div>
                 </Link>

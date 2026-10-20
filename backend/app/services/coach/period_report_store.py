@@ -327,6 +327,10 @@ def mark_failed(
         **(report.meta or {}),
         "failure_reason": reason,
         "failure_kind": kind if kind in FAILURE_KINDS else FAILURE_UNKNOWN,
+        # #974: a failed row persists, so it has to say WHEN it failed. Kept in
+        # `meta` beside the reason rather than in a column of its own: it is
+        # only ever read back for display.
+        "failed_at": datetime.now(timezone.utc).isoformat(),
     }
     updated = (
         db.query(PeriodReport)
