@@ -76,7 +76,6 @@ An unbound user's notifications fall back to the global `TELEGRAM_CHAT_ID` only 
 Env vars are per Railway service, so a var set on `web` is not set on `worker`.
 Platform training-load numbers (Strava Fitness, Garmin Training Load) are validation-only and never seed our own readiness model, because they are a different unit.
 Every stored `context_pack` is re-parsed through `load_stored_pack`, and no stored pack is ever migrated or deleted.
-Postgres is on host port `5433`, Redis `6379`, backend `8000`, and frontend `3000`.
 
 ## Architecture Summary
 The backend is a FastAPI app (`app/main.py`) using SQLAlchemy 2.x on Postgres, with Alembic migrations in `backend/alembic/versions/`.
@@ -84,6 +83,7 @@ Background work runs on Redis-backed RQ through `python -m app.worker`, whose em
 The Strava integration is a port (`StravaPort`) with an HTTP adapter and an in-memory adapter for tests.
 Analysis is a pipeline in `app/services/analysis/`, where `stages.py` declares what each stage reads and writes and a contract break fails at import.
 The `DerivedMetric` upsert writes every column unconditionally, so a stage that abstains overwrites the prior value.
+A change to what analysis stores bumps `ANALYSIS_VERSION` in `services/analysis/version.py`, or old activities keep the old values, since the worker re-analyses every runner only when that number moves.
 Webhook and self-heal converge on `app/jobs/process_new_activity.py`: ingest, analyze, assign block, then dispatch to the active cadence in `app/jobs/cadence/`.
 The coach report chains `context.py`, `llm.py`, `validator.py`, `service.py`, and finally `voice_rewrite.py`.
 `service.py` caches the result in `CoachReport` and sets `is_fallback=True` on LLM failure, parse failure, or a medical overreach that survives the policy retry.
