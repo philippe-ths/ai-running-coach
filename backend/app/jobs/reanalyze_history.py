@@ -41,6 +41,7 @@ from app.models import Activity, ActivityStream
 from app.services.analysis import analyze
 from app.services.analysis.baseline import recompute_runner_baseline
 from app.services.analysis.version import ANALYSIS_VERSION
+from app.services.schedule.completion import correct_auto_credit
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,9 @@ def reanalyze_history_batch(
     for activity_id, strava_id, owner_id in items:
         try:
             analyze(db, str(activity_id), skip_baseline=True)
+            # #971: a rule change can make an old auto-tick wrong; analysis has
+            # just re-derived the evidence it is judged on, so correct it here.
+            correct_auto_credit(db, db.get(Activity, activity_id))
         except Exception as exc:  # noqa: BLE001 - convergence over completeness
             db.rollback()
             logger.error(

@@ -44,10 +44,6 @@ PRELOADED_INPUTS = frozenset(
     {
         "db",
         "activity",
-        # #830: the planned session this activity satisfies, resolved in the load
-        # phase. It is what finally feeds `_extract_planned_workout`, a
-        # placeholder that returned None from the beginning of the project.
-        "planned_session",
         # #1032: the runner's goal races on this activity's day, the witness that
         # a run was a race when the runner neither renamed nor tagged it.
         "goal_races_on_day",
@@ -67,6 +63,10 @@ SCRATCH_NAMES = frozenset(
     {
         "probed_structure",   # the interval-structure probe's raw output
         "interval_session",   # the ONE "is this an interval session" gate (#701)
+        # #830/#971: the planned session this activity satisfies. It feeds
+        # `_extract_planned_workout`, and is resolved after the gate because a
+        # rep session only matches a run the gate found reps in.
+        "planned_session",
         "history_metrics",    # prior DerivedMetric rows, for load-spike detection
     }
 )
@@ -121,10 +121,6 @@ class StageContext:
     max_hr: int
     zone_boundaries: Any
     state: DerivedMetricFields
-    # #830. Defaulted because it is absent for every runner without a schedule,
-    # and because "no plan" is the honest reading of its absence rather than a
-    # missing argument.
-    planned_session: Any = None
     # #1032. Defaulted for the same reason: no goal race on the day is the usual case.
     goal_races_on_day: Any = ()
     scratch: dict[str, Any] = field(default_factory=dict)
@@ -246,6 +242,12 @@ ANALYSIS_STAGES: tuple[Stage, ...] = (
         adapter="_stage_interval_gate",
         reads=("structure", "probed_structure"),
         writes=("interval_session", "interval_structure"),
+    ),
+    Stage(
+        name="planned_session",
+        adapter="_stage_planned_session",
+        reads=("db", "activity", "interval_session"),
+        writes=("planned_session",),
     ),
     Stage(
         name="workout_match",

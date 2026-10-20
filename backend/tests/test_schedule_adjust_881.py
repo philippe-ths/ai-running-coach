@@ -362,8 +362,15 @@ def test_the_coach_can_actually_name_a_session_to_act_on(db):
     # A run on the same day IS matched to it, which moves the session out of the
     # upcoming list and into `planned_for_this_activity`. The id has to be
     # reachable there too, or the coach can act on every session except the one
-    # the report it is writing is about.
-    matched = build_schedule_context(db, _activity("Run"))
+    # the report it is writing is about. The session is reps, so the run is
+    # one analysis found reps in (#971).
+    run = _activity("Run")
+    db.add(DerivedMetric(
+        activity_id=run.id, effort_score=0.0, confidence="high",
+        interval_structure={"summary": {"rep_count": 6}},
+    ))
+    db.commit()
+    matched = build_schedule_context(db, run)
     assert matched.planned_for_this_activity.session_id == str(session.id)
 
 

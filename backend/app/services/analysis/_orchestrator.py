@@ -47,8 +47,11 @@ _FLAGS_METRIC_READS = tuple(
     if name in {f.name for f in dataclass_fields(DerivedMetricFields)}
 )
 
-def _resolve_planned_session(db: Session, activity) -> Any:
+def _resolve_planned_session(db: Session, activity, reps_shown: bool) -> Any:
     """The planned session this activity most plausibly is, or None.
+
+    `reps_shown` is this run's interval gate, passed live because the stored
+    copy is only written once this analysis commits (#971).
 
     Imported lazily: the schedule is a higher layer than analysis, and a
     top-level import would point the dependency the wrong way for a lookup that
@@ -58,7 +61,7 @@ def _resolve_planned_session(db: Session, activity) -> Any:
     try:
         from app.services.schedule.completion import find_matching_session
 
-        return find_matching_session(db, activity)
+        return find_matching_session(db, activity, reps_shown)
     except Exception:  # noqa: BLE001 — analysis must survive a schedule fault
         logger.exception(
             "planned-session lookup failed for activity %s; analysing without a plan",
@@ -329,10 +332,24 @@ def _stage_interval_gate(ctx: StageContext) -> None:
     ctx.set("interval_structure", interval_session.structure)
 
 
+def _stage_planned_session(ctx: StageContext) -> None:
+    """Resolve the planned session this run satisfies (#830), after the interval
+    gate, because a rep session only matches a run the gate found reps in
+    (#971). The auto-tick reads the same answer once it is stored, so what
+    analysis judges this run against and what the schedule ticks stay one.
+    """
+    ctx.set(
+        "planned_session",
+        _resolve_planned_session(
+            ctx.get("db"), ctx.get("activity"), ctx.get("interval_session").is_session
+        ),
+    )
+
+
 def _stage_workout_match(ctx: StageContext) -> None:
     """Compare planned vs detected.
 
-    Live since #830: `planned_session` is resolved in the load phase, so this
+    Live since #830: `planned_session` is resolved by the stage before, so this
     stage now runs its plan-scoring path whenever the runner had a planned
     session with rep structure covering this activity. Without a schedule — or on
     a session the coach prescribed no reps for — it still runs the no-plan path
@@ -569,11 +586,6 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
     # it is subject to the same declaration as every other stage rather than
     # being a privileged constructor call. `state.to_columns()` still reproduces
     # the exact upsert dict (#701).
-    # The planned session this activity satisfies, if the runner has a schedule.
-    # Read here in the load phase alongside the check-in and the profile, so
-    # every entry point — the pipeline, a re-analysis, the backfill — resolves it
-    # the same way, and so the stage layer stays free of a service import.
-    planned_session = _resolve_planned_session(db, activity)
     goal_races_on_day = _resolve_goal_races_on_day(db, activity)
 
     state = DerivedMetricFields(effort_score=0.0)
@@ -583,7 +595,6 @@ def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optio
         history=history,
         streams_dict=streams_dict,
         check_in=check_in,
-        planned_session=planned_session,
         goal_races_on_day=goal_races_on_day,
         profile=profile,
         max_hr=max_hr,
