@@ -8,6 +8,8 @@ stored history once when that deploy boots
 
 Bumps:
 1. #1065 — zone time on the moving clock, not by counting samples.
+2. #971 — a rep session is only a run's plan when the run shows reps, and a
+   wrong auto-tick is withdrawn as each run is re-analysed.
 """
 
-ANALYSIS_VERSION = 1
+ANALYSIS_VERSION = 2

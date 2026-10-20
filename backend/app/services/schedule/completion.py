@@ -13,6 +13,10 @@ right discipline, inside the window, and a substantial fraction of what was aske
 for — and otherwise leaves the session open for the runner to tick or mention. A
 missed auto-match costs one tap; a wrong one tells the runner they did a session
 they did not do, and quietly feeds that into the plan-versus-actual read.
+
+A rep session is prescribed by its structure, so how long or far a run went
+cannot show it was one (#971). It only auto-matches a run that analysis found
+reps in: the interval gate's answer, stored on the run's `DerivedMetric`.
 """
 
 import logging
@@ -21,6 +25,7 @@ from typing import Any, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.models.derived_metric import DerivedMetric
 from app.models.planned_session import PlannedSession
 from app.services.activity_facts import local_day
 from app.services.schedule import store
@@ -50,6 +55,27 @@ def _activity_local_day(activity: Any) -> date:
     )
 
 
+def shows_reps(db: Session, activity: Any) -> bool:
+    """Whether analysis found reps in this run, as it stored them.
+
+    The interval gate (`IntervalSession`) is the one owner of that answer and
+    persists its structure as `interval_structure`. A run not yet analysed has
+    shown nothing, so it cannot claim a rep session.
+    """
+    structure = (
+        db.query(DerivedMetric.interval_structure)
+        .filter(DerivedMetric.activity_id == activity.id)
+        .scalar()
+    )
+    return structure is not None
+
+
+def _is_rep_session(session: PlannedSession) -> bool:
+    """A session prescribed as reps. Since #878 a structure can carry only a
+    warm-up and cool-down (a tempo), and that is not one."""
+    return bool((session.structure or {}).get("reps_planned"))
+
+
 def _options(session: PlannedSession) -> List[dict]:
     """The ways this slot can be filled, as dicts: the session itself first, then
     its alternatives (#1082). The index of each is its `done_option`."""
@@ -58,6 +84,7 @@ def _options(session: PlannedSession) -> List[dict]:
         "activity_type": getattr(session, "activity_type", None),
         "target_distance_m": session.target_distance_m,
         "target_duration_s": session.target_duration_s,
+        "reps": _is_rep_session(session),
     }
     alternatives = [
         alt for alt in (getattr(session, "alternatives", None) or []) if isinstance(alt, dict)
@@ -75,11 +102,11 @@ def _option_fits(option: dict, activity: Any) -> bool:
     ) and same_sport(option.get("activity_type"), activity_type)
 
 
-def _option_closeness(option: dict, activity: Any) -> float:
+def _option_closeness(option: dict, activity: Any) -> Optional[float]:
     """How well this activity fills one option, as a ratio of what was asked.
 
-    1.0 is exactly the prescription. An option with no target at all sits at 1.0
-    too: there is nothing to be far from.
+    1.0 is exactly the prescription. None when the option has no target: there
+    is nothing to measure, which is not the same as a perfect fit (#971).
     """
     if option.get("target_distance_m"):
         actual = getattr(activity, "distance_m", 0) or 0
@@ -87,26 +114,50 @@ def _option_closeness(option: dict, activity: Any) -> float:
     if option.get("target_duration_s"):
         actual = getattr(activity, "moving_time_s", 0) or 0
         return actual / option["target_duration_s"]
-    return 1.0
+    return None
 
 
-def matching_option(session: PlannedSession, activity: Any) -> Optional[int]:
-    """Which option of this slot the activity is: the one it fits that it
-    fills most exactly, or None when it fits no option."""
+def _miss(closeness: Optional[float]) -> tuple:
+    """A sort key: measured fits by how far they miss, then unmeasured ones."""
+    return (1, 0.0) if closeness is None else (0, abs(closeness - 1.0))
+
+
+def _fit_rank(option: dict, activity: Any) -> tuple:
+    """A sort key over options the activity qualifies for. Reps seen are the
+    strongest evidence a run can carry, so a rep option it qualifies for comes
+    first; then how exactly the run fills the rest."""
+    return (0 if option.get("reps") else 1, *_miss(_option_closeness(option, activity)))
+
+
+def _option_qualifies(option: dict, activity: Any, reps_shown: bool) -> bool:
+    """Whether this option could be what the activity was: its discipline, reps
+    seen when it asks for reps, and enough of it done when it can be measured."""
+    if not _option_fits(option, activity):
+        return False
+    if option.get("reps") and not reps_shown:
+        return False
+    closeness = _option_closeness(option, activity)
+    return closeness is None or closeness >= MIN_COMPLETION_FRACTION
+
+
+def matching_option(
+    session: PlannedSession, activity: Any, reps_shown: bool = False
+) -> Optional[int]:
+    """Which option of this slot the activity is: the one it qualifies for that
+    it fills most exactly, or None when it qualifies for none. `reps_shown`
+    defaults to the cautious answer: no reps seen."""
     fits = [
-        (abs(_option_closeness(option, activity) - 1.0), index)
+        (_fit_rank(option, activity), index)
         for index, option in enumerate(_options(session))
-        if _option_fits(option, activity)
+        if _option_qualifies(option, activity, reps_shown)
     ]
     return min(fits)[1] if fits else None
 
 
-def _closeness(session: PlannedSession, activity: Any) -> float:
-    """How well this activity fills the option of this slot it matches."""
-    index = matching_option(session, activity)
-    if index is None:
-        return 0.0
-    return _option_closeness(_options(session)[index], activity)
+def _fit_for(session: PlannedSession, activity: Any, reps_shown: bool) -> tuple:
+    """How well this activity fits the option of this slot it matches."""
+    index = matching_option(session, activity, reps_shown)
+    return _fit_rank(_options(session)[index], activity)
 
 
 def open_sessions_for(db: Session, activity: Any) -> List[PlannedSession]:
@@ -148,7 +199,9 @@ def credited_session(db: Session, activity: Any) -> Optional[PlannedSession]:
     )
 
 
-def find_matching_session(db: Session, activity: Any) -> Optional[PlannedSession]:
+def find_matching_session(
+    db: Session, activity: Any, reps_shown: Optional[bool] = None
+) -> Optional[PlannedSession]:
     """The planned session this activity most plausibly IS, or None.
 
     Read-only. `analyze` calls this to hand the interval matcher a plan, and the
@@ -164,26 +217,41 @@ def find_matching_session(db: Session, activity: Any) -> Optional[PlannedSession
     tap, the intent write, the stream backfill and the bulk re-analysis), so
     without this the runner tapping RPE on their notification would quietly erase
     the plan-versus-execution disagreement.
+
+    An AUTO credit wins only while it still qualifies (#971): one the matcher
+    should never have made is not this run's plan. A tap or a confirmed
+    conversation always wins; the runner said they did it.
+
+    `reps_shown` is the interval gate's answer. Analysis passes it live, since
+    it runs before the answer is stored; every other caller reads it stored.
     """
+    if reps_shown is None:
+        reps_shown = shows_reps(db, activity)
+
     credited = credited_session(db, activity)
-    if credited is not None:
+    if credited is not None and (
+        credited.completion_source != AUTO
+        or matching_option(credited, activity, reps_shown) is not None
+    ):
         return credited
 
     candidates = [
         session
         for session in open_sessions_for(db, activity)
-        if _closeness(session, activity) >= MIN_COMPLETION_FRACTION
+        if matching_option(session, activity, reps_shown) is not None
     ]
     if not candidates:
         return None
 
     def _rank(session: PlannedSession):
-        # A commitment outranks a suggestion; then whichever the activity fills
-        # most exactly; then the tightest window, since a session the coach
-        # placed narrowly is the more specific claim on this day.
+        # A commitment outranks a suggestion; then a rep session the run showed
+        # reps for; then whichever the activity fills most exactly, a session
+        # with nothing to measure after any that can be; then the tightest
+        # window, since a session the coach placed narrowly is the more specific
+        # claim on this day.
         return (
             0 if session.commitment == "committed" else 1,
-            abs(_closeness(session, activity) - 1.0),
+            _fit_for(session, activity, reps_shown),
             (session.window_end - session.window_start).days,
         )
 
@@ -206,7 +274,7 @@ def complete_planned_session(
     # #1082: which option filled the slot. Given by the runner's tap, or read off
     # the activity; a tap that names none is the session itself.
     if option is None and activity is not None:
-        option = matching_option(session, activity)
+        option = matching_option(session, activity, shows_reps(db, activity))
     session.done_option = option if option is not None else 0
     # Finishing something settles it; a suggestion the runner acted on is no
     # longer a suggestion they might dismiss.
@@ -251,11 +319,14 @@ def complete_from_activity(db: Session, activity: Any) -> Optional[PlannedSessio
     """Auto-tick whatever this synced activity satisfies, if anything.
 
     Idempotent: an activity already credited to a session cannot tick a second
-    one, so a re-analysis or a replayed webhook changes nothing.
+    one, so a re-analysis or a replayed webhook changes nothing. The exception
+    is an auto credit that no longer qualifies, which is withdrawn first.
     """
     already = credited_session(db, activity)
     if already is not None:
-        return already
+        if not _unfounded_auto_credit(db, activity, already):
+            return already
+        clear_completion(db, already)
 
     session = find_matching_session(db, activity)
     if session is None:
@@ -288,3 +359,33 @@ def clear_completions_for_activity(db: Session, activity: Any) -> int:
     for session in sessions:
         clear_completion(db, session)
     return len(sessions)
+
+
+def _unfounded_auto_credit(
+    db: Session, activity: Any, credited: PlannedSession
+) -> bool:
+    """An auto credit the matcher would not make today. Never a tap or a
+    conversation: those are the runner's word, not the matcher's guess."""
+    return (
+        credited.completion_source == AUTO
+        and matching_option(credited, activity, shows_reps(db, activity)) is None
+    )
+
+
+def correct_auto_credit(db: Session, activity: Any) -> Optional[PlannedSession]:
+    """Withdraw this activity's auto credit if it no longer qualifies, and give
+    the run to the session it does match, if any (#971).
+
+    For re-analysis, which corrects old ticks once the rules change. It acts
+    only on a wrong auto credit, so it never ticks anything for a run that was
+    not credited, and never touches a session the runner ticked or unticked.
+    """
+    credited = credited_session(db, activity)
+    if credited is None or not _unfounded_auto_credit(db, activity, credited):
+        return None
+    logger.info(
+        "schedule: activity %s no longer completes planned session %s",
+        activity.id,
+        credited.id,
+    )
+    return complete_from_activity(db, activity)

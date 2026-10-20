@@ -27,7 +27,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.config import settings
-from app.models import Activity, User, UserProfile
+from app.models import Activity, DerivedMetric, User, UserProfile
 from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
 from app.services.schedule.coach_view import build_schedule_context
@@ -125,6 +125,12 @@ def test_the_coach_learns_what_this_run_was_meant_to_be(db):
         detail="5k effort",
     )
     activity = _seed_activity(db, user)
+    # A rep session is only this run's plan when analysis found reps in it (#971).
+    db.add(DerivedMetric(
+        activity_id=activity.id, effort_score=0.0, confidence="high",
+        interval_structure={"summary": {"rep_count": 6}},
+    ))
+    db.commit()
 
     section = build_schedule_context(db, activity)
 

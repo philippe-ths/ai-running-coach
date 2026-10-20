@@ -620,7 +620,7 @@ def test_analysis_survives_a_schedule_that_cannot_answer(db):
         raise RuntimeError("the schedule is down")
 
     with patch.object(completion, "find_matching_session", _boom):
-        assert _orchestrator._resolve_planned_session(db, activity) is None
+        assert _orchestrator._resolve_planned_session(db, activity, False) is None
 
 
 def test_a_reanalysis_after_the_auto_tick_keeps_the_plan_it_was_judged_against(
@@ -712,10 +712,12 @@ def test_the_planned_session_resolved_for_analysis_is_the_matched_one(db):
     )
     run = _seed_activity(db, user, distance_m=10000)
 
-    resolved = _orchestrator._resolve_planned_session(db, run)
+    resolved = _orchestrator._resolve_planned_session(db, run, reps_shown=True)
 
     assert resolved == session
     assert _orchestrator._extract_planned_workout(resolved) == session.structure
+    # #971: without reps seen, the same run is not this rep session's.
+    assert _orchestrator._resolve_planned_session(db, run, reps_shown=False) is None
 
 
 # --- the conversational route in -------------------------------------------

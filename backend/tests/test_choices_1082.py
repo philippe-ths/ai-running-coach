@@ -122,8 +122,8 @@ def test_a_ride_ticks_the_slot_as_its_bike_option(db):
     _, session = _choice_session(db)
     ride = SimpleNamespace(id=None, type="Ride", distance_m=20000, moving_time_s=3500)
 
+    # `matching_option` only names an option the ride clears the floor for.
     assert completion.matching_option(session, ride) == 1
-    assert completion._closeness(session, ride) >= completion.MIN_COMPLETION_FRACTION
 
     completion.complete_planned_session(db, session, source=completion.AUTO, activity=ride)
     assert session.done_option == 1
