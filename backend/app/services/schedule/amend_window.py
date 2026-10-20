@@ -42,17 +42,6 @@ def resolve_window(
     return first, last_start + timedelta(days=6)
 
 
-def _weeks_in(start: date, end: date, starts_on: int) -> List[date]:
-    """Every week the window covers, by its start date."""
-    weeks: List[date] = []
-    cursor = week_start(start, starts_on)
-    last = week_start(end, starts_on)
-    while cursor <= last:
-        weeks.append(cursor)
-        cursor = cursor + timedelta(days=7)
-    return weeks
-
-
 def sessions_in_window(
     db: Session, user_id, plan: TrainingPlan, start: date, end: date
 ) -> List[PlannedSession]:
