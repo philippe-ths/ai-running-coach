@@ -39,6 +39,10 @@ export type DraftWatch = {
   drafting: boolean;
   /** The most recent draft failed and nothing was written. */
   failed: boolean;
+  /** The watch gave up on a draft still reading as in progress (#1048): polls
+   *  kept failing, or it ran past the cap. Not an outcome, so a surface must
+   *  stop saying the plan is being written rather than say it failed. */
+  lost: boolean;
   /** This hook is following a draft it was told about, rather than reporting
    *  whatever it found. A surface that should only speak about a plan the runner
    *  asked for in front of it gates on this. */
@@ -68,6 +72,7 @@ export function useDraftStatus(
   const [draft, setDraft] = useState<DraftStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [watching, setWatching] = useState(false);
+  const [lost, setLost] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const polls = useRef(0);
@@ -96,6 +101,7 @@ export function useDraftStatus(
         timer.current = setTimeout(poll, POLL_INTERVAL_MS);
         return;
       }
+      if (data?.status === "drafting") setLost(true);
       if (data?.status === "active" && (sawDrafting.current || isWatching.current)) {
         sawDrafting.current = false;
         ready.current?.();
@@ -111,6 +117,10 @@ export function useDraftStatus(
       if (errors.current < MAX_CONSECUTIVE_ERRORS && polls.current < MAX_POLLS) {
         polls.current += 1;
         timer.current = setTimeout(poll, POLL_INTERVAL_MS);
+      } else {
+        // Giving up leaves the last answer on screen, which for a draft in
+        // flight is "being written", for ever. Say the watch ended instead.
+        setLost(true);
       }
     }
   }, []);
@@ -122,6 +132,7 @@ export function useDraftStatus(
     sawDrafting.current = false;
     isWatching.current = true;
     setWatching(true);
+    setLost(false);
     void poll();
   }, [poll]);
 
@@ -159,6 +170,7 @@ export function useDraftStatus(
     draft,
     drafting,
     failed: draft?.status === "failed",
+    lost,
     watching,
     start,
     watch,

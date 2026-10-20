@@ -229,16 +229,32 @@ export default function CoachSheet() {
   // failure from days ago to someone who never asked for a plan, which is a
   // different thing from telling the runner what happened to the one they just
   // confirmed. It speaks only about a draft it was told to watch.
+  //
+  // #1048: the job writes the outcome into the thread it was confirmed in (the
+  // ledger line on success, the coach's note on failure), so landing either way
+  // re-reads the thread. Before, a failure left the confirmed card as the
+  // conversation's last word.
   const {
     drafting: draftWriting,
     failed: draftFailed,
+    lost: draftLost,
     watching: draftWatching,
     draft,
     watch: watchDraft,
   } = useDraftStatus(
-    useCallback(() => router.refresh(), [router]),
+    useCallback(() => {
+      const id = currentThreadRef.current;
+      if (id) void openThreadRef.current?.(id);
+      router.refresh();
+    }, [router]),
     { pollOnMount: false },
   );
+  const draftFailedHere = draftFailed && draftWatching;
+  useEffect(() => {
+    if (!draftFailedHere) return;
+    const id = currentThreadRef.current;
+    if (id) void openThreadRef.current?.(id);
+  }, [draftFailedHere]);
 
   // #1003: an amendment is written on the worker like a draft, and the runner
   // was told nothing when it landed. The job writes the coach's own note into
@@ -529,18 +545,25 @@ export default function CoachSheet() {
       // promise meant the session showed the agreed change while the record held
       // a different one, and the correction surfaced only if the thread was
       // reopened — somewhere the runner had no reason to look.
-      const confirmed = [proposedAction.description, ...(result?.changes ?? [])]
-        .join(' | ')
-        .trim();
-      setMessages(prev => [
-        ...prev,
-        {
-          id: `event-${proposedAction.token}`,
-          role: 'event',
-          content: confirmed,
-          created_at: new Date().toISOString(),
-        },
-      ]);
+      //
+      // Not for a plan (#1048). The server records a draft's line only once the
+      // plan exists, so a check drawn here at the tap stood in the conversation
+      // as done while the draft failed on the worker. Re-reading the thread
+      // when the draft lands brings the real line in when there is one.
+      if (kind !== 'draft_plan') {
+        const confirmed = [proposedAction.description, ...(result?.changes ?? [])]
+          .join(' | ')
+          .trim();
+        setMessages(prev => [
+          ...prev,
+          {
+            id: `event-${proposedAction.token}`,
+            role: 'event',
+            content: confirmed,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
       setProposedAction(null);
       // The change itself lands on the runner's record, so refresh the screen
       // behind the sheet too.
@@ -848,8 +871,14 @@ export default function CoachSheet() {
                 request answers, so its own state SUPERSEDES the line the confirm
                 left behind rather than sitting under it (#879). Two lines, one
                 promising and one reporting, is how the runner ended up believing
-                a failed plan was in. The message is the server's, verbatim. */}
-            {(draftWriting || (draftFailed && draftWatching)) && !proposedAction ? (
+                a failed plan was in. While writing, the message is the server's,
+                verbatim. A failure's full sentence is the coach's note in the
+                thread (#1048), so this line only names it and offers the retry,
+                which goes back through the conversation the plan was agreed in:
+                the draft reads that conversation, so a bare re-draft could write
+                a different plan. A watch that gave up says so rather than
+                leaving "being written" up for ever. */}
+            {draftWatching && (draftWriting || draftFailed || draftLost) && !proposedAction ? (
               <div
                 role="status"
                 aria-live="polite"
@@ -859,10 +888,29 @@ export default function CoachSheet() {
                     : 'border-gray-200 text-gray-500 dark:border-gray-700 dark:text-gray-400'
                 }`}
               >
-                {draftWriting && (
+                {draftWriting && !draftLost && (
                   <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" aria-hidden="true" />
                 )}
-                <span>{draft?.message}</span>
+                {draftFailed ? (
+                  <div className="space-y-1.5">
+                    <span className="block">Your plan was not written. Nothing has changed.</span>
+                    <button
+                      type="button"
+                      onClick={() => void sendMessage('That plan did not save. Can you try again?')}
+                      disabled={streaming}
+                      className="rounded-lg border border-amber-300 px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/30"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                ) : draftLost ? (
+                  <span>
+                    I lost track of your plan while it was being written. Your Schedule
+                    screen will show it if it landed.
+                  </span>
+                ) : (
+                  <span>{draft?.message}</span>
+                )}
               </div>
             ) : (
               actionDone &&

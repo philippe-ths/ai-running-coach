@@ -300,7 +300,7 @@ def test_a_plan_that_ramped_too_hard_says_so_and_names_the_next_move(db, client)
 
 
 def _generic_failure_message() -> str:
-    from app.api.schedule import _DRAFT_FAILURE_MESSAGES
+    from app.services.schedule.draft_messages import DRAFT_FAILURE_MESSAGES as _DRAFT_FAILURE_MESSAGES
 
     return _DRAFT_FAILURE_MESSAGES[store.FAILURE_UNKNOWN]
 
@@ -309,7 +309,7 @@ def test_every_category_the_writer_can_store_has_a_sentence_of_its_own(db, clien
     """A category with no message is a lookup miss, which would serve the generic
     sentence and quietly undo the fix. The vocabulary is closed precisely so this
     can be checked."""
-    from app.api.schedule import _DRAFT_FAILURE_MESSAGES
+    from app.services.schedule.draft_messages import DRAFT_FAILURE_MESSAGES as _DRAFT_FAILURE_MESSAGES
 
     assert set(_DRAFT_FAILURE_MESSAGES) == set(store.FAILURE_KINDS)
     # And no two categories share wording, or the distinction buys nothing.

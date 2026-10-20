@@ -46,6 +46,7 @@ from app.services.activity_facts import query_facts
 from app.services.schedule import amend_watch, challenge, completion, season_store, store
 from app.services.schedule.season import enqueue_season
 from app.services.schedule.draft import enqueue_draft
+from app.services.schedule.draft_messages import failure_message
 from app.services.schedule.horizon import (
     DEFAULT_HORIZON_WEEKS,
     MAX_HORIZON_WEEKS,
@@ -108,63 +109,12 @@ def read_horizon(
     return build_horizon(db, user, weeks=weeks)
 
 
-# One sentence per failure CATEGORY (#859). A draft can fail for reasons the
-# runner has genuinely different moves for, and until now all of them arrived as
-# the same sentence: someone whose coach had ramped too hard was told to "ask
-# again", which produces the same plan and the same rejection.
-#
-# What each sentence is held to: it says what happened in the runner's own terms,
-# it names the move available to them, it states that nothing they had has
-# changed, and it carries none of the gate's machinery. The category is chosen in
-# `draft.py` where the failure is known; nothing internal ever travels here.
-_DRAFT_FAILURE_MESSAGES = {
-    store.FAILURE_TOO_BIG_A_JUMP: (
-        "Your coach wrote a block that climbs much faster than your recent weeks, "
-        "so it was not saved. Nothing has changed — ask again for a gentler "
-        "build, or talk it through and have the same block spread over more weeks."
-    ),
-    store.FAILURE_UNREACHABLE: (
-        "Your coach could not be reached, so no plan was written. Nothing has "
-        "changed — try again in a few minutes."
-    ),
-    store.FAILURE_OVER_BUDGET: (
-        "You have used this period's coaching allowance, so no plan was written. "
-        "Nothing has changed — your runs still sync and your reports still "
-        "arrive. Ask again once the allowance resets."
-    ),
-    store.FAILURE_SEASON: (
-        "Your coach could not settle a season that held together, so no plan was "
-        "written. Nothing has changed: ask again, or talk it through in a "
-        "conversation."
-    ),
-    # The fallback, and the sentence every failure used to get. No "just now"
-    # (#879). This is read at the moment of failure and for as long afterwards as
-    # the runner has not asked for another plan, which can be days: only the
-    # empty-week panel used to show it, and only to someone sitting there
-    # watching. Now it is on the Schedule screen of anyone whose last attempt
-    # failed, so it has to stay true when it is no longer news.
-    store.FAILURE_UNKNOWN: (
-        "Your coach could not write a plan. Nothing has changed — ask again, or "
-        "talk it through in a conversation."
-    ),
-}
-
 _DRAFT_MESSAGES = {
     "drafting": "Your coach is planning your season and writing your weeks. This usually takes a few minutes.",
     "active": "Your plan is ready.",
     "superseded": "This plan has been replaced by a newer one.",
-    "failed": _DRAFT_FAILURE_MESSAGES[store.FAILURE_UNKNOWN],
+    "failed": failure_message(None),
 }
-
-
-def _failure_message(plan) -> str:
-    """The sentence for THIS failure. Falls back for a row with no category —
-    every plan that failed before the column existed, and any category a future
-    writer adds without a sentence to go with it."""
-    return _DRAFT_FAILURE_MESSAGES.get(
-        getattr(plan, "failure_kind", None) or store.FAILURE_UNKNOWN,
-        _DRAFT_FAILURE_MESSAGES[store.FAILURE_UNKNOWN],
-    )
 
 
 def _draft_status(plan) -> DraftStatusRead:
@@ -179,7 +129,7 @@ def _draft_status(plan) -> DraftStatusRead:
     # which sentence, and `DraftStatusRead` deliberately gains no reason field,
     # so there is no second channel a client could render raw.
     if plan.status == store.FAILED:
-        message = _failure_message(plan)
+        message = failure_message(getattr(plan, "failure_kind", None))
     else:
         message = _DRAFT_MESSAGES.get(plan.status, "You have no plan yet.")
     return DraftStatusRead(
