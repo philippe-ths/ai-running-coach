@@ -112,12 +112,12 @@ def _zone_number(key: Any) -> Optional[int]:
 def zone_seconds(fact: Any) -> Dict[int, float]:
     """One activity's time in each heart-rate zone, in seconds of MOVING time.
 
-    The stored `time_in_zones` counts heart-rate SAMPLES, which equal seconds
-    only for a 1 s recording. A watch on smart recording logs a walk or a ride
-    about every 4 s, so its stored figures run about 4x short. Each zone's share
-    of the samples is spread over the activity's moving time instead, so a walk
-    and a run are measured on the same clock. Empty when there is no heart-rate
-    data: that time is never guessed.
+    A row analysed before #1065 stores heart-rate SAMPLE counts, which equal
+    seconds only for a 1 s recording, so a smart-recorded walk or ride runs about
+    4x short. Analysis now stores seconds of moving time, but each zone's share
+    is still spread over the moving time here, so a row of either age reads on
+    the same clock. Empty when there is no heart-rate data: that time is never
+    guessed.
     """
     counts = {}
     for key, value in (getattr(fact, "time_in_zones", None) or {}).items():
