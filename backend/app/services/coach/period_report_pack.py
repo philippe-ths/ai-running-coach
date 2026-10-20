@@ -93,6 +93,14 @@ class PeriodReportPack(BaseModel):
         return int(self.totals.get("sessions", 0)) == 0
 
 
+def _running_only(norm: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The thread baseline's norm, running keys only. It also carries the weekly
+    hours limit across every activity (#1047), which this report states under a
+    RUNNING heading, where hours would read as running time."""
+    running = {k: v for k, v in (norm or {}).items() if "running" in k}
+    return running or None
+
+
 def build_period_report_pack(
     db: Session,
     user: User,
@@ -160,7 +168,7 @@ def build_period_report_pack(
         memory=baseline.get("memory"),
         readiness=baseline.get("readiness"),
         schedule=baseline.get("schedule"),
-        running_norm=baseline.get("running_norm"),
+        running_norm=_running_only(baseline.get("running_norm")),
         totals=_totals(facts),
         by_type=_by_type(facts),
         sessions=sessions,

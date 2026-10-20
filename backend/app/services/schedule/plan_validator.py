@@ -27,6 +27,7 @@ no schedule, because the runner would act on it. So the draft is retried once
 with the failures fed back, and then abandoned visibly.
 """
 
+import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
@@ -104,6 +105,13 @@ def hours_ceilings(norm_weekly_s: Optional[float]) -> Optional[tuple]:
     if not norm_weekly_s:
         return None
     return (norm_weekly_s * MAX_WEEKLY_MULTIPLE, norm_weekly_s * MAX_SKETCH_MULTIPLE)
+
+
+def stated_hours(seconds: float) -> float:
+    """A time limit as told to a coach: hours, rounded DOWN to a tenth, so a week
+    under the stated limit always passes the gate (#1047). The drafting context
+    and the conversation both say it through here."""
+    return math.floor(seconds / 360) / 10
 
 
 def _hours(seconds: float) -> str:
