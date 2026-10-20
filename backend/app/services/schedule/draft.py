@@ -78,7 +78,7 @@ from app.services.schedule.runner_rules import runner_rules
 from app.services.schedule.run_log import attempt_cost, output_failure
 from app.services.weeks import resolve_week_start, week_start
 
-# Re-imported so everything importable from this module still is (#1100).
+# Re-imported so every name other modules and tests import from here still resolves (#1100).
 from app.services.schedule.draft_facts import (
     _conversation_block,
     _memory_lines,
