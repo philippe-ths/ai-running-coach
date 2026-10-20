@@ -365,13 +365,28 @@ def _render_authority_tiering(
 # than an isolated per-activity thread. Bounded by turn count + per-message
 # truncation so the injected history cannot grow unbounded as it accumulates
 # (~8 turns x 240 chars ≈ 500 tokens, the key discipline).
-# What the coach said when it could not answer: a safe redirect or a stream
-# error. Neither is conversation, so neither threads forward as continuity —
+# What a turn stores when generation failed (#625). The row is kept so the runner
+# still sees the failure in the transcript and on reload, but it is not something
+# the coach said, so no reader sends it to the model as conversation (#936).
+STREAM_FAIL_MESSAGE = "Sorry, I encountered an error. Please try again."
+RATE_LIMITED_FAIL_MESSAGE = (
+    "I'm getting a lot of requests right now, so I couldn't finish that "
+    "reply. Give me a moment and try again — your message is saved."
+)
+_TURN_FAILURE_MESSAGES = {STREAM_FAIL_MESSAGE, RATE_LIMITED_FAIL_MESSAGE}
+
+# What the coach said when it could not answer: a safe redirect or a failed
+# turn. Neither is conversation, so neither threads forward as continuity —
 # otherwise the coach echoes its own failure back at the runner as memory.
-_CONTINUITY_NOISE = {
-    MEDICAL_REDIRECT_MESSAGE,
-    "Sorry, I encountered an error. Please try again.",
-}
+_CONTINUITY_NOISE = {MEDICAL_REDIRECT_MESSAGE, *_TURN_FAILURE_MESSAGES}
+
+
+def is_failed_turn(msg: CoachChatMessage) -> bool:
+    """A stored failure, not a reply: shown to the runner, never sent to the model."""
+    return (
+        msg.role == "assistant"
+        and (msg.content or "").strip() in _TURN_FAILURE_MESSAGES
+    )
 
 
 def _is_noise_message(msg: CoachChatMessage) -> bool:
@@ -426,7 +441,7 @@ async def _buffered_tool_loop(
     assistant_text = None
     stream_failed = False
     # The message served if the stream fails; the except may specialise it (#625).
-    stream_fail_message = "Sorry, I encountered an error. Please try again."
+    stream_fail_message = STREAM_FAIL_MESSAGE
     # #664: ordered, one-record-per-CALL trace of WHAT each tool fetched (tool name,
     # friendly label, resolved window, result count), persisted for the UI's
     # "looked up …" trace. NOT de-duped by name, so a multi-window turn shows every
@@ -671,10 +686,7 @@ async def _buffered_tool_loop(
         )
         stream_failed = True
         stream_fail_message = (
-            "I'm getting a lot of requests right now, so I couldn't finish that "
-            "reply. Give me a moment and try again — your message is saved."
-            if rate_limited
-            else "Sorry, I encountered an error. Please try again."
+            RATE_LIMITED_FAIL_MESSAGE if rate_limited else STREAM_FAIL_MESSAGE
         )
 
     out["assistant_text"] = assistant_text

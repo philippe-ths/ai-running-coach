@@ -36,6 +36,7 @@ from app.services.coach.chat import (
     _render_authority_tiering,
     _slice_for_stream,
     _validate_conversational_text,
+    is_failed_turn,
     sessions_in_play_from_tool_results,
 )
 from app.services.coach import max_hr_calibration
@@ -543,6 +544,26 @@ def build_thread_system_prompt(
     )
 
 
+def _llm_history(db: Session, thread: Thread) -> List[dict]:
+    """The thread's own turns as the model is sent them, oldest first.
+
+    Only what was SAID becomes a turn. An action event (#778) is the app's own
+    record of a confirmed change, so it reaches the model through the ledger in
+    the system prompt, where it can be labelled for what it is, and never as a
+    message that would read as the runner's words or the coach's. A failed turn
+    (#936) stays in the transcript for the runner but is not the coach speaking,
+    so a retry does not hand the model its own error as a prior reply. The
+    medical redirect is NOT dropped here, unlike the cross-thread digest: in its
+    own thread the coach must see that it already declined.
+    """
+    history = [
+        row
+        for row in thread_service.thread_messages(db, thread)
+        if row.role in thread_service.CONVERSATIONAL_ROLES and not is_failed_turn(row)
+    ][-_MAX_LLM_HISTORY_TURNS:]
+    return [{"role": row.role, "content": row.content} for row in history]
+
+
 async def stream_thread_turn(
     db: Session,
     user: User,
@@ -610,16 +631,7 @@ async def stream_thread_turn(
     )
     system_prompt = build_thread_system_prompt(db, user, thread, screen_view)
 
-    # Only what was SAID becomes a turn. An action event (#778) is the app's own
-    # record of a confirmed change, so it reaches the model through the ledger in
-    # the system prompt, where it can be labelled for what it is, and never as a
-    # message that would read as the runner's words or the coach's.
-    history = [
-        row
-        for row in thread_service.thread_messages(db, thread)
-        if row.role in thread_service.CONVERSATIONAL_ROLES
-    ][-_MAX_LLM_HISTORY_TURNS:]
-    llm_messages = [{"role": row.role, "content": row.content} for row in history]
+    llm_messages = _llm_history(db, thread)
 
     client = build_client(TurnKind.THREAD, user.id)
 
