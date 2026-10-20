@@ -18,6 +18,7 @@ from app.db.session import SessionLocal
 from app.models.user import User
 from app.services.schedule import season_store, store
 from app.services.schedule.draft import draft_plan
+from app.services.schedule.draft_messages import failure_message
 from app.services.schedule.season import generate_season
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ def generate_schedule_job(
         # while the coach plans the season and then the weeks.
         season_failure = asyncio.run(_ensure_season(db, user, thread_id))
         if season_failure is not None:
+            _say_it_failed(db, thread_id, season_failure[1])
             store.fail_plan(db, plan, season_failure[0], kind=season_failure[1])
             return
 
@@ -81,6 +83,7 @@ def generate_schedule_job(
             logger.info("schedule draft: plan %s is now active", plan.id)
             _record_in_thread(db, thread_id, description)
         else:
+            _say_it_failed(db, thread_id, outcome.failure_kind)
             store.fail_plan(
                 db,
                 plan,
@@ -100,6 +103,7 @@ def generate_schedule_job(
                 .first()
             )
             if plan is not None and plan.status == store.DRAFTING:
+                _say_it_failed(db, thread_id, store.FAILURE_UNKNOWN)
                 store.fail_plan(
                     db,
                     plan,
@@ -155,6 +159,28 @@ async def _ensure_season(db, user, thread_id) -> tuple | None:
         outcome.message or "the season could not be planned",
         _SEASON_FAILURE_KIND.get(outcome.message, store.FAILURE_SEASON),
     )
+
+
+def _say_it_failed(db, thread_id, kind: str | None) -> None:
+    """Tell the runner the plan they confirmed was not written, in the thread
+    they confirmed it in (#1048), the amendment's `_say_it_failed` precedent.
+
+    Without it the conversation's last word was the card they confirmed, and a
+    reload showed nothing saying the plan never arrived. The sentence is the one
+    the draft status serves, so the two never disagree, and carries none of the
+    gate's machinery. Called BEFORE the plan is marked failed, so a sheet that
+    re-reads the thread on seeing the failure finds the note already there.
+    Fail-soft: a note that cannot be written never stops the plan failing.
+    """
+    if not thread_id:
+        return
+    note = "That plan did not make it into your schedule. " + failure_message(kind)
+    try:
+        from app.services.coach import threads as thread_service
+
+        thread_service.record_coach_note(db, thread_id, note)
+    except Exception:  # noqa: BLE001 - the note is the consolation, not the work
+        logger.exception("schedule draft: failure note not written to %s", thread_id)
 
 
 def _record_in_thread(db, thread_id, description: str | None) -> None:
