@@ -7,9 +7,17 @@ def calculate_time_in_zones(
     streams: Dict[str, List[any]],
     max_hr: int = 190,
     zone_boundaries: Optional[List[int]] = None,
+    moving_time_s: Optional[float] = None,
 ) -> Optional[Dict[str, int]]:
     """
     Calculates time spent in 5 heart rate zones.
+
+    With ``moving_time_s``, each zone's share of the heart-rate samples is spread
+    over the moving time (#1065). Samples equal seconds only for a 1 s recording;
+    a watch on smart recording logs a walk or ride about every 4 s, so a raw count
+    ran about 4x short. The share is of EVERY sample, dropouts and below-zone
+    readings included, so that time stays outside the zones as it did before.
+    Without it, the result is sample counts.
 
     When ``zone_boundaries`` is supplied (the runner's own 5 ascending HR-zone
     lower bounds in bpm, e.g. from their Strava athlete zones), readings are
@@ -46,14 +54,10 @@ def calculate_time_in_zones(
         hist, _ = np.histogram(hr_arr, bins=bins)
         for i in range(5):
             zones[f"Z{i + 1}"] = int(hist[i])
-        return zones
+        return _on_moving_clock(zones, len(hr_list), moving_time_s)
 
     # Fallback: generic %-of-max-HR thresholds.
     t = [0.5 * max_hr, 0.6 * max_hr, 0.7 * max_hr, 0.8 * max_hr, 0.9 * max_hr]
-
-    # Binning
-    # Counts of HR readings (assuming 1 reading = 1 second for 'time' stream usually.
-    # Ideally should use the 'time' stream deltas, but simple count is close enough for MVP.
 
     # Optimized numpy binning
     # bins: [0, t0, t1, t2, t3, t4, max_possible]
@@ -69,7 +73,18 @@ def calculate_time_in_zones(
     zones["Z4"] = int(hist[4])
     zones["Z5"] = int(hist[5])
 
-    return zones
+    return _on_moving_clock(zones, len(hr_list), moving_time_s)
+
+
+def _on_moving_clock(
+    counts: Dict[str, int], samples: int, moving_time_s: Optional[float]
+) -> Dict[str, int]:
+    """Sample counts as seconds of moving time, or the counts when there is no
+    moving time to spread them over."""
+    if not moving_time_s or moving_time_s <= 0 or samples <= 0:
+        return counts
+    per_sample = moving_time_s / samples
+    return {zone: int(round(count * per_sample)) for zone, count in counts.items()}
 
 def calculate_pace_variability(streams: Dict[str, List[any]]) -> Optional[float]:
     """
@@ -324,7 +339,10 @@ def compute_derived_metrics_data(
         effective_max = max_hr if max_hr and max_hr > 150 else 190
 
         zones = calculate_time_in_zones(
-            streams_dict, effective_max, zone_boundaries=zone_boundaries
+            streams_dict,
+            effective_max,
+            zone_boundaries=zone_boundaries,
+            moving_time_s=activity.moving_time_s,
         )
 
     # Training-load primitive (#186): comparable zone-minutes across HR/no-HR.
