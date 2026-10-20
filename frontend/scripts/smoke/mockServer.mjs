@@ -279,4 +279,4 @@ function sendJson(res, statusCode, body) {
   res.end(JSON.stringify(body));
 }
 
-export { createMockApiServer, sendJson };
+export { createMockApiServer };
