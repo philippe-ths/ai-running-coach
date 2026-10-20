@@ -25,6 +25,7 @@ from app.services.weeks import (
     week_start,
 )
 
+
 def resolve_window(
     today: date, starts_on: int, *, weeks_from: int, weeks_through: int
 ) -> tuple:

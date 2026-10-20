@@ -20,10 +20,10 @@ from app.services.schedule.amend_contract import SUMMARY_MAX_CHARS, AmendedPlan
 from app.services.schedule.amend_window import _is_replaceable, sessions_in_window
 from app.services.schedule.effort import estimate_effort
 from app.services.schedule.week_check import says_week
-from app.services.weeks import week_start
 
 # Named for `amend` so the moved `_apply` log line keeps its logger (#1098).
 logger = logging.getLogger("app.services.schedule.amend")
+
 
 def _restate_shortfalls(
     plan: TrainingPlan, rewritten: List[date], shortfalls: Sequence[str]

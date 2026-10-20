@@ -52,7 +52,7 @@ from app.services.schedule.runner_rules import with_runner_rules
 from app.services.weeks import resolve_week_start, week_start
 
 # The amendment's pieces live in sibling modules; they are imported here so every
-# name that was importable from this module still is (#1098).
+# name other modules and tests import from here still resolves (#1098).
 from app.services.schedule.amend_contract import (  # noqa: F401
     MAX_AMEND_WEEKS,
     RECORD_AMENDMENT_TOOL,
