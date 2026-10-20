@@ -74,6 +74,9 @@ class PeriodReportRead(BaseModel):
     generated_at: Optional[datetime] = None
     created_at: datetime
     report: Optional[PeriodReportContent] = None
+    # #974: when a failed report failed, so a runner can tell a fresh failure
+    # from one left over from an outage long since fixed. Null unless failed.
+    failed_at: Optional[datetime] = None
     # Runner-facing, mirroring the schedule draft's `DraftStatusRead.message`:
     # what is happening or what went wrong, in the runner's own terms, never the
     # gate's internal failure text.
@@ -90,6 +93,8 @@ class PeriodReportListItem(BaseModel):
     status: PeriodReportStatus
     generated_at: Optional[datetime] = None
     created_at: datetime
+    # #974: as on the read, so the list itself separates old failures from new.
+    failed_at: Optional[datetime] = None
     # A short lead-in for the list row — the report's own headline, or the first
     # line of its message, so the list reads like a list of reports rather than
     # a list of dates.

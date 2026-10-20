@@ -14,7 +14,8 @@ timeout. `GET /{id}` is the status poll the client reads until the row leaves
 """
 
 import logging
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -51,10 +52,13 @@ router = APIRouter(
     dependencies=[Depends(require_period_report_enabled)],
 )
 
+# Each sentence has to stay true for as long as the failed row is shown, which
+# can be weeks (#974): the screen says when it failed, so no sentence may say
+# "just now" or "in a few minutes" (the plan draft's #879 rule).
 _FAILURE_MESSAGES = {
     store.FAILURE_UNREACHABLE: (
         "Your coach could not be reached, so no report was written. Nothing has "
-        "changed — try again in a few minutes."
+        "changed — ask again."
     ),
     store.FAILURE_OVER_BUDGET: (
         "You have used this period's coaching allowance, so no report was "
@@ -79,6 +83,21 @@ _STATUS_MESSAGES = {
 def _failure_message(report) -> str:
     kind = (report.meta or {}).get("failure_kind") or store.FAILURE_UNKNOWN
     return _FAILURE_MESSAGES.get(kind, _FAILURE_MESSAGES[store.FAILURE_UNKNOWN])
+
+
+def _failed_at(report) -> Optional[datetime]:
+    """When this row failed. Rows that failed before #974 carry no time, and
+    fall back to when they were asked for: a generation fails within minutes,
+    or the staleness sweep fails it soon after. A `ready` row only reads as
+    failed when its stored report is unreadable, and that is as old as the
+    report itself."""
+    stamp = (report.meta or {}).get("failed_at")
+    if stamp:
+        try:
+            return datetime.fromisoformat(stamp)
+        except (TypeError, ValueError):
+            pass
+    return report.generated_at or report.created_at
 
 
 def _read(report) -> PeriodReportRead:
@@ -106,6 +125,7 @@ def _read(report) -> PeriodReportRead:
         status=status,
         generated_at=report.generated_at,
         created_at=report.created_at,
+        failed_at=_failed_at(report) if status == store.FAILED else None,
         report=content,
         message=message,
     )
@@ -223,6 +243,7 @@ def list_period_reports(db: DbSession, user: CurrentUser) -> List[PeriodReportLi
                 status=report.status,
                 generated_at=report.generated_at,
                 created_at=report.created_at,
+                failed_at=_failed_at(report) if report.status == store.FAILED else None,
                 headline=headline,
             )
         )

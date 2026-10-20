@@ -18,6 +18,8 @@ export interface PeriodReport {
   status: PeriodReportStatus;
   generated_at: string | null;
   created_at: string;
+  // #974: when a failed report failed; null unless it did.
+  failed_at: string | null;
   report: PeriodReportContent | null;
   // Runner-facing status/failure sentence, written for whoever is reading it —
   // never the gate's own internal text.
@@ -32,6 +34,7 @@ export interface PeriodReportListItem {
   status: PeriodReportStatus;
   generated_at: string | null;
   created_at: string;
+  failed_at: string | null;
   headline: string | null;
 }
 

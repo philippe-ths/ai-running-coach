@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { format } from 'date-fns';
+import { format, formatDistanceToNow } from 'date-fns';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ArrowLeft, Loader2, NotebookPen } from 'lucide-react';
@@ -105,6 +105,14 @@ export default function PeriodReportDetailPage() {
 
           {report.status === 'failed' && (
             <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800 p-6">
+              {/* #974: without a time, a failure from days ago read as one the
+                  runner had just caused. */}
+              {report.failed_at && (
+                <p className="text-xs font-medium text-amber-700 dark:text-amber-400 mb-1">
+                  Failed {format(new Date(report.failed_at), "MMM d 'at' HH:mm")} (
+                  {formatDistanceToNow(new Date(report.failed_at), { addSuffix: true })})
+                </p>
+              )}
               <p className="text-sm text-amber-800 dark:text-amber-300">{report.message}</p>
               <Link
                 href="/period-reports"
