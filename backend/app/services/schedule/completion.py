@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.models.planned_session import PlannedSession
 from app.services.activity_facts import local_day
 from app.services.schedule import store
-from app.services.schedule.disciplines import discipline_for_activity_type
+from app.services.schedule.disciplines import discipline_for_activity_type, same_sport
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ def _options(session: PlannedSession) -> List[dict]:
     its alternatives (#1082). The index of each is its `done_option`."""
     main = {
         "discipline": session.discipline,
+        "activity_type": getattr(session, "activity_type", None),
         "target_distance_m": session.target_distance_m,
         "target_duration_s": session.target_duration_s,
     }
@@ -62,6 +63,16 @@ def _options(session: PlannedSession) -> List[dict]:
         alt for alt in (getattr(session, "alternatives", None) or []) if isinstance(alt, dict)
     ]
     return [main] + alternatives
+
+
+def _option_fits(option: dict, activity: Any) -> bool:
+    """Whether the activity is this option's discipline and, when the option
+    names one, its sport (#1090): a yoga class is `other` like a swim, but it
+    is not the swim."""
+    activity_type = getattr(activity, "type", None)
+    return option.get("discipline") == discipline_for_activity_type(
+        activity_type
+    ) and same_sport(option.get("activity_type"), activity_type)
 
 
 def _option_closeness(option: dict, activity: Any) -> float:
@@ -80,13 +91,12 @@ def _option_closeness(option: dict, activity: Any) -> float:
 
 
 def matching_option(session: PlannedSession, activity: Any) -> Optional[int]:
-    """Which option of this slot the activity is: the one of its discipline it
-    fills most exactly, or None when no option is that discipline."""
-    discipline = discipline_for_activity_type(getattr(activity, "type", None))
+    """Which option of this slot the activity is: the one it fits that it
+    fills most exactly, or None when it fits no option."""
     fits = [
         (abs(_option_closeness(option, activity) - 1.0), index)
         for index, option in enumerate(_options(session))
-        if option.get("discipline") == discipline
+        if _option_fits(option, activity)
     ]
     return min(fits)[1] if fits else None
 
@@ -109,7 +119,6 @@ def open_sessions_for(db: Session, activity: Any) -> List[PlannedSession]:
     if plan is None:
         return []
     day = _activity_local_day(activity)
-    discipline = discipline_for_activity_type(getattr(activity, "type", None))
     return [
         session
         for session in db.query(PlannedSession)
@@ -123,7 +132,7 @@ def open_sessions_for(db: Session, activity: Any) -> List[PlannedSession]:
         )
         .all()
         if session.intent != "rest"
-        and any(option.get("discipline") == discipline for option in _options(session))
+        and any(_option_fits(option, activity) for option in _options(session))
     ]
 
 

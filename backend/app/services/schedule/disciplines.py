@@ -63,6 +63,22 @@ def sport_fits_discipline(activity_type: str, discipline: str) -> bool:
     return discipline_for_activity_type(activity_type) == discipline
 
 
+def same_sport(planned: Any, recorded: Any) -> bool:
+    """Whether a recorded activity is the sport a session named (#1090).
+
+    Exact on Strava's names, except that the run sports are one: a planned trail
+    run is still done by a road or treadmill run. A session naming no sport
+    takes any.
+    """
+    named = (planned or "").strip().lower()
+    if not named:
+        return True
+    raw = (recorded or "").strip().lower()
+    if named in _RUN_TYPES:
+        return raw in _RUN_TYPES
+    return raw == named
+
+
 def discipline_for_fact(fact: Any) -> str:
     """Same, for a fact from the stream — routed through `is_run` so the run
     boundary is decided in exactly one place."""
