@@ -107,7 +107,8 @@ class PlannedSession(Base):
     target_effort_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # #1089: the exact sport in Strava's names ("Swim", "Yoga"), finer than the
-    # discipline. Only the screen reads it; rules and load read the discipline.
+    # discipline. The screen and auto-completion (#1090) read it; rules and load
+    # read the discipline.
     activity_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
 
     # {"reps_planned": int, "rep_distance_m": float, "rest_s": float} or None.
