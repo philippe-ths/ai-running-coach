@@ -246,30 +246,47 @@ def _running_norm_section(db: Session, user: User) -> Optional[dict]:
     comes from `volume_ceilings`, which the coherence gate also calls: the number
     named in conversation IS the number a drafted block is judged against.
 
-    None when there is too little history for a norm — the gate abstains there
-    too, so there is no bound to state and inventing one would put a population
-    figure in front of the coach.
+    The weekly TIME limit across every activity rides alongside (#1047), from
+    `hours_ceilings`, which the gate calls, and rounded down the way the drafting
+    context says it. Either half is left out when there is too little history
+    for its norm — the gate abstains there too, so there is no bound to state and
+    inventing one would put a population figure in front of the coach. None when
+    neither has a norm.
     """
     try:
         from datetime import date
 
         from app.services.schedule.draft import fetch_draft_facts
-        from app.services.schedule.norms import running_norm_weekly_m
-        from app.services.schedule.plan_validator import volume_ceilings
+        from app.services.schedule.norms import running_norm_weekly_m, weekly_hours_norm_s
+        from app.services.schedule.plan_validator import (
+            hours_ceilings,
+            stated_hours,
+            volume_ceilings,
+        )
 
         today = date.today()
-        norm = running_norm_weekly_m(fetch_draft_facts(db, user, today), today)
+        facts = fetch_draft_facts(db, user, today)
+        norm = running_norm_weekly_m(facts, today)
         ceilings = volume_ceilings(norm)
+        norm_s = weekly_hours_norm_s(facts, today)
+        hours = hours_ceilings(norm_s)
     except Exception:  # noqa: BLE001 — a norm hiccup never blocks a reply
         logger.exception("thread running-norm section failed for user %s", user.id)
         return None
-    if not norm or ceilings is None:
-        return None
-    return {
-        "typical_weekly_running_km": round(norm / 1000, 1),
-        "max_weekly_running_km": round(ceilings[0] / 1000),
-        "max_sketched_weekly_running_km": round(ceilings[1] / 1000),
-    }
+    section: dict = {}
+    if norm and ceilings is not None:
+        section.update(
+            typical_weekly_running_km=round(norm / 1000, 1),
+            max_weekly_running_km=round(ceilings[0] / 1000),
+            max_sketched_weekly_running_km=round(ceilings[1] / 1000),
+        )
+    if hours is not None:
+        section.update(
+            typical_weekly_hours=round(norm_s / 3600, 1),
+            max_weekly_hours=stated_hours(hours[0]),
+            max_sketched_weekly_hours=stated_hours(hours[1]),
+        )
+    return section or None
 
 
 def _render_baseline_block(sections: dict) -> str:
@@ -337,7 +354,28 @@ def _render_running_norm_block(norm: dict) -> str:
     it is: handed "38 km" beside a typical 19, a model reads the larger figure as
     the one to aim at. The North Star's second question — whatever is ambiguous
     will eventually be read wrong — applied to a limit.
+
+    The time limit is said as every activity together, never as running time:
+    for a runner who walks a lot it is more than double their running (#1047).
     """
+    block = ""
+    if "max_weekly_running_km" in norm:
+        block += _render_running_km_limit(norm)
+    if "max_weekly_hours" in norm:
+        block += (
+            "\nTHEIR TYPICAL TRAINING TIME (every activity together, walks and "
+            "rides included — not running time):\n"
+            f"{norm['typical_weekly_hours']} h of training in a typical week. A "
+            f"week of a block you settle here with more than "
+            f"{norm['max_weekly_hours']} h of committed time, every activity "
+            f"together, is rejected the same way — a limit, not a target. A week "
+            f"further out that is only sketched may reach "
+            f"{norm['max_sketched_weekly_hours']} h."
+        )
+    return block
+
+
+def _render_running_km_limit(norm: dict) -> str:
     return (
         "\nTHEIR TYPICAL RUNNING WEEK (their own recent weeks, the figure a block "
         "you agree with them is measured against):\n"

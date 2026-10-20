@@ -27,7 +27,6 @@ Three decisions worth knowing before reading
 
 import json
 import logging
-import math
 import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -70,6 +69,7 @@ from app.services.schedule.norms import (
 from app.services.schedule.plan_validator import (
     VOLUME_CEILING,
     hours_ceilings,
+    stated_hours,
     validate_drafted_plan,
     volume_ceilings,
 )
@@ -241,7 +241,7 @@ one. The runner's week "
             # Said from `hours_ceilings`, the function the gate calls, so the
             # limit stated is the limit enforced (the #859 rule for km below).
             # Rounded DOWN to a tenth: a week under the stated limit must pass.
-            concrete_h = math.floor(hours_ceilings(total_h * 3600)[0] / 360) / 10
+            concrete_h = stated_hours(hours_ceilings(total_h * 3600)[0])
             parts.append(
                 f"- A week above {concrete_h:.1f} h of committed time, every "
                 f"activity together, is rejected outright. A limit, not a target."

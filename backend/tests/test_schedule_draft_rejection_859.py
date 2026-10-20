@@ -102,8 +102,9 @@ def test_the_conversation_carries_the_runners_own_typical_running_week(db):
     norm, concrete, sketched = _norm_and_ceilings(db, user)
 
     sections = thread_turn._build_baseline_sections(db, user)
+    running = {k: v for k, v in sections["running_norm"].items() if "running" in k}
 
-    assert sections["running_norm"] == {
+    assert running == {
         "typical_weekly_running_km": round(norm / 1000, 1),
         "max_weekly_running_km": round(concrete / 1000),
         "max_sketched_weekly_running_km": round(sketched / 1000),

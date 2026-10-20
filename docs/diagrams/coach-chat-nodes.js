@@ -592,7 +592,7 @@ const NODES = [
    one generic sentence about it. Stated as a ceiling rather than a figure,
    because a bare number well above their typical week reads as the target. */
 { id:'d_running_norm', layer:'baseline', kind:'code', tag:'builder', section:'running_norm',
-  title:'running_norm_weekly_m + volume_ceilings', path:'services/schedule/norms.py',
+  title:'running + hours norms and their ceilings', path:'services/schedule/norms.py',
   from:['t_activity'],
   body:()=> { const b=_B();
     if(!('running_norm' in b))
@@ -600,7 +600,7 @@ const NODES = [
         ? 'Absent — COACH_SCHEDULE_ENABLED is off, so the coach is not given the norm.'
         : 'Absent from this capture.');
     return head('output') + (b.running_norm===null
-      ? none('null — too little running history for a norm, so the gate abstains and no ceiling is stated.')
+      ? none('null — too little history for a running or an hours norm, so the gate abstains and no ceiling is stated.')
       : jsonHTML(b.running_norm, false)); } },
 
 /* #945. A durable profile fact (max HR) set once and never revisited, even as
