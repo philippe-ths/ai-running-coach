@@ -12,13 +12,19 @@ An activity is eligible when it is not soft-deleted and has stored
 
 Pagination uses a `strava_activity_id` cursor carried in the job args (that
 column is unique and roughly time-ordered): each batch processes the next chunk
-of eligible activities older than the cursor (newest first) and, while work
+of eligible activities newer than the cursor (oldest first) and, while work
 remains, schedules its successor via rq-scheduler `enqueue_in` carrying the
-advanced cursor. A fresh trigger starts with no cursor (from the newest
+advanced cursor. A fresh trigger starts with no cursor (from the oldest
 activity), which is exactly the "re-run after a derivation change" semantics — no
 DB marker and no migration are needed. A worker crash mid-run is recovered by
-re-triggering: the chain restarts from the newest activity and idempotently
+re-triggering: the chain restarts from the oldest activity and idempotently
 re-derives until it passes where it stopped.
+
+Oldest first because analysis reads the runner's EARLIER activities' stored
+metrics (load spike, risk): walked newest first, each activity was judged
+against predecessors still on the old derivation, so one pass left flags a
+second pass changed (#1122). Strava ids follow upload order, so an old activity
+uploaded late is the one case still judged out of order.
 
 Unlike the stream backfill (#110) the pacing is not rate-limit driven — there are
 no Strava calls — so the batch is large and the pause is short; it just yields
@@ -49,10 +55,10 @@ _REANALYZE_JOB_ID = "reanalyze_history"
 
 
 def _eligible_stmt(*, cursor: Optional[int] = None, user_id: Optional[str] = None):
-    """Non-deleted activities that have stored streams, newest first.
+    """Non-deleted activities that have stored streams, oldest first.
 
     Only activities with stored streams can be re-derived offline (no Strava
-    call). When `cursor` is given, restrict to activities strictly older than it
+    call). When `cursor` is given, restrict to activities strictly newer than it
     by `strava_activity_id`, so a batch chain walks the whole set exactly once
     without gaps or repeats (the column is unique). When `user_id` is given the
     set is scoped to that runner (#470), so a user's trigger only re-analyzes
@@ -63,9 +69,9 @@ def _eligible_stmt(*, cursor: Optional[int] = None, user_id: Optional[str] = Non
         batch_chain.has_streams_exists(),
     )
     if cursor is not None:
-        stmt = stmt.where(Activity.strava_activity_id < cursor)
+        stmt = stmt.where(Activity.strava_activity_id > cursor)
     stmt = batch_chain.scope_to_user(stmt, user_id)
-    return stmt.order_by(Activity.strava_activity_id.desc())
+    return stmt.order_by(Activity.strava_activity_id.asc())
 
 
 def count_eligible(
@@ -115,7 +121,7 @@ class ReanalyzeBatchResult:
 def reanalyze_history_batch(
     db: Session, *, limit: int, cursor: Optional[int] = None, user_id: Optional[str] = None
 ) -> ReanalyzeBatchResult:
-    """Re-analyze up to `limit` eligible activities older than `cursor`.
+    """Re-analyze up to `limit` eligible activities newer than `cursor`.
 
     `analyze` re-derives each `DerivedMetric` from the stored streams and commits
     per activity, so progress survives an interruption. A failure on one activity
@@ -255,7 +261,7 @@ def enqueue_reanalyze(db: Session, user_id) -> int:
     if eligible:
         queue.enqueue(
             reanalyze_history_job,
-            None,  # cursor: start from the newest activity
+            None,  # cursor: start from the oldest activity
             user_id,
             job_id=f"{_REANALYZE_JOB_ID}_{user_id}",
             result_ttl=batch_chain.CHAIN_RESULT_TTL,
@@ -285,7 +291,7 @@ def reanalyze_if_analysis_changed() -> bool:
     try:
         queue.enqueue(
             reanalyze_history_job,
-            None,  # cursor: start from the newest activity
+            None,  # cursor: start from the oldest activity
             None,  # user_id: every runner
             settings.AUTO_REANALYZE_BATCH_SIZE,
             job_id=f"{_REANALYZE_JOB_ID}_v{ANALYSIS_VERSION}",
