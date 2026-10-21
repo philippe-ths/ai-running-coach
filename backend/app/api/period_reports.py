@@ -229,6 +229,7 @@ def list_period_reports(db: DbSession, user: CurrentUser) -> List[PeriodReportLi
     reports = store.list_reports(db, user.id)
     out = []
     for report in reports:
+        report = store.settle_if_stale(db, report)
         headline = None
         if report.status == store.READY and isinstance(report.report, dict):
             headline = report.report.get("headline") or (
@@ -251,6 +252,6 @@ def list_period_reports(db: DbSession, user: CurrentUser) -> List[PeriodReportLi
 
 
 @router.get("/{report_id}", response_model=PeriodReportRead)
-def read_period_report(report: OwnedPeriodReport) -> PeriodReportRead:
+def read_period_report(report: OwnedPeriodReport, db: DbSession) -> PeriodReportRead:
     """The status poll + the finished report."""
-    return _read(report)
+    return _read(store.settle_if_stale(db, report))
