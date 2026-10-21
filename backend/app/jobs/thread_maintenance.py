@@ -17,7 +17,7 @@ from app.models.coach_chat_message import CoachChatMessage
 from app.models.thread import Thread
 from app.services.coach.budget import record as budget_record
 from app.services.coach.llm import AnthropicClient
-from app.services.coach.threads import CONVERSATIONAL_ROLES
+from app.services.coach.threads import said
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,9 @@ def enqueue_title_generation(db, thread: Thread) -> None:
         .filter(
             CoachChatMessage.thread_id == thread.id,
             CoachChatMessage.role == "assistant",
+            # A failed turn is not the first reply (#1124): counted, it spent
+            # the one title enqueue on the failure and the thread never got one.
+            said(),
         )
         .count()
     )
@@ -84,7 +87,7 @@ def generate_thread_title_job(thread_id: str) -> None:
                 # only what was said (#778): an action event is neither side
                 # speaking, and labelling it "Coach:" would put the app's words
                 # in the coach's mouth.
-                CoachChatMessage.role.in_(CONVERSATIONAL_ROLES),
+                said(),
             )
             .order_by(CoachChatMessage.created_at.asc(), CoachChatMessage.id.asc())
             .limit(4)
@@ -135,7 +138,7 @@ def _conversational_count(db, thread: Thread) -> int:
         db.query(CoachChatMessage)
         .filter(
             CoachChatMessage.thread_id == thread.id,
-            CoachChatMessage.role.in_(CONVERSATIONAL_ROLES),
+            said(),
         )
         .count()
     )

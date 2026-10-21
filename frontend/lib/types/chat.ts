@@ -22,8 +22,9 @@ export interface ChatMessage {
   activity_id?: string | null;
   // #778: "event" is the app's record of a proposed action the runner confirmed
   // here — neither side speaking, so it renders as a quiet ledger line rather
-  // than a bubble or coach prose.
-  role: "user" | "assistant" | "event";
+  // than a bubble or coach prose. #1124: "notice" is text the app wrote in the
+  // coach's place (a failed turn, a job's note); it renders as the coach.
+  role: "user" | "assistant" | "event" | "notice";
   content: string;
   // #648 f/u / #664: the on-demand data tools the coach ran for this assistant turn
   // (null/absent when none), so the UI can show a persistent "looked up …" trace

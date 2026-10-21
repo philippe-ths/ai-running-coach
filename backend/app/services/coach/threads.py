@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import Dict, List, Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.sql import func
 
@@ -33,6 +33,11 @@ _UNTITLED = "New thread"
 # what was SAID filter to `CONVERSATIONAL_ROLES`; the transcript shows all three.
 ACTION_EVENT_ROLE = "event"
 CONVERSATIONAL_ROLES = ("user", "assistant")
+# Text the app writes in the coach's place (#1124): a turn that failed, or a
+# background job reporting back into the thread. The runner reads it in the
+# coach's bubble; no model reads it as either side speaking, and it sits outside
+# `CONVERSATIONAL_ROLES` so a reader filtering to what was said cannot let it in.
+NOTICE_ROLE = "notice"
 
 # A long conversation can accumulate confirmations. The ledger the coach reads is
 # bounded like every other injected history here, and keeps the most recent.
@@ -306,6 +311,31 @@ def delete_threads_for_activity(db: Session, activity: Activity) -> None:
     db.commit()
 
 
+def said():
+    """SQL form of "what the runner or the coach said" (#1124): every reader
+    that hands a thread to a model filters with this or `was_said`.
+
+    The role does the work for rows written since `NOTICE_ROLE`. Failed turns
+    stored before it are `assistant` rows, matched by their text.
+    """
+    from app.services.coach.chat import _TURN_FAILURE_MESSAGES
+
+    return and_(
+        CoachChatMessage.role.in_(CONVERSATIONAL_ROLES),
+        or_(
+            CoachChatMessage.role != "assistant",
+            CoachChatMessage.content.notin_(sorted(_TURN_FAILURE_MESSAGES)),
+        ),
+    )
+
+
+def was_said(row: CoachChatMessage) -> bool:
+    """`said`, for a row already loaded."""
+    from app.services.coach.chat import is_failed_turn
+
+    return row.role in CONVERSATIONAL_ROLES and not is_failed_turn(row)
+
+
 def record_action_event(db: Session, thread_id, activity_id, description: str) -> None:
     """Leave the trace a confirmed proposed action used to leave nowhere (#778).
 
@@ -352,12 +382,13 @@ def touch_thread(db: Session, thread: Thread) -> None:
 def record_coach_note(db: Session, thread_id, text: str) -> None:
     """Let a background job say something back into the conversation (#984).
 
-    An `assistant` row rather than an `ACTION_EVENT_ROLE` one, and the
+    A `NOTICE_ROLE` row rather than an `ACTION_EVENT_ROLE` one, and the
     distinction carries the whole meaning. An event says a change was made, and
     reaches the coach as part of the confirmed ledger; this is used when a change
     was NOT made, so recording it as an event would put a write into the ledger
-    that never happened. What this records is the coach speaking: the runner sees
-    it in the thread, and the coach reads it back as its own words.
+    that never happened. Nor is it the coach speaking (#1124): the runner sees it
+    in the coach's bubble, but the coach never reads it back as its own words.
+    Whether a change landed reaches the coach through the schedule itself.
 
     The case it exists for is an amendment that fails on the worker. Before, that
     was a log line and silence, and the runner was left watching a Schedule
@@ -378,7 +409,7 @@ def record_coach_note(db: Session, thread_id, text: str) -> None:
     db.add(
         CoachChatMessage(
             thread_id=thread_id,
-            role="assistant",
+            role=NOTICE_ROLE,
             content=body,
         )
     )

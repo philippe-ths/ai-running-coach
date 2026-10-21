@@ -36,7 +36,6 @@ from app.services.coach.chat import (
     _render_authority_tiering,
     _slice_for_stream,
     _validate_conversational_text,
-    is_failed_turn,
     sessions_in_play_from_tool_results,
 )
 from app.services.coach import max_hr_calibration
@@ -422,6 +421,9 @@ def _build_cross_thread_block(db: Session, thread: Thread, user_id) -> str:
         .filter(
             Thread.user_id == user_id,
             CoachChatMessage.thread_id != thread.id,
+            # Only what was said (#1124): an event row read here became "You:
+            # Put it in my schedule".
+            thread_service.said(),
         )
         .order_by(CoachChatMessage.created_at.desc(), CoachChatMessage.id.desc())
         .limit(_CROSS_THREAD_SCAN_LIMIT)
@@ -559,7 +561,7 @@ def _llm_history(db: Session, thread: Thread) -> List[dict]:
     history = [
         row
         for row in thread_service.thread_messages(db, thread)
-        if row.role in thread_service.CONVERSATIONAL_ROLES and not is_failed_turn(row)
+        if thread_service.was_said(row)
     ][-_MAX_LLM_HISTORY_TURNS:]
     return [{"role": row.role, "content": row.content} for row in history]
 
@@ -703,7 +705,7 @@ async def stream_thread_turn(
     assistant_msg = CoachChatMessage(
         thread_id=thread.id,
         activity_id=thread.activity_id,
-        role="assistant",
+        role=thread_service.NOTICE_ROLE if out["stream_failed"] else "assistant",
         content=assistant_text,
         tools_used=out["tool_trace"] or None,
         skills_used=out.get("skills_used") or None,

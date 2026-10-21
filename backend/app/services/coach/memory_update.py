@@ -56,6 +56,7 @@ from app.services.coach.budget import over_budget as budget_over, record as budg
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.memory_store import upsert_memory
 from app.services.coach.retrieval import fetch_recent_user_digests
+from app.services.coach.threads import said
 
 logger = logging.getLogger(__name__)
 
@@ -323,7 +324,7 @@ def gather_memory_sources(db: Session, user_id, *, as_of: Optional[datetime] = N
             db.query(CoachChatMessage.content, CoachChatMessage.created_at, CoachChatMessage.activity_id)
             .join(Activity, CoachChatMessage.activity_id == Activity.id)
             .filter(Activity.user_id == user_id)
-            .filter(CoachChatMessage.role == chat_role)
+            .filter(CoachChatMessage.role == chat_role, said())
             .order_by(CoachChatMessage.created_at.desc())
             .limit(limit + 1)
             .all()

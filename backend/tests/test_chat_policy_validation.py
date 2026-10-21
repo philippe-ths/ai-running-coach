@@ -127,12 +127,12 @@ def _streamed_text(resp) -> str:
     return "".join(out)
 
 
-def _assistant_text(db, activity) -> str:
+def _assistant_text(db, activity, role: str = "assistant") -> str:
     msg = (
         db.query(CoachChatMessage)
         .filter(
             CoachChatMessage.activity_id == activity.id,
-            CoachChatMessage.role == "assistant",
+            CoachChatMessage.role == role,
         )
         .order_by(CoachChatMessage.created_at.desc())
         .first()
@@ -238,4 +238,6 @@ def test_stream_error_serves_safe_message(client, db):
     assert "Let me think" not in resp.text  # partial pre-error output is dropped
     streamed = _streamed_text(resp)
     assert "error" in streamed.lower()
-    assert _assistant_text(db, activity) == streamed
+    # Stored for the runner, as a notice rather than the coach speaking (#1124).
+    assert _assistant_text(db, activity, role="notice") == streamed
+    assert _assistant_text(db, activity) == ""
