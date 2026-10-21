@@ -92,14 +92,22 @@ def _options(session: PlannedSession) -> List[dict]:
     return [main] + alternatives
 
 
+def _sport_type(activity: Any) -> Optional[str]:
+    """The activity's exact sport in Strava's `SportType` names, which is what a
+    session names (#1129). `Activity.type` is Strava's legacy type and folds
+    sports together: a tennis match is stored as `Workout`, a gravel ride as
+    `Ride`. Read the way the classifier reads it."""
+    raw = getattr(activity, "raw_summary", None) or {}
+    return raw.get("sport_type") or getattr(activity, "type", None)
+
+
 def _option_fits(option: dict, activity: Any) -> bool:
     """Whether the activity is this option's discipline and, when the option
     names one, its sport (#1090): a yoga class is `other` like a swim, but it
     is not the swim."""
-    activity_type = getattr(activity, "type", None)
     return option.get("discipline") == discipline_for_activity_type(
-        activity_type
-    ) and same_sport(option.get("activity_type"), activity_type)
+        getattr(activity, "type", None)
+    ) and same_sport(option.get("activity_type"), _sport_type(activity))
 
 
 def _option_closeness(option: dict, activity: Any) -> Optional[float]:
@@ -129,12 +137,24 @@ def _fit_rank(option: dict, activity: Any) -> tuple:
     return (0 if option.get("reps") else 1, *_miss(_option_closeness(option, activity)))
 
 
+# Intents a runner states for a run that WAS the rep work (#1121). A tempo run
+# as one continuous block does the work of its reps without the rests the
+# interval gate looks for.
+_REP_WORK_INTENTS = {"Tempo", "Intervals"}
+
+
+def _stated_rep_work(activity: Any) -> bool:
+    """Whether the runner said this run was the session's work."""
+    return getattr(activity, "user_intent", None) in _REP_WORK_INTENTS
+
+
 def _option_qualifies(option: dict, activity: Any, reps_shown: bool) -> bool:
     """Whether this option could be what the activity was: its discipline, reps
-    seen when it asks for reps, and enough of it done when it can be measured."""
+    seen (or the work stated) when it asks for reps, and enough of it done when
+    it can be measured."""
     if not _option_fits(option, activity):
         return False
-    if option.get("reps") and not reps_shown:
+    if option.get("reps") and not (reps_shown or _stated_rep_work(activity)):
         return False
     closeness = _option_closeness(option, activity)
     return closeness is None or closeness >= MIN_COMPLETION_FRACTION
