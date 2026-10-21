@@ -40,6 +40,7 @@ from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
 from app.models.user import User
 from app.services.coach import turn
+from app.services.coach.llm import is_unreachable
 from app.services.schedule import goals
 from app.services.schedule import season_store, store
 from app.services.schedule.draft import fetch_draft_facts
@@ -256,15 +257,27 @@ async def propose_amendment(
                     else max(1.0, budget_seconds - (time.monotonic() - started_at))
                 ),
             )
-        except (TypeError, AttributeError):
-            # A bad kwarg or a missing method is a bug in this code, not a
-            # network that misbehaved, and the catch below cannot tell them
-            # apart. Left inside it, a signature change reports itself to the
-            # runner as "the coach could not be reached" after two retries that
-            # never reached anything — which is exactly what a test double
-            # missing the new `timeout` kwarg did (#995). Raised so it is found.
-            raise
-        except Exception as exc:  # transport, timeout, refusal
+        except ValueError as exc:
+            # The call ran and its answer failed: cut off, or no tool call. That
+            # is the coach's output, not the network, so it spends a rewrite and
+            # the coach is told why (#999), as the draft does.
+            logger.warning("schedule amend: unusable answer: %s", exc)
+            rewrites_left -= 1
+            tool_name = RECORD_AMENDMENT_TOOL["name"]
+            failures = [
+                f"Your previous answer was cut off, or did not call {tool_name}, "
+                f"so none of it could be read. Answer only by calling {tool_name}, "
+                "with no field longer than it needs to be."
+            ]
+            continue
+        except Exception as exc:
+            # Only a call that never got through is "could not be reached". A
+            # bad kwarg or any other bug in this code is raised so it is found:
+            # caught here, a test double missing the new `timeout` kwarg reported
+            # itself to the runner as an unreachable coach after two retries that
+            # reached nothing (#995, #999).
+            if not is_unreachable(exc):
+                raise
             logger.warning("schedule amend: generation call failed: %s", exc)
             if transport_retries_left > 0:
                 transport_retries_left -= 1

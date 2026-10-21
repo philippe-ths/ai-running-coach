@@ -25,6 +25,8 @@ from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
+import anthropic
+import httpx2
 import pytest
 
 from app.models import Activity, DerivedMetric, User, UserProfile
@@ -49,6 +51,14 @@ FAKE_MODEL = "claude-fake-schedule-1"
 
 
 # --- the fake generation seam ----------------------------------------------
+
+
+def _blip():
+    """A call that never got through (#999). A bare RuntimeError is a bug in
+    this code now, not a network failure, and is raised rather than retried."""
+    return anthropic.APIConnectionError(
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
 
 
 class _FakeClient:
@@ -507,7 +517,7 @@ async def test_a_transport_failure_is_retried_without_reaching_the_prompt(
     user = _seed_user(db)
     _seed_history(db, user)
     plan = store.create_drafting_plan(db, user.id)
-    client = _FakeClient([RuntimeError("upstream blew up"), _good_plan()])
+    client = _FakeClient([_blip(), _good_plan()])
     _inject(monkeypatch, client)
 
     outcome = await draft_plan(db, user, plan, today=TODAY)
@@ -530,7 +540,7 @@ async def test_a_transport_blip_does_not_spend_the_coachs_rewrite(db, monkeypatc
     plan = store.create_drafting_plan(db, user.id)
     rejected = _good_plan()
     rejected["weeks"][0]["week_start"] = "2020-01-06"  # in the past
-    client = _FakeClient([RuntimeError("429"), rejected, _good_plan()])
+    client = _FakeClient([_blip(), rejected, _good_plan()])
     _inject(monkeypatch, client)
 
     outcome = await draft_plan(db, user, plan, today=TODAY)
@@ -663,7 +673,10 @@ async def test_the_context_carries_the_runner_and_never_asks_for_a_load_number(
         priority="A",
     )
     plan = store.create_drafting_plan(db, user.id)
-    client = _FakeClient([_good_plan()])
+    # Two answers: this one only reads the prompt, and the first is rejected
+    # against this history. With one, the retry raised on the empty list, which
+    # the old catch-all swallowed as a network failure (#999).
+    client = _FakeClient([_good_plan(), _good_plan()])
     _inject(monkeypatch, client)
 
     await draft_plan(db, user, plan, today=TODAY)
@@ -1125,7 +1138,7 @@ async def test_a_coach_that_cannot_be_reached_is_its_own_category(db, monkeypatc
     plan = store.create_drafting_plan(db, user.id)
     _inject(
         monkeypatch,
-        _FakeClient([RuntimeError("connection reset"), RuntimeError("again")]),
+        _FakeClient([_blip(), _blip()]),
     )
 
     outcome = await draft_plan(db, user, plan, today=TODAY)

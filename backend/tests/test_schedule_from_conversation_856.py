@@ -23,6 +23,8 @@ from types import SimpleNamespace
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
+import anthropic
+import httpx2
 import pytest
 
 from app.core.config import settings
@@ -346,7 +348,10 @@ def test_a_seeded_draft_is_told_to_transcribe_rather_than_re_plan(db):
         ):
             seen.setdefault("systems", []).append(system)
             seen.setdefault("users", []).append(user)
-            raise RuntimeError("stop after capturing the prompt")
+            # A call that never got through, so the draft stops here (#999).
+            raise anthropic.APIConnectionError(
+                request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+            )
 
     with patch.object(draft.turn, "over_budget", return_value=False), patch.object(
         draft.turn, "build_client", return_value=_Client()
