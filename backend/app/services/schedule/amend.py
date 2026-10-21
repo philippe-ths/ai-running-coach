@@ -263,12 +263,9 @@ async def propose_amendment(
             # the coach is told why (#999), as the draft does.
             logger.warning("schedule amend: unusable answer: %s", exc)
             rewrites_left -= 1
-            tool_name = RECORD_AMENDMENT_TOOL["name"]
-            failures = [
-                f"Your previous answer was cut off, or did not call {tool_name}, "
-                f"so none of it could be read. Answer only by calling {tool_name}, "
-                "with no field longer than it needs to be."
-            ]
+            # Read by the rewrite and, if it is the last word, by the runner and
+            # the chat coach, so it says what happened and instructs no one.
+            failures = ["the amendment came back cut off or incomplete, so none of it could be read"]
             continue
         except Exception as exc:
             # Only a call that never got through is "could not be reached". A

@@ -19,7 +19,7 @@ missing something you agreed to is exactly what the coach should see.
 """
 
 import logging
-from datetime import date, datetime, timedelta, timezone, tzinfo
+from datetime import date, timedelta, timezone, tzinfo
 from typing import Any, List, Optional
 
 from pydantic import ValidationError
@@ -48,7 +48,7 @@ from app.services.activity_facts import (
     query_facts,
 )
 from app.services.coach.volume import build_training_volume
-from app.services.runner_clock import local_date, runner_zone
+from app.services.runner_clock import local_date, runner_today, runner_zone
 from app.services.schedule import store
 from app.services.schedule.disciplines import discipline_for_fact
 from app.services.schedule.placement import (
@@ -277,7 +277,7 @@ def build_week(
 ) -> ScheduleWeekRead:
     """The runner's week: what is planned, what is logged, and how it compares."""
     zone = runner_zone(db, user.id)
-    today = today or local_date(datetime.now(timezone.utc), zone)
+    today = today or runner_today(db, user.id)
     profile = getattr(user, "profile", None)
     starts_on = resolve_week_start(profile)
 

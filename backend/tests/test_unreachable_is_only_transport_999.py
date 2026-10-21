@@ -114,3 +114,52 @@ async def test_a_bug_in_the_draft_path_is_raised_not_called_unreachable(db, monk
     with pytest.raises(KeyError):
         await draft.draft_plan(db, user, plan, today=TODAY)
     assert len(client.calls) == 1
+
+
+def test_a_cut_off_amendment_tells_the_runner_what_happened_not_the_model_what_to_do(db):
+    """The last failure is shown to the runner and handed to the chat coach, so
+    it may not be the rewrite's instruction to the model."""
+    cut = ValueError("record_amendment tool call truncated at max_tokens")
+
+    proposal = _amend(db, _AmendClient(cut, cut))
+
+    said = " ".join(proposal.failures)
+    assert proposal.ok is False
+    assert "cut off" in said
+    assert "record_" not in said and "Answer only" not in said
+
+
+def test_an_amend_job_that_raises_still_tells_the_runner(db, monkeypatch):
+    """Raising instead of reporting "unreachable" must not bring back #984's
+    silence: the job's own handler says it failed and ends the watch."""
+    from app.jobs import amend_schedule
+    from app.models.coach_chat_message import CoachChatMessage
+    from app.services.schedule import amend_watch
+    from tests.test_amendment_watch_1003 import _NoCloseSession, _plan as _active_plan, _thread
+    from tests.test_amendment_watch_1003 import _FakeRedis as _WatchRedis
+
+    monkeypatch.setattr(amend_watch, "redis_conn", _WatchRedis())
+    user = _user(db)
+    plan = _active_plan(db, user)
+    thread = _thread(db, user)
+
+    async def _bug(*_a, **_k):
+        raise _status(400)
+
+    class _KeepSeed(_NoCloseSession):
+        """The handler rolls back, which in this harness would also drop the
+        seeded rows; nothing was written, so there is nothing to undo."""
+
+        def rollback(self):
+            pass
+
+    with patch.object(amend_schedule, "SessionLocal", return_value=_KeepSeed(db)), \
+         patch.object(amend_schedule, "amend_plan", _bug):
+        amend_schedule.amend_schedule_job(
+            str(user.id), str(plan.id), 1, 1, "reason", str(thread.id), "Rewrite the week."
+        )
+
+    notes = db.query(CoachChatMessage).filter(CoachChatMessage.thread_id == thread.id).all()
+    assert [n.role for n in notes] == ["assistant"]
+    assert "could not write" in notes[0].content
+    assert amend_watch.current(user.id)["status"] == "failed"

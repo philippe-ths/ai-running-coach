@@ -143,3 +143,82 @@ def test_the_chats_tools_resolve_windows_from_the_runners_date(client, db, monke
 
     assert resp.status_code == 200
     assert seen == [date(2026, 10, 22)]
+
+
+class _ServerClockAt:
+    """Patch `runner_clock`'s clock to one server instant."""
+
+    def __init__(self, instant):
+        self.instant = instant
+
+    def install(self, monkeypatch):
+        from app.services import runner_clock
+
+        instant = self.instant
+
+        class _Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant
+
+        monkeypatch.setattr(runner_clock, "datetime", _Clock)
+
+
+def _melbourne_runner(db):
+    from tests.test_schedule_week import _seed_user
+
+    user = _seed_user(db)
+    db.add(Activity(
+        user_id=user.id, strava_activity_id=abs(hash(user.email)) % 10**9, type="Run",
+        name="Run", start_date=datetime(2026, 10, 20, 6, 0),
+        start_date_local=datetime(2026, 10, 20, 17, 0), distance_m=5000,
+        moving_time_s=1500, elapsed_time_s=1500,
+        raw_summary={"timezone": "(GMT+11:00) Australia/Melbourne"},
+    ))
+    db.commit()
+    return user
+
+
+# Sunday 25 Oct, 14:00 on the server; already Monday 26 Oct in Melbourne.
+SUNDAY_ON_THE_SERVER = datetime(2026, 10, 25, 14, 0, tzinfo=timezone.utc)
+
+
+def test_the_week_view_opens_on_the_runners_week(db, monkeypatch):
+    """With no date passed, the Schedule screen's current week is the runner's."""
+    from app.services.schedule.week import build_week
+
+    _ServerClockAt(SUNDAY_ON_THE_SERVER).install(monkeypatch)
+    user = _melbourne_runner(db)
+
+    week = build_week(db, user)
+
+    assert week.week_start == date(2026, 10, 26)
+
+
+def test_an_amendment_job_resolves_the_week_the_card_showed(db, monkeypatch):
+    """The card resolves its window on the runner's date, so the job must too, or
+    a Melbourne runner's "this week" is amended as last week."""
+    from unittest.mock import patch
+
+    from app.jobs import amend_schedule
+    from app.services.schedule import amend_watch
+    from app.services.schedule.amend import AmendOutcome
+    from tests.test_amendment_watch_1003 import _FakeRedis, _NoCloseSession, _plan, _thread
+
+    _ServerClockAt(SUNDAY_ON_THE_SERVER).install(monkeypatch)
+    monkeypatch.setattr(amend_watch, "redis_conn", _FakeRedis())
+    user = _melbourne_runner(db)
+    plan, thread = _plan(db, user), _thread(db, user)
+    seen = {}
+
+    async def _amend(*_a, **kwargs):
+        seen["today"] = kwargs.get("today")
+        return AmendOutcome(ok=False, failures=["it does not fit"])
+
+    with patch.object(amend_schedule, "SessionLocal", return_value=_NoCloseSession(db)), \
+         patch.object(amend_schedule, "amend_plan", _amend):
+        amend_schedule.amend_schedule_job(
+            str(user.id), str(plan.id), 0, 0, "reason", str(thread.id), "Rewrite the week."
+        )
+
+    assert seen["today"] == date(2026, 10, 26)

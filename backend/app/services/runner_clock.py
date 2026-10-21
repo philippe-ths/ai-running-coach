@@ -47,6 +47,7 @@ def runner_zone(db: Session, user_id) -> tzinfo:
     latest = (
         db.query(Activity)
         .filter(Activity.user_id == user_id)
+        .filter(Activity.is_deleted == False)  # noqa: E712
         .order_by(Activity.start_date.desc())
         .first()
     )

@@ -315,7 +315,7 @@ def test_an_impossible_amendment_tells_the_runner_in_their_thread(db):
     )
     assert len(said) == 1
     note = said[0]
-    assert note.role == "notice", (
+    assert note.role == "assistant", (
         "a failure must not be recorded as a confirmed action event; the ledger "
         "would then carry a write that never happened"
     )

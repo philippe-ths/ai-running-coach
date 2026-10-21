@@ -379,16 +379,20 @@ def touch_thread(db: Session, thread: Thread) -> None:
     db.add(thread)
 
 
-def record_coach_note(db: Session, thread_id, text: str) -> None:
+def record_coach_note(db: Session, thread_id, text: str, *, spoken: bool = False) -> None:
     """Let a background job say something back into the conversation (#984).
 
     A `NOTICE_ROLE` row rather than an `ACTION_EVENT_ROLE` one, and the
     distinction carries the whole meaning. An event says a change was made, and
     reaches the coach as part of the confirmed ledger; this is used when a change
     was NOT made, so recording it as an event would put a write into the ledger
-    that never happened. Nor is it the coach speaking (#1124): the runner sees it
-    in the coach's bubble, but the coach never reads it back as its own words.
-    Whether a change landed reaches the coach through the schedule itself.
+    that never happened. Nor is it, by default, the coach speaking (#1124): the
+    runner sees it in the coach's bubble, but the coach never reads it back as
+    its own words, because what it reports reaches the coach another way (a
+    landed change through the ledger, a failed draft through the schedule).
+
+    `spoken` is for a note the coach has no other way to learn, written in its
+    own voice: it is stored as the coach's turn and read back as one.
 
     The case it exists for is an amendment that fails on the worker. Before, that
     was a log line and silence, and the runner was left watching a Schedule
@@ -409,7 +413,7 @@ def record_coach_note(db: Session, thread_id, text: str) -> None:
     db.add(
         CoachChatMessage(
             thread_id=thread_id,
-            role=NOTICE_ROLE,
+            role="assistant" if spoken else NOTICE_ROLE,
             content=body,
         )
     )

@@ -168,6 +168,8 @@ async def prepare_offer(
             action_type="amend_plan", ok=False, detail="this runner is gone"
         )
 
+    from app.services.runner_clock import runner_today
+
     proposal = await propose_amendment(
         db,
         user,
@@ -176,6 +178,7 @@ async def prepare_offer(
         weeks_through=request.weeks_through,
         instruction=request.amend_reason or "",
         budget_seconds=budget_seconds,
+        today=runner_today(db, user.id),
     )
     if not proposal.ok or proposal.amended is None:
         return PreparedOffer(
@@ -1246,11 +1249,14 @@ def _build_offer(
         # dates the model supplied, exactly as `propose_amendment` resolves it.
         # The card and the job then agree about which weeks are in play without
         # either of them having to be told by the other.
+        from app.services.runner_clock import runner_today
         from app.services.schedule.amend import resolve_window
         from app.services.weeks import resolve_week_start
 
         start, end = resolve_window(
-            date.today(),
+            # The runner's date, as the coach's schedule section reads it (#1073):
+            # "this week" in the turn and in the card are one week.
+            runner_today(db, owner_user_id),
             resolve_week_start(getattr(plan.user, "profile", None)),
             weeks_from=request.weeks_from,
             weeks_through=request.weeks_through,

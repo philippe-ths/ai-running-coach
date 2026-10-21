@@ -242,7 +242,8 @@ def test_a_failed_amendment_is_published_and_said(db, redis):
     )
 
     assert amend_watch.current(user.id)["status"] == "failed"
-    note = [m for m in _said(db, thread) if m.role == "notice"]
+    # Spoken (#1124): nothing else tells the coach the amendment failed.
+    note = [m for m in _said(db, thread) if m.role == "assistant"]
     assert len(note) == 1
     assert "could not write" in note[0].content
     assert not any(m.role == "event" for m in _said(db, thread)), (
