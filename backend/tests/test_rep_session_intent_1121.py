@@ -80,3 +80,20 @@ def test_a_run_not_marked_as_rep_work_still_needs_reps(db, intent):
     _tune_up_tempo(db, plan)
 
     assert completion.find_matching_session(db, _evening_run(db, user, intent)) is None
+
+
+def test_a_swim_marked_intervals_does_not_complete_a_rep_swim(db):
+    """The human's answer was about a run: a swim's "Intervals" is not settled."""
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    swim_set = _seed_session(
+        db, plan, start=WEEK_START, end=WEEK_END, intent="quality",
+        discipline="other", title="10x100m", structure={"reps_planned": 10},
+    )
+    swim_set.activity_type = "Swim"
+    db.commit()
+    swim = _seed_activity(db, user, day=SEP_18, activity_type="Swim", distance_m=2000)
+    swim.user_intent = "Intervals"
+    db.commit()
+
+    assert completion.find_matching_session(db, _analysed(db, swim, None)) is None

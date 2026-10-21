@@ -90,3 +90,23 @@ def test_a_trail_run_stored_as_run_still_ticks_a_planned_trail_run(db):
     trail = _recorded(db, user, "Run", "TrailRun")
 
     assert completion.find_matching_session(db, trail) == session
+
+
+@pytest.mark.parametrize(
+    "named, legacy_type, sport_type, discipline",
+    [
+        ("Ride", "Ride", "MountainBikeRide", "bike"),
+        ("Ride", "Ride", "GravelRide", "bike"),
+        ("Workout", "Workout", "HIIT", "other"),
+    ],
+)
+def test_a_session_naming_the_parent_sport_is_still_ticked_by_its_sub_sports(
+    db, named, legacy_type, sport_type, discipline
+):
+    user = _seed_user(db)
+    plan = _seed_plan(db, user)
+    session = _named(db, plan, named, discipline)
+
+    assert completion.find_matching_session(
+        db, _recorded(db, user, legacy_type, sport_type)
+    ) == session

@@ -105,9 +105,14 @@ def _option_fits(option: dict, activity: Any) -> bool:
     """Whether the activity is this option's discipline and, when the option
     names one, its sport (#1090): a yoga class is `other` like a swim, but it
     is not the swim."""
-    return option.get("discipline") == discipline_for_activity_type(
-        getattr(activity, "type", None)
-    ) and same_sport(option.get("activity_type"), _sport_type(activity))
+    legacy = getattr(activity, "type", None)
+    named = option.get("activity_type")
+    # A session naming the exact sport is filled by it; one naming a parent
+    # sport ("Ride", "Workout") is still filled by the sports Strava files under
+    # it, as before #1129.
+    return option.get("discipline") == discipline_for_activity_type(legacy) and (
+        same_sport(named, _sport_type(activity)) or same_sport(named, legacy)
+    )
 
 
 def _option_closeness(option: dict, activity: Any) -> Optional[float]:
@@ -144,8 +149,12 @@ _REP_WORK_INTENTS = {"Tempo", "Intervals"}
 
 
 def _stated_rep_work(activity: Any) -> bool:
-    """Whether the runner said this run was the session's work."""
-    return getattr(activity, "user_intent", None) in _REP_WORK_INTENTS
+    """Whether the runner said this RUN was the session's work. A swim's
+    "Intervals" is not a run's, and a swim set is not what #1121 settled."""
+    return (
+        getattr(activity, "user_intent", None) in _REP_WORK_INTENTS
+        and same_sport("Run", _sport_type(activity))
+    )
 
 
 def _option_qualifies(option: dict, activity: Any, reps_shown: bool) -> bool:
