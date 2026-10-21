@@ -20,7 +20,7 @@ import { Loader2, LogOut } from 'lucide-react';
 //
 // Rendered only when Clerk is configured: `useClerk` needs its provider.
 
-type Account = { email: string; deletable: boolean };
+type Account = { email: string; deletable: boolean; is_owner: boolean };
 
 const DESTROYED =
   'your activities, streams and analysis, coaching reports, conversations, ' +
@@ -109,10 +109,14 @@ export default function AccountPanel() {
       {account && (
         <div className={card}>
           <h2 className="text-sm font-semibold">Delete account</h2>
-          {!account.deletable ? (
+          {account.is_owner ? (
             <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
               This is the account that owns this app, so it cannot be deleted
               here. Its coaching history exists nowhere else.
+            </p>
+          ) : !account.deletable ? (
+            <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+              Deleting an account is not available right now.
             </p>
           ) : !confirming ? (
             <>

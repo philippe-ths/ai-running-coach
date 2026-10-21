@@ -102,5 +102,5 @@ def test_the_account_read_says_whose_it_is_and_whether_it_can_go(client, db, mon
     app.dependency_overrides[verify_clerk_session] = lambda: test.user
     as_test = client.get("/api/account").json()
 
-    assert as_owner == {"email": owner.email, "deletable": False}
-    assert as_test == {"email": test.email, "deletable": True}
+    assert as_owner == {"email": owner.email, "deletable": False, "is_owner": True}
+    assert as_test == {"email": test.email, "deletable": True, "is_owner": False}

@@ -39,6 +39,9 @@ class AccountRead(BaseModel):
     email: str
     # False for the deployment owner, so the page explains rather than offers.
     deletable: bool
+    # Why not, when not: the owner, or (#1125) a deployment whose owner cannot be
+    # identified, where no account is deletable and none is told it is the owner.
+    is_owner: bool
 
 
 class AccountDeleteRequest(BaseModel):
@@ -66,7 +69,12 @@ def read_account(
     user: User = Depends(require_current_user),
 ) -> AccountRead:
     """The signed-in account, as the profile page's Account section shows it."""
-    return AccountRead(email=user.email, deletable=_may_be_deleted(db, user))
+    owner = resolve_owner_user(db)
+    return AccountRead(
+        email=user.email,
+        deletable=_may_be_deleted(db, user),
+        is_owner=owner is not None and owner.id == user.id,
+    )
 
 
 @router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)

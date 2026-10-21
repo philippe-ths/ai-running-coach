@@ -43,13 +43,24 @@ def _delete(client, ctx, email):
     return resp, clerk
 
 
-def test_the_cascade_covers_every_table_that_points_at_a_runner_or_their_activities(db):
-    pointing = {
-        table.name
-        for table in Base.metadata.sorted_tables
-        for fk in table.foreign_keys
-        if fk.column.table.name in ("users", "activities")
-    }
+def _tables_reaching_users() -> set:
+    """Every table whose rows can point, through any chain of foreign keys, at a
+    runner: each one is a row Postgres refuses to orphan."""
+    reaching = {"users"}
+    while True:
+        more = {
+            table.name
+            for table in Base.metadata.sorted_tables
+            for fk in table.foreign_keys
+            if fk.column.table.name in reaching
+        } - reaching
+        if not more:
+            return reaching - {"users"}
+        reaching |= more
+
+
+def test_the_cascade_covers_every_table_that_reaches_a_runner(db):
+    pointing = _tables_reaching_users()
     user = User(email="empty@del.dev")
     db.add(user)
     db.commit()
@@ -95,4 +106,26 @@ def test_no_account_is_deleted_while_the_owner_cannot_be_identified(
     assert _residual_rows(db, owner) > 10
 
     app.dependency_overrides[verify_clerk_session] = lambda: test.user
-    assert client.get("/api/account").json()["deletable"] is False
+    assert client.get("/api/account").json() == {
+        "email": test.email, "deletable": False, "is_owner": False,
+    }
+
+
+def test_the_deletion_is_committed_after_the_sign_in_is_gone(client, db, monkeypatch):
+    """Clerk before the commit, and a commit at all: without it a 204 leaves the
+    sign-in gone and every row kept."""
+    owner, test = _two_runners(db)
+    monkeypatch.setattr(settings, "OWNER_EMAIL", owner.email)
+    order = []
+    real_commit = db.commit
+    monkeypatch.setattr(db, "commit", lambda: (order.append("commit"), real_commit())[1])
+    app.dependency_overrides[verify_clerk_session] = lambda: test.user
+
+    with patch(
+        "app.api.account.delete_clerk_user_by_email",
+        side_effect=lambda _email: order.append("clerk") or True,
+    ):
+        resp = client.request("DELETE", "/api/account", json={"confirm_email": test.email})
+
+    assert resp.status_code == 204
+    assert order == ["clerk", "commit"]
