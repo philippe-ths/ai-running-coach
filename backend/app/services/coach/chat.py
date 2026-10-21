@@ -373,7 +373,17 @@ RATE_LIMITED_FAIL_MESSAGE = (
     "I'm getting a lot of requests right now, so I couldn't finish that "
     "reply. Give me a moment and try again — your message is saved."
 )
-_TURN_FAILURE_MESSAGES = {STREAM_FAIL_MESSAGE, RATE_LIMITED_FAIL_MESSAGE}
+TRUNCATED_FAIL_MESSAGE = (
+    "Sorry, that reply ran too long and was cut off. "
+    "Please ask again, or ask for a shorter answer."
+)
+# Every text a failed turn is stored as. A failure stored as any other text is
+# read back as the coach's words (#1124), so each one is a name here.
+_TURN_FAILURE_MESSAGES = {
+    STREAM_FAIL_MESSAGE,
+    RATE_LIMITED_FAIL_MESSAGE,
+    TRUNCATED_FAIL_MESSAGE,
+}
 
 # What the coach said when it could not answer: a safe redirect or a failed
 # turn. Neither is conversation, so neither threads forward as continuity —
@@ -656,10 +666,7 @@ async def _buffered_tool_loop(
                     _MAX_TOOL_ROUNDS,
                 )
                 stream_failed = True
-                stream_fail_message = (
-                    "Sorry, that reply ran too long and was cut off. "
-                    "Please ask again, or ask for a shorter answer."
-                )
+                stream_fail_message = TRUNCATED_FAIL_MESSAGE
                 break
             assistant_text = _extract_block_text(final_msg.content_blocks)
             break
