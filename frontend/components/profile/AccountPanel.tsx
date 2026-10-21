@@ -55,6 +55,7 @@ export default function AccountPanel() {
     if (!matches || deleting) return;
     setDeleting(true);
     setError('');
+    const failed = 'Your account could not be deleted. Nothing has changed — try again.';
     try {
       const res = await fetch('/api/account', {
         method: 'DELETE',
@@ -63,20 +64,23 @@ export default function AccountPanel() {
       });
       if (res.status !== 204) {
         const detail = (await res.json().catch(() => null))?.detail;
-        setError(
-          typeof detail === 'string'
-            ? detail
-            : 'Your account could not be deleted. Nothing has changed — try again.',
-        );
+        setError(typeof detail === 'string' ? detail : failed);
+        setDeleting(false);
         return;
       }
-      // The sign-in record is already gone server-side; this clears the
-      // browser's session so the app does not keep acting as a deleted user.
+    } catch {
+      setError(failed);
+      setDeleting(false);
+      return;
+    }
+    // The account is gone. The sign-in record is already gone server-side; this
+    // clears the browser's session so the app does not keep acting as a deleted
+    // user. A sign-out that fails against the deleted user must not read as a
+    // failed delete (#1125), so it leaves for the sign-in page regardless.
+    try {
       await signOut({ redirectUrl: '/sign-in' });
     } catch {
-      setError('Your account could not be deleted. Nothing has changed — try again.');
-    } finally {
-      setDeleting(false);
+      window.location.assign('/sign-in');
     }
   };
 

@@ -12,6 +12,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from app.core.clerk_auth import verify_clerk_session
+from app.core.config import settings
 from app.main import app
 from app.models import (
     Activity,
@@ -154,9 +155,11 @@ def test_delete_user_account_removes_every_owned_row(db):
     assert _residual_rows(db, b) > 10  # B is completely untouched
 
 
-def test_endpoint_deletes_account_and_calls_clerk(client, db):
+def test_endpoint_deletes_account_and_calls_clerk(client, db, monkeypatch):
     a = _seed_full_user(db, email="a@del.dev", athlete_id=1, strava_activity_id=11, hash_suffix="a")
     b = _seed_full_user(db, email="b@del.dev", athlete_id=2, strava_activity_id=22, hash_suffix="b")
+    # The owner must be identifiable for any delete to go ahead (#1125).
+    monkeypatch.setattr(settings, "OWNER_EMAIL", b.email)
     _act_as(a.user)
     with patch("app.api.account.delete_clerk_user_by_email", return_value=True) as clerk:
         resp = client.request("DELETE", "/api/account", json={"confirm_email": a.email})
@@ -166,10 +169,11 @@ def test_endpoint_deletes_account_and_calls_clerk(client, db):
     assert _residual_rows(db, b) > 10
 
 
-def test_endpoint_aborts_local_cascade_when_clerk_delete_fails(client, db):
+def test_endpoint_aborts_local_cascade_when_clerk_delete_fails(client, db, monkeypatch):
     a = _seed_full_user(db, email="a@del.dev", athlete_id=1, strava_activity_id=11, hash_suffix="a")
     # A second runner: alone, A would be the implicit owner, whom #969 never deletes.
-    _seed_full_user(db, email="b@del.dev", athlete_id=2, strava_activity_id=22, hash_suffix="b")
+    b = _seed_full_user(db, email="b@del.dev", athlete_id=2, strava_activity_id=22, hash_suffix="b")
+    monkeypatch.setattr(settings, "OWNER_EMAIL", b.email)
     _act_as(a.user)
     before = _residual_rows(db, a)
     with patch("app.api.account.delete_clerk_user_by_email", return_value=False):

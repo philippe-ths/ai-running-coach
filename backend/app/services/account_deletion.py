@@ -42,6 +42,7 @@ from app.models import (
     User,
     UserMaterial,
     UserProfile,
+    WeekRecommendation,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,15 +62,18 @@ _USER_OWNED = (
     StravaImport,
     UserMaterial,
     UserProfile,
+    WeekRecommendation,
 )
 
 
-def delete_user_account(db: Session, user_id) -> dict:
+def delete_user_account(db: Session, user_id, *, commit: bool = True) -> dict:
     """Delete every row owned by ``user_id`` in FK-safe order, then the user.
 
     Returns a per-table count of deleted rows (audit/verification). Commits once
     at the end so the whole cascade is atomic — a failure leaves the account
-    intact rather than half-deleted.
+    intact rather than half-deleted. ``commit=False`` leaves the transaction
+    open, so the endpoint can prove the cascade runs before it removes the Clerk
+    user (#1125): a table missing here then fails with nothing gone anywhere.
     """
     counts: dict[str, int] = {}
     activity_ids = select(Activity.id).where(Activity.user_id == user_id)
@@ -138,6 +142,7 @@ def delete_user_account(db: Session, user_id) -> dict:
         db.query(User).filter(User.id == user_id).delete(synchronize_session=False)
     )
 
-    db.commit()
+    if commit:
+        db.commit()
     logger.info("account_deleted", extra={"user_id": str(user_id), "counts": counts})
     return counts
