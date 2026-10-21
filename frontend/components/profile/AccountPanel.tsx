@@ -20,7 +20,7 @@ import { Loader2, LogOut } from 'lucide-react';
 //
 // Rendered only when Clerk is configured: `useClerk` needs its provider.
 
-type Account = { email: string; deletable: boolean };
+type Account = { email: string; deletable: boolean; is_owner: boolean };
 
 const DESTROYED =
   'your activities, streams and analysis, coaching reports, conversations, ' +
@@ -55,6 +55,7 @@ export default function AccountPanel() {
     if (!matches || deleting) return;
     setDeleting(true);
     setError('');
+    const failed = 'Your account could not be deleted. Nothing has changed — try again.';
     try {
       const res = await fetch('/api/account', {
         method: 'DELETE',
@@ -63,20 +64,23 @@ export default function AccountPanel() {
       });
       if (res.status !== 204) {
         const detail = (await res.json().catch(() => null))?.detail;
-        setError(
-          typeof detail === 'string'
-            ? detail
-            : 'Your account could not be deleted. Nothing has changed — try again.',
-        );
+        setError(typeof detail === 'string' ? detail : failed);
+        setDeleting(false);
         return;
       }
-      // The sign-in record is already gone server-side; this clears the
-      // browser's session so the app does not keep acting as a deleted user.
+    } catch {
+      setError(failed);
+      setDeleting(false);
+      return;
+    }
+    // The account is gone. The sign-in record is already gone server-side; this
+    // clears the browser's session so the app does not keep acting as a deleted
+    // user. A sign-out that fails against the deleted user must not read as a
+    // failed delete (#1125), so it leaves for the sign-in page regardless.
+    try {
       await signOut({ redirectUrl: '/sign-in' });
     } catch {
-      setError('Your account could not be deleted. Nothing has changed — try again.');
-    } finally {
-      setDeleting(false);
+      window.location.assign('/sign-in');
     }
   };
 
@@ -105,10 +109,14 @@ export default function AccountPanel() {
       {account && (
         <div className={card}>
           <h2 className="text-sm font-semibold">Delete account</h2>
-          {!account.deletable ? (
+          {account.is_owner ? (
             <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
               This is the account that owns this app, so it cannot be deleted
               here. Its coaching history exists nowhere else.
+            </p>
+          ) : !account.deletable ? (
+            <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+              Deleting an account is not available right now.
             </p>
           ) : !confirming ? (
             <>

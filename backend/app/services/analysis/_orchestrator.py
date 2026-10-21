@@ -384,17 +384,22 @@ def _stage_interval_kpis(ctx: StageContext) -> None:
 
 
 def _stage_history_metrics(ctx: StageContext) -> None:
-    """Load prior DerivedMetric rows for load-spike detection."""
+    """Load prior DerivedMetric rows for load-spike detection, in the history's
+    own order (most recent first). Load spike takes the first seven as "recent";
+    in the database's arbitrary row order that window shifted whenever rows were
+    rewritten, so re-analysing nothing new could flip the flag (#1037)."""
     history = ctx.get("history")
+    rows = (
+        ctx.get("db").query(DerivedMetric)
+        .filter(DerivedMetric.activity_id.in_([h.id for h in history]))
+        .all()
+        if history
+        else []
+    )
+    by_activity = {row.activity_id: row for row in rows}
     ctx.set(
         "history_metrics",
-        (
-            ctx.get("db").query(DerivedMetric)
-            .filter(DerivedMetric.activity_id.in_([h.id for h in history]))
-            .all()
-            if history
-            else []
-        ),
+        [by_activity[h.id] for h in history if h.id in by_activity],
     )
 
 

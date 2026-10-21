@@ -170,16 +170,25 @@ def _say_it_failed(db, thread_id, kind: str | None) -> None:
     the draft status serves, so the two never disagree, and carries none of the
     gate's machinery. Called BEFORE the plan is marked failed, so a sheet that
     re-reads the thread on seeing the failure finds the note already there.
-    Fail-soft: a note that cannot be written never stops the plan failing.
+    Fail-soft: a note that cannot be written never stops the plan failing. A
+    thread the runner deleted while the draft ran gets no note; inserting one
+    would violate its foreign key and, unrolled-back, leave the session unable to
+    mark the plan failed, so it read "being written" until the staleness sweep
+    (#1123). Any other failure is rolled back for the same reason.
     """
     if not thread_id:
         return
     note = "That plan did not make it into your schedule. " + failure_message(kind)
     try:
+        from app.models.thread import Thread
         from app.services.coach import threads as thread_service
 
+        if db.get(Thread, uuid.UUID(str(thread_id))) is None:
+            logger.info("schedule draft: thread %s is gone; no failure note", thread_id)
+            return
         thread_service.record_coach_note(db, thread_id, note)
     except Exception:  # noqa: BLE001 - the note is the consolation, not the work
+        db.rollback()
         logger.exception("schedule draft: failure note not written to %s", thread_id)
 
 

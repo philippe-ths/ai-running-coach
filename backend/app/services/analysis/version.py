@@ -9,7 +9,10 @@ stored history once when that deploy boots
 Bumps:
 1. #1065 — zone time on the moving clock, not by counting samples.
 2. #971 — a rep session is only a run's plan when the run shows reps, and a
-   wrong auto-tick is withdrawn as each run is re-analysed.
+   wrong auto-tick is withdrawn as each run is re-analysed. Before version 2
+   first ran in production it also carried #1121 (a run marked Tempo or
+   Intervals counts too), #1129 (a named sport is read from `sport_type`) and
+   #1122 (a pass walks oldest first, so it converges), so no bump for those.
 """
 
 ANALYSIS_VERSION = 2

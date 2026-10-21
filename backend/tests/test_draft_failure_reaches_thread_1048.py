@@ -114,3 +114,22 @@ def test_a_plan_that_lands_leaves_no_failure_note(db):
         return DraftOutcome(ok=True, plan_id=target_plan.id)
 
     assert _run(db, user, plan, thread, _ok) == []
+
+
+def test_a_thread_deleted_while_the_draft_ran_still_lets_the_plan_fail(db):
+    """#1123: the runner deleted the conversation mid-draft. On Postgres the note's
+    insert violated the thread foreign key and the swallowed error left the
+    session unable to mark the plan failed, so it read "being written"."""
+    user, thread = _runner_and_thread(db)
+    plan = store.create_drafting_plan(db, user.id)
+    plan_id = plan.id
+    db.delete(thread)
+    db.commit()
+
+    async def _rejected(*_args, **_kwargs):
+        return DraftOutcome(ok=False, failures=[OBSERVED_FAILURE])
+
+    notes = _run(db, user, plan, thread, _rejected)
+
+    assert notes == []
+    assert db.get(store.TrainingPlan, plan_id).status == store.FAILED

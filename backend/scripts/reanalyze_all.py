@@ -10,7 +10,7 @@ until the whole eligible set is drained (no queue, no pacing), which is exactly
 what the offline eval workflow needs.
 
     python -m scripts.reanalyze_all            # all eligible activities
-    python -m scripts.reanalyze_all --limit 50 # bound the run (newest first)
+    python -m scripts.reanalyze_all --limit 50 # bound the run (oldest first)
 
 Eligible = non-deleted activities that have stored streams (the only rows that
 can be re-derived offline). Idempotent: `analyze` upserts the `DerivedMetric`, so
@@ -30,7 +30,7 @@ def reanalyze_all(
     """Re-analyze eligible stored history to completion; return the count processed.
 
     Walks the same eligible set as the async job (non-deleted, stream-bearing),
-    newest first, by looping `reanalyze_history_batch` until the cursor drains —
+    oldest first, by looping `reanalyze_history_batch` until the cursor drains —
     so the re-analysis contract lives in one place. `limit` bounds the TOTAL
     number of activities processed (None means all); `batch_size` defaults to the
     configured `REANALYZE_BATCH_SIZE`.
@@ -55,7 +55,7 @@ def main() -> None:
         description="Re-analyze stored activities from their stored streams (run to completion)."
     )
     parser.add_argument(
-        "--limit", type=int, default=None, help="max activities to process (newest first)"
+        "--limit", type=int, default=None, help="max activities to process (oldest first)"
     )
     args = parser.parse_args()
 

@@ -111,15 +111,15 @@ def test_batch_paginates_by_cursor_without_gaps_or_repeats(db):
     for sid in (9101, 9102, 9103):
         _seed_activity(db, user, sid)
 
-    # First batch (newest first): processes the two highest ids, advances cursor.
+    # First batch (oldest first, #1122): processes the two lowest ids, advances cursor.
     batch1 = reanalyze_history_batch(db, limit=2)
-    assert batch1.processed == [9103, 9102]
+    assert batch1.processed == [9101, 9102]
     assert batch1.next_cursor == 9102
     assert batch1.remaining == 1
 
     # Second batch continues strictly past the cursor, drains the set.
     batch2 = reanalyze_history_batch(db, limit=2, cursor=batch1.next_cursor)
-    assert batch2.processed == [9101]
+    assert batch2.processed == [9103]
     assert batch2.next_cursor is None
     assert batch2.remaining == 0
 
@@ -344,7 +344,7 @@ def test_cli_reanalyzes_whole_set_across_batch_boundaries(db):
 
 
 def test_cli_limit_bounds_the_total_processed(db):
-    """`--limit N` stops after N activities (newest first), leaving the rest
+    """`--limit N` stops after N activities (oldest first, #1122), leaving the rest
     untouched, even when a single batch could hold more."""
     from scripts.reanalyze_all import reanalyze_all
 
@@ -356,10 +356,10 @@ def test_cli_limit_bounds_the_total_processed(db):
     processed = reanalyze_all(db, limit=2, batch_size=10)
 
     assert processed == 2
-    # Newest two re-analyzed; the oldest left untouched.
-    assert _has_metric(db, a3)
+    # Oldest two re-analyzed; the newest left untouched.
+    assert _has_metric(db, a1)
     assert _has_metric(db, a2)
-    assert not _has_metric(db, a1)
+    assert not _has_metric(db, a3)
 
 
 def test_cli_inherits_eligibility_excludes_streamless(db):
@@ -417,17 +417,17 @@ def test_global_pass_reports_remaining_across_every_runner(db):
 
     alice = _seed_user(db)
     bob = _seed_second_user(db)
-    # Newest-first by strava id: bob's two lead, alice's two follow.
-    _seed_activity(db, alice, 9501)
-    _seed_activity(db, alice, 9502)
-    _seed_activity(db, bob, 9503)
-    _seed_activity(db, bob, 9504)
+    # Oldest-first by strava id: bob's two lead, alice's two follow.
+    _seed_activity(db, bob, 9501)
+    _seed_activity(db, bob, 9502)
+    _seed_activity(db, alice, 9503)
+    _seed_activity(db, alice, 9504)
 
     # A FULL batch of bob's two, so the cursor advances and `remaining` is computed.
     # Alice's two are still eligible past that cursor.
     result = reanalyze_history_batch(db, limit=2)
 
-    assert result.next_cursor == 9503
+    assert result.next_cursor == 9502
     assert result.remaining == 2, (
         "an unscoped pass must count both of alice's activities as remaining; "
         "scoping to the last batch member's owner reports 0"
@@ -449,6 +449,6 @@ def test_scoped_pass_still_reports_only_that_runners_remaining(db):
 
     result = reanalyze_history_batch(db, limit=2, user_id=str(alice.id))
 
-    # Alice's newest two are done (9603, 9602); 9601 remains. Bob's never count.
+    # Alice's oldest two are done (9601, 9602); 9603 remains. Bob's never count.
     assert result.next_cursor == 9602
     assert result.remaining == 1
