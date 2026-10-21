@@ -150,6 +150,12 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
       });
+      // #956: another card for this offer was confirmed first (a second tab).
+      // The change is made, so the card reads as done rather than as a failure.
+      if (res.status === 409) {
+        setOfferState('done');
+        return;
+      }
       if (!res.ok) throw new Error(String(res.status));
       // The server says something back only when the write lands somewhere the
       // runner is not looking — a plan is drafted on the worker over a minute,

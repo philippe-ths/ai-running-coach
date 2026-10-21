@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
@@ -510,6 +510,9 @@ class StoredProposedAction(BaseModel):
     # #778: the card's own words, so the trace records what the runner actually
     # agreed to rather than a second description of it. Server-supplied.
     description: Optional[str] = None
+    # #956: the coach report whose offer this card is, so confirming spends the
+    # offer and not only this token. Server-supplied at the report read.
+    report_id: Optional[UUID] = None
 
 
 PROPOSED_ACTION_TOOL: Dict[str, Any] = {
@@ -679,6 +682,7 @@ def mint_proposed_action(
     *,
     thread_id: Optional[UUID] = None,
     prepared: Optional["PreparedOffer"] = None,
+    report_id: Optional[UUID] = None,
 ) -> tuple[dict, Optional[dict]]:
     """Validate a model-authored offer and mint the user-scoped action token.
 
@@ -732,6 +736,7 @@ def mint_proposed_action(
         update={
             "thread_id": stored.thread_id or thread_id,
             "description": frame.description,
+            "report_id": report_id,
         }
     )
 
@@ -766,10 +771,48 @@ def consume_and_execute(db: Session, owner_user_id: UUID, token: str) -> dict:
     if stored is None:
         raise LookupError("Proposed action not found")
 
-    result = _execute(db, owner_user_id, stored)
+    if stored.report_id is not None and not _spend_report_offer(db, stored.report_id):
+        # Another card for the same offer was confirmed first: a second tab, or
+        # a token minted before the first confirm landed.
+        raise OfferAlreadyConfirmed("You already confirmed this change.")
+    try:
+        result = _execute(db, owner_user_id, stored)
+    except Exception:
+        if stored.report_id is not None:
+            _unspend_report_offer(db, stored.report_id)
+        raise
     if stored.action_type not in DEFERRED_ACTION_TYPES:
         _record_confirmed(db, stored, result)
     return result
+
+
+class OfferAlreadyConfirmed(Exception):
+    """A card for a report offer that was already confirmed (#956)."""
+
+
+def _spend_report_offer(db: Session, report_id: UUID) -> bool:
+    """Mark a report's offer confirmed, once (#956). Compare-and-set, so of two
+    tokens for one offer only the first spends it. False when it was spent."""
+    from app.models.coach_report import CoachReport
+
+    spent = (
+        db.query(CoachReport)
+        .filter(CoachReport.id == report_id, CoachReport.offer_confirmed_at.is_(None))
+        .update({CoachReport.offer_confirmed_at: datetime.now(timezone.utc)}, synchronize_session=False)
+    )
+    db.commit()
+    return spent == 1
+
+
+def _unspend_report_offer(db: Session, report_id: UUID) -> None:
+    """The change failed, so nothing was confirmed: the offer is live again."""
+    from app.models.coach_report import CoachReport
+
+    db.rollback()
+    db.query(CoachReport).filter(CoachReport.id == report_id).update(
+        {CoachReport.offer_confirmed_at: None}, synchronize_session=False
+    )
+    db.commit()
 
 
 def _record_confirmed(
