@@ -12,6 +12,8 @@ import StanceDialsPanel from '@/components/StanceDialsPanel';
 import UserMaterialsPanel from '@/components/UserMaterialsPanel';
 import FeatureDisabledGate from '@/components/FeatureDisabledGate';
 import ProfileHub from '@/components/profile/ProfileHub';
+import AccountPanel from '@/components/profile/AccountPanel';
+import { clerkEnabled } from '@/lib/authMode';
 import SectionScreen from '@/components/profile/SectionScreen';
 import {
   AppSection,
@@ -258,6 +260,19 @@ function ProfileScreens() {
           </FeatureDisabledGate>
         </SectionScreen>
       );
+
+    // #967/#968: sign out and delete, in place of Clerk's own user menu. No
+    // Clerk, no account to manage: the hub hides the row, and the URL falls
+    // through to the hub like any section this build does not know.
+    case 'account':
+      if (clerkEnabled) {
+        return (
+          <SectionScreen title="Account">
+            <AccountPanel />
+          </SectionScreen>
+        );
+      }
+    // falls through
 
     // No section, or one this build does not know: the hub.
     default:

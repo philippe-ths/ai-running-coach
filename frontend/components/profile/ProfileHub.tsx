@@ -6,6 +6,7 @@ import { useTheme } from 'next-themes';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 import { SettingGroup, SettingRow } from './SettingRow';
 import { useConnectionStatus } from '@/lib/useConnectionStatus';
+import { clerkEnabled } from '@/lib/authMode';
 import {
   EXPERIENCE_LABELS,
   GOAL_LABELS,
@@ -208,6 +209,17 @@ export default function ProfileHub({ form }: { form: ProfileForm }) {
         />
         <SettingRow href="/profile?s=app" name="Appearance" value={themeValue} />
       </SettingGroup>
+
+      {clerkEnabled && (
+        <SettingGroup title="Account">
+          <SettingRow
+            href="/profile?s=account"
+            name="Account"
+            value="Sign out, delete"
+            valueTone="muted"
+          />
+        </SettingGroup>
+      )}
     </div>
   );
 }
