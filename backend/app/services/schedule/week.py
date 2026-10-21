@@ -19,7 +19,7 @@ missing something you agreed to is exactly what the coach should see.
 """
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, List, Optional
 
 from pydantic import ValidationError
@@ -48,6 +48,7 @@ from app.services.activity_facts import (
     query_facts,
 )
 from app.services.coach.volume import build_training_volume
+from app.services.runner_clock import local_date, runner_zone
 from app.services.schedule import store
 from app.services.schedule.disciplines import discipline_for_fact
 from app.services.schedule.placement import (
@@ -153,19 +154,20 @@ def _to_session_read(
         return None
 
 
-def _done_on(row: Any, fact_day_by_activity: dict) -> Optional[date]:
+def _done_on(row: Any, fact_day_by_activity: dict, zone: tzinfo = timezone.utc) -> Optional[date]:
     """The day a done session used up, kept inside its own window (#1081).
 
     A session matched to an activity was done on that activity's day. One ticked
     by hand carries only the moment of the tick, which is the best the app knows:
     a walk ticked on Thursday for Tuesday counts on Thursday unless that is
     outside its window, where it is held to the nearest day it could have been.
+    That moment is read on the runner's calendar, not UTC's (#1085).
     """
     if getattr(row, "completed_at", None) is None:
         return None
     day = fact_day_by_activity.get(getattr(row, "completed_activity_id", None))
     if day is None:
-        day = row.completed_at.date()
+        day = local_date(row.completed_at, zone)
     return min(max(day, row.window_start), row.window_end)
 
 
@@ -274,7 +276,8 @@ def build_week(
     today: Optional[date] = None,
 ) -> ScheduleWeekRead:
     """The runner's week: what is planned, what is logged, and how it compares."""
-    today = today or date.today()
+    zone = runner_zone(db, user.id)
+    today = today or local_date(datetime.now(timezone.utc), zone)
     profile = getattr(user, "profile", None)
     starts_on = resolve_week_start(profile)
 
@@ -368,7 +371,7 @@ def build_week(
     for row in rows:
         if session_status(row, today) != "done":
             continue
-        day = _done_on(row, fact_day_by_activity)
+        day = _done_on(row, fact_day_by_activity, zone)
         done_on_by_id[row.id] = day
         fixed.append(PlacedSession(session_id=row.id, intent=_done_intent(row), day=day))
     _, raw_violations = check_rules(open_rows, rules, today, fixed=fixed)

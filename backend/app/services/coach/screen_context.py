@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -68,8 +67,11 @@ def resolve_screen_view(
             return None
         from app.services.coach.query_tools import get_session_detail
 
+        from app.services.runner_clock import runner_today
+
         detail = get_session_detail(
-            db, owner_user_id, activity_id=str(pointer.activity_id), today=date.today()
+            db, owner_user_id, activity_id=str(pointer.activity_id),
+            today=runner_today(db, owner_user_id),
         )
         if detail.get("error"):
             # Cross-user or unknown id: an unresolvable claim gets no voice.
