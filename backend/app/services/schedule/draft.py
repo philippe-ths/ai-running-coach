@@ -40,7 +40,7 @@ from app.models.training_plan import TrainingPlan
 from app.models.user import User
 from app.schemas.season import DraftLog, SeasonPlan
 from app.services.coach import turn
-from app.services.coach.llm import ReasonedCallFailed
+from app.services.coach.llm import ReasonedCallFailed, is_unreachable
 from app.services.coach.retrieval import fetch_corpus
 from app.services.coach.stance import resolve_stance
 from app.services.coach.volume import build_training_volume
@@ -516,11 +516,6 @@ async def draft_plan(
                 effort="high",
                 web_search_max_uses=0,
             )
-        except (TypeError, AttributeError):
-            # A bad kwarg or a missing method is a bug in this code, not a network
-            # that misbehaved; the catch below would report it to the runner as
-            # "could not be reached" after retries that reached nothing.
-            raise
         except ReasonedCallFailed as exc:
             # The call ran and was billed but gave no usable answer (cut off, or
             # no tool call). That is the coach's OUTPUT failing, not the network,
@@ -535,7 +530,12 @@ async def draft_plan(
             previous = None
             failure_kind = store.FAILURE_UNKNOWN
             continue
-        except Exception as exc:  # transport, timeout, refusal
+        except Exception as exc:
+            # Only a call that never got through is "could not be reached"; a
+            # bad kwarg or any other bug in this code is raised so it is found,
+            # not reported after retries that reached nothing (#999).
+            if not is_unreachable(exc):
+                raise
             logger.warning("schedule draft: generation call failed: %s", exc)
             if transport_retries_left > 0:
                 transport_retries_left -= 1

@@ -123,6 +123,31 @@ def _rate_limit_backoff_seconds(exc: Any, retry_index: int) -> float:
     return min(backoff, _RATE_LIMIT_BACKOFF_CAP_SECONDS)
 
 
+def is_unreachable(exc: BaseException) -> bool:
+    """Whether a model call failed because the coach could not be reached (#999).
+
+    The ladder's own retriable set, plus the caller's deadline running out: what
+    a loop around a model call may retry or report as "could not be reached".
+    Anything else is this code or the model's answer failing, and calling it
+    unreachable sends a bug to the runner as a network blip, after retries that
+    reached nothing.
+    """
+    import anthropic
+
+    if isinstance(
+        exc,
+        (
+            anthropic.APIConnectionError,  # includes APITimeoutError
+            anthropic.RateLimitError,
+            httpx2.RemoteProtocolError,
+            TimeoutError,
+            asyncio.TimeoutError,
+        ),
+    ):
+        return True
+    return isinstance(exc, anthropic.APIStatusError) and exc.status_code >= 500
+
+
 class RetryLadder:
     """THE transport retry policy for every Anthropic call this app makes (#801).
 

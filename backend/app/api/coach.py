@@ -218,7 +218,7 @@ def _with_offer(db: Session, user: User, read: CoachReportRead) -> CoachReportRe
     row the offer names on top of that, so a report that somehow named another
     runner's session yields no card rather than a tappable one.
     """
-    card = mint_report_offer(db, user.id, read.report)
+    card = mint_report_offer(db, user.id, read.report, report_id=read.id)
     if card:
         read.offer = CoachReportOfferCard.model_validate(card)
     # The stored half never goes on the wire. It is server-side bookkeeping —

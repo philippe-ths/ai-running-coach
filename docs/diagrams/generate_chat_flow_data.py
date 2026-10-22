@@ -826,7 +826,12 @@ def _capture_assembled() -> dict:
             }
 
             # --- the bounded history the model is actually handed ---
-            history = thread_service.thread_messages(db, thread)[-tt._MAX_LLM_HISTORY_TURNS:]
+            # Filtered as `thread_turn._llm_history` filters it (#1124): an event
+            # row, a notice or a failed turn is never handed to the model.
+            history = [
+                m for m in thread_service.thread_messages(db, thread)
+                if thread_service.was_said(m)
+            ][-tt._MAX_LLM_HISTORY_TURNS:]
             history_facts = {
                 "total_in_thread": db.query(CoachChatMessage)
                     .filter(CoachChatMessage.thread_id == thread.id).count(),

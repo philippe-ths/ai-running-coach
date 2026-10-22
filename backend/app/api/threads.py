@@ -205,10 +205,15 @@ def confirm_proposed_action(
     db: DbSession,
     user: CurrentUser,
 ):
-    from app.services.coach.proposed_actions import consume_and_execute
+    from app.services.coach.proposed_actions import (
+        OfferAlreadyConfirmed,
+        consume_and_execute,
+    )
 
     try:
         result = consume_and_execute(db, user.id, body.token)
+    except OfferAlreadyConfirmed as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except LookupError:
         raise HTTPException(status_code=404, detail="Proposed action not found")
     except ValueError as exc:

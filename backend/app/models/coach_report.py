@@ -77,6 +77,14 @@ class CoachReport(Base):
     # row reads as stale, so it regenerates once onto the current voice.
     voice_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
+    # #956: when the runner confirmed this report's offer. Runner state, not what
+    # the coach wrote, so it sits beside `report` rather than inside it. A spent
+    # offer is never minted as a card again; a regenerated report is a new row
+    # whose own offer is fresh.
+    offer_confirmed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

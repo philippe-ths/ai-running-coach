@@ -222,7 +222,7 @@ def test_a_landed_amendment_is_published_and_said(db, redis):
     assert state["status"] == "done"
 
     said = _said(db, thread)
-    note = [m for m in said if m.role == "assistant"]
+    note = [m for m in said if m.role == "notice"]
     assert len(note) == 1, "the coach has to come back and say the week is in"
     assert "7 sessions" in note[0].content
     # And the ledger entry beside it, which is for the COACH rather than the
@@ -242,6 +242,7 @@ def test_a_failed_amendment_is_published_and_said(db, redis):
     )
 
     assert amend_watch.current(user.id)["status"] == "failed"
+    # Spoken (#1124): nothing else tells the coach the amendment failed.
     note = [m for m in _said(db, thread) if m.role == "assistant"]
     assert len(note) == 1
     assert "could not write" in note[0].content
@@ -262,4 +263,4 @@ def test_the_landing_guard_would_fail_without_the_note(db, redis, monkeypatch):
 
     _run_job(db, user, plan, AmendOutcome(ok=True, weeks_touched=1, sessions_written=7), thread)
 
-    assert [m for m in _said(db, thread) if m.role == "assistant"] == []
+    assert [m for m in _said(db, thread) if m.role == "notice"] == []

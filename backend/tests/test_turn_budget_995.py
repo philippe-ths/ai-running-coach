@@ -200,9 +200,8 @@ def test_the_refusal_names_the_window_that_would_have_fitted(db):
 class _CountingClient:
     """Counts calls and answers off-contract, so the loop rejects it.
 
-    Deliberately NOT a client that raises: `propose_amendment` treats any
-    exception from the call as a transport failure and retries, so a double that
-    raises to signal "I was called" is swallowed and the test learns nothing.
+    Deliberately NOT a client that raises: a raise would end the run (#999)
+    before the count says anything about the size gate.
     """
 
     def __init__(self):

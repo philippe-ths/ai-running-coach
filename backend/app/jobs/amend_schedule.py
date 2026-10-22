@@ -46,6 +46,7 @@ def amend_schedule_job(
     job already sitting in Redis when this deploys still binds and runs.
     """
     db = SessionLocal()
+    user = start = end = None
     try:
         user = db.query(User).filter(User.id == uuid.UUID(str(user_id))).first()
         plan = (
@@ -122,6 +123,18 @@ def amend_schedule_job(
             )
     except Exception:
         logger.exception("schedule amend: job failed for plan %s", plan_id)
+        # A raise is a failure the runner is waiting on like any other (#999):
+        # without this they get no note, and the screen says the week is being
+        # worked out until the watch expires.
+        try:
+            db.rollback()
+            _say_it_failed(db, thread_id, [])
+            if user is not None and start is not None:
+                from app.services.schedule import amend_watch
+
+                amend_watch.mark_failed(user.id, start, end, "the amendment job raised")
+        except Exception:  # noqa: BLE001 - never raise out of the worker
+            logger.exception("schedule amend: could not report the failure for %s", plan_id)
     finally:
         db.close()
 
@@ -177,7 +190,9 @@ def _say_it_failed(db, thread_id, failures) -> None:
     try:
         from app.services.coach import threads as thread_service
 
-        thread_service.record_coach_note(db, thread_id, note)
+        # Spoken: nothing else tells the coach this amendment failed, and the
+        # runner's natural reply ("try again") needs a coach that knows (#1124).
+        thread_service.record_coach_note(db, thread_id, note, spoken=True)
     except Exception:  # noqa: BLE001 - the note is the consolation, not the work
         logger.exception("schedule amend: failure note not written to %s", thread_id)
 

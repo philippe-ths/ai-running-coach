@@ -195,10 +195,29 @@ def report_in_flight(
     )
     if row is None:
         return None
-    if _is_stale(row):
-        mark_failed(db, row, "abandoned: still generating after the staleness window", kind=FAILURE_UNKNOWN)
+    if settle_if_stale(db, row).status != GENERATING:
         return None
     return row
+
+
+def settle_if_stale(db: Session, report: PeriodReport) -> PeriodReport:
+    """Mark a row stuck in `generating` past `STALE_AFTER` as failed, and return
+    it. Run on every read as well as before a new request (#1128): a worker
+    killed mid-job or a lost enqueue otherwise leaves a report that says it is
+    being reviewed forever. It is stamped as failing when it went stale, not
+    when someone happened to look, so the screen does not call an old failure
+    new."""
+    if report.status != GENERATING or not _is_stale(report):
+        return report
+    created = report.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    mark_failed(
+        db, report, "abandoned: still generating after the staleness window",
+        kind=FAILURE_UNKNOWN, failed_at=created + STALE_AFTER,
+    )
+    db.refresh(report)
+    return report
 
 
 def find_ready(
@@ -313,7 +332,12 @@ def mark_ready(
 
 
 def mark_failed(
-    db: Session, report: PeriodReport, reason: str, *, kind: str = FAILURE_UNKNOWN
+    db: Session,
+    report: PeriodReport,
+    reason: str,
+    *,
+    kind: str = FAILURE_UNKNOWN,
+    failed_at: Optional[datetime] = None,
 ) -> Optional[PeriodReport]:
     """COMPARE-AND-SET, the `mark_ready` precedent: only writes `failed` over a
     row that is still `generating`. Called both by a generation's own failure
@@ -330,7 +354,7 @@ def mark_failed(
         # #974: a failed row persists, so it has to say WHEN it failed. Kept in
         # `meta` beside the reason rather than in a column of its own: it is
         # only ever read back for display.
-        "failed_at": datetime.now(timezone.utc).isoformat(),
+        "failed_at": (failed_at or datetime.now(timezone.utc)).isoformat(),
     }
     updated = (
         db.query(PeriodReport)

@@ -97,17 +97,18 @@ def _conversation_block(db: Session, user: User, thread_id: Optional[str]) -> st
                 thread_id,
             )
             return ""
-        from app.services.coach.threads import CONVERSATIONAL_ROLES
+        from app.services.coach.threads import said
 
         rows = (
             db.query(CoachChatMessage)
             .filter(
                 CoachChatMessage.thread_id == thread.id,
                 # This block is the conversation that settled the plan, and each
-                # line is attributed to Runner or You. An action event (#778) is
-                # neither, so it is read out of the transcript rather than
-                # attributed to whichever side the else-branch happens to name.
-                CoachChatMessage.role.in_(CONVERSATIONAL_ROLES),
+                # line is attributed to Runner or You. An action event (#778) or
+                # a failed turn (#1124) is neither, so it is read out of the
+                # transcript rather than attributed to whichever side the
+                # else-branch happens to name.
+                said(),
             )
             .order_by(
                 CoachChatMessage.created_at.desc(), CoachChatMessage.id.desc()

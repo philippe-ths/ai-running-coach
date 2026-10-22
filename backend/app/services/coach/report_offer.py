@@ -231,8 +231,15 @@ def _session_ids_in_pack(pack: CoachContextPack) -> Set[str]:
     return ids
 
 
+def _offer_spent(db: Session, report_id: UUID) -> bool:
+    from app.models.coach_report import CoachReport
+
+    row = db.get(CoachReport, report_id)
+    return row is not None and row.offer_confirmed_at is not None
+
+
 def mint_report_offer(
-    db: Session, owner_user_id: UUID, report: Any
+    db: Session, owner_user_id: UUID, report: Any, *, report_id: Optional[UUID] = None
 ) -> Optional[Dict[str, Any]]:
     """Mint the single-use action token for a stored offer, for THIS reader.
 
@@ -256,6 +263,9 @@ def mint_report_offer(
     offer = getattr(report, "offer", None)
     if offer is None:
         return None
+    if report_id is not None and _offer_spent(db, report_id):
+        # Confirmed already (#956): a re-read is not a second chance to apply it.
+        return None
     # Belt and braces over the store-time whitelist: a row written by an older
     # build, or by a future kind added to CoachReportOffer without being added
     # here, must not become a card.
@@ -270,7 +280,8 @@ def mint_report_offer(
 
     try:
         _result, frame = mint_proposed_action(
-            db, owner_user_id, offer.model_dump(mode="json", exclude_none=True)
+            db, owner_user_id, offer.model_dump(mode="json", exclude_none=True),
+            report_id=report_id,
         )
     except Exception:  # noqa: BLE001 -- a card is never worth failing the report read
         logger.exception("coach report offer mint failed")

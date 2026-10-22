@@ -24,7 +24,7 @@ That key is a partial unique index scoped to `superseded_at IS NULL`, so every r
 Its `report` JSON is either the legacy structured `CoachReportContent` (schema 1.2) or the prose `CoachMessageReport` (schema 2.0).
 One evolving `CoachReport` row holds both exchange stages: the opener writes `opener_message`, and the fuller turn fills `message` in place.
 A `Thread` is a runner-initiated conversation, and its `CoachChatMessage` rows store `asked_from`, `tools_used`, and `skills_used` provenance.
-A `CoachChatMessage` with role `event` records a confirmed proposed action, and `threads.CONVERSATIONAL_ROLES` keeps it out of everything that reads what was said.
+Every reader that hands a thread to a model filters with `threads.said`, which keeps out `event` rows (a confirmed action) and `notice` rows (a failed turn or a job's note, shown to the runner as the coach).
 A `RunnerBaseline` stores rolling per-user typicals plus trends bucketed by effort, terrain and temperature band.
 A `RunnerMemory` is the durable memory profile of facts the runner stated, the citable `Stated memory` tier that yields to this run's `DerivedMetric` on conflict.
 A `UserMaterial` is a runner-uploaded markdown file whose untrusted `raw_text` never enters a prompt or the API, only its strict-coerced `distilled` record.

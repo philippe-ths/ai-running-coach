@@ -57,7 +57,7 @@ def _run(db, user, plan, thread, draft):
     return [
         m.content
         for m in db.query(CoachChatMessage)
-        .filter(CoachChatMessage.thread_id == thread_id, CoachChatMessage.role == "assistant")
+        .filter(CoachChatMessage.thread_id == thread_id, CoachChatMessage.role == "notice")
         .all()
     ]
 
