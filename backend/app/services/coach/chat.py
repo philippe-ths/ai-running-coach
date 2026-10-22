@@ -448,11 +448,6 @@ async def _buffered_tool_loop(
     surfaces gate against different pack sources but share this loop verbatim,
     so the safety-floor mechanics cannot drift between them."""
     yield _heartbeat()
-    from app.services.runner_clock import runner_today
-
-    # The runner's date, not the server's (#1073): every named window a tool
-    # resolves ("this week", "today") starts from where the runner is.
-    today = runner_today(db, owner_user_id)
     assistant_text = None
     stream_failed = False
     # The message served if the stream fails; the except may specialise it (#625).
@@ -644,9 +639,7 @@ async def _buffered_tool_loop(
                         status_tool=name or "",
                     )
                     last_heartbeat = time.monotonic()
-                    result = execute_chat_tool(
-                        db, owner_user_id, name, tool_input, today=today
-                    )
+                    result = execute_chat_tool(db, owner_user_id, name, tool_input)
                     raw_tool_results.append((name, result))
                     # #664: AFTER the fetch, derive the compact trace record of what it
                     # returned (resolved window + count, all server-derived) and both

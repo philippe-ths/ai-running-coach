@@ -149,9 +149,9 @@ def _build_baseline_sections(db: Session, user: User) -> dict:
     if profile_json:
         sections["memory"] = profile_json
     try:
-        from app.services.runner_clock import runner_today
+        from datetime import date
 
-        readiness = build_readiness(db, user.id, runner_today(db, user.id))
+        readiness = build_readiness(db, user.id, date.today())
     except Exception:  # noqa: BLE001 — a readiness hiccup never blocks a reply
         readiness = None
     if readiness is not None:
@@ -229,10 +229,9 @@ def _max_hr_revision_section(db: Session, user: User) -> Optional[dict]:
 def _schedule_section(db: Session, user: User) -> Optional[dict]:
     """The runner's active plan, or None when they have none."""
     try:
-        from app.services.runner_clock import runner_today
         from app.services.schedule.coach_view import build_thread_schedule
 
-        return build_thread_schedule(db, user, today=runner_today(db, user.id))
+        return build_thread_schedule(db, user)
     except Exception:  # noqa: BLE001 — a schedule hiccup never blocks a reply
         logger.exception("thread schedule section failed for user %s", user.id)
         return None
@@ -255,6 +254,8 @@ def _running_norm_section(db: Session, user: User) -> Optional[dict]:
     neither has a norm.
     """
     try:
+        from datetime import date
+
         from app.services.schedule.draft import fetch_draft_facts
         from app.services.schedule.norms import running_norm_weekly_m, weekly_hours_norm_s
         from app.services.schedule.plan_validator import (
@@ -263,9 +264,7 @@ def _running_norm_section(db: Session, user: User) -> Optional[dict]:
             volume_ceilings,
         )
 
-        from app.services.runner_clock import runner_today
-
-        today = runner_today(db, user.id)
+        today = date.today()
         facts = fetch_draft_facts(db, user, today)
         norm = running_norm_weekly_m(facts, today)
         ceilings = volume_ceilings(norm)

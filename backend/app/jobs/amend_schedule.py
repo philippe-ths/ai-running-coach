@@ -19,6 +19,7 @@ path by name.
 import asyncio
 import logging
 import uuid
+from datetime import date
 
 from app.db.session import SessionLocal
 from app.models.user import User
@@ -79,15 +80,12 @@ def amend_schedule_job(
             )
             return
 
-        from app.services.runner_clock import runner_today
         from app.services.schedule import amend_watch
         from app.services.schedule.amend import resolve_window
         from app.services.weeks import resolve_week_start
 
-        # The runner's date, as the card that was confirmed resolved it (#1073).
-        today = runner_today(db, user.id)
         start, end = resolve_window(
-            today,
+            date.today(),
             resolve_week_start(getattr(user, "profile", None)),
             weeks_from=int(weeks_from),
             weeks_through=int(weeks_through),
@@ -100,7 +98,6 @@ def amend_schedule_job(
                 weeks_from=int(weeks_from),
                 weeks_through=int(weeks_through),
                 instruction=instruction or "",
-                today=today,
             )
         )
         if outcome.ok:

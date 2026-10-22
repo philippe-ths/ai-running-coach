@@ -53,7 +53,6 @@ from app.services.schedule.horizon import (
     build_horizon,
     planned_by_challenge_week,
 )
-from app.services.runner_clock import runner_today
 from app.services.schedule.week import build_week
 from app.services.weeks import resolve_week_start
 
@@ -228,7 +227,7 @@ def read_previous_plan(db: DbSession, user: CurrentUser) -> PreviousPlanRead:
         generated_at=plan.generated_at,
         horizon_end=plan.horizon_end,
         sessions_ahead=store.count_sessions_from(
-            db, user.id, plan.id, on_or_after=runner_today(db, user.id)
+            db, user.id, plan.id, on_or_after=date.today()
         ),
         restorable=blocker is None,
         message=blocker or _PREVIOUS_PLAN_AVAILABLE,
@@ -383,7 +382,7 @@ def _challenge_statuses(db, user, plan, goal_names, today) -> list:
 
 
 def _season_read(db, user) -> SeasonRead:
-    today = runner_today(db, user.id)
+    today = date.today()
     upcoming = store.list_goal_races(db, user.id, on_or_after=today)
     goals_read = [GoalRaceRead.model_validate(g) for g in upcoming]
     drafting = season_store.drafting_in_flight(db, user.id)
@@ -442,7 +441,7 @@ def start_season(db: DbSession, user: CurrentUser) -> SeasonRead:
         raise HTTPException(
             status_code=409, detail="Your coach is already planning your season."
         )
-    if not store.list_goal_races(db, user.id, on_or_after=runner_today(db, user.id)):
+    if not store.list_goal_races(db, user.id, on_or_after=date.today()):
         raise HTTPException(status_code=422, detail=season_store.NO_GOALS_MESSAGE)
     season = season_store.create_drafting_season(db, user.id)
     enqueue_season(user.id, season.id)

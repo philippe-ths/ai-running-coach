@@ -520,21 +520,28 @@ def test_the_conversation_carries_the_week_the_runner_is_actually_training_on_ev
     """Day-independence proof for #949: the fixture-construction fix above must
     hold no matter which real-world weekday the suite happens to run on.
 
-    `_schedule_section` passes the runner's own date (`runner_clock
-    .runner_today`, #1073) to `build_thread_schedule`, so pinning that one
-    function fixes "today" for the whole chain without adding a dependency
-    (e.g. freezegun, which is not in this project). This exercises the REAL
-    call chain the app uses (`thread_turn._build_baseline_sections` ->
-    `_schedule_section` -> `build_thread_schedule` -> `_week_view`), not a
-    reimplementation of it.
+    `build_thread_schedule` reads `date.today()` (via `app.services.schedule
+    .coach_view`'s module-level `date` import) when no `today` is passed, and
+    `_build_baseline_sections`/`_schedule_section` never pass one through — so
+    the only injection seam available without adding a dependency (e.g.
+    freezegun, which is not in this project) is patching that module's `date`
+    name to a subclass whose `today()` returns the fixed value under test. This
+    exercises the REAL call chain the app uses (`thread_turn
+    ._build_baseline_sections` -> `_schedule_section` -> `build_thread_schedule`
+    -> `_week_view`), not a reimplementation of it.
 
     2026-08-10 is a Monday, so the seven parametrized dates cover one full week
     including Sunday — the day the original bug only reproduced on.
     """
-    from app.services import runner_clock
     from app.services.coach import thread_turn
+    from app.services.schedule import coach_view
 
-    monkeypatch.setattr(runner_clock, "runner_today", lambda *_a, **_k: today)
+    class _PinnedDate(date):
+        @classmethod
+        def today(cls):
+            return today
+
+    monkeypatch.setattr(coach_view, "date", _PinnedDate)
 
     user = _user(db)
     plan = _active_plan(db, user)
