@@ -16,9 +16,11 @@ of eligible activities newer than the cursor (oldest first) and, while work
 remains, schedules its successor via rq-scheduler `enqueue_in` carrying the
 advanced cursor. A fresh trigger starts with no cursor (from the oldest
 activity), which is exactly the "re-run after a derivation change" semantics — no
-DB marker and no migration are needed. A worker crash mid-run is recovered by
-re-triggering: the chain restarts from the oldest activity and idempotently
-re-derives until it passes where it stopped.
+DB marker and no migration are needed. A worker crash mid-run of a manual chain
+is recovered by re-triggering: the chain restarts from the oldest activity and
+idempotently re-derives until it passes where it stopped. The worker-boot pass
+for an `ANALYSIS_VERSION` keeps its progress in Redis instead, and a later boot
+resumes it (`reanalyze_if_analysis_changed`, #1122).
 
 Oldest first because analysis reads the runner's EARLIER activities' stored
 metrics (load spike, risk): walked newest first, each activity was judged
@@ -298,6 +300,9 @@ _APPLIED_KEY = "analysis_version_applied:{}"
 # the pass was queued rather than finished, so it is read as not finished.
 _DONE = "done"
 _AT = "at:"
+# Long enough to cover two workers booting together, short enough that the
+# next real boot after an interruption is never refused.
+_RESUME_LEASE_SECONDS = 60
 
 
 def _version_job_id(version: int, cursor: Optional[int]) -> str:
@@ -353,6 +358,9 @@ def reanalyze_if_analysis_changed() -> bool:
                 return False
             if _version_pass_pending(ANALYSIS_VERSION):
                 logger.info("analysis version %d: pass still running", ANALYSIS_VERSION)
+                return False
+            # Two workers booting at once both see nothing waiting; only one resumes.
+            if not redis_conn.set(f"{key}:resuming", "1", nx=True, ex=_RESUME_LEASE_SECONDS):
                 return False
             tail = state[len(_AT):] if state.startswith(_AT) else ""
             cursor = int(tail) if tail.isdigit() else None

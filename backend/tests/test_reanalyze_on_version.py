@@ -5,6 +5,7 @@ through a manual per-runner trigger. The worker now starts one gentle, global
 pass per analysis version at boot.
 """
 
+import uuid
 from unittest.mock import MagicMock, patch
 
 from app.core.config import settings
@@ -51,10 +52,10 @@ class _FakeQueue:
         self.enqueue = enqueue or MagicMock(side_effect=self._enqueue)
 
     def _enqueue(self, func, *args, job_id=None, **_):
-        self.waiting.append((job_id, args))
+        self.waiting.append((job_id or str(uuid.uuid4()), args))  # RQ's own default
 
     def enqueue_in(self, _delay, func, *args, job_id=None, **_):
-        self.waiting.append((job_id, args))
+        self.waiting.append((job_id or str(uuid.uuid4()), args))
 
     def get_job_ids(self):
         return []
@@ -112,6 +113,28 @@ def test_an_interrupted_pass_resumes_from_its_last_finished_batch():
     assert enqueue.call_args.args[1:] == (4242, None, settings.AUTO_REANALYZE_BATCH_SIZE, 1)
 
 
+def test_two_workers_booting_on_an_interrupted_pass_resume_it_once():
+    redis = _FakeRedis()
+    redis.store[mod._APPLIED_KEY.format(1)] = "at:4242"
+    enqueue = MagicMock()  # records nothing, so the second boot sees nothing waiting
+
+    first, _ = _boot(redis, enqueue=enqueue)
+    second, _ = _boot(redis, enqueue=enqueue)
+
+    assert (first, second) == (True, False)
+    enqueue.assert_called_once()
+
+
+def test_a_failed_resume_keeps_the_progress_for_the_next_boot():
+    redis = _FakeRedis()
+    key = mod._APPLIED_KEY.format(1)
+    redis.store[key] = "at:4242"
+
+    _boot(redis, enqueue=MagicMock(side_effect=ConnectionError("queue down")))
+
+    assert redis.store[key] == "at:4242"
+
+
 def test_a_marker_from_before_progress_was_recorded_reruns_the_pass():
     """The old marker was set when the pass was queued, so it says nothing about
     whether the pass finished; re-analysis is idempotent, so run it again."""
@@ -124,7 +147,7 @@ def test_a_marker_from_before_progress_was_recorded_reruns_the_pass():
     assert enqueue.call_args.args[1] is None
 
 
-def test_each_batch_records_progress_and_names_its_successor_for_the_boot():
+def test_each_batch_records_progress_and_names_its_successor_for_the_boot(caplog):
     """The successor's job id is what the boot looks for, so a chain that is
     alive is never doubled, and one that died is resumed where it stopped."""
     redis = _FakeRedis()
@@ -144,7 +167,10 @@ def test_each_batch_records_progress_and_names_its_successor_for_the_boot():
     run(middle, None)
     assert redis.store[key] == "at:7"
     assert fake_queue.waiting[-1][1] == (7, None, 2, 1)
-    assert _boot(redis, fake_queue=fake_queue)[0] is False  # alive: left alone
+    with caplog.at_level("INFO"):
+        assert _boot(redis, fake_queue=fake_queue)[0] is False  # alive: left alone
+    assert "pass still running" in caplog.text
+    assert "check failed" not in caplog.text
 
     fake_queue.waiting.clear()  # the worker died before running the successor
     started, enqueue = _boot(redis, fake_queue=fake_queue)

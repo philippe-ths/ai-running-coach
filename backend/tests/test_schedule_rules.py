@@ -409,3 +409,24 @@ def test_the_same_week_fits_when_the_long_run_can_take_the_last_day():
     week, rules = _over_full_by_the_rest_day(SUN)
 
     assert check_rules(week, rules) == (True, [])
+
+
+def test_the_rest_after_session_is_placed_first_even_with_the_widest_window(caplog):
+    """The capacity check sees the lost day only once the long run is placed, so
+    it must be placed first even when its window is the widest in the week."""
+    intents = ["easy", "quality", "strength", "walk", "cross", "mobility"]
+    others = [
+        _session(intents[i % 6], *((MON, FRI) if i % 2 else (WED, SUN)), session_id=f"s{i}")
+        for i in range(12)
+    ]
+    week = [_session("long", MON, SAT, session_id="long"), *others]
+    rules = [
+        REST_AFTER_LONG,
+        SpacingRule(kind="max_sessions_per_day", label="At most two a day", count=2),
+    ]
+
+    with caplog.at_level("WARNING"):
+        ok, violations = check_rules(week, rules)
+
+    assert not ok
+    assert "ran out of budget" not in caplog.text

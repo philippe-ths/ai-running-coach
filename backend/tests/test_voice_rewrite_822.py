@@ -170,6 +170,10 @@ def test_a_number_word_sourced_by_its_digits_is_not_invention():
     assert invented_numbers(baseline, voiced) == []
 
 
+def test_a_figure_the_baseline_wrote_in_words_sources_its_digits():
+    assert invented_numbers("Five km easy.", "5 km easy.") == []
+
+
 def test_one_and_half_are_not_read_as_figures():
     """"One" is as often a pronoun as a count, and "half" is a share."""
     assert invented_numbers("Ramp back.", "Any one of those is manageable, half the week.") == []
@@ -186,6 +190,8 @@ def test_a_day_the_baseline_never_named_is_invention():
 def test_a_time_word_the_baseline_made_is_not_invention():
     assert invented_time_words("Rest today, run Sunday.", "Today: rest. Sunday: run.") == []
     assert invented_time_words("A big week.", "A big week, so rest tomorrow.") == ["tomorrow"]
+    assert invented_time_words("Long runs on Sunday.", "Sundays are for the long run.") == []
+    assert invented_time_words("A big week.", "Run easy on Fridays.") == ["friday"]
 
 
 # ---------------------------------------------------------------------------
