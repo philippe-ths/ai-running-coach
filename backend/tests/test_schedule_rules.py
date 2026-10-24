@@ -373,3 +373,39 @@ def test_a_week_of_eight_freely_floating_sessions_resolves_quickly():
 
     assert (ok, violations) == (True, [])
     assert elapsed < 2.0, f"the week search took {elapsed:.2f}s"
+
+
+def _over_full_by_the_rest_day(long_end):
+    """Two a day, a long run then a rest day, and twelve other sessions: thirteen
+    sessions for the fourteen slots of seven days, minus the two the rest day
+    takes. Mixed intents, so the twin pruning cannot shortcut the search."""
+    intents = ["easy", "quality", "strength", "walk", "cross", "mobility"]
+    others = [
+        _session(intents[i % 6], MON + timedelta(days=i % 2), SUN, session_id=f"s{i}")
+        for i in range(12)
+    ]
+    rules = [
+        REST_AFTER_LONG,
+        SpacingRule(kind="max_sessions_per_day", label="At most two a day", count=2),
+    ]
+    return [_session("long", MON, long_end, session_id="long"), *others], rules
+
+
+def test_a_week_over_full_only_because_of_a_rest_day_reports_the_clash(caplog):
+    """#1084: this week used to run out of search budget and report no violations."""
+    week, rules = _over_full_by_the_rest_day(SAT)
+
+    with caplog.at_level("WARNING"):
+        ok, violations = check_rules(week, rules)
+
+    assert not ok
+    assert "A full rest day after the long run" in _labels(violations)
+    assert "ran out of budget" not in caplog.text
+
+
+def test_the_same_week_fits_when_the_long_run_can_take_the_last_day():
+    """The rest day after a Sunday long run falls outside the week, so it costs
+    no slot: the pruning must not reject a week that can be arranged."""
+    week, rules = _over_full_by_the_rest_day(SUN)
+
+    assert check_rules(week, rules) == (True, [])
