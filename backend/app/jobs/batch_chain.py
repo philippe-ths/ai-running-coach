@@ -25,7 +25,7 @@ import uuid
 from datetime import timedelta
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Activity, ActivityStream
@@ -65,8 +65,9 @@ def scope_to_user(stmt, user_id: Optional[str]):
 
 
 def count_eligible(db: Session, stmt) -> int:
-    """How many rows an eligibility statement selects."""
-    return len(db.execute(stmt).scalars().all())
+    """How many rows an eligibility statement selects, counted in the database
+    rather than by loading every row, which each batch of a chain asks (#1122)."""
+    return db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery()))
 
 
 def acquire_enqueue_slot(
@@ -97,15 +98,15 @@ def acquire_enqueue_slot(
         return degrade_open
 
 
-def schedule_after(job_func, pause_seconds: int, *args) -> None:
+def schedule_after(job_func, pause_seconds: int, *args, **options) -> None:
     """Schedule the chain's successor after ``pause_seconds`` so the single worker
     stays free to process webhooks between batches. Carries ``*args`` (cursor and/or
     user) so the chain stays scoped to the triggering runner and resumes where it
-    left off.
+    left off. ``options`` (such as ``job_id``) pass through to RQ.
 
     Uses RQ-native deferred scheduling (drained by the worker's ``with_scheduler``),
     so no separate rq-scheduler process is needed (#123/ADR 0006).
     """
     from app.core.queue import queue
 
-    queue.enqueue_in(timedelta(seconds=pause_seconds), job_func, *args)
+    queue.enqueue_in(timedelta(seconds=pause_seconds), job_func, *args, **options)
