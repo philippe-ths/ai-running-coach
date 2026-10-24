@@ -24,6 +24,7 @@ from app.services.coach.voice_rewrite import (
     APPLIED,
     build_rewrite_prompts,
     invented_numbers,
+    invented_time_words,
     render_voice_character,
     revoice_report,
 )
@@ -156,6 +157,43 @@ def test_a_number_with_no_source_is_invention():
     assert invented_numbers("You ran 5 km", "You ran 5 km in 8 weeks") == ["8"]
 
 
+def test_a_number_written_in_words_is_still_a_number():
+    """#1053: "back five kilometres" is the same claim as "back 5 km"."""
+    assert invented_numbers("You ran 18 km", "You ran 18 km, back five kilometres") == ["5"]
+    assert invented_numbers("You ran 18 km", "Rolling seven-day load") == ["7"]
+
+
+def test_a_number_word_sourced_by_its_digits_is_not_invention():
+    """Real rewrites spell out the baseline's figures: "eighteen", "fifty-five"."""
+    baseline = "The 18 km long run. HR dropped 55 beats in 2 minutes, 300 m short."
+    voiced = "The eighteen kilometre long run. Fifty-five beats in two minutes, three hundred metres short."
+    assert invented_numbers(baseline, voiced) == []
+
+
+def test_a_figure_the_baseline_wrote_in_words_sources_its_digits():
+    assert invented_numbers("Five km easy.", "5 km easy.") == []
+
+
+def test_one_and_half_are_not_read_as_figures():
+    """"One" is as often a pronoun as a count, and "half" is a share."""
+    assert invented_numbers("Ramp back.", "Any one of those is manageable, half the week.") == []
+
+
+def test_a_day_the_baseline_never_named_is_invention():
+    """#1053: the real rewrite that told the runner when to run, which the report
+    had not."""
+    baseline = "Let the intervals go and arrive at Sunday's long run fresh."
+    voiced = "Run easy Friday or Saturday, and arrive at Sunday's long run fresh."
+    assert invented_time_words(baseline, voiced) == ["friday", "saturday"]
+
+
+def test_a_time_word_the_baseline_made_is_not_invention():
+    assert invented_time_words("Rest today, run Sunday.", "Today: rest. Sunday: run.") == []
+    assert invented_time_words("A big week.", "A big week, so rest tomorrow.") == ["tomorrow"]
+    assert invented_time_words("Long runs on Sunday.", "Sundays are for the long run.") == []
+    assert invented_time_words("A big week.", "Run easy on Fridays.") == ["friday"]
+
+
 # ---------------------------------------------------------------------------
 # The guarantee, and the degrade path that protects it
 # ---------------------------------------------------------------------------
@@ -180,6 +218,18 @@ async def test_default_voice_makes_no_call_at_all():
         )
     assert result.text is None and build.call_count == 0
     assert result.reason == "default_voice"
+
+
+@pytest.mark.asyncio
+async def test_an_invented_time_word_serves_the_baseline():
+    """#1053: a day named by the voice and not the report is a new claim."""
+    outcome = await _revoice(
+        _voice(voice_preset="roast"),
+        "Half your normal week, and that reads as detraining. Ramp back on Friday.",
+    )
+    assert outcome.text is None
+    assert outcome.reason == "invented_time:friday"
+    assert outcome.rejected_text is not None
 
 
 @pytest.mark.asyncio

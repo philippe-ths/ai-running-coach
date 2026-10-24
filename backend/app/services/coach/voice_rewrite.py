@@ -281,11 +281,65 @@ def extract_report(raw: str) -> Optional[str]:
 # ("5.1 km" read back as "5 km") passes while a figure with no source does not.
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 
+# A number written out ("back five kilometres") is the same claim as one in
+# digits, so words are read as their figure on both sides (#1053): "eighteen" in
+# the rewrite is sourced by an 18 in the baseline. "One" is left out because it
+# is as often a pronoun as a count, and "half" because it is a share, not a figure.
+_UNITS = (
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen "
+    "fourteen fifteen sixteen seventeen eighteen nineteen"
+).split()
+_TENS = "twenty thirty forty fifty sixty seventy eighty ninety".split()
+_NUMBER_WORD = re.compile(
+    rf"\b(?:({'|'.join(_TENS)})(?:[- ]({'|'.join(_UNITS[1:10])}))?"
+    rf"|({'|'.join(u for u in _UNITS if u != 'one')}))\b"
+    r"(?:\s+(hundred|thousand))?",
+    re.IGNORECASE,
+)
+
+
+def _number_words(text: str) -> list[str]:
+    """The figures `text` writes out in words, as digits."""
+    figures = []
+    for tens, unit, small, scale in _NUMBER_WORD.findall(text):
+        if tens:
+            value = 10 * (_TENS.index(tens.lower()) + 2)
+            value += _UNITS.index(unit.lower()) if unit else 0
+        else:
+            value = _UNITS.index(small.lower())
+        if scale:
+            value *= 100 if scale.lower() == "hundred" else 1000
+        figures.append(str(value))
+    return figures
+
 
 def invented_numbers(baseline: str, voiced: str) -> list[str]:
-    """Numbers in the re-voiced text that appear nowhere in the baseline."""
-    source = _NUMBER.sub(lambda m: m.group(0), baseline)
-    return [n for n in _NUMBER.findall(voiced) if n not in source]
+    """Numbers in the re-voiced text, in digits or words, that appear nowhere in
+    the baseline."""
+    source = " ".join([baseline, *_number_words(baseline)])
+    figures = _NUMBER.findall(voiced) + _number_words(voiced)
+    return [n for n in figures if n not in source]
+
+
+# A day named is a claim too: "run easy Friday" tells the runner when, and a
+# rewrite that names a day the report never did has decided it (#1053). Matched
+# as whole phrases, so the report's "this week" sources only "this week".
+_TIME_WORD = re.compile(
+    r"\b(yesterday|today|tonight|tomorrow"
+    r"|(?:this|last|next) (?:morning|afternoon|evening|night|week|weekend|month)"
+    r"|monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b",
+    re.IGNORECASE,
+)
+
+
+def invented_time_words(baseline: str, voiced: str) -> list[str]:
+    """Days and time references in the re-voiced text the baseline never made."""
+    source = {m.lower() for m in _TIME_WORD.findall(baseline)}
+    found = []
+    for word in (m.lower() for m in _TIME_WORD.findall(voiced)):
+        if word not in source and word not in found:
+            found.append(word)
+    return found
 
 
 # Composing from findings gives a voice licence to leave things out, which is what
@@ -453,6 +507,19 @@ async def revoice_report(
         return RewriteOutcome(
             None,
             f"invented_numbers:{','.join(invented[:3])}",
+            elapsed,
+            rejected_text=voiced,
+        )
+
+    invented_times = invented_time_words(baseline, voiced)
+    if invented_times:
+        logger.warning(
+            "voice_rewrite introduced unsourced time words %s; serving the baseline",
+            invented_times,
+        )
+        return RewriteOutcome(
+            None,
+            f"invented_time:{','.join(invented_times[:3])}",
             elapsed,
             rejected_text=voiced,
         )

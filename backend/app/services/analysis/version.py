@@ -3,8 +3,11 @@
 A change to how analysis derives a stored `DerivedMetric` value only reaches
 activities analysed after it, unless history is re-analysed. Bump
 `ANALYSIS_VERSION` in the same change, and the worker re-analyses every runner's
-stored history once when that deploy boots
-(`jobs.reanalyze_history.reanalyze_if_analysis_changed`).
+activities that have stored streams once when that deploy boots, resuming on a
+later boot if the pass is cut off
+(`jobs.reanalyze_history.reanalyze_if_analysis_changed`). Summary-only
+activities (a history import, or a backfill not yet run) are not reached: they
+keep their stored values until their streams are fetched and analysed.
 
 Bumps:
 1. #1065 — zone time on the moving clock, not by counting samples.
