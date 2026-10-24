@@ -235,9 +235,10 @@ class CoachReportMeta(BaseModel):
     voice_name: Optional[str] = None
     # #824: what the rewrite did — "applied", or why the baseline stands
     # ("default_voice", "switched_off", "over_budget", "transport_error",
-    # "invented_numbers:…", "policy:…"). Without it a null voiced_message cannot be
-    # told apart from a rewrite that failed, which is a hole in the audit the two-pass
-    # design exists to provide. Optional so pre-#822 stored meta validates.
+    # "invented_numbers:…", "invented_time:…", "policy:…"). Without it a null
+    # voiced_message cannot be told apart from a rewrite that failed, which is a
+    # hole in the audit the two-pass design exists to provide. Optional so pre-#822
+    # stored meta validates.
     voice_rewrite: Optional[str] = None
 
 
