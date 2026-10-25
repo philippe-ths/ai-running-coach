@@ -227,8 +227,8 @@ def test_job_schedules_next_batch_when_cursor_remains():
         mod.reanalyze_history_job()
 
     # cursor advances to 1; user_id is None here (the unscoped global call), and
-    # no batch size was given, so none is carried.
-    sched.assert_called_once_with(1, None, None)
+    # no batch size or version was given, so none is carried.
+    sched.assert_called_once_with(1, None, None, None)
 
 
 def test_job_does_not_reschedule_when_drained():

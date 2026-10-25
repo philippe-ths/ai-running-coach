@@ -16,9 +16,11 @@ of eligible activities newer than the cursor (oldest first) and, while work
 remains, schedules its successor via rq-scheduler `enqueue_in` carrying the
 advanced cursor. A fresh trigger starts with no cursor (from the oldest
 activity), which is exactly the "re-run after a derivation change" semantics — no
-DB marker and no migration are needed. A worker crash mid-run is recovered by
-re-triggering: the chain restarts from the oldest activity and idempotently
-re-derives until it passes where it stopped.
+DB marker and no migration are needed. A worker crash mid-run of a manual chain
+is recovered by re-triggering: the chain restarts from the oldest activity and
+idempotently re-derives until it passes where it stopped. The worker-boot pass
+for an `ANALYSIS_VERSION` keeps its progress in Redis instead, and a later boot
+resumes it (`reanalyze_if_analysis_changed`, #1122).
 
 Oldest first because analysis reads the runner's EARLIER activities' stored
 metrics (load spike, risk): walked newest first, each activity was judged
@@ -199,18 +201,35 @@ def reanalyze_history_batch(
 
 
 def _schedule_next_batch(
-    cursor: int, user_id: Optional[str] = None, batch_size: Optional[int] = None
+    cursor: int,
+    user_id: Optional[str] = None,
+    batch_size: Optional[int] = None,
+    version: Optional[int] = None,
 ) -> None:
     """Schedule the next batch after the configured pause. Carries the advanced
     `cursor`, `user_id` and `batch_size` so the self-paced chain resumes strictly
     past where it stopped, stays scoped to the triggering runner (#470), and keeps
-    its batch size. The chain mechanics live in `batch_chain.schedule_after` (#698)."""
+    its batch size. The chain mechanics live in `batch_chain.schedule_after` (#698).
+
+    A version pass also carries its `version`, and names each successor by it, so
+    the worker boot can see the pass is still running (`_version_pass_pending`)."""
+    if version is None:
+        batch_chain.schedule_after(
+            reanalyze_history_job,
+            settings.REANALYZE_BATCH_PAUSE_SECONDS,
+            cursor,
+            user_id,
+            batch_size,
+        )
+        return
     batch_chain.schedule_after(
         reanalyze_history_job,
         settings.REANALYZE_BATCH_PAUSE_SECONDS,
         cursor,
         user_id,
         batch_size,
+        version,
+        job_id=_version_job_id(version, cursor),
     )
 
 
@@ -218,13 +237,16 @@ def reanalyze_history_job(
     cursor: Optional[int] = None,
     user_id: Optional[str] = None,
     batch_size: Optional[int] = None,
+    version: Optional[int] = None,
 ) -> None:
     """RQ entrypoint. Runs one batch; if work remains, schedules the next.
 
     `user_id` scopes the eligible set to one runner (#470); the user-triggered
     path always supplies it, while an unscoped call still re-analyzes globally.
     `batch_size` defaults to `REANALYZE_BATCH_SIZE`; a successor already queued
-    before it existed carries two arguments and gets the default.
+    before it existed carries two arguments and gets the default. `version` is
+    set only on the worker-boot pass for that `ANALYSIS_VERSION`, which records
+    its progress after each batch so a later boot can finish it (#1122).
     """
     db = SessionLocal()
     try:
@@ -237,8 +259,10 @@ def reanalyze_history_job(
     finally:
         db.close()
 
+    if version is not None:
+        _record_progress(version, result.next_cursor)
     if result.next_cursor is not None:
-        _schedule_next_batch(result.next_cursor, user_id, batch_size)
+        _schedule_next_batch(result.next_cursor, user_id, batch_size, version)
         logger.info(
             "Re-analysis scheduled next batch in %ds (%d remaining)",
             settings.REANALYZE_BATCH_PAUSE_SECONDS,
@@ -270,40 +294,102 @@ def enqueue_reanalyze(db: Session, user_id) -> int:
 
 
 _APPLIED_KEY = "analysis_version_applied:{}"
+# The marker holds how far the pass for that version has got: `_DONE` once it
+# drained, otherwise `_AT` and the cursor of the last finished batch (empty
+# before the first). A marker written by code before #1122 holds "1", set when
+# the pass was queued rather than finished, so it is read as not finished.
+_DONE = "done"
+_AT = "at:"
+# Long enough to cover two workers booting together, short enough that the
+# next real boot after an interruption is never refused.
+_RESUME_LEASE_SECONDS = 60
+
+
+def _version_job_id(version: int, cursor: Optional[int]) -> str:
+    return f"{_REANALYZE_JOB_ID}_v{version}_at{cursor or 0}"
+
+
+def _record_progress(version: int, next_cursor: Optional[int]) -> None:
+    """Write how far the version pass has got. Best-effort: a lost write costs a
+    later boot some repeated, idempotent work, never a stopped chain."""
+    from app.core.queue import redis_conn
+
+    value = _DONE if next_cursor is None else f"{_AT}{next_cursor}"
+    try:
+        redis_conn.set(_APPLIED_KEY.format(version), value)
+    except Exception as exc:  # noqa: BLE001 - progress is best-effort
+        logger.warning("analysis version progress not recorded: %s", type(exc).__name__)
+
+
+def _version_pass_pending(version: int) -> bool:
+    """Whether a batch of this version's pass is waiting in the queue or the
+    scheduled registry, so the chain is alive and a boot must not start another.
+
+    A batch that was running when its worker died is not counted: it will never
+    schedule its successor, which is the interruption a boot exists to repair.
+    """
+    prefix = f"{_REANALYZE_JOB_ID}_v{version}_"
+    waiting = list(queue.get_job_ids()) + list(queue.scheduled_job_registry.get_job_ids())
+    return any(job_id.startswith(prefix) for job_id in waiting)
 
 
 def reanalyze_if_analysis_changed() -> bool:
     """Worker-boot hook: re-analyse every runner once per `ANALYSIS_VERSION`.
 
-    A Redis marker per version stops a restart from starting a second pass. A
-    lost marker costs one repeat pass, which is safe because re-analysis is
+    The Redis marker per version records the pass's progress (#1122): a boot
+    after it finished queues nothing; a boot that finds it unfinished and no
+    batch of it waiting resumes it from the last finished batch, so a pass cut
+    off by a redeploy or a failed batch is completed rather than marked done.
+    A lost marker costs one repeat pass, which is safe because re-analysis is
     idempotent. Never stops the worker from booting. True if a pass started.
     """
     from app.core.queue import redis_conn
 
     key = _APPLIED_KEY.format(ANALYSIS_VERSION)
     try:
-        if not redis_conn.set(key, "1", nx=True):
-            return False
+        state = redis_conn.get(key)
+        if state is None:
+            if not redis_conn.set(key, _AT, nx=True):
+                return False  # another worker booting at once took it
+            cursor = None
+        else:
+            state = state.decode() if isinstance(state, bytes) else str(state)
+            if state == _DONE:
+                return False
+            if _version_pass_pending(ANALYSIS_VERSION):
+                logger.info("analysis version %d: pass still running", ANALYSIS_VERSION)
+                return False
+            # Two workers booting at once both see nothing waiting; only one resumes.
+            if not redis_conn.set(f"{key}:resuming", "1", nx=True, ex=_RESUME_LEASE_SECONDS):
+                return False
+            tail = state[len(_AT):] if state.startswith(_AT) else ""
+            cursor = int(tail) if tail.isdigit() else None
     except Exception as exc:  # noqa: BLE001 - never stop the worker from booting
         logger.warning("analysis version check failed: %s", type(exc).__name__)
         return False
     try:
         queue.enqueue(
             reanalyze_history_job,
-            None,  # cursor: start from the oldest activity
+            cursor,  # None: start from the oldest activity
             None,  # user_id: every runner
             settings.AUTO_REANALYZE_BATCH_SIZE,
-            job_id=f"{_REANALYZE_JOB_ID}_v{ANALYSIS_VERSION}",
+            ANALYSIS_VERSION,
+            job_id=_version_job_id(ANALYSIS_VERSION, cursor),
             result_ttl=batch_chain.CHAIN_RESULT_TTL,
         )
     except Exception as exc:  # noqa: BLE001 - never stop the worker from booting
-        # Release the marker so the next boot tries again.
-        try:
-            redis_conn.delete(key)
-        except Exception:  # noqa: BLE001
-            pass
+        # A fresh pass releases the marker so the next boot tries again; an
+        # unfinished one keeps its progress for the next boot to resume.
+        if cursor is None and state is None:
+            try:
+                redis_conn.delete(key)
+            except Exception:  # noqa: BLE001
+                pass
         logger.warning("analysis version re-analysis not queued: %s", type(exc).__name__)
         return False
-    logger.info("analysis version %d: re-analysing every runner", ANALYSIS_VERSION)
+    logger.info(
+        "analysis version %d: re-analysing every runner%s",
+        ANALYSIS_VERSION,
+        f" from cursor {cursor}" if cursor is not None else "",
+    )
     return True

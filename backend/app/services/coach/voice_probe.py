@@ -48,7 +48,12 @@ from app.services.coach.eval.rubric import (
 )
 from app.services.coach.validator import validate_message_policy
 from app.services.coach.voice import PRESETS, VoiceProfile, resolve_voice
-from app.services.coach.voice_rewrite import APPLIED, RewriteOutcome, invented_numbers
+from app.services.coach.voice_rewrite import (
+    APPLIED,
+    RewriteOutcome,
+    invented_numbers,
+    invented_time_words,
+)
 
 # ---------------------------------------------------------------------------
 # The recorded hard-case set
@@ -369,6 +374,13 @@ def _run_checks(baseline: Baseline, voiced: str) -> dict[str, tuple[str, str]]:
         else (CHECK_PASS, "every figure in the rewrite came from the baseline")
     )
 
+    invented_times = invented_time_words(baseline.text, voiced)
+    checks["invented_time"] = (
+        (CHECK_FAIL, f"time words absent from the baseline: {', '.join(invented_times)}")
+        if invented_times
+        else (CHECK_PASS, "every day and time word in the rewrite came from the baseline")
+    )
+
     violations = _policy_validator(baseline)(voiced)
     checks["policy_floor"] = (
         (CHECK_FAIL, "; ".join(f"{v.rule}: {v.detail}" for v in violations))
@@ -523,7 +535,7 @@ def summarise(results: Sequence[ProbeResult]) -> dict:
         "applied": sum(1 for r in results if r.applied),
         "rejected_by_the_gate": sum(
             1 for r in results if not r.applied and r.outcome_reason.split(":")[0]
-            in ("invented_numbers", "policy", "dropped")
+            in ("invented_numbers", "invented_time", "policy", "dropped")
         ),
         "skipped": sum(
             1

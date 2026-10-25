@@ -58,3 +58,12 @@ def test_an_unknown_voice_is_refused_by_name():
     with pytest.raises(voice_probe.ProbeError) as exc:
         voice_probe.resolve_named_voice("the_narrator")
     assert "the_narrator" in str(exc.value)
+
+
+def test_a_time_word_rejection_counts_as_the_gate_rejecting():
+    """#1053 added a gate reason; the summary must not drop it into no bucket."""
+    result = voice_probe.ProbeResult(
+        voice="roast", baseline=None, outcome_reason="invented_time:friday",
+        voiced=None, duration_ms=1,
+    )
+    assert voice_probe.summarise([result])["rejected_by_the_gate"] == 1

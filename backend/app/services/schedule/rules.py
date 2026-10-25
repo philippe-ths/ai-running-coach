@@ -221,13 +221,20 @@ def find_assignment(
     def twin_key(pair: Tuple[Any, List]) -> Tuple:
         return (pair[0].intent, tuple(pair[1]))
 
-    domains.sort(key=lambda pair: (len(pair[1]), twin_key(pair)))
+    # A session followed by a rest day goes first: once it is placed, the day
+    # after it has no room left, which the capacity check below can then see.
+    rest_after = {r.intent for r in checkable if r.kind == "rest_day_after"}
+    domains.sort(
+        key=lambda pair: (pair[0].intent not in rest_after, len(pair[1]), twin_key(pair))
+    )
     placed: List[PlacedSession] = list(fixed)
 
     # The tightest "at most N a day", if any. Used to stop a branch as soon as
     # the sessions still to place cannot fit in the room left on their days,
     # rather than discovering it by trying every arrangement of them: a week
-    # with more activities than the runner's limit allows fails at once.
+    # with more activities than the runner's limit allows fails at once, and so
+    # does one over-full only because a rest day after a session took a day
+    # away (#1084).
     caps = [r.count for r in checkable if r.kind == "max_sessions_per_day" and r.count]
     cap = min(caps) if caps else None
 
@@ -238,7 +245,8 @@ def find_assignment(
         if not rest:
             return True
         used = Counter(p.day for p in placed if p.intent != "rest")
-        days = set().union(*(set(d) for _, d in rest))
+        rested = {p.day + timedelta(days=1) for p in placed if p.intent in rest_after}
+        days = set().union(*(set(d) for _, d in rest)) - rested
         return len(rest) <= sum(max(0, cap - used[day]) for day in days)
 
     def backtrack(index: int) -> bool:
