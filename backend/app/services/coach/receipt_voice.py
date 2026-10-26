@@ -38,7 +38,6 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
-from rq.exceptions import DuplicateJobError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -341,19 +340,11 @@ def enqueue_receipt_template_refresh(user_id) -> None:
         from app.core.queue import queue
         from app.jobs.generate_receipt_templates import generate_receipt_templates_job
 
-        # `unique=True`: RQ rejects the repeated id only when asked (#1136). The
-        # job leaves no result behind, so the id collapses repeats only while one
-        # is queued or running, and a later voice change can still enqueue.
         queue.enqueue(
             generate_receipt_templates_job,
             str(user_id),
             job_id=f"receipt_templates_{user_id}",
-            result_ttl=0,
-            failure_ttl=600,
-            unique=True,
         )
-    except DuplicateJobError:
-        logger.info("receipt-template refresh for user %s already queued", user_id)
     except Exception:  # noqa: BLE001 — fire-and-forget
         logger.exception(
             "failed to enqueue receipt-template refresh for user %s", user_id

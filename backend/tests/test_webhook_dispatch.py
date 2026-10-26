@@ -53,6 +53,7 @@ def _post(
     object_id: int = 7777,
     owner_id: int = CONNECTED_ATHLETE_ID,
     subscription_id: int = 1,
+    event_time: int = 1700000000,
 ):
     payload = {
         "object_type": "activity",
@@ -60,7 +61,7 @@ def _post(
         "aspect_type": aspect_type,
         "owner_id": owner_id,
         "subscription_id": subscription_id,
-        "event_time": 1700000000,
+        "event_time": event_time,
         "updates": {},
     }
     return client.post("/api/webhooks/strava", json=payload)
@@ -341,6 +342,18 @@ class TestWebhookDeliveredTwice:
         assert second.status_code == 200
         assert len(unique_queue.runs) == 1
 
+    def test_rename_while_the_create_is_still_queued_runs_one_pipeline(
+        self, client, db, unique_queue, connected_account
+    ):
+        # The create's job has not stored the row yet, so a quick rename looks like
+        # a missed create. It must join the create's job, not start a second one.
+        _seed_activity(db, user=connected_account.user, strava_activity_id=7000)
+        _post(client, aspect_type="create", object_id=8888, event_time=1700000000)
+        second = _post(client, aspect_type="update", object_id=8888, event_time=1700000042)
+
+        assert second.status_code == 200
+        assert len(unique_queue.runs) == 1
+
 
 class TestUpdateForAnActivityWeNeverStored:
     """#1136: an `update` for an activity with no row (its `create` was lost)
@@ -421,9 +434,16 @@ class TestDeletingTheMemberThatHeldTheCheck:
     def test_deleting_the_last_member_schedules_the_survivors_check(
         self, client, db, fake_queue, deferred, connected_account
     ):
+        from datetime import datetime, timezone
+
         from app.jobs.process_new_activity import block_complete_job
+        from app.models import Exchange
 
         first, _later, block = self._block_of_two(db, connected_account.user)
+        # A live session: its receipt opened the exchange moments ago.
+        ex = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+        ex.opened_at = datetime.now(timezone.utc)
+        db.commit()
 
         response = _post(client, aspect_type="delete", object_id=6002)
         assert response.status_code == 200
@@ -431,6 +451,33 @@ class TestDeletingTheMemberThatHeldTheCheck:
         assert [(f, a) for f, a, _ in deferred.runs] == [
             (block_complete_job, (str(block.id), str(first.id)))
         ]
+
+    def test_deleting_from_a_never_opened_block_schedules_nothing(
+        self, client, db, fake_queue, deferred, connected_account
+    ):
+        # Imported history never opens an exchange: deleting a duplicate of an
+        # old run must not produce a full report about it.
+        self._block_of_two(db, connected_account.user)
+
+        _post(client, aspect_type="delete", object_id=6002)
+
+        assert deferred.runs == []
+
+    def test_deleting_from_a_long_past_session_schedules_nothing(
+        self, client, db, fake_queue, deferred, connected_account
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from app.models import Exchange
+
+        _first, _later, block = self._block_of_two(db, connected_account.user)
+        ex = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+        ex.opened_at = datetime.now(timezone.utc) - timedelta(days=60)
+        db.commit()
+
+        _post(client, aspect_type="delete", object_id=6002)
+
+        assert deferred.runs == []
 
     def test_deleting_an_earlier_member_schedules_nothing(
         self, client, db, fake_queue, deferred, connected_account

@@ -265,7 +265,7 @@ async def receive_webhook(
             process_new_activity_job,
             strava_athlete_id=event.owner_id,
             strava_activity_id=event.object_id,
-            job_id=f"pipeline_{event.object_id}_{event.event_time}",
+            job_id=f"pipeline_{event.object_id}",
             result_ttl=3600,
             retry=PIPELINE_RETRY,
         ):

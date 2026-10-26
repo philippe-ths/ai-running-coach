@@ -57,6 +57,7 @@ from typing import Iterator, Optional
 from sqlalchemy import func, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.config import settings
 from app.models import Activity, Block, Exchange
@@ -271,7 +272,9 @@ def claim_receipt(db: Session, activity: Activity, *, now: Optional[datetime] = 
     db.commit()
     won = result.rowcount == 1
     if won:
-        activity.receipt_sent_at = stamp
+        # Mirror the row without marking the instance dirty: a later commit in the
+        # caller's session must not write this value back over another run's state.
+        set_committed_value(activity, "receipt_sent_at", stamp)
     return won
 
 
@@ -282,7 +285,7 @@ def release_receipt_claim(db: Session, activity: Activity) -> None:
         update(Activity).where(Activity.id == activity.id).values(receipt_sent_at=None)
     )
     db.commit()
-    activity.receipt_sent_at = None
+    set_committed_value(activity, "receipt_sent_at", None)
 
 
 def mark_done(db: Session, exchange: Exchange, *, now: Optional[datetime] = None) -> bool:

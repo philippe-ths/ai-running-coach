@@ -328,8 +328,11 @@ def remove_activity_from_block(db: Session, activity: Activity) -> Optional[Acti
     if activity_end(activity) < activity_end(last_survivor):
         return None  # a survivor ends later, so its own check is still live
     exchange = lifecycle.get_exchange_for_block(db, block_id)
-    if exchange is None or lifecycle.is_closed(exchange):
-        return None  # the block has already spoken
+    # Only a live session's check is handed on: the exchange opened recently and has
+    # not spoken. An imported, never-opened or long-past block must not get a full
+    # report because a duplicate of it was deleted.
+    if exchange is None or not lifecycle.can_fire_reply_fuller(exchange):
+        return None
     return last_survivor
 
 
