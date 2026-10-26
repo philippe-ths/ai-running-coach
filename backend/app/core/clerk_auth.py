@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Callable, Optional
 
 import jwt
@@ -149,6 +150,7 @@ def reset_verifier_cache() -> None:
     with _verifier_lock:
         _verifier = None
         _verifier_jwks_url = None
+    reset_email_cache()
 
 
 # --- email resolution ------------------------------------------------------
@@ -161,15 +163,66 @@ def _email_from_claims(claims: dict) -> Optional[str]:
     return None
 
 
+# #1137: sub -> (email, expires_at monotonic). Without it a session token with no
+# email claim cost one Clerk API round trip on EVERY request. Only successful
+# lookups are cached, bounded in size and age, so a failure is retried next
+# request and an email changed in Clerk is picked up within the TTL.
+_EMAIL_CACHE_TTL_SECONDS = 600.0
+_EMAIL_CACHE_MAX_ENTRIES = 1024
+_email_cache: dict[str, tuple[str, float]] = {}
+_email_cache_lock = threading.Lock()
+
+
+def _cached_email(clerk_user_id: str) -> Optional[str]:
+    with _email_cache_lock:
+        hit = _email_cache.get(clerk_user_id)
+        if hit is None:
+            return None
+        if hit[1] <= time.monotonic():
+            del _email_cache[clerk_user_id]
+            return None
+        return hit[0]
+
+
+def _remember_email(clerk_user_id: str, email: str) -> None:
+    with _email_cache_lock:
+        _email_cache.pop(clerk_user_id, None)
+        while len(_email_cache) >= _EMAIL_CACHE_MAX_ENTRIES:
+            del _email_cache[next(iter(_email_cache))]  # oldest insertion
+        _email_cache[clerk_user_id] = (email, time.monotonic() + _EMAIL_CACHE_TTL_SECONDS)
+
+
+def _forget_email(email: str) -> None:
+    with _email_cache_lock:
+        for sub in [k for k, (v, _) in _email_cache.items() if v.lower() == email.lower()]:
+            del _email_cache[sub]
+
+
+def reset_email_cache() -> None:
+    with _email_cache_lock:
+        _email_cache.clear()
+
+
 def fetch_email_from_clerk_api(clerk_user_id: str) -> Optional[str]:
     """Fall back to the Clerk Backend API to read a user's primary email.
 
     Only used when the session token carries no email claim. Configuring the
     Clerk session-token template to include ``email`` avoids this call. Returns
-    None on any failure (the caller turns that into a 401).
+    None on any failure (the caller turns that into a 401). A successful lookup
+    is cached in-process for ``_EMAIL_CACHE_TTL_SECONDS`` (#1137).
     """
     if not settings.CLERK_SECRET_KEY:
         return None
+    cached = _cached_email(clerk_user_id)
+    if cached is not None:
+        return cached
+    email = _fetch_email_uncached(clerk_user_id)
+    if email is not None:
+        _remember_email(clerk_user_id, email)
+    return email
+
+
+def _fetch_email_uncached(clerk_user_id: str) -> Optional[str]:
     import httpx
 
     try:
@@ -209,6 +262,7 @@ def delete_clerk_user_by_email(email: str) -> bool:
     """
     if not settings.CLERK_SECRET_KEY:
         return True  # Clerk not configured (local/test) — nothing to delete
+    _forget_email(email)
     import httpx
 
     headers = {"Authorization": f"Bearer {settings.CLERK_SECRET_KEY}"}

@@ -211,3 +211,39 @@ def test_endpoint_returns_null_lead_for_an_uncoached_run(client, db):
     resp = client.get("/api/activities")
     item = next(i for i in resp.json() if i["name"] == "Uncoached Run")
     assert item["coach_lead"] is None
+
+
+
+def test_heavy_columns_are_not_loaded(db, user):
+    """#1137: the list reads one lead line, so its query must not pull
+    `context_pack`, `meta` or `raw_llm_response` for every row. A pre-digest row
+    still re-projects its lead from `report`, inside the same single query."""
+    digested = [_activity(db, user, offset_days=i) for i in range(3)]
+    pre_digest = [_activity(db, user, offset_days=10 + i) for i in range(3)]
+    for a in digested:
+        _report(db, a, message="Stored lead differs from this.",
+                digest={"lead_argument": f"Digest lead {a.id}."})
+    for a in pre_digest:
+        _report(db, a, message=f"{_LEAD} Second sentence.")
+    ids = [a.id for a in digested + pre_digest]
+    db.expunge_all()  # a fresh request: no report row already in the identity map
+    activities = db.query(Activity).filter(Activity.id.in_(ids)).all()
+
+    statements = []
+    from sqlalchemy import event
+
+    def record(conn, cursor, stmt, *args):
+        if "coach_reports" in stmt:
+            statements.append(stmt)
+
+    event.listen(db.bind, "before_cursor_execute", record)
+    try:
+        leads = get_displayable_report_leads(db, activities)
+    finally:
+        event.remove(db.bind, "before_cursor_execute", record)
+
+    assert {i: leads[i] for i in ids[:3]} == {i: f"Digest lead {i}." for i in ids[:3]}
+    assert all(leads[i] == _LEAD for i in ids[3:])
+    assert len(statements) == 1, statements
+    for column in ("context_pack", "raw_llm_response", "coach_reports.meta"):
+        assert column not in statements[0]

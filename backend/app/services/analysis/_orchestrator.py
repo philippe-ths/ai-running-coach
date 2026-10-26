@@ -128,12 +128,17 @@ def _extract_planned_workout(planned_session) -> dict | None:
     return structure
 
 async def analyze_with_streams(
-    db: Session, activity_id: str, port: Optional["StravaPort"] = None
+    db: Session,
+    activity_id: str,
+    port: Optional["StravaPort"] = None,
+    skip_baseline: bool = False,
 ) -> Optional[DerivedMetric]:
     """
     Explicitly fetches streams and re-runs analysis.
 
     `port` is the Strava port to fetch through; None uses the process default.
+    `skip_baseline` is passed to `analyze`: a bulk caller defers the baseline
+    recompute to `recompute_baselines_after_batch` (#1137).
     """
     activity_uuid = _coerce_uuid(activity_id)
     activity = db.query(Activity).filter(Activity.id == activity_uuid).first()
@@ -147,7 +152,7 @@ async def analyze_with_streams(
         await refetch_streams(db, account, activity, port or get_strava_port())
 
     # Run normal processing (which now picks up streams)
-    return analyze(db, activity_id)
+    return analyze(db, activity_id, skip_baseline=skip_baseline)
 
 
 def _coerce_uuid(value) -> uuid.UUID:
@@ -513,6 +518,21 @@ def _post_commit_baseline(db: Session, user_id) -> None:
         from app.core.observability import capture_exception
         logger.exception("runner baseline recompute failed for user %s", user_id)
         capture_exception(exc)
+
+
+def recompute_baselines_after_batch(db: Session, user_ids) -> None:
+    """Recompute each distinct user's runner baseline once, after a bulk loop
+    that called `analyze(..., skip_baseline=True)` (#366, #1137).
+
+    The recompute is a full idempotent pass over the rolling window, so once per
+    batch leaves the same baseline as once per activity. Best-effort exactly as
+    `_post_commit_baseline`, which it reuses.
+    """
+    seen: list = []
+    for user_id in user_ids:
+        if user_id not in seen:
+            seen.append(user_id)
+            _post_commit_baseline(db, user_id)
 
 
 def analyze(db: Session, activity_id: str, skip_baseline: bool = False) -> Optional[DerivedMetric]:

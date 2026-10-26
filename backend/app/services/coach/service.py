@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, undefer
+from sqlalchemy.orm import Session, load_only, undefer
 
 from app.core.config import settings
 from app.models import Activity, Block
@@ -373,6 +373,19 @@ def get_displayable_report_leads(db: Session, activities) -> dict:
 
     rows = (
         db.query(CoachReport)
+        # #1137: only what selection and the lead need, never the heavy
+        # `context_pack` / `raw_llm_response` / `meta`. `report` stays: a row
+        # written before the stored digest (A2a) re-projects its lead from it,
+        # and loading it here keeps this one query rather than adding a second.
+        .options(load_only(
+            CoachReport.id,
+            CoachReport.activity_id,
+            CoachReport.prompt_id,
+            CoachReport.schema_version,
+            CoachReport.digest,
+            CoachReport.report,
+            CoachReport.created_at,
+        ))
         .filter(
             CoachReport.activity_id.in_(list(by_id)),
             # #646: current rows only, never a superseded audit copy.

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -148,7 +149,8 @@ async def test_sync_upserts_summary_defers_streams_then_backfill_fills_them(
     # enqueue goes through RQ, so stub the queue to keep the test off Redis.
     fake_queue = MagicMock()
     with patch.object(bf, "queue", fake_queue):
-        result = await sync_activities(db=db, user=user)
+        # A plain def since #1137: FastAPI runs it in its threadpool, so do the same.
+        result = await asyncio.to_thread(sync_activities, db=db, account=account)
 
     assert isinstance(result, SyncResponse)
     assert result.fetched == 1

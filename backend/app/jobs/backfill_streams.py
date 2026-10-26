@@ -31,7 +31,7 @@ from app.core.queue import queue
 from app.db.session import SessionLocal
 from app.jobs import batch_chain
 from app.models import Activity
-from app.services.analysis import analyze_with_streams
+from app.services.analysis import analyze_with_streams, recompute_baselines_after_batch
 from app.services.strava_ingestion import strava_budget
 from app.services.strava_ingestion.port import StravaRateLimited
 
@@ -101,6 +101,7 @@ async def backfill_streams_batch(
     """
     batch = db.execute(_eligible_stmt(user_id=user_id).limit(limit)).scalars().all()
     result = BackfillBatchResult()
+    analyzed_owners: list = []
 
     for activity in batch:
         if strava_budget.over_budget():
@@ -113,7 +114,9 @@ async def backfill_streams_batch(
             break
         strava_id = activity.strava_activity_id
         try:
-            await analyze_with_streams(db, str(activity.id))
+            # #1137: baseline once per owner after the loop, not per activity.
+            await analyze_with_streams(db, str(activity.id), skip_baseline=True)
+            analyzed_owners.append(activity.user_id)
         except StravaRateLimited as exc:
             # Shared window hit mid-batch: leave this activity eligible (do NOT
             # mark attempted) and stop so the job reschedules after the backoff.
@@ -137,6 +140,7 @@ async def backfill_streams_batch(
         db.commit()
         result.processed.append(strava_id)
 
+    recompute_baselines_after_batch(db, analyzed_owners)
     result.remaining = count_eligible(db, user_id=user_id)
     logger.info(
         "Backfill batch processed %d activities, %d remaining",
