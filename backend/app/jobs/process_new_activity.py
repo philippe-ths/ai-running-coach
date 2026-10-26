@@ -45,7 +45,11 @@ from app.jobs.cadence import get_active_cadence
 from app.jobs.reanalyze_history import reanalyze_activity_if_streams
 from app.models import Activity, StravaAccount
 from app.services.analysis import analyze_with_streams
-from app.services.coach.service import get_or_generate_coach_report, revoice_stored_report
+from app.services.coach.service import (
+    RevoiceOutcome,
+    get_or_generate_coach_report,
+    revoice_stored_report,
+)
 from app.services.notifications import Notification, get_notifier
 from app.services.notifications.port import NotifierPort
 from app.services.strava_ingestion import (
@@ -232,16 +236,18 @@ def revoice_report_job(activity_id: str) -> None:
     """RQ entrypoint for a voice-stale report (#1142): re-say the stored voiceless
     baseline in the runner's current voice, without regenerating it.
 
-    The server decides, not the panel: when the active report is stale ONLY by voice
-    and holds a voiceless baseline (ADR 0030), only the voice rewrite runs. Anything
-    else (a fallback, a pre-#822 row, a report no longer voice-stale) takes the full
-    `regenerate_report_job` path, so nothing that used to regenerate stops doing so."""
+    The server decides, not the panel. Only a report that is stale and has no safe
+    voiceless baseline to re-say (a fallback, a pre-#822 row, a baseline over the
+    medical floor) takes the full `regenerate_report_job` path. A report no longer
+    stale, or whose rewrite was deferred, is left alone: that is not a request for
+    new substance."""
     db = SessionLocal()
     try:
-        revoiced = asyncio.run(revoice_stored_report(db, str(activity_id)))
+        outcome = asyncio.run(revoice_stored_report(db, str(activity_id)))
     finally:
         db.close()
-    if revoiced is None:
+    logger.info("revoice_report_job %s for activity %s", outcome.value, activity_id)
+    if outcome is RevoiceOutcome.NEEDS_REGENERATE:
         regenerate_report_job(activity_id)
 
 

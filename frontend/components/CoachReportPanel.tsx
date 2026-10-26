@@ -268,15 +268,11 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
   const regenAttempts = useRef(0);
   const [regenTick, setRegenTick] = useState(0);
   // P1.1: a loaded report can be voice-stale (generated under a now-changed voice).
-  // We kick the async re-voice ONCE so it is said in the runner's current voice
-  // (#1142: re-voiced, not regenerated, when only the voice changed). The ref guards
-  // against re-firing while polling and against a loop — the result is no longer stale.
+  // We ask the server ONCE per view to bring it onto the runner's current voice
+  // (#1142: re-voiced, not regenerated, when only the voice changed).
   const voiceRegenKicked = useRef(false);
 
-  // `action` is "regenerate" for the runner's own Re-run, "revoice" for a
-  // voice-stale report (#1142), where the server re-says the stored report in the
-  // new voice and only regenerates what it cannot re-voice.
-  const regenerate = useCallback(async (action: 'regenerate' | 'revoice' = 'regenerate') => {
+  const regenerate = useCallback(async () => {
     regenBaseline.current = report ? reportVersion(report) : null;
     regenAttempts.current = 0;
     setErrorMsg('');
@@ -284,7 +280,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
     setRegenTick((t) => t + 1);
     try {
       const res = await fetch(
-        `/api/activities/${activityId}/coach-report/${action}`,
+        `/api/activities/${activityId}/coach-report/regenerate`,
         { method: 'POST' },
       );
       if (!res.ok) {
@@ -338,16 +334,54 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
     return () => clearTimeout(id);
   }, [status, regenTick, activityId]);
 
-  // P1.1: when a freshly-loaded report is voice-stale, re-voice it onto the
-  // runner's current voice. Fires once (the ref survives the regen + poll), and the
-  // rewritten report comes back not-stale, so there is no loop. A fallback regen also
-  // returns not-stale, so a persistent failure cannot hammer the worker.
+  // P1.1 / #1142: when a freshly-loaded report is voice-stale, ask the server to
+  // bring it onto the runner's current voice, IN THE BACKGROUND: the runner keeps
+  // reading the report they have, and the new one is swapped in if it lands. The
+  // server may legitimately change nothing (the voice was switched back, another
+  // device already did it, or the rewrite was deferred over budget or on a
+  // transport error), so this never spins or errors; it just stops polling.
+  const revoiceBaseline = useRef<string | null>(null);
+  const revoiceAttempts = useRef(0);
+  const [revoiceTick, setRevoiceTick] = useState(0); // 0 = not polling
+
   useEffect(() => {
     if (status !== 'loaded' || !report || !report.meta.voice_stale) return;
     if (voiceRegenKicked.current) return;
     voiceRegenKicked.current = true;
-    regenerate('revoice');
-  }, [status, report, regenerate]);
+    revoiceBaseline.current = reportVersion(report);
+    revoiceAttempts.current = 0;
+    fetch(`/api/activities/${activityId}/coach-report/revoice`, { method: 'POST' })
+      .then((res) => {
+        if (res.ok) setRevoiceTick(1);
+      })
+      .catch(() => {
+        // best-effort: the next view asks again
+      });
+  }, [status, report, activityId]);
+
+  useEffect(() => {
+    if (revoiceTick === 0 || status !== 'loaded') return;
+    if (revoiceAttempts.current >= REGEN_POLL_MAX_ATTEMPTS) return;
+    const id = setTimeout(async () => {
+      revoiceAttempts.current += 1;
+      try {
+        const res = await fetch(
+          `/api/activities/${activityId}/coach-report?generate=false&force=false`,
+        );
+        if (res.ok) {
+          const data = (await res.json()) as CoachReport;
+          if (data?.meta?.generated_at && reportVersion(data) !== revoiceBaseline.current) {
+            setReport(data);
+            return;
+          }
+        }
+      } catch {
+        // transient; keep polling
+      }
+      setRevoiceTick((t) => t + 1);
+    }, REGEN_POLL_INTERVAL_MS);
+    return () => clearTimeout(id);
+  }, [revoiceTick, status, activityId]);
 
   if (!hasMetrics) return null;
 
@@ -356,7 +390,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
   if (status === 'idle') {
     return (
       <button
-        onClick={() => regenerate()}
+        onClick={regenerate}
         className="w-full bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-md transition-all flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
       >
         <Sparkles className="w-5 h-5" />
@@ -388,7 +422,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
       <div className="bg-red-50 dark:bg-red-900/30 rounded-xl border border-red-200 dark:border-red-800 p-6">
         <p className="text-red-700 dark:text-red-300 text-sm">{errorMsg}</p>
         <button
-          onClick={() => regenerate()}
+          onClick={regenerate}
           className="mt-2 text-sm text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 underline"
         >
           Try again
@@ -481,7 +515,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
         {copied ? 'Copied' : 'Copy'}
       </button>
       <button
-        onClick={() => regenerate()}
+        onClick={regenerate}
         className="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1 transition-colors"
         title="Re-run coach analysis"
       >

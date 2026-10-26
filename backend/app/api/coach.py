@@ -307,8 +307,9 @@ def revoice_coach_report(activity: OwnedActivityWithMetrics):
     The panel calls this, not regenerate, when a read flags `voice_stale`. The
     worker decides what that takes: a report stale only by voice is re-said from its
     stored voiceless baseline (ADR 0030) with no regeneration; anything it cannot
-    honestly re-voice is regenerated in full, as before. Shares the regenerate
-    cooldown, so the two cannot stack LLM work on one report.
+    honestly re-voice is regenerated in full, as before. Its cooldown is separate
+    from Re-run's, so an automatic revoice never swallows an explicit Re-run; a
+    revoice that lands after a Re-run finds the row changed and writes nothing.
     """
     from app.jobs.process_new_activity import revoice_report_job
 
@@ -333,7 +334,13 @@ def _enqueue_report_job(activity_id, job, *, job_name: str, status: str) -> dict
     # racing enqueue onto one job rather than queuing duplicates. The cooldown
     # degrades open (enqueues) if Redis is unreachable — a cost guard must never
     # block a legitimate single regeneration.
-    cooldown_key = f"coach_regen_cooldown:{activity_id}"
+    # Each job kind has its own cooldown (#1142): the panel's automatic revoice must
+    # never swallow a Re-run the runner asked for seconds later.
+    cooldown_key = (
+        f"coach_regen_cooldown:{activity_id}"
+        if job_name == "regenerate"
+        else f"coach_{job_name}_cooldown:{activity_id}"
+    )
     # RQ forbids ":" in a job id (Job.set_id raises), so use "-" — the colon made
     # every regeneration enqueue throw and 503 (#490). The cooldown_key above is a
     # plain Redis key, where ":" is fine and idiomatic.
