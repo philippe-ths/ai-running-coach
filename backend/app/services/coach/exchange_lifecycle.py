@@ -55,7 +55,9 @@ from datetime import datetime, timezone
 from typing import Iterator, Optional
 
 from sqlalchemy import func, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.config import settings
 from app.models import Activity, Block, Exchange
@@ -251,13 +253,39 @@ def open_exchange(db: Session, exchange: Exchange, *, now: Optional[datetime] = 
     return True
 
 
-def record_receipt_sent(db: Session, activity: Activity, *, now: Optional[datetime] = None) -> None:
-    """Mark this activity's instant receipt as sent (#296). The per-activity dedup
-    sentinel; set only after a successful send so the receipt stays re-sendable on a
-    pipeline retry. The caller has already confirmed `receipt_sent_at` was null."""
-    activity.receipt_sent_at = now or _now()
-    db.add(activity)
+def claim_receipt(db: Session, activity: Activity, *, now: Optional[datetime] = None) -> bool:
+    """Atomically CLAIM this activity's instant receipt (#296), so exactly one of two
+    racing pipeline runs for the same activity sends it (#1136).
+
+    The per-activity dedup sentinel `receipt_sent_at`, set by a conditional UPDATE
+    WHERE it is still NULL with the rowcount inspected, mirroring `claim_fuller`: the
+    old guard read the column and set it after the send, so two runs that both read
+    null both delivered. The claim is taken before the send; the caller MUST
+    `release_receipt_claim` when nothing went out, so the receipt stays re-sendable on
+    a pipeline retry. Returns True if this caller won the claim."""
+    stamp = now or _now()
+    result = db.execute(
+        update(Activity)
+        .where(Activity.id == activity.id, Activity.receipt_sent_at.is_(None))
+        .values(receipt_sent_at=stamp)
+    )
     db.commit()
+    won = result.rowcount == 1
+    if won:
+        # Mirror the row without marking the instance dirty: a later commit in the
+        # caller's session must not write this value back over another run's state.
+        set_committed_value(activity, "receipt_sent_at", stamp)
+    return won
+
+
+def release_receipt_claim(db: Session, activity: Activity) -> None:
+    """Give back a receipt claim whose send did not go out (#1136). Only ever called
+    by the caller that won `claim_receipt`."""
+    db.execute(
+        update(Activity).where(Activity.id == activity.id).values(receipt_sent_at=None)
+    )
+    db.commit()
+    set_committed_value(activity, "receipt_sent_at", None)
 
 
 def mark_done(db: Session, exchange: Exchange, *, now: Optional[datetime] = None) -> bool:
@@ -412,6 +440,13 @@ def fuller_claim(db: Session, exchange: Exchange) -> Iterator[FullerClaim]:
     claim = FullerClaim(claim_fuller(db, exchange))
     try:
         yield claim
+    except SQLAlchemyError:
+        if claim.won and not claim.kept:
+            # A database error inside the turn leaves the session refusing every
+            # statement until it is rolled back, the release UPDATE included
+            # (#1136). The claim itself was committed, so the rollback keeps it.
+            db.rollback()
+        raise
     finally:
         if claim.won and not claim.kept:
             release_fuller_claim(db, exchange)

@@ -318,6 +318,66 @@ def test_enqueue_import_is_idempotent_while_running(db):
     fake_queue.enqueue.assert_called_once()
 
 
+def test_enqueue_import_replaces_a_stalled_running_import(db):
+    """#1136: a worker killed mid-batch leaves the import `running` with nothing
+    queued, and `enqueue_import` returned that row on every later request, so the
+    runner could never import again. A `running` row untouched for longer than any
+    batch or backoff can take is abandoned: it is failed (which also stops any
+    straggling batch, since a batch only runs on a `running` row) and a fresh
+    import starts."""
+    from datetime import timedelta
+
+    from app.jobs import strava_import as mod
+
+    user, account = _seed_user_and_account(db)
+    stalled = _make_import(db, user, cursor_page=7)
+    stalled.updated_at = datetime.now(timezone.utc) - mod.import_stale_after() - timedelta(minutes=1)
+    db.commit()
+
+    fake_queue = MagicMock()
+    with patch.object(mod, "queue", fake_queue):
+        fresh = mod.enqueue_import(db, account, date(2025, 1, 1))
+
+    assert fresh.id != stalled.id
+    assert fresh.status == "running"
+    db.refresh(stalled)
+    assert stalled.status == "failed"
+    fake_queue.enqueue.assert_called_once()
+
+
+def test_enqueue_import_keeps_a_recently_active_running_import(db):
+    from app.jobs import strava_import as mod
+
+    user, account = _seed_user_and_account(db)
+    running = _make_import(db, user, cursor_page=7)
+    running.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    fake_queue = MagicMock()
+    with patch.object(mod, "queue", fake_queue):
+        again = mod.enqueue_import(db, account, date(2025, 1, 1))
+
+    assert again.id == running.id
+    fake_queue.enqueue.assert_not_called()
+
+
+def test_import_batches_carry_a_retry_policy(db):
+    """#1136: a batch whose worker dies is re-run by RQ rather than left for the
+    staleness rule, on the first batch and on every successor."""
+    from app.jobs import strava_import as mod
+
+    _user, account = _seed_user_and_account(db)
+    fake_queue = MagicMock()
+    with patch.object(mod, "queue", fake_queue), patch(
+        "app.core.queue.queue", fake_queue
+    ):
+        imp = mod.enqueue_import(db, account, date(2025, 1, 1))
+        mod._schedule_next_batch(str(imp.id))
+
+    assert fake_queue.enqueue.call_args.kwargs["retry"].max >= 1
+    assert fake_queue.enqueue_in.call_args.kwargs["retry"].max >= 1
+
+
 def test_endpoint_starts_import_and_status_reports_progress(client, db):
     from app.jobs import strava_import as mod
 

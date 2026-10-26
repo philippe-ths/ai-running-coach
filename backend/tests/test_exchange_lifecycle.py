@@ -188,12 +188,18 @@ def test_open_exchange_is_idempotent(db):
 # --- receipt-sent transition --------------------------------------------------
 
 
-def test_record_receipt_sent_sets_sentinel(db):
+def test_claim_receipt_is_won_once_until_released(db):
     a = _activity(db)
     assert a.receipt_sent_at is None
-    lifecycle.record_receipt_sent(db, a)
+    assert lifecycle.claim_receipt(db, a) is True
     db.refresh(a)
     assert a.receipt_sent_at is not None
+    assert lifecycle.claim_receipt(db, a) is False  # the sentinel is held
+
+    lifecycle.release_receipt_claim(db, a)
+    db.refresh(a)
+    assert a.receipt_sent_at is None
+    assert lifecycle.claim_receipt(db, a) is True  # re-sendable after a release
 
 
 # --- done transition ----------------------------------------------------------

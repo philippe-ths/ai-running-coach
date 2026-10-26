@@ -676,6 +676,36 @@ class TestThreadMaintenance:
         db.refresh(thread)
         assert thread.title == "My own name"
 
+    def test_title_job_spends_nothing_once_the_runner_is_over_budget(self, db, monkeypatch):
+        # #1136: the title call skipped the `over_budget` gate every other
+        # auxiliary call checks, so a capped runner kept spending on titles.
+        from app.core.config import settings
+        from app.jobs import thread_maintenance
+        from app.services.coach import budget
+
+        user = _seed_user(db)
+        thread = _seed_thread(db, user, messages=[("user", "q"), ("assistant", "a")])
+        monkeypatch.setattr(settings, "LLM_BUDGET_USER_DAILY_USD", 0.01)
+        budget.record(user.id, "claude-haiku-4-5", 1_000_000, 0)
+        assert budget.over_budget(user.id)
+
+        calls = []
+
+        async def fake_gen(self, *, system, user, max_tokens=1024):
+            calls.append(user)
+            from app.services.coach.llm import Usage
+
+            return "A title", Usage(input_tokens=10, output_tokens=5)
+
+        with patch("app.services.coach.llm.AnthropicClient.generate_json_with_usage", new=fake_gen), patch.object(
+            thread_maintenance, "SessionLocal", return_value=db
+        ), patch.object(db, "close"):
+            thread_maintenance.generate_thread_title_job(str(thread.id))
+
+        db.refresh(thread)
+        assert calls == []
+        assert thread.title is None
+
     def test_quiet_job_fires_memory_pass_only_when_actually_quiet(self, db):
         from app.jobs import thread_maintenance
 
