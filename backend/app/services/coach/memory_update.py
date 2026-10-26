@@ -451,6 +451,25 @@ def build_writer_messages(sources: MemorySources) -> tuple[str, str]:
 # --------------------------------------------------------------------------- #
 # Per-candidate coercion (#931).
 # --------------------------------------------------------------------------- #
+def _is_over_long_safety_limit(item: object) -> bool:
+    return (
+        isinstance(item, dict)
+        and item.get("section") == "limits_and_constraints"
+        and item.get("safety_relevant") is True
+        and isinstance(item.get("text"), str)
+        and len(item["text"]) > MAX_LINE_LENGTH
+    )
+
+
+def _shorten_at_word(text: str, limit: int) -> str:
+    """`text` cut to at most `limit` characters at the last word boundary, with an
+    ellipsis marking the cut."""
+    head = text[: limit - 1]
+    if " " in head:
+        head = head[: head.rindex(" ")]
+    return head.rstrip(" ,;:-") + "…"
+
+
 def coerce_candidates(raw: object, *, user_id: object = None) -> List[MemoryCandidate]:
     """Coerce the writer's tool output one candidate at a time, dropping the
     off-shape ones and keeping the rest.
@@ -466,6 +485,10 @@ def coerce_candidates(raw: object, *, user_id: object = None) -> List[MemoryCand
     source keeps the fact. Truncating the text instead would silently put words in
     the writer's mouth. A drop is logged, never silent.
 
+    One exception (#1143): a safety-relevant limit is cut at a word boundary
+    instead, because losing a stated injury or health limit costs the runner more
+    than a shortened sentence does. The cut is marked with an ellipsis and logged.
+
     Raises only when the payload itself is not a candidate list — that is off-contract
     output rather than one bad line, and the caller fails the pass.
     """
@@ -480,6 +503,9 @@ def coerce_candidates(raw: object, *, user_id: object = None) -> List[MemoryCand
     kept: List[MemoryCandidate] = []
     dropped = 0
     for item in items:
+        if _is_over_long_safety_limit(item):
+            item = {**item, "text": _shorten_at_word(item["text"], MAX_LINE_LENGTH)}
+            logger.info("memory writer: shortened an over-long safety limit for user %s", user_id)
         try:
             kept.append(MemoryCandidate.model_validate(item))
         except Exception:  # noqa: BLE001 — one bad line never costs the pass

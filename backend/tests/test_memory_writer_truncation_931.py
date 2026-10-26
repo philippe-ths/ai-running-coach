@@ -154,6 +154,31 @@ def test_an_over_long_line_drops_and_the_rest_survive():
     assert [c.text for c in kept] == [good["text"], other_good["text"]]
 
 
+def test_an_over_long_safety_limit_is_cut_at_a_word_not_dropped():
+    """#1143: a stated injury limit is worth more than a whole sentence; a 210-char
+    shin report was being dropped. It is now cut at a word boundary and marked."""
+    words = "Right shin sore after the half marathon on 4 Oct, worse on downhills " * 4
+    safety = {"text": words.strip(), "section": "limits_and_constraints",
+              "supporting_source_ids": ["chat0"], "safety_relevant": True}
+    assert len(safety["text"]) > MAX_LINE_LENGTH
+
+    [kept] = coerce_candidates({"candidates": [safety]})
+
+    assert len(kept.text) <= MAX_LINE_LENGTH
+    assert kept.text.endswith("…")
+    assert safety["text"].startswith(kept.text[:-1])
+    assert safety["text"][len(kept.text) - 1] == " "  # cut between words
+    assert kept.safety_relevant is True
+
+
+def test_an_over_long_non_safety_limit_still_drops():
+    """The cut is for safety limits only; every other over-long line keeps the
+    drop-not-truncate rule."""
+    limit = {"text": "y " * MAX_LINE_LENGTH, "section": "limits_and_constraints",
+             "supporting_source_ids": ["chat0"], "safety_relevant": False}
+    assert coerce_candidates({"candidates": [limit]}) == []
+
+
 def test_a_missing_candidates_key_is_an_empty_list_not_a_crash():
     assert coerce_candidates({}) == []
 
