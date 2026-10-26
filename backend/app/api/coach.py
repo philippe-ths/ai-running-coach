@@ -252,8 +252,8 @@ async def get_coach_report(
         if existing:
             read = _to_read(existing)
             # P1.1: flag a report still speaking in a now-changed voice so the
-            # frontend regenerates it onto the runner's current voice (async, on
-            # next view). A read-time flag only — the stored report is untouched.
+            # frontend re-voices it onto the runner's current voice (async, on
+            # next view, #1142). A read-time flag only — the stored report is untouched.
             read.meta.voice_stale = report_voice_stale(db, existing)
             return _with_offer(db, user, read)
         # #482: block-aware display fallback. A non-primary member of a multi-
@@ -290,12 +290,40 @@ def regenerate_coach_report(activity: OwnedActivityWithMetrics):
     the GET endpoint for the fresh report. Returns 404 when the activity has no
     metrics to regenerate from.
     """
-    activity_id = activity.id
+    from app.jobs.process_new_activity import regenerate_report_job
+
+    return _enqueue_report_job(
+        activity.id, regenerate_report_job, job_name="regenerate", status="regenerating"
+    )
+
+
+@router.post(
+    "/activities/{activity_id}/coach-report/revoice",
+    status_code=202,
+)
+def revoice_coach_report(activity: OwnedActivityWithMetrics):
+    """Bring a voice-stale report onto the runner's current voice (#1142).
+
+    The panel calls this, not regenerate, when a read flags `voice_stale`. The
+    worker decides what that takes: a report stale only by voice is re-said from its
+    stored voiceless baseline (ADR 0030) with no regeneration; anything it cannot
+    honestly re-voice is regenerated in full, as before. Shares the regenerate
+    cooldown, so the two cannot stack LLM work on one report.
+    """
+    from app.jobs.process_new_activity import revoice_report_job
+
+    return _enqueue_report_job(
+        activity.id, revoice_report_job, job_name="revoice", status="revoicing"
+    )
+
+
+def _enqueue_report_job(activity_id, job, *, job_name: str, status: str) -> dict:
+    """Enqueue one coach-report worker job behind the per-activity cooldown."""
     # Imported here to keep the queue/job dependency off the module import path of
     # the read endpoints (and out of test collection that does not touch Redis).
     from app.core.config import settings
     from app.core.queue import queue
-    from app.jobs.process_new_activity import PIPELINE_RETRY, regenerate_report_job
+    from app.jobs.process_new_activity import PIPELINE_RETRY
 
     # P2.2 / going-live landmine 1: the regenerate endpoint is the single most
     # exposed cost lever — a stuck "Regenerate" button can fan out full two-stage
@@ -309,7 +337,7 @@ def regenerate_coach_report(activity: OwnedActivityWithMetrics):
     # RQ forbids ":" in a job id (Job.set_id raises), so use "-" — the colon made
     # every regeneration enqueue throw and 503 (#490). The cooldown_key above is a
     # plain Redis key, where ":" is fine and idiomatic.
-    job_id = f"coach-regenerate-{activity_id}"
+    job_id = f"coach-{job_name}-{activity_id}"
     try:
         acquired = queue.connection.set(
             cooldown_key, "1", nx=True, ex=settings.COACH_REGEN_COOLDOWN_SECONDS,
@@ -336,14 +364,14 @@ def regenerate_coach_report(activity: OwnedActivityWithMetrics):
     # return an actionable 503.
     try:
         queue.enqueue(
-            regenerate_report_job, str(activity_id),
+            job, str(activity_id),
             job_id=job_id,
             job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
             retry=PIPELINE_RETRY,
         )
     except Exception as exc:  # noqa: BLE001 — a queue failure must not 500 the runner
         logger.warning(
-            "regenerate_enqueue_failed",
+            f"{job_name}_enqueue_failed",
             extra={"activity_id": str(activity_id), "error": str(exc)},
         )
         try:
@@ -354,7 +382,7 @@ def regenerate_coach_report(activity: OwnedActivityWithMetrics):
             status_code=503,
             detail="Couldn't start the coach analysis just now — please try again in a moment.",
         )
-    return {"status": "regenerating"}
+    return {"status": status}
 
 
 @router.get(

@@ -69,6 +69,12 @@ const OPENER_POLL_MAX_ATTEMPTS = 40;
 const REGEN_POLL_INTERVAL_MS = 8000;
 const REGEN_POLL_MAX_ATTEMPTS = 90;
 
+// What makes a polled report "the new one": a regeneration moves generated_at, a
+// re-voicing (#1142) moves only revoiced_at, since its substance is unchanged.
+function reportVersion(report: CoachReport): string {
+  return `${report.meta.generated_at}|${report.meta.revoiced_at ?? ''}`;
+}
+
 // Public env var inlined at build time. Set NEXT_PUBLIC_SHOW_DEBUG_PANEL=true
 // (or "1") on the build environment to expose the LLM-input/output panel.
 const SHOW_DEBUG_PANEL =
@@ -256,26 +262,29 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
 
   // #260: on-demand (re)generation is asynchronous. The "Re-run" / "Get analysis"
   // buttons enqueue a worker job (no gateway timeout) and we poll for the fresh
-  // report — the report is "fresh" once its generated_at differs from the one we
+  // report — the report is "fresh" once its reportVersion differs from the one we
   // started with (or, generating from nothing, once any report appears).
   const regenBaseline = useRef<string | null>(null);
   const regenAttempts = useRef(0);
   const [regenTick, setRegenTick] = useState(0);
   // P1.1: a loaded report can be voice-stale (generated under a now-changed voice).
-  // We kick the existing async regen ONCE so it is rewritten in the runner's current
-  // voice ("regenerate on next view"). The ref guards against re-firing while polling
-  // and against a loop — the regenerated report is no longer stale.
+  // We kick the async re-voice ONCE so it is said in the runner's current voice
+  // (#1142: re-voiced, not regenerated, when only the voice changed). The ref guards
+  // against re-firing while polling and against a loop — the result is no longer stale.
   const voiceRegenKicked = useRef(false);
 
-  const regenerate = useCallback(async () => {
-    regenBaseline.current = report?.meta.generated_at ?? null;
+  // `action` is "regenerate" for the runner's own Re-run, "revoice" for a
+  // voice-stale report (#1142), where the server re-says the stored report in the
+  // new voice and only regenerates what it cannot re-voice.
+  const regenerate = useCallback(async (action: 'regenerate' | 'revoice' = 'regenerate') => {
+    regenBaseline.current = report ? reportVersion(report) : null;
     regenAttempts.current = 0;
     setErrorMsg('');
     setStatus('regenerating');
     setRegenTick((t) => t + 1);
     try {
       const res = await fetch(
-        `/api/activities/${activityId}/coach-report/regenerate`,
+        `/api/activities/${activityId}/coach-report/${action}`,
         { method: 'POST' },
       );
       if (!res.ok) {
@@ -314,7 +323,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
         );
         if (res.ok) {
           const data = (await res.json()) as CoachReport;
-          const ga = data?.meta?.generated_at ?? null;
+          const ga = data?.meta?.generated_at ? reportVersion(data) : null;
           if (ga && ga !== regenBaseline.current) {
             setReport(data);
             setStatus('loaded');
@@ -329,7 +338,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
     return () => clearTimeout(id);
   }, [status, regenTick, activityId]);
 
-  // P1.1: when a freshly-loaded report is voice-stale, regenerate it onto the
+  // P1.1: when a freshly-loaded report is voice-stale, re-voice it onto the
   // runner's current voice. Fires once (the ref survives the regen + poll), and the
   // rewritten report comes back not-stale, so there is no loop. A fallback regen also
   // returns not-stale, so a persistent failure cannot hammer the worker.
@@ -337,7 +346,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
     if (status !== 'loaded' || !report || !report.meta.voice_stale) return;
     if (voiceRegenKicked.current) return;
     voiceRegenKicked.current = true;
-    regenerate();
+    regenerate('revoice');
   }, [status, report, regenerate]);
 
   if (!hasMetrics) return null;
@@ -347,7 +356,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
   if (status === 'idle') {
     return (
       <button
-        onClick={regenerate}
+        onClick={() => regenerate()}
         className="w-full bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-md transition-all flex items-center justify-center gap-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
       >
         <Sparkles className="w-5 h-5" />
@@ -379,7 +388,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
       <div className="bg-red-50 dark:bg-red-900/30 rounded-xl border border-red-200 dark:border-red-800 p-6">
         <p className="text-red-700 dark:text-red-300 text-sm">{errorMsg}</p>
         <button
-          onClick={regenerate}
+          onClick={() => regenerate()}
           className="mt-2 text-sm text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 underline"
         >
           Try again
@@ -472,7 +481,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
         {copied ? 'Copied' : 'Copy'}
       </button>
       <button
-        onClick={regenerate}
+        onClick={() => regenerate()}
         className="text-xs text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1 transition-colors"
         title="Re-run coach analysis"
       >
