@@ -199,7 +199,7 @@ def test_streaming_turn_records_each_round(gate, monkeypatch):
     monkeypatch.setattr(settings, "LLM_BUDGET_USER_DAILY_USD", 4.0)
     inner = _inner()
 
-    async def _stream(*, system, messages, tools=None, max_tokens=1024):
+    async def _stream(*, system, messages, tools=None, max_tokens=1024, tool_choice=None):
         yield ChatTurnDelta(text="hi")
         yield ChatTurnDelta(
             final=MessageResult(
@@ -230,7 +230,7 @@ def test_cache_buckets_reach_the_counter(gate, monkeypatch):
     monkeypatch.setattr(settings, "LLM_BUDGET_USER_DAILY_USD", 1.0)
     inner = _inner()
 
-    async def _stream(*, system, messages, tools=None, max_tokens=1024):
+    async def _stream(*, system, messages, tools=None, max_tokens=1024, tool_choice=None):
         yield ChatTurnDelta(
             final=MessageResult(
                 content_blocks=[], stop_reason="end_turn",
@@ -306,7 +306,7 @@ async def test_thread_turn_records_its_spend_end_to_end(db, gate, monkeypatch):
     activity = _seed_activity_with_report(db)
     user = db.query(User).filter(User.id == activity.user_id).one()
 
-    async def _stream(self, *, system, messages, tools=None, max_tokens=1024):
+    async def _stream(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
         yield ChatTurnDelta(text="Solid run.")
         yield ChatTurnDelta(
             final=MessageResult(
@@ -347,7 +347,7 @@ async def test_thread_turn_spend_can_trip_the_cap_on_a_later_turn(db, gate, monk
     activity = _seed_activity_with_report(db)
     user = db.query(User).filter(User.id == activity.user_id).one()
 
-    async def _stream(self, *, system, messages, tools=None, max_tokens=1024):
+    async def _stream(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
         yield ChatTurnDelta(
             final=MessageResult(
                 content_blocks=[{"type": "text", "text": "Solid run."}],

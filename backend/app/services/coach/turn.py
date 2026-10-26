@@ -299,6 +299,7 @@ class MeteredClient:
         messages: List[dict],
         tools: Optional[List[Dict[str, Any]]] = None,
         max_tokens: int = 1024,
+        tool_choice: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatTurnDelta]:
         """Stream a conversational turn, recording the spend of EACH round.
 
@@ -309,7 +310,8 @@ class MeteredClient:
         caller depends on is unchanged.
         """
         async for delta in self._inner.stream_chat_turn(
-            system=system, messages=messages, tools=tools, max_tokens=max_tokens
+            system=system, messages=messages, tools=tools, max_tokens=max_tokens,
+            tool_choice=tool_choice,
         ):
             if delta.final is not None:
                 self._record(delta.final)

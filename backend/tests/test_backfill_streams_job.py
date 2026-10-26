@@ -250,7 +250,7 @@ async def test_rate_limited_activity_is_not_marked_and_stays_eligible(db, monkey
     user, _account = _seed_user_and_account(db)
     activity = _seed_summary_activity(db, user, 8201)
 
-    async def _raise_rate_limited(db_, activity_id):
+    async def _raise_rate_limited(db_, activity_id, **_kwargs):
         raise StravaRateLimited(retry_after=300, label="get_activity_streams")
 
     monkeypatch.setattr(mod, "analyze_with_streams", _raise_rate_limited)

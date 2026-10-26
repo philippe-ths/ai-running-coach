@@ -132,7 +132,7 @@ async def test_rate_limited_message_still_specialises(db, monkeypatch):
     from app.services.coach.llm import ChatTurnDelta  # noqa: F401  (stub shape)
 
     def _rate_limited_stub():
-        async def _stub(self, *, system, messages, tools=None, max_tokens=1024):
+        async def _stub(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
             raise anthropic.RateLimitError(
                 "rate limited",
                 response=httpx.Response(

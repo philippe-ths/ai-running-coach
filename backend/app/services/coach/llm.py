@@ -327,6 +327,41 @@ def _cacheable_system(system: str) -> List[Dict[str, Any]]:
     return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
 
 
+# Block types that may not carry `cache_control` (the API rejects it on them).
+_UNCACHEABLE_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
+
+
+def _cacheable_messages(messages: List[dict]) -> List[dict]:
+    """`messages` with one ephemeral cache breakpoint on the last content block of
+    the last message (#1137), so each tool round and the next turn read the whole
+    history so far from cache instead of resending it at full price.
+
+    Pure: the caller's list and its dicts are never mutated (the tool loop keeps
+    appending to its own list, and a breakpoint left behind in it would pile up
+    past the API's limit of 4). Only the last message is copied. With the system
+    breakpoint (`_cacheable_system`) this is 2 of the 4 allowed. Content is
+    unchanged apart from the marker; a string content becomes the equivalent single
+    text block. No breakpoint when the last block cannot carry one.
+    """
+    if not messages:
+        return messages
+    last = messages[-1]
+    content = last.get("content")
+    if isinstance(content, str):
+        if not content:
+            return messages
+        blocks = [{"type": "text", "text": content}]
+    elif isinstance(content, list) and content:
+        blocks = list(content)
+    else:
+        return messages
+    tail = blocks[-1]
+    if not isinstance(tail, dict) or tail.get("type") in _UNCACHEABLE_BLOCK_TYPES:
+        return messages
+    blocks[-1] = {**tail, "cache_control": {"type": "ephemeral"}}
+    return [*messages[:-1], {**last, "content": blocks}]
+
+
 @dataclass
 class MessageResult:
     """The raw output of the A3 prose-message call: the response content blocks
@@ -740,6 +775,7 @@ class AnthropicClient:
         messages: List[dict],
         tools: Optional[List[Dict[str, Any]]] = None,
         max_tokens: int = 1024,
+        tool_choice: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator["ChatTurnDelta"]:
         """Stream one turn of a tool-aware chat conversation (#648).
 
@@ -748,8 +784,12 @@ class AnthropicClient:
         once the turn ends, carrying the content blocks (text + any tool_use blocks)
         and the stop_reason for the tool loop to dispatch on.
 
-        When `tools` is falsy the call carries no tool surface, forcing a text answer
-        (the loop's tools-off final round).
+        When `tools` is falsy the call carries no tool surface, forcing a text answer.
+        The loop's final round instead keeps `tools` and passes `tool_choice`
+        `{"type": "none"}` (#1137): the tools render first in the cache prefix, so
+        dropping them re-billed the whole tools + system + history prefix, while a
+        `tool_choice` change keeps the tools and system cache. `none` is not a
+        forced choice, so the 5.5 lanes that 400 on `any`/`tool` accept it.
 
         Transport resilience: the SHARED `RetryLadder` (#801), so a chat turn now
         survives the same transient drops and 5xx a report does — before this it
@@ -769,12 +809,14 @@ class AnthropicClient:
             # cache breakpoint applies here too — tools render before system,
             # so one breakpoint caches both.
             system=_cacheable_system(system),
-            messages=messages,
+            # #1137: a second breakpoint at the end of the history, so a tool
+            # round (and the next turn) reads everything before it from cache.
+            messages=_cacheable_messages(messages),
             timeout=_MESSAGE_TIMEOUT_SECONDS,
         )
         if tools:
             stream_kwargs["tools"] = tools
-            stream_kwargs["tool_choice"] = {"type": "auto"}
+            stream_kwargs["tool_choice"] = tool_choice or {"type": "auto"}
 
         ladder = RetryLadder("anthropic_chat")
         while True:

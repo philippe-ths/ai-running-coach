@@ -43,7 +43,7 @@ from app.core.config import settings
 from app.core.queue import queue
 from app.db.session import SessionLocal
 from app.models import StravaAccount, StravaImport
-from app.services.analysis import analyze
+from app.services.analysis import analyze, recompute_baselines_after_batch
 from app.services.blocks import (
     assign_block_guarded,
     reconcile_unassigned_activities,
@@ -120,6 +120,7 @@ async def run_import_batch(
         return ImportBatchResult(imported=0, done=True)
 
     imported = 0
+    analyzed = False
     for raw in batch:
         try:
             activity = upsert_activity(db, raw, account.user_id)
@@ -128,7 +129,9 @@ async def run_import_batch(
             # Deterministic analysis only (no streams, no LLM, no notification);
             # a failure here must not abort the import of the rest of the page.
             try:
-                analyze(db, str(activity.id))
+                # #1137: baseline once per batch, below, not per activity.
+                analyze(db, str(activity.id), skip_baseline=True)
+                analyzed = True
             except Exception as exc:  # noqa: BLE001
                 db.rollback()
                 logger.error(
@@ -144,6 +147,8 @@ async def run_import_batch(
     # Once per batch (not per activity): recover any activity an earlier ingest
     # committed but left block-less because its guarded assignment raised (#515).
     reconcile_unassigned_activities(db, account.user_id)
+    if analyzed:
+        recompute_baselines_after_batch(db, [account.user_id])
 
     import_obj.activities_imported += imported
     # A short page means we have reached the end of the window: done. A full page

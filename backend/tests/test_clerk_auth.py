@@ -334,6 +334,78 @@ class TestEmailResolution:
         assert client.get("/api/profile", headers={HEADER: token}).status_code == 401
 
 
+class _FakeClerkUserResponse:
+    def __init__(self, ok: bool, email: str = "cached@example.com"):
+        self._ok = ok
+        self._email = email
+
+    def raise_for_status(self):
+        if not self._ok:
+            raise RuntimeError("clerk 500")
+
+    def json(self):
+        return {
+            "primary_email_address_id": "e1",
+            "email_addresses": [{"id": "e1", "email_address": self._email}],
+        }
+
+
+class TestEmailLookupCache:
+    """#1137: the Clerk API email fallback is cached per sub in-process, so a
+    session token without an email claim no longer costs a Clerk round trip on
+    every request. Only a successful lookup is cached."""
+
+    @pytest.fixture
+    def http_calls(self, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(settings, "CLERK_SECRET_KEY", "sk_test_x")
+        clerk_auth.reset_email_cache()
+        calls: list[str] = []
+        outcomes: list[bool] = []
+
+        def fake_get(url, **kwargs):
+            calls.append(url)
+            return _FakeClerkUserResponse(outcomes.pop(0) if outcomes else True)
+
+        monkeypatch.setattr(httpx, "get", fake_get)
+        yield calls, outcomes
+        clerk_auth.reset_email_cache()
+
+    def test_two_resolves_for_one_sub_make_one_call(self, http_calls):
+        calls, _ = http_calls
+        claims = {"sub": "user_abc"}
+        assert clerk_auth.resolve_email(claims) == "cached@example.com"
+        assert clerk_auth.resolve_email(claims) == "cached@example.com"
+        assert len(calls) == 1
+        assert clerk_auth.resolve_email({"sub": "user_other"}) == "cached@example.com"
+        assert len(calls) == 2  # keyed per sub
+
+    def test_failed_lookup_is_not_cached(self, http_calls):
+        calls, outcomes = http_calls
+        outcomes.append(False)
+        with pytest.raises(clerk_auth.ClerkAuthError):
+            clerk_auth.resolve_email({"sub": "user_flaky"})
+        assert clerk_auth.resolve_email({"sub": "user_flaky"}) == "cached@example.com"
+        assert len(calls) == 2
+
+    def test_entry_expires_after_ttl(self, http_calls, monkeypatch):
+        calls, _ = http_calls
+        now = [1000.0]
+        monkeypatch.setattr(clerk_auth.time, "monotonic", lambda: now[0])
+        clerk_auth.resolve_email({"sub": "user_ttl"})
+        now[0] += clerk_auth._EMAIL_CACHE_TTL_SECONDS + 1
+        clerk_auth.resolve_email({"sub": "user_ttl"})
+        assert len(calls) == 2
+
+    def test_cache_is_bounded(self, http_calls, monkeypatch):
+        monkeypatch.setattr(clerk_auth, "_EMAIL_CACHE_MAX_ENTRIES", 3)
+        for i in range(5):
+            clerk_auth.resolve_email({"sub": f"user_{i}"})
+        assert len(clerk_auth._email_cache) == 3
+        assert "user_0" not in clerk_auth._email_cache
+
+
 # --- identity resolution + owner reconcile (unit) --------------------------
 
 @pytest.fixture

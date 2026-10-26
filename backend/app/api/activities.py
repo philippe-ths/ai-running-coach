@@ -1,8 +1,9 @@
+import asyncio
 from datetime import date, datetime, timedelta
 from typing import Annotated, List, Optional
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.responses import Response
+from pydantic import TypeAdapter
 
 from app.api.deps import (
     CurrentUser,
@@ -109,7 +110,7 @@ _DEFAULT_SYNC_WINDOW_DAYS = 30
 
 
 @router.post("/sync", response_model=SyncResponse)
-async def sync_activities(
+def sync_activities(
     db: DbSession,
     account: LinkedStravaAccount,
     since_days: Annotated[
@@ -134,20 +135,31 @@ async def sync_activities(
     Strava's 100/15min ceiling under concurrent onboarding and blocking the request
     to the gateway timeout. Metrics/coach then populate asynchronously, exactly as
     the webhook path already does.
+
+    A plain `def` (#1137): the ingest + analysis below is blocking DB and CPU
+    work, so FastAPI runs it in its threadpool instead of on the event loop,
+    where it froze every other request and SSE stream for the whole sync. The
+    async Strava calls get their own loop in this worker thread, as the RQ jobs
+    do.
     """
     since = datetime.now() - timedelta(days=since_days)
-    activities, stats = await ingest_recent_activities(
-        db, account, get_strava_port(), since=since, fetch_streams=False
+    activities, stats = asyncio.run(
+        ingest_recent_activities(
+            db, account, get_strava_port(), since=since, fetch_streams=False
+        )
     )
 
     for activity in activities:
         try:
-            analysis.analyze(db, str(activity.id))
+            # #1137: one baseline recompute after the loop, not one per activity.
+            analysis.analyze(db, str(activity.id), skip_baseline=True)
             stats.analyzed += 1
         except Exception as exc:
             stats.errors.append(
                 f"Analysis failed for activity {activity.strava_activity_id}: {exc}"
             )
+    if stats.analyzed:
+        analysis.recompute_baselines_after_batch(db, [account.user_id])
 
     # Populate stream-derived analysis in the background, gated by the Strava
     # budget and self-paced (#601), so concurrent first-syncs cannot overshoot the
@@ -179,6 +191,9 @@ def refresh_activities(
         return {"status": "no_account"}
     triggered = maybe_enqueue_self_heal(account.user_id)
     return {"status": "checking" if triggered else "throttled"}
+
+
+_ACTIVITY_LIST_ADAPTER = TypeAdapter(List[ActivityRead])
 
 
 @router.get("/activities", response_model=List[ActivityRead])
@@ -223,7 +238,12 @@ def read_activities(
     # `ActivityRead.normalize_run_cadence` — a NON-idempotent single-leg->two-leg
     # doubling — a second time, so avg_cadence would be doubled twice. Serialize the
     # already-normalized instances directly to keep normalization at exactly one pass.
-    return JSONResponse(content=jsonable_encoder(responses))
+    # #1137: Pydantic's own serializer, byte-identical to `jsonable_encoder` +
+    # JSONResponse and far cheaper (pinned by test_activity_json_encoding_1137).
+    return Response(
+        content=_ACTIVITY_LIST_ADAPTER.dump_json(responses),
+        media_type="application/json",
+    )
 
 
 @router.get("/activities/earliest-date")
@@ -308,7 +328,10 @@ def read_activity(
     # avg_cadence and the raw cadence stream twice while the guarded smoothed_cadence
     # recompute stays at one doubling (the 254-vs-127 split). Serialize the
     # already-normalized instance directly so normalization runs at exactly one pass.
-    return JSONResponse(content=jsonable_encoder(response))
+    # #1137: `model_dump_json` is byte-identical to `jsonable_encoder` + JSONResponse
+    # but ~25x cheaper over the ~40k stream floats (pinned by
+    # test_activity_json_encoding_1137).
+    return Response(content=response.model_dump_json(), media_type="application/json")
 
 @router.post("/activities/{activity_id}/checkin", response_model=CheckInRead)
 def create_checkin(

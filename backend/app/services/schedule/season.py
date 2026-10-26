@@ -364,7 +364,11 @@ async def generate_season(
                 tool=RECORD_SEASON_TOOL,
                 max_tokens=MAX_TOKENS,
                 effort="high",
-                web_search_max_uses=WEB_SEARCH_MAX_USES,
+                # #1137: a rewrite of a plan we hold already carries the events
+                # the first attempt found, so searching again only re-bills
+                # searches and their results. A from-scratch retry (the attempt
+                # was unusable, nothing kept) still gets to search.
+                web_search_max_uses=0 if previous is not None else WEB_SEARCH_MAX_USES,
             )
         except ReasonedCallFailed as exc:
             # Billed, and the coach's OUTPUT failed (cut off, or no tool call):

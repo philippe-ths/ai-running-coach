@@ -138,6 +138,88 @@ async def test_stream_chat_turn_binds_and_keeps_its_temperature():
     assert sent[0]["temperature"] == 0.3
 
 
+
+# --- chat caching (#1137) ---------------------------------------------------
+
+_HISTORY = [
+    {"role": "user", "content": "how was my week?"},
+    {"role": "assistant", "content": [
+        {"type": "text", "text": "Let me look."},
+        {"type": "tool_use", "id": "tu_1", "name": "emit", "input": {"x": 1}},
+    ]},
+    {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "tu_1", "content": "{\"km\": 42.0}"},
+    ]},
+]
+
+
+def _breakpoints(body: dict) -> int:
+    n = sum(1 for b in body.get("system", []) if "cache_control" in b)
+    n += sum(1 for t in body.get("tools", []) if "cache_control" in t)
+    for m in body["messages"]:
+        if isinstance(m["content"], list):
+            n += sum(1 for b in m["content"] if "cache_control" in b)
+    return n
+
+
+def _strip_cache_control(messages):
+    out = []
+    for m in messages:
+        c = m["content"]
+        if isinstance(c, list):
+            c = [{k: v for k, v in b.items() if k != "cache_control"} for b in c]
+        out.append({**m, "content": c})
+    return out
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_turn_caches_the_history_without_changing_it():
+    """The last block of the last message carries the one messages breakpoint, so a
+    tool round reads the history so far from cache; nothing else in it changes, and
+    the caller's list is not mutated (the loop keeps appending to it)."""
+    client, sent = _client([_stream(_sse("reply"))])
+    history = json.loads(json.dumps(_HISTORY))
+
+    _ = [d async for d in client.stream_chat_turn(
+        system="s", messages=history, tools=[_TOOL]
+    )]
+
+    body = sent[0]
+    assert body["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in b for m in body["messages"][:-1]
+               for b in (m["content"] if isinstance(m["content"], list) else []))
+    assert _strip_cache_control(body["messages"]) == _HISTORY
+    assert history == _HISTORY  # caller's list untouched
+    assert _breakpoints(body) == 2  # system + history, within the API's 4
+    assert body["tool_choice"] == {"type": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_turn_string_content_becomes_one_cached_text_block():
+    client, sent = _client([_stream(_sse("reply"))])
+
+    _ = [d async for d in client.stream_chat_turn(
+        system="s", messages=[{"role": "user", "content": "u"}], tools=[_TOOL]
+    )]
+
+    assert sent[0]["messages"] == [{"role": "user", "content": [
+        {"type": "text", "text": "u", "cache_control": {"type": "ephemeral"}},
+    ]}]
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_turn_final_round_keeps_tools_and_forbids_their_use():
+    """The forced-text final round keeps the same `tools` (the head of the cached
+    prefix) and sends tool_choice none instead of dropping them."""
+    client, sent = _client([_stream(_sse("reply"))])
+
+    _ = [d async for d in client.stream_chat_turn(
+        system="s", messages=_HISTORY, tools=[_TOOL], tool_choice={"type": "none"}
+    )]
+
+    assert sent[0]["tools"] == [_TOOL]
+    assert sent[0]["tool_choice"] == {"type": "none"}
+
 @pytest.mark.asyncio
 async def test_a_disconnect_mid_body_is_retried_by_the_ladder():
     """#302 under the SDK's real transport: the error the SDK's stream iterator
