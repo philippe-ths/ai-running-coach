@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import { AlertTriangle } from 'lucide-react';
 
 export default function Error({
@@ -10,9 +11,20 @@ export default function Error({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const router = useRouter();
+  const [retrying, startTransition] = useTransition();
+
   useEffect(() => {
     console.error(error);
   }, [error]);
+
+  // reset() alone re-renders the boundary from the cached server payload, so a
+  // server component that failed would fail again. Refetch it, then reset.
+  const retry = () =>
+    startTransition(() => {
+      router.refresh();
+      reset();
+    });
 
   return (
     <div className="mx-auto max-w-2xl p-8">
@@ -24,10 +36,11 @@ export default function Error({
         <span>Something went wrong loading this page. Your data is untouched.</span>
       </div>
       <button
-        onClick={reset}
-        className="mt-4 min-h-[44px] rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700"
+        onClick={retry}
+        disabled={retrying}
+        className="mt-4 min-h-[44px] rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        Try again
+        {retrying ? 'Retrying...' : 'Try again'}
       </button>
     </div>
   );

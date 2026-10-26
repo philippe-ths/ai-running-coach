@@ -76,8 +76,14 @@ export default function SchedulePage() {
   // Only the latest request may write state, so a slow response for a week the
   // runner has already left cannot overwrite the one on screen (as trends does).
   const weekRequestId = useRef(0);
+  // The week the runner last navigated to. A silent reload captured for an
+  // earlier week (an action tapped before navigating) is skipped, so it cannot
+  // take the latest request id and drop the navigation.
+  const shownParam = useRef<string | null>(null);
 
   const load = useCallback(async (param: string | null, silent = false) => {
+    if (!silent) shownParam.current = param;
+    else if (param !== shownParam.current) return;
     const requestId = ++weekRequestId.current;
     if (!silent) setLoading(true);
     setError(null);

@@ -55,6 +55,8 @@ export default function ProfilePage() {
   );
 }
 
+const OWN_SAVE_SECTIONS = new Set(['connections', 'voice', 'stance', 'materials', 'account']);
+
 function ProfileScreens() {
   const router = useRouter();
   const section = useSearchParams().get('s');
@@ -152,7 +154,10 @@ function ProfileScreens() {
 
   if (loading) return <div className="p-8">Loading profile...</div>;
 
-  if (loadError || !loaded) {
+  // Only the screens that read or save the profile form need it loaded. The
+  // ones that save on their own (Strava, Telegram, voice, account) stay usable,
+  // so a stored profile that will not load cannot lock the runner out of them.
+  if ((loadError || !loaded) && !OWN_SAVE_SECTIONS.has(section ?? '')) {
     return (
       <div className="mx-auto max-w-2xl p-8">
         <div

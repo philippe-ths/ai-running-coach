@@ -461,6 +461,10 @@ export default function CoachSheet() {
       const text = (textArg ?? input).trim();
       if (!text || streaming) return;
       if (textArg === undefined) setInput('');
+      // A send owns the transcript: the first-open auto-select must not land on
+      // another thread mid-stream, and a thread load still in flight is dropped.
+      hasAutoOpenedThread.current = true;
+      openSeqRef.current++;
       setStreaming(true);
       setStreamingText('');
       setStreamingTools([]);
