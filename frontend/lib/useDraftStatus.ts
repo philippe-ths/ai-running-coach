@@ -77,6 +77,10 @@ export function useDraftStatus(
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const polls = useRef(0);
   const errors = useRef(0);
+  // `alive` stops a loop after unmount; `gen` is bumped by watch() so a loop
+  // already in flight exits instead of forking into two (as useSeason does).
+  const alive = useRef(true);
+  const gen = useRef(0);
   // The callback identity changes with its owner's state; a ref keeps the poll
   // loop from re-subscribing (and double-polling) every time it does.
   const ready = useRef(onPlanReady);
@@ -91,8 +95,10 @@ export function useDraftStatus(
   const sawDrafting = useRef(false);
 
   const poll = useCallback(async () => {
+    const mine = gen.current;
     try {
       const data: DraftStatus | null = await fetchFromAPI("/api/schedule/draft");
+      if (!alive.current || mine !== gen.current) return;
       errors.current = 0;
       setDraft(data);
       if (data?.status === "drafting" && polls.current < MAX_POLLS) {
@@ -111,6 +117,7 @@ export function useDraftStatus(
       // it here would hide the failure at the exact moment there is a failure to
       // report. A new `watch()` is the only thing that resets it.
     } catch {
+      if (!alive.current || mine !== gen.current) return;
       // A failed poll says nothing about the plan either way, so it changes no
       // state. It only decides whether to keep asking.
       errors.current += 1;
@@ -126,6 +133,7 @@ export function useDraftStatus(
   }, []);
 
   const watch = useCallback(() => {
+    gen.current += 1;
     if (timer.current) clearTimeout(timer.current);
     polls.current = 0;
     errors.current = 0;
@@ -139,8 +147,10 @@ export function useDraftStatus(
   // On mount, pick up a draft already in flight — asked for on another device or
   // before a reload — and report where it stands.
   useEffect(() => {
+    alive.current = true;
     if (pollOnMount) void poll();
     return () => {
+      alive.current = false;
       if (timer.current) clearTimeout(timer.current);
     };
   }, [poll, pollOnMount]);

@@ -27,12 +27,17 @@ const SHOW_DEBUG_PANEL =
   process.env.NEXT_PUBLIC_SHOW_DEBUG_PANEL === '1';
 
 export default async function ActivityDetail({ params }: { params: { id: string } }) {
-  const activity: Activity | null = await serverFetch(`/api/activities/${params.id}`);
+  // #522: coach input feature flags drive UI greying (fail open to enabled, also
+  // when the flags call itself fails: the page must not crash over a grey-out).
+  const [activity, coachFlagsRaw]: [Activity | null, Record<string, unknown> | null] =
+    await Promise.all([
+      serverFetch(`/api/activities/${params.id}`),
+      serverFetch('/api/coach/feature-flags').catch(() => ({})),
+    ]);
 
   if (!activity) return <div>Activity not found</div>;
 
-  // #522: coach input feature flags drive UI greying (fail open to enabled).
-  const coachFlags = (await serverFetch('/api/coach/feature-flags')) || {};
+  const coachFlags = coachFlagsRaw || {};
   const stopsEnabled = coachFlags.stops_analysis !== false;
 
   // #562: when the recorded laps are just per-km auto-distance laps, they

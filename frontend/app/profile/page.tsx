@@ -64,25 +64,38 @@ function ProfileScreens() {
   const [profile, setProfile] = useState<ProfileForm>(EMPTY_PROFILE_FORM);
   const [draft, setDraft] = useState<ProfileForm>(EMPTY_PROFILE_FORM);
   const [loading, setLoading] = useState(true);
+  // A failed GET must not leave the blank form looking stored: saving it would
+  // PUT blanks over the real profile. `loaded` is true only after a GET succeeded
+  // (a 404 for a new user resolves to null and counts as success).
+  const [loadError, setLoadError] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
   // #1068: a PB row that does not parse holds the save rather than dropping it.
   const [pbsValid, setPbsValid] = useState(true);
 
-  useEffect(() => {
+  const loadProfile = useCallback(() => {
+    setLoading(true);
+    setLoadError(false);
     fetchFromAPI('/api/profile')
       .then((data) => {
-        const loaded = profileFromApi(data);
-        setProfile(loaded);
-        setDraft(loaded);
+        const stored = profileFromApi(data);
+        setProfile(stored);
+        setDraft(stored);
+        setLoaded(true);
         setLoading(false);
       })
       .catch((err) => {
         console.error(err);
+        setLoadError(true);
         setLoading(false);
       });
   }, []);
+
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
 
   // Opening or leaving a screen starts from what is stored, so edits abandoned
   // with Back are discarded rather than silently carried into the next save.
@@ -102,6 +115,7 @@ function ProfileScreens() {
   }, []);
 
   const handleSave = useCallback(async () => {
+    if (!loaded) return;
     setSaving(true);
     setError(null);
     try {
@@ -128,7 +142,7 @@ function ProfileScreens() {
     } finally {
       setSaving(false);
     }
-  }, [draft, router, section]);
+  }, [draft, loaded, router, section]);
 
   useEffect(() => {
     if (!justSaved) return;
@@ -137,6 +151,26 @@ function ProfileScreens() {
   }, [justSaved]);
 
   if (loading) return <div className="p-8">Loading profile...</div>;
+
+  if (loadError || !loaded) {
+    return (
+      <div className="mx-auto max-w-2xl p-8">
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200"
+        >
+          <AlertTriangle size={16} aria-hidden="true" className="mt-0.5 shrink-0" />
+          <span>Could not load your profile. Nothing has been changed.</span>
+        </div>
+        <button
+          onClick={loadProfile}
+          className="mt-4 min-h-[44px] rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   const saveProps = { onSave: handleSave, saving };
 

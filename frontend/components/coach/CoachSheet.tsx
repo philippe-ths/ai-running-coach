@@ -12,6 +12,7 @@
 // "asked from …" label — the label only, never that screen's data (ADR 0028).
 
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -194,6 +195,51 @@ function ToolTrace({ tools }: { tools: ToolTraceEntry[] }) {
 const coachProseClasses =
   'prose prose-sm prose-gray dark:prose-invert max-w-none leading-relaxed font-serif prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-headings:mt-3 prose-headings:mb-1.5 prose-headings:text-sm';
 
+// Past messages never change while a reply streams, so memoising by message
+// keeps their markdown from re-parsing on every streamed token.
+const MessageBubble = memo(function MessageBubble({
+  msg,
+  screenKey,
+}: {
+  msg: ChatMessage;
+  screenKey: string;
+}) {
+  /* #778: a confirmed action leaves a mark in the conversation, but a
+     change the runner can already see on the activity or schedule
+     screen does not deserve a chat bubble. One quiet ledger line,
+     carrying the card's own words back. */
+  if (msg.role === 'event') {
+    return (
+      <div className="flex items-start gap-1.5 text-[11.5px] leading-relaxed text-gray-500 dark:text-gray-400">
+        <Check className="mt-[3px] h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        <span>{msg.content}</span>
+      </div>
+    );
+  }
+  if (msg.role === 'user') {
+    return (
+      <div className="flex flex-col items-end gap-0.5">
+        {msg.asked_from && msg.asked_from !== screenKey && (
+          <span className="font-mono text-[9px] tracking-wide text-gray-400 dark:text-gray-500">
+            asked from {askedFromLabel(msg.asked_from)}
+          </span>
+        )}
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-blue-600 px-3.5 py-2 text-sm leading-relaxed text-white">
+          {msg.content}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="text-[15px] text-gray-800 dark:text-gray-100">
+      <ToolTrace tools={msg.tools_used ?? []} />
+      <div className={`${coachProseClasses} selectable`}>
+        <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>
+      </div>
+    </div>
+  );
+});
+
 export default function CoachSheet() {
   const router = useRouter();
   const { enabled, isOpen, close, screen, selections, pendingPrompt, consumePendingPrompt } =
@@ -300,7 +346,12 @@ export default function CoachSheet() {
     }
   }, []);
 
+  // Bumped by every openThread and startNewThread; a response that lands under
+  // an older number belongs to a thread the runner has already left.
+  const openSeqRef = useRef(0);
+
   const openThread = useCallback(async (id: string) => {
+    const seq = ++openSeqRef.current;
     setSwitcherOpen(false);
     setCurrentThreadId(id);
     setHeadReport(null);
@@ -313,6 +364,8 @@ export default function CoachSheet() {
       const res = await fetch(`/api/coach/threads/${id}`);
       if (!res.ok) return;
       const detail: ThreadDetail = await res.json();
+      // A newer open or a new thread took over while this one was in flight.
+      if (seq !== openSeqRef.current) return;
       setCurrentTitle(detail.title);
       setMessages(detail.messages);
       setAnchorActivityId(detail.anchor?.activity_id ?? null);
@@ -325,6 +378,7 @@ export default function CoachSheet() {
           );
           if (rep.ok) {
             const repData = await rep.json();
+            if (seq !== openSeqRef.current) return;
             const msg = repData?.report?.message;
             if (typeof msg === 'string' && msg.trim()) setHeadReport(msg);
           }
@@ -345,6 +399,7 @@ export default function CoachSheet() {
   openThreadRef.current = openThread;
 
   const startNewThread = useCallback(() => {
+    openSeqRef.current++;
     setSwitcherOpen(false);
     setCurrentThreadId(null);
     setCurrentTitle('New thread');
@@ -664,7 +719,8 @@ export default function CoachSheet() {
       <div className="relative flex shrink-0 items-center justify-between gap-2 px-3.5 pb-2 pt-1.5 md:pt-3">
         <button
           onClick={() => setSwitcherOpen(v => !v)}
-          className="flex min-w-0 items-center gap-1.5 text-[13.5px] font-semibold text-gray-900 dark:text-gray-100"
+          disabled={streaming}
+          className="flex min-w-0 items-center gap-1.5 text-[13.5px] font-semibold text-gray-900 disabled:opacity-50 dark:text-gray-100"
           aria-expanded={switcherOpen}
           aria-label="Switch thread"
         >
@@ -674,7 +730,7 @@ export default function CoachSheet() {
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-2 text-gray-400 dark:text-gray-500">
-          <button onClick={startNewThread} aria-label="Start a new thread" className="p-1.5 hover:text-blue-600 dark:hover:text-blue-400">
+          <button onClick={startNewThread} disabled={streaming} aria-label="Start a new thread" className="p-1.5 hover:text-blue-600 disabled:opacity-40 dark:hover:text-blue-400">
             <Plus className="h-4 w-4" />
           </button>
           <button onClick={close} aria-label="Close the coach" className="p-1.5 hover:text-gray-600 dark:hover:text-gray-300">
@@ -688,7 +744,7 @@ export default function CoachSheet() {
 
       {/* Transcript region (the switcher drops over it). */}
       <div className="relative flex min-h-0 flex-1 flex-col">
-        {switcherOpen && (
+        {switcherOpen && !streaming && (
           <ThreadSwitcher
             threads={threads}
             currentThreadId={currentThreadId}
@@ -742,39 +798,9 @@ export default function CoachSheet() {
           )}
 
           <div className="space-y-4">
-            {messages.map(msg =>
-              /* #778: a confirmed action leaves a mark in the conversation, but a
-                 change the runner can already see on the activity or schedule
-                 screen does not deserve a chat bubble. One quiet ledger line,
-                 carrying the card's own words back. */
-              msg.role === 'event' ? (
-                <div
-                  key={msg.id}
-                  className="flex items-start gap-1.5 text-[11.5px] leading-relaxed text-gray-500 dark:text-gray-400"
-                >
-                  <Check className="mt-[3px] h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                  <span>{msg.content}</span>
-                </div>
-              ) : msg.role === 'user' ? (
-                <div key={msg.id} className="flex flex-col items-end gap-0.5">
-                  {msg.asked_from && msg.asked_from !== screen.key && (
-                    <span className="font-mono text-[9px] tracking-wide text-gray-400 dark:text-gray-500">
-                      asked from {askedFromLabel(msg.asked_from)}
-                    </span>
-                  )}
-                  <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-blue-600 px-3.5 py-2 text-sm leading-relaxed text-white">
-                    {msg.content}
-                  </div>
-                </div>
-              ) : (
-                <div key={msg.id} className="text-[15px] text-gray-800 dark:text-gray-100">
-                  <ToolTrace tools={msg.tools_used ?? []} />
-                  <div className={`${coachProseClasses} selectable`}>
-                    <Markdown remarkPlugins={[remarkGfm]}>{msg.content}</Markdown>
-                  </div>
-                </div>
-              ),
-            )}
+            {messages.map(msg => (
+              <MessageBubble key={msg.id} msg={msg} screenKey={screen.key} />
+            ))}
 
             {streaming && streamingText && (
               <div className="text-[15px] text-gray-800 dark:text-gray-100">

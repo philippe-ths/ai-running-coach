@@ -73,22 +73,29 @@ export default function SchedulePage() {
 
   const coach = useCoachSheet();
 
+  // Only the latest request may write state, so a slow response for a week the
+  // runner has already left cannot overwrite the one on screen (as trends does).
+  const weekRequestId = useRef(0);
+
   const load = useCallback(async (param: string | null, silent = false) => {
+    const requestId = ++weekRequestId.current;
     if (!silent) setLoading(true);
     setError(null);
     try {
       const qs = param ? `?week_start=${param}` : "";
       const data: ScheduleWeek | null = await fetchFromAPI(`/api/schedule/week${qs}`);
+      if (requestId !== weekRequestId.current) return;
       if (data) {
         setWeek(data);
       } else if (!silent) {
         setError("Your schedule is not available right now.");
       }
     } catch {
+      if (requestId !== weekRequestId.current) return;
       if (!silent) setError("Could not load your schedule.");
       else setActionError("Saved, but the week could not be refreshed. Reload to see it.");
     } finally {
-      if (!silent) setLoading(false);
+      if (requestId === weekRequestId.current) setLoading(false);
     }
   }, []);
 

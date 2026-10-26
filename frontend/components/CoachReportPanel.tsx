@@ -235,6 +235,9 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
   // attempt cap that survives re-renders (the ref does not reset), so a fuller
   // that never arrives stops polling rather than looping forever.
   const pollAttempts = useRef(0);
+  // Bumped on a failed attempt so the effect re-runs and schedules the next one
+  // (a failure leaves `report` unchanged, which would otherwise end the poll).
+  const [openerTick, setOpenerTick] = useState(0);
   useEffect(() => {
     if (status !== 'loaded' || !report || !isOpenerOnly(report.report)) return;
     if (pollAttempts.current >= OPENER_POLL_MAX_ATTEMPTS) return;
@@ -246,13 +249,16 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
         );
         if (res.ok) {
           setReport((await res.json()) as CoachReport);
+        } else {
+          setOpenerTick((t) => t + 1);
         }
       } catch {
         // keep waiting; a transient failure should not stop the poll
+        setOpenerTick((t) => t + 1);
       }
     }, OPENER_POLL_INTERVAL_MS);
     return () => clearTimeout(id);
-  }, [status, report, activityId]);
+  }, [status, report, activityId, openerTick]);
 
   // #260: on-demand (re)generation is asynchronous. The "Re-run" / "Get analysis"
   // buttons enqueue a worker job (no gateway timeout) and we poll for the fresh
