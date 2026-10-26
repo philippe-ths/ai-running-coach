@@ -120,9 +120,11 @@ export function groupActivitiesByDay<T extends GroupableActivity>(
 
 /** "Today" / "Yesterday" / "Friday, Aug 21" (year added only when it is not
  * the current one), so a day header reads as a date the runner recognises
- * rather than an ISO string. */
-export function dayHeading(date: Date): string {
-  const today = new Date();
+ * rather than an ISO string. With no `now` (a render that cannot know the
+ * runner's date, such as the server's) it is the plain date. */
+export function dayHeading(date: Date, now: Date | null = new Date()): string {
+  if (now === null) return format(date, 'EEEE, MMM d');
+  const today = now;
   const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const diffDays = Math.round((startOfToday.getTime() - startOfDay.getTime()) / 86400000);
