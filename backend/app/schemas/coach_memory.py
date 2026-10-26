@@ -33,6 +33,12 @@ from pydantic import BaseModel, ConfigDict, Field
 # size. Per-section line count and per-line character length.
 MAX_LINES_PER_SECTION = 6
 MAX_LINE_LENGTH = 200
+# The most candidate lines one writer pass may propose.
+MAX_WRITER_CANDIDATES = 80
+# A stated safety limit is never cut by the per-section cap (#1143), so the limits
+# section is bounded by the writer's candidate ceiling, which no pass can exceed.
+# Non-safety limit lines still stop at MAX_LINES_PER_SECTION (`apply_graduation`).
+MAX_LIMIT_LINES = MAX_WRITER_CANDIDATES
 
 # Canonical section order, used everywhere a profile is iterated (render, gather,
 # the M3 pack projection).
@@ -57,6 +63,7 @@ MEMORY_SECTION_TITLES = {
 # length cap on the str, per-section count cap on the list.
 _Line = Annotated[str, Field(max_length=MAX_LINE_LENGTH)]
 _Section = Annotated[List[_Line], Field(max_length=MAX_LINES_PER_SECTION)]
+_LimitsSection = Annotated[List[_Line], Field(max_length=MAX_LIMIT_LINES)]
 
 
 class RunnerMemoryProfile(BaseModel):
@@ -70,7 +77,7 @@ class RunnerMemoryProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     who_you_are: _Section = []
-    limits_and_constraints: _Section = []
+    limits_and_constraints: _LimitsSection = []
     goals_and_plans: _Section = []
     what_works_for_you: _Section = []
     lately: _Section = []

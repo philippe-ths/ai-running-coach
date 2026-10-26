@@ -8,7 +8,7 @@ read of the resulting profile.
 
 ## What it scores
 
-The memory writer is an LLM (`claude-haiku-4-5`) that rebuilds the whole profile
+The memory writer is an LLM (`claude-haiku-5-5`, `MEMORY_MODEL_ID`) that rebuilds the whole profile
 from source each pass, so its behaviour cannot be pinned by deterministic unit
 tests. The unit the harness scores is the triple:
 

@@ -207,3 +207,67 @@ def test_plan_bar_defaults_to_the_two_source_constant():
     # so the LIVE bar-of-1 is a wiring choice (update_memory), not baked into the gate.
     profile = apply_graduation([_c("A goal", "goals_and_plans", ["s1"])], KNOWN)
     assert profile.goals_and_plans == []
+
+
+# --- #1143: a stated safety limit is never cut by the per-section cap --- #
+
+
+def test_every_stated_safety_limit_is_kept_past_the_cap():
+    # A runner who has reported more body issues than the cap allows keeps all of
+    # them: the cap exists to keep the profile small, never to drop a safety limit.
+    reports = [f"Body report {i}, mentioned once" for i in range(MAX_LINES_PER_SECTION + 3)]
+    profile = apply_graduation(
+        [_c(text, "limits_and_constraints", ["s1"], safety=True) for text in reports], KNOWN
+    )
+    assert profile.limits_and_constraints == reports
+
+
+def test_safety_limits_come_first_and_other_limits_fill_the_remaining_slots():
+    # Six firm practical limits arrive BEFORE two body reports. The body reports are
+    # kept and listed first; the practical limits fill what is left of the cap, in
+    # their own order.
+    practical = [_c(f"Practical limit {i}", "limits_and_constraints", ["s1", "s2"]) for i in range(6)]
+    body = [
+        _c("Sore left shin, mentioned once", "limits_and_constraints", ["s3"], safety=True),
+        _c("Possible right-knee niggle, mentioned once", "limits_and_constraints", ["s4"], safety=True),
+    ]
+    profile = apply_graduation(practical + body, KNOWN)
+    assert profile.limits_and_constraints == [
+        "Sore left shin, mentioned once",
+        "Possible right-knee niggle, mentioned once",
+        "Practical limit 0",
+        "Practical limit 1",
+        "Practical limit 2",
+        "Practical limit 3",
+    ]
+
+
+def test_non_safety_limits_are_still_capped():
+    over = [
+        _c(f"Practical limit {i}", "limits_and_constraints", ["s1", "s2"])
+        for i in range(MAX_LINES_PER_SECTION + 4)
+    ]
+    profile = apply_graduation(over, KNOWN)
+    assert profile.limits_and_constraints == [f"Practical limit {i}" for i in range(MAX_LINES_PER_SECTION)]
+
+
+def test_safety_flag_outside_limits_has_no_effect():
+    # The flag means something only in limits_and_constraints. On a `lately` line it
+    # neither changes what is stored nor makes the rubric expect a held limit.
+    from app.services.coach.eval.memory.rubric import score_memory
+    from app.services.coach.eval.rubric import AssertionStatus
+    from app.services.coach.memory_update import MemorySources, SourceItem
+
+    sources = MemorySources(
+        sources=(SourceItem(id="s1", kind="check_in_note", text="thigh a bit sore", durable=True),)
+    )
+    line = "Open: is the right thigh soreness clearing? Runner to report."
+    flagged = [_c(line, "lately", ["s1"], safety=True)]
+    plain = [_c(line, "lately", ["s1"], safety=False)]
+
+    profile = apply_graduation(flagged, sources.source_ids, durable_source_ids=sources.durable_source_ids)
+    assert profile.model_dump() == apply_graduation(
+        plain, sources.source_ids, durable_source_ids=sources.durable_source_ids
+    ).model_dump()
+    held = next(a for a in score_memory(sources, flagged, profile).assertions if a.name == "safety_limit_held")
+    assert held.status is AssertionStatus.NOT_APPLICABLE

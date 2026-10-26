@@ -214,7 +214,9 @@ def assert_safety_limit_held(
     grounded_safety = [
         c
         for c in candidates
-        if c.safety_relevant and (set(c.supporting_source_ids) & durable_ids)
+        if c.safety_relevant
+        and c.section == "limits_and_constraints"  # the flag means nothing elsewhere (#1143)
+        and (set(c.supporting_source_ids) & durable_ids)
     ]
     if not grounded_safety:
         return AssertionResult(

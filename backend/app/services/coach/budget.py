@@ -50,9 +50,8 @@ PRICE_PER_MTOK: Dict[str, tuple[float, float]] = {
     "claude-sonnet-5": (2.0, 10.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-sonnet-4-5": (3.0, 15.0),
-    # Haiku 5.5 is $0.10/$0.50 up to 100k prompt tokens and $0.50/$2.50 above; the
-    # meter does not know prompt length, so it takes the higher (safe) tier.
-    "claude-haiku-5-5": (0.5, 2.5),
+    # Haiku 5.5's normal tier; prompts over 100K tokens bill at $0.50/$2.50 (#1143).
+    "claude-haiku-5-5": (0.1, 0.5),
     "claude-haiku-4-5": (1.0, 5.0),
 }
 _DEFAULT_PRICE = max(PRICE_PER_MTOK.values())  # unknown model: most expensive known

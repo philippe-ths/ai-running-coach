@@ -18,6 +18,7 @@ from app.schemas.coach_memory import RunnerMemoryProfile
 from app.services.coach.llm import Usage
 from app.services.coach.memory_store import get_memory, upsert_memory
 from app.services.coach.memory_update import (
+    MEMORY_MODEL_ID,
     MemorySources,
     build_writer_messages,
     gather_memory_sources,
@@ -198,7 +199,7 @@ def test_two_distinct_check_ins_graduate_a_durable_fact(db):
 
     assert stub.calls == 1
     assert row is not None
-    assert row.model_id == "claude-haiku-4-5"
+    assert row.model_id == MEMORY_MODEL_ID
     assert row.source_report_count == 2
     profile = RunnerMemoryProfile.model_validate(row.profile)
     assert profile.goals_and_plans == ["Targeting a sub-3 marathon"]

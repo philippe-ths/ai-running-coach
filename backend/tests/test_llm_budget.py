@@ -37,6 +37,8 @@ def test_cost_usd_matches_price_table():
     # 5.5 prices (platform.claude.com/docs/en/about-claude/pricing, 2026-10-07).
     assert budget.cost_usd("claude-opus-5-5", 1_000_000, 1_000_000) == pytest.approx(24.0)
     assert budget.cost_usd("claude-sonnet-5-5", 1_000_000, 1_000_000) == pytest.approx(12.0)
+    # Haiku 5.5 at its normal (<=100K prompt) tier, $0.10/$0.50 (#1143).
+    assert budget.cost_usd("claude-haiku-5-5", 1_000_000, 1_000_000) == pytest.approx(0.6)
     # A dated snapshot id prices as its family, not as an unknown model.
     assert budget.cost_usd("claude-haiku-4-5-20251001", 1_000_000, 1_000_000) == pytest.approx(6.0)
     # Opus 5.5 reads cache at 0.05x.
