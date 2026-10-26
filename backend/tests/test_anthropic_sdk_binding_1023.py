@@ -207,18 +207,6 @@ async def test_stream_chat_turn_string_content_becomes_one_cached_text_block():
     ]}]
 
 
-@pytest.mark.asyncio
-async def test_stream_chat_turn_final_round_keeps_tools_and_forbids_their_use():
-    """The forced-text final round keeps the same `tools` (the head of the cached
-    prefix) and sends tool_choice none instead of dropping them."""
-    client, sent = _client([_stream(_sse("reply"))])
-
-    _ = [d async for d in client.stream_chat_turn(
-        system="s", messages=_HISTORY, tools=[_TOOL], tool_choice={"type": "none"}
-    )]
-
-    assert sent[0]["tools"] == [_TOOL]
-    assert sent[0]["tool_choice"] == {"type": "none"}
 
 @pytest.mark.asyncio
 async def test_a_disconnect_mid_body_is_retried_by_the_ladder():

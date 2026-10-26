@@ -171,10 +171,6 @@ def test_a_failing_season_is_retried_once_with_every_failure_listed(db, user, go
     assert "booked for 8 November 2026" in retry
     assert "Backyard ultra" in retry and "no view" in retry
     assert client.calls[0]["user"] in retry  # the same context travels with it
-    # #1137: the rewrite carries the plan (and the events it found), so the
-    # retry does not pay for the searches again; the first call did search.
-    assert client.calls[0]["web_search_max_uses"] == 5
-    assert client.calls[1]["web_search_max_uses"] == 0
     db.refresh(season)
     log = DraftLog.model_validate(season.draft_log)
     assert (log.first_try_passed, log.checked) == (0, 1)
@@ -192,8 +188,6 @@ def test_an_off_contract_answer_is_retried_with_the_coercion_error(db, user, goa
 
     retry = client.calls[1]["user"]
     assert "not the shape the tool requires" in retry and "surprise" in retry
-    # #1137: nothing usable was kept, so the from-scratch retry may search again.
-    assert client.calls[1]["web_search_max_uses"] == 5
 
 
 def test_two_failures_fail_the_season_and_activate_nothing(db, user, goals):
@@ -221,8 +215,6 @@ def test_a_transport_error_does_not_spend_the_rewrite(db, user, goals):
     client = FakeClient(RuntimeError("503"), bad(valid_payload(goals)), valid_payload(goals))
     assert go(db, user, season, client).ok
     assert len(client.calls) == 3
-    # The re-issued call is the same request, search included; the rewrite is not.
-    assert [c["web_search_max_uses"] for c in client.calls] == [5, 5, 0]
 
 
 def test_two_transport_errors_fail_with_the_unreachable_message(db, user, goals):

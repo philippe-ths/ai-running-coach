@@ -63,12 +63,12 @@ def _seed_user(db):
     return user, account
 
 
-def _raws(base: datetime) -> list[dict]:
+def _raws(base: datetime, first_id: int = 7_000_000) -> list[dict]:
     raws = []
     for i in range(_N):
         start = base - timedelta(days=2 * i, hours=i % 3)
         raws.append({
-            "id": 7_000_000 + i,
+            "id": first_id + i,
             "name": f"Run {i}",
             "type": "Run",
             "start_date": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -151,9 +151,12 @@ async def test_import_batch_baseline_matches_per_activity_path(db, strava_adapte
     db.add(imp)
     db.commit()
 
-    result = await run_import_batch(db, imp, limit=50)
+    with patch("app.services.analysis._orchestrator.recompute_runner_baseline",
+               wraps=recompute_runner_baseline) as spy:
+        result = await run_import_batch(db, imp, limit=50)
 
     assert result.imported == _N
+    assert spy.call_count == 1  # once per batch, not once per activity
     _assert_same_as_oracle(db, user)
 
 
@@ -171,7 +174,39 @@ async def test_backfill_batch_baseline_matches_per_activity_path(db, strava_adap
     db.commit()
     _seed_streams(strava_adapter, raws)
 
-    result = await bf.backfill_streams_batch(db, limit=50, user_id=str(user.id))
+    with patch("app.services.analysis._orchestrator.recompute_runner_baseline",
+               wraps=recompute_runner_baseline) as spy:
+        result = await bf.backfill_streams_batch(db, limit=50, user_id=str(user.id))
 
     assert len(result.processed) == _N
+    assert spy.call_count == 1  # once per batch, not once per activity
     _assert_same_as_oracle(db, user)
+
+
+@pytest.mark.asyncio
+async def test_unscoped_backfill_recomputes_every_owner_once(db, strava_adapter, monkeypatch):
+    """Production backfill runs unscoped (user_id=None) across runners: each owner
+    in the batch gets exactly one recompute, and each matches the old path."""
+    from app.jobs import backfill_streams as bf
+    from app.services.strava_ingestion import strava_budget
+    from app.services.strava_ingestion.persistence import upsert_activity
+
+    monkeypatch.setattr(strava_budget, "over_budget", lambda: False)
+    owners = []
+    for first_id in (7_000_000, 8_000_000):
+        user, _account = _seed_user(db)
+        raws = _raws(datetime(2026, 3, 1, 9, tzinfo=timezone.utc), first_id)
+        for raw in raws:
+            upsert_activity(db, raw, user.id)
+        db.commit()
+        _seed_streams(strava_adapter, raws)
+        owners.append(user)
+
+    with patch("app.services.analysis._orchestrator.recompute_runner_baseline",
+               wraps=recompute_runner_baseline) as spy:
+        result = await bf.backfill_streams_batch(db, limit=50, user_id=None)
+
+    assert len(result.processed) == 2 * _N
+    assert spy.call_count == 2
+    for user in owners:
+        _assert_same_as_oracle(db, user)

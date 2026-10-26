@@ -93,9 +93,8 @@ async def test_tool_loop_fetches_then_answers(db):
 
 @pytest.mark.asyncio
 async def test_final_round_runs_tools_off(db):
-    """The loop always terminates: after the round budget, the final call forbids
-    tool use (tool_choice none) so the model must answer in text rather than fetch
-    again. It keeps the SAME tools (#1137) so the cached tools + system prefix holds."""
+    """The loop always terminates: after the round budget, the final call carries no
+    tools so the model must answer in text rather than fetch again."""
     activity = _seed_activity_with_report(db)
     capture = {}
     # Keep fetching for the whole budget, whatever the budget is: the guarantee
@@ -112,12 +111,9 @@ async def test_final_round_runs_tools_off(db):
     tools_seen = capture["tools_seen"]
     assert len(tools_seen) == _MAX_TOOL_ROUNDS
     fetch_tools = {t["name"] for t in CHAT_TOOLS}
-    for offered in tools_seen:
+    for offered in tools_seen[:-1]:
         assert fetch_tools <= {t["name"] for t in offered}
-    assert tools_seen[-1] == tools_seen[0]  # same tools: the cached prefix holds
-    choices = capture["tool_choice_seen"]
-    assert all(c is None for c in choices[:-1])  # earlier rounds: auto
-    assert choices[-1] == {"type": "none"}  # final round: no tool may be called
+    assert tools_seen[-1] is None  # final round: tools off
     assert "Here's the summary." in "".join(ev.text for ev in events if ev.text)
 
 

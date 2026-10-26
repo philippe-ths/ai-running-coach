@@ -348,7 +348,7 @@ class TestThreadTurn:
         def capturing_stub(deltas):
             from app.services.coach.llm import ChatTurnDelta, MessageResult
 
-            async def _stub(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
+            async def _stub(self, *, system, messages, tools=None, max_tokens=1024):
                 seen["messages"] = messages
                 yield ChatTurnDelta(
                     final=MessageResult(

@@ -775,7 +775,6 @@ class AnthropicClient:
         messages: List[dict],
         tools: Optional[List[Dict[str, Any]]] = None,
         max_tokens: int = 1024,
-        tool_choice: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator["ChatTurnDelta"]:
         """Stream one turn of a tool-aware chat conversation (#648).
 
@@ -784,12 +783,8 @@ class AnthropicClient:
         once the turn ends, carrying the content blocks (text + any tool_use blocks)
         and the stop_reason for the tool loop to dispatch on.
 
-        When `tools` is falsy the call carries no tool surface, forcing a text answer.
-        The loop's final round instead keeps `tools` and passes `tool_choice`
-        `{"type": "none"}` (#1137): the tools render first in the cache prefix, so
-        dropping them re-billed the whole tools + system + history prefix, while a
-        `tool_choice` change keeps the tools and system cache. `none` is not a
-        forced choice, so the 5.5 lanes that 400 on `any`/`tool` accept it.
+        When `tools` is falsy the call carries no tool surface, forcing a text answer
+        (the loop's tools-off final round).
 
         Transport resilience: the SHARED `RetryLadder` (#801), so a chat turn now
         survives the same transient drops and 5xx a report does — before this it
@@ -816,7 +811,7 @@ class AnthropicClient:
         )
         if tools:
             stream_kwargs["tools"] = tools
-            stream_kwargs["tool_choice"] = tool_choice or {"type": "auto"}
+            stream_kwargs["tool_choice"] = {"type": "auto"}
 
         ladder = RetryLadder("anthropic_chat")
         while True:

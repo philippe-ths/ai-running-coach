@@ -154,7 +154,7 @@ def _sse_text(raw: str) -> str:
 def _capturing_stub(reply: str, seen: dict):
     from app.services.coach.llm import ChatTurnDelta, MessageResult
 
-    async def _stub(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
+    async def _stub(self, *, system, messages, tools=None, max_tokens=1024):
         seen["system"] = system
         seen["messages"] = [dict(m) for m in messages]
         yield ChatTurnDelta(

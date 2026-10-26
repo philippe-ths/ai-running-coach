@@ -21,7 +21,7 @@ def chat_turn_stub(deltas: List[str], *, capture: Optional[dict] = None, on_delt
     """
     from app.services.coach.llm import ChatTurnDelta, MessageResult
 
-    async def _stub(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
+    async def _stub(self, *, system, messages, tools=None, max_tokens=1024):
         if capture is not None:
             capture["system"] = system
             capture.setdefault("tools_seen", []).append(tools)
@@ -44,7 +44,7 @@ def chat_raising_stub(*, before: str = ""):
     to exercise the mid-stream failure -> safe-degrade path."""
     from app.services.coach.llm import ChatTurnDelta
 
-    async def _stub(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
+    async def _stub(self, *, system, messages, tools=None, max_tokens=1024):
         if before:
             yield ChatTurnDelta(text=before)
         raise RuntimeError("upstream blew up")
@@ -68,12 +68,11 @@ def chat_tool_loop_stub(rounds, *, capture: Optional[dict] = None):
 
     state = {"i": 0}
 
-    async def _stub(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
+    async def _stub(self, *, system, messages, tools=None, max_tokens=1024):
         i = state["i"]
         state["i"] += 1
         if capture is not None:
             capture.setdefault("tools_seen", []).append(tools)
-            capture.setdefault("tool_choice_seen", []).append(tool_choice)
             capture.setdefault("messages_seen", []).append([dict(m) for m in messages])
         if i >= len(rounds):
             raise AssertionError(
@@ -115,7 +114,7 @@ def chat_no_final_stub(*, before: str = ""):
     """
     from app.services.coach.llm import ChatTurnDelta
 
-    async def _stub(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
+    async def _stub(self, *, system, messages, tools=None, max_tokens=1024):
         if before:
             yield ChatTurnDelta(text=before)
 

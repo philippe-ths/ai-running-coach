@@ -185,7 +185,7 @@ def test_chat_degrades_gracefully_on_exhausted_rate_limit(client, db):
         resp = httpx.Response(status_code=429, request=req)
         return anthropic.RateLimitError("rate limited", response=resp, body=None)
 
-    async def _stub(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
+    async def _stub(self, *, system, messages, tools=None, max_tokens=1024):
         raise _rate_limited()
         yield  # unreachable; makes this an async generator like the real method
 

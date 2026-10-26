@@ -204,7 +204,7 @@ class _ScriptedClient:
         self.rounds = list(rounds)
         self.seen = []
 
-    async def stream_chat_turn(self, *, system, messages, tools=None, max_tokens=1024, tool_choice=None):
+    async def stream_chat_turn(self, *, system, messages, tools=None, max_tokens=1024):
         from app.services.coach.llm import ChatTurnDelta, MessageResult
 
         self.seen.append([dict(m) for m in messages])

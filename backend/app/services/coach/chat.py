@@ -472,20 +472,16 @@ async def _buffered_tool_loop(
     turn_started_at = last_heartbeat
     try:
         for round_idx in range(_MAX_TOOL_ROUNDS):
-            # The final round forbids tool use, forcing a text answer rather than
-            # another fetch — the loop is guaranteed to terminate (#648, Q8). It
-            # keeps the same `tools` and sends tool_choice none (#1137): dropping
-            # the tools changed the head of the cached prefix and re-billed the
-            # whole tools + system prompt on the turn's most expensive round.
+            # The final round runs tools-off, forcing a text answer rather than another
+            # fetch — the loop is guaranteed to terminate (#648, Q8).
             toolset = CHAT_TOOLS if tools is None else tools
-            final_round = round_idx == _MAX_TOOL_ROUNDS - 1
+            tools_arg = toolset if round_idx < _MAX_TOOL_ROUNDS - 1 else None
             final_msg = None
             async for delta in client.stream_chat_turn(
                 system=system_prompt,
                 messages=llm_messages,
-                tools=toolset,
-                max_tokens=_chat_max_tokens(None if final_round else toolset),
-                tool_choice={"type": "none"} if final_round else None,
+                tools=tools_arg,
+                max_tokens=_chat_max_tokens(tools_arg),
             ):
                 if delta.final is not None:
                     final_msg = delta.final
@@ -508,7 +504,7 @@ async def _buffered_tool_loop(
                     "(round %s of %s, tools=%s)",
                     round_idx + 1,
                     _MAX_TOOL_ROUNDS,
-                    "off" if final_round else "on",
+                    "on" if tools_arg else "off",
                 )
                 stream_failed = True
                 break
