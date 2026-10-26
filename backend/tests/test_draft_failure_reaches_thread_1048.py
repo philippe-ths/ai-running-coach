@@ -92,7 +92,9 @@ def test_the_note_carries_the_same_sentence_as_the_draft_status(db):
     assert failure_message(store.FAILURE_TOO_BIG_A_JUMP) in notes[0]
 
 
-def test_a_draft_that_throws_is_said_too(db):
+def test_a_draft_that_throws_is_said_too(savepoint_db):
+    # The job rolls back before recovering (#1136); see `savepoint_db`.
+    db = savepoint_db
     user, thread = _runner_and_thread(db)
     plan = store.create_drafting_plan(db, user.id)
 

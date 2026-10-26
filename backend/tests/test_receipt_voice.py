@@ -304,3 +304,19 @@ def test_the_fingerprint_moves_when_a_characters_exemplars_are_rewritten():
         "rewriting a character's exemplars left the fingerprint unchanged, so no "
         "runner's receipt templates would ever be regenerated from the new prose"
     )
+
+
+def test_receipt_template_refresh_enqueued_twice_runs_once(monkeypatch):
+    """#1136: the lazy path can ask for a refresh on every receipt; while one is
+    queued a repeat must collapse into it. RQ only rejects the repeated job id
+    under `unique=True`."""
+    from app.core import queue as queue_mod
+    from tests._unique_queue import UniqueAwareQueue
+
+    q = UniqueAwareQueue()
+    monkeypatch.setattr(queue_mod, "queue", q)
+    user_id = uuid4()
+    RV.enqueue_receipt_template_refresh(user_id)
+    RV.enqueue_receipt_template_refresh(user_id)
+
+    assert len(q.runs) == 1

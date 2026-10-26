@@ -262,6 +262,25 @@ def test_enqueue_reanalyze_counts_and_enqueues_first_batch(db):
     assert kwargs["job_id"] == f"reanalyze_history_{user.id}"
 
 
+def test_enqueue_reanalyze_twice_starts_one_chain(db):
+    """#1136: a second trigger while the runner's chain is queued must not start
+    a second chain. RQ only rejects the repeated per-user job id under
+    `unique=True`; the second trigger still reports the eligible count."""
+    from app.jobs import reanalyze_history as mod
+    from tests._unique_queue import UniqueAwareQueue
+
+    user = _seed_user(db)
+    _seed_activity(db, user, 4002)
+
+    q = UniqueAwareQueue()
+    with patch.object(mod, "queue", q):
+        first = mod.enqueue_reanalyze(db, user.id)
+        second = mod.enqueue_reanalyze(db, user.id)
+
+    assert first == second == 1
+    assert len(q.runs) == 1
+
+
 def test_enqueue_reanalyze_is_noop_when_nothing_eligible(db):
     from app.jobs import reanalyze_history as mod
 

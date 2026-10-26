@@ -4,8 +4,9 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from pydantic import BaseModel, ValidationError
+from rq.exceptions import DuplicateJobError
 
 from app.core.config import settings
 from app.db.session import get_db
@@ -16,6 +17,7 @@ from app.jobs.process_new_activity import (
     mark_done_and_schedule,
     process_new_activity_job,
 )
+from app.jobs import exchange_ops
 from app.jobs.strava_sync import sync_activity_job
 from app.schemas import CheckInCreate
 from app.services.blocks import remove_activity_from_block
@@ -139,6 +141,42 @@ def _event_is_authentic(event: "StravaEvent", db: Session) -> bool:
     return True
 
 
+def _is_missed_create(db: Session, event: "StravaEvent") -> bool:
+    """An `update` for an activity we never stored whose `create` we must have
+    missed (#1136): newer than every activity stored for this athlete. Strava ids
+    grow over time, so an unstored id BELOW the newest stored one is an edit to an
+    old activity outside our history; running the pipeline for it would send a
+    receipt and a report about a long-past session. With nothing stored there is
+    no anchor, so it is treated as old too."""
+    stored = (
+        db.query(Activity.id)
+        .filter(Activity.strava_activity_id == event.object_id)
+        .first()
+    )
+    if stored is not None:
+        return False
+    newest = (
+        db.query(func.max(Activity.strava_activity_id))
+        .join(StravaAccount, StravaAccount.user_id == Activity.user_id)
+        .filter(StravaAccount.strava_athlete_id == event.owner_id)
+        .scalar()
+    )
+    return newest is not None and event.object_id > newest
+
+
+def _enqueue_once(func, *, job_id: str, **kwargs) -> bool:
+    """Enqueue one job per event (#1136). Strava redelivers an event it thinks
+    went unacknowledged, with the same `event_time`, so the job id repeats; RQ
+    rejects a repeated id only under `unique=True`. Returns False when the job
+    was already there, which is the redelivery being absorbed, not an error."""
+    try:
+        queue.enqueue(func, job_id=job_id, unique=True, **kwargs)
+    except DuplicateJobError:
+        logger.info("strava_webhook_duplicate_event job_id=%s", job_id)
+        return False
+    return True
+
+
 @router.post("/webhooks/strava")
 async def receive_webhook(
     event: StravaEvent,
@@ -189,8 +227,9 @@ async def receive_webhook(
                 )
 
         if activity is not None and activity.block_id is not None:
+            survivor = None
             try:
-                remove_activity_from_block(db, activity)
+                survivor = remove_activity_from_block(db, activity)
             except Exception:
                 # Block removal failed: the soft-delete already committed, so
                 # the activity is correctly hidden from users. The block
@@ -200,31 +239,49 @@ async def receive_webhook(
                     "strava_delete_block_removal_failed strava_id=%s",
                     event.object_id,
                 )
+            if survivor is not None:
+                # The deleted activity held the block's live block-complete check;
+                # hand it to the survivor that now ends last (#1136).
+                try:
+                    exchange_ops.schedule_block_complete(
+                        str(survivor.block_id), str(survivor.id)
+                    )
+                except Exception:
+                    logger.exception(
+                        "strava_delete_survivor_check_failed strava_id=%s",
+                        event.object_id,
+                    )
         return {"status": "processed", "action": "deleted"}
 
-    elif event.aspect_type == "create":
+    elif event.aspect_type == "create" or (
+        event.aspect_type == "update" and _is_missed_create(db, event)
+    ):
         # Fresh activity: run the full pipeline (ingest → analyze → coach → notify).
-        job_id = f"pipeline_{event.object_id}_{event.event_time}"
-        queue.enqueue(
+        # An `update` for an activity we never stored (its `create` was lost) takes
+        # this path too (#1136): re-ingesting it alone would store a summary-only
+        # row that self-heal then treats as known, so it is never analysed or
+        # reported.
+        if not _enqueue_once(
             process_new_activity_job,
             strava_athlete_id=event.owner_id,
             strava_activity_id=event.object_id,
-            job_id=job_id,
+            job_id=f"pipeline_{event.object_id}_{event.event_time}",
             result_ttl=3600,
             retry=PIPELINE_RETRY,
-        )
+        ):
+            return {"status": "processed", "action": "already_enqueued"}
         return {"status": "processed", "action": "enqueued_pipeline"}
 
     elif event.aspect_type == "update":
         # Existing activity edit (title, visibility): re-ingest only.
-        job_id = f"sync_{event.object_id}_{event.event_time}"
-        queue.enqueue(
+        if not _enqueue_once(
             sync_activity_job,
             strava_athlete_id=event.owner_id,
             strava_activity_id=event.object_id,
-            job_id=job_id,
+            job_id=f"sync_{event.object_id}_{event.event_time}",
             result_ttl=3600,
-        )
+        ):
+            return {"status": "processed", "action": "already_enqueued"}
         return {"status": "processed", "action": "enqueued_sync"}
 
     return {"status": "ignored", "reason": "unknown_aspect"}

@@ -112,6 +112,7 @@ async def backfill_streams_batch(
             )
             break
         strava_id = activity.strava_activity_id
+        activity_id = activity.id
         try:
             await analyze_with_streams(db, str(activity.id))
         except StravaRateLimited as exc:
@@ -124,9 +125,13 @@ async def backfill_streams_batch(
             )
             break
         except Exception as exc:  # noqa: BLE001 - convergence over completeness
+            # A database error leaves the session refusing the marker commit below
+            # (#1136); roll back and re-read the row before marking it.
+            db.rollback()
+            activity = db.get(Activity, activity_id)
             logger.error(
                 "Backfill failed for activity %s (strava id %s): %s",
-                activity.id,
+                activity_id,
                 strava_id,
                 exc,
             )

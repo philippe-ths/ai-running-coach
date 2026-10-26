@@ -65,6 +65,7 @@ def generate_period_report_job(user_id: str, report_id: str) -> None:
     except Exception:
         logger.exception("period report: job failed for report %s", report_id)
         try:
+            db.rollback()  # a database error leaves the session unusable (#1136)
             report = (
                 db.query(PeriodReport)
                 .filter(PeriodReport.id == uuid.UUID(str(report_id)))

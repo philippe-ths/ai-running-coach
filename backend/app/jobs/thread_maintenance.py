@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.coach_chat_message import CoachChatMessage
 from app.models.thread import Thread
-from app.services.coach.budget import record as budget_record
+from app.services.coach.budget import over_budget as budget_over, record as budget_record
 from app.services.coach.llm import AnthropicClient
 from app.services.coach.threads import said
 
@@ -78,6 +78,11 @@ def generate_thread_title_job(thread_id: str) -> None:
             db.query(Thread).filter(Thread.id == uuid_module.UUID(thread_id)).first()
         )
         if thread is None or thread.title:
+            return
+        # The same gate every other auxiliary call checks (#1136): an over-budget
+        # runner goes untitled rather than spending past the cap.
+        if budget_over(thread.user_id):
+            logger.info("thread title skipped for %s: over LLM budget", thread_id)
             return
         rows = (
             db.query(CoachChatMessage)

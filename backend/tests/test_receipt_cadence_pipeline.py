@@ -138,6 +138,82 @@ async def test_receipt_sends_opens_exchange_and_dedups(db, configured, notifier)
     assert len(notifier.sent) == 1
 
 
+def _run_sync(coro):
+    """Drive a coroutine that never suspends to completion from synchronous code.
+    `send_receipt` awaits nothing, so the racing second process can be run to its
+    end from inside the first one's synchronous hook."""
+    try:
+        coro.send(None)
+    except StopIteration as stop:
+        return stop.value
+    raise AssertionError("coroutine suspended; cannot drive it synchronously")
+
+
+async def test_concurrent_receipts_for_one_activity_send_once(db, configured, notifier):
+    # #1136: two pipeline runs for one activity (a webhook retry, or the pipeline's
+    # own RQ retry beside a slow first run) each read `receipt_sent_at` null before
+    # either sent. The sentinel was check-then-send, so both delivered. Two
+    # processes are two Sessions on one connection; the second runs to completion
+    # from inside the first, after the first has passed its null check but before
+    # it sends. The atomic claim must let exactly one receipt out.
+    from sqlalchemy.orm import Session as _Session
+
+    from app.jobs.cadence import receipt as receipt_mod
+
+    activity = _seed(db)
+    block = _block_of(db, activity)
+    db.commit()
+
+    second_db = _Session(bind=db.connection())
+    second_activity = second_db.get(Activity, activity.id)
+    from app.models import Block
+    second_block = second_db.get(Block, block.id)
+    real_build = receipt_mod.build_receipt
+    raced = {"done": False}
+
+    def race_then_build(*args, **kwargs):
+        if not raced["done"]:
+            raced["done"] = True
+            _run_sync(ReceiptCadence().send_receipt(
+                db=second_db, activity=second_activity, block=second_block,
+                notifier=notifier,
+            ))
+        return real_build(*args, **kwargs)
+
+    with patch.object(receipt_mod, "build_receipt", side_effect=race_then_build):
+        await ReceiptCadence().send_receipt(
+            db=db, activity=activity, block=block, notifier=notifier
+        )
+    second_db.close()
+
+    assert raced["done"]
+    assert len(notifier.sent) == 1
+    db.refresh(activity)
+    assert activity.receipt_sent_at is not None
+
+
+async def test_receipt_send_failure_leaves_it_resendable(db, configured, notifier):
+    # The claim taken before the send is given back when the send fails, so the
+    # pipeline's retry can still deliver the receipt.
+    activity = _seed(db)
+    block = _block_of(db, activity)
+
+    class _Down:
+        def send(self, _n):
+            raise RuntimeError("telegram 502")
+
+    assert await ReceiptCadence().send_receipt(
+        db=db, activity=activity, block=block, notifier=_Down()
+    ) is None
+    db.refresh(activity)
+    assert activity.receipt_sent_at is None
+
+    assert await ReceiptCadence().send_receipt(
+        db=db, activity=activity, block=block, notifier=notifier
+    ) is not None
+    assert len(notifier.sent) == 1
+
+
 async def test_receipt_never_calls_llm(db, configured, notifier):
     # The whole point: no LLM on the instant path, so it cannot fall back.
     activity = _seed(db)
@@ -173,6 +249,84 @@ async def test_block_complete_fires_full_report_not_opener(db, configured, notif
     assert row is not None and not row.is_fallback
     assert is_opener_only(row.report) is False  # a complete full report
     assert len(notifier.sent) == 2  # receipt + full report
+
+
+class _DownNotifier:
+    """A channel that is down (Telegram 5xx / timeout): every send raises."""
+
+    def __init__(self):
+        self.attempts = 0
+
+    def send(self, _notification):
+        self.attempts += 1
+        raise RuntimeError("telegram 502")
+
+
+async def test_full_report_send_failure_raises_so_rq_retries_and_retry_sends_once(
+    db, configured, notifier
+):
+    # #1136: a failed full-report send released the claim, but the job returned
+    # normally, so nothing ever sent the report. The job must raise (RQ retries
+    # it), the retry must deliver exactly once, and must not generate again.
+    activity = _seed(db)
+    block = _block_of(db, activity)
+    await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+    down = _DownNotifier()
+
+    # One LLM result only: a second generation would exhaust the fake client.
+    with patch("app.services.coach.turn.AnthropicClient",
+               return_value=_client(_result(_fuller_blocks()))):
+        with pytest.raises(RuntimeError, match="telegram 502"):
+            await process_block_complete(
+                db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=down
+            )
+        assert down.attempts == 1
+        assert _exchange_of(db, activity).fuller_sent_at is None  # claim released
+
+        sent = await process_block_complete(
+            db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=notifier
+        )
+        again = await process_block_complete(
+            db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=notifier
+        )
+
+    assert sent is not None
+    assert again is None  # the claim kept after the real send blocks a re-send
+    assert len(notifier.sent) == 2  # receipt + exactly one full report
+    assert _exchange_of(db, activity).fuller_sent_at is not None
+
+
+async def test_full_report_for_unbound_runner_does_not_raise(
+    db, configured, notifier, monkeypatch
+):
+    # Fail-closed suppression (#795) is a decided outcome, not a delivery failure:
+    # an unbound non-owner runner gets no report and the job must not retry it.
+    monkeypatch.setattr(settings, "OWNER_EMAIL", "someone-else@example.com")
+    activity = _seed(db)
+    block = _block_of(db, activity)
+    await ReceiptCadence().send_receipt(db=db, activity=activity, block=block, notifier=notifier)
+
+    with patch("app.services.coach.turn.AnthropicClient",
+               return_value=_client(_result(_fuller_blocks()))):
+        result = await process_block_complete(
+            db=db, block_id=str(block.id), activity_id=str(activity.id), notifier=notifier
+        )
+
+    assert result is None
+    assert notifier.sent == []
+
+
+async def test_block_complete_check_carries_a_retry_policy(monkeypatch):
+    # The raise above only helps if the deferred check is retried (#1136).
+    from app.core import queue as queue_mod
+    from tests._unique_queue import UniqueAwareQueue
+
+    q = UniqueAwareQueue()
+    monkeypatch.setattr(queue_mod, "queue", q)
+    exchange_ops.schedule_block_complete(str(uuid4()), str(uuid4()))
+
+    (_func, _args, kwargs), = q.runs
+    assert kwargs["retry"].max >= 1
 
 
 async def test_block_complete_superseded_by_newer_member_noops(db, configured, notifier):

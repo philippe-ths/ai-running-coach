@@ -498,9 +498,13 @@ def test_a_plan_that_is_gone_leaves_the_worker_alive(db):
         _run_job(db, uuid4(), uuid4())          # no such user either
 
 
-def test_a_drafting_run_that_throws_leaves_the_worker_alive_and_the_plan_failed(db):
+def test_a_drafting_run_that_throws_leaves_the_worker_alive_and_the_plan_failed(
+    savepoint_db,
+):
     """The job's contract: it never crashes the worker, and it never leaves a
-    runner polling a `drafting` row that will never move."""
+    runner polling a `drafting` row that will never move. The job rolls back
+    before recovering (#1136), so this runs on a session where that is real."""
+    db = savepoint_db
     user = _seed_user(db)
     plan = store.create_drafting_plan(db, user.id)
 
