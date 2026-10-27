@@ -119,6 +119,10 @@ def _cost(placed: Sequence[Tuple[Any, date]], fixed: Sequence[PlacedSession],
         days.setdefault(day, []).append(session)
     fixed_by_day: Dict[date, List[str]] = {}
     for p in fixed:
+        # #1162: something the runner did that was not planned for its day
+        # has no say in where the planned sessions go.
+        if not p.counts_toward_limit:
+            continue
         fixed_by_day.setdefault(p.day, []).append(p.intent)
 
     cost = 0

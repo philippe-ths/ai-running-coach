@@ -21,7 +21,7 @@ reps in: the interval gate's answer, stored on the run's `DerivedMetric`.
 
 import logging
 from datetime import date, datetime, timezone
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -219,17 +219,11 @@ def open_sessions_for(db: Session, activity: Any) -> List[PlannedSession]:
     ]
 
 
-def _shown_on_day(db: Session, activity: Any, plan_id: Any) -> set:
-    """The sessions the runner was last shown on this activity's day (#1155).
-
-    Read straight from the stored recommendation rather than through
-    `recommend_store.load`, which resets a row from another plan in place: a
-    read here must not leave a write behind for the tick's commit to flush.
-    """
+def _week_row(db: Session, activity: Any) -> Optional[WeekRecommendation]:
     day = _activity_local_day(activity)
     profile = db.query(UserProfile).filter(UserProfile.user_id == activity.user_id).first()
     start = week_start(day, resolve_week_start(profile))
-    row = (
+    return (
         db.query(WeekRecommendation)
         .filter(
             WeekRecommendation.user_id == activity.user_id,
@@ -237,10 +231,25 @@ def _shown_on_day(db: Session, activity: Any, plan_id: Any) -> set:
         )
         .first()
     )
+
+
+def _shown_days(db: Session, activity: Any, plan_id: Any) -> Dict[str, date]:
+    """The day each session was last shown on, for this activity's week.
+
+    Read straight from the stored recommendation rather than through
+    `recommend_store.load`, which resets a row from another plan in place: a
+    read here must not leave a write behind for the tick's commit to flush.
+    """
+    row = _week_row(db, activity)
     if row is None or row.plan_id != plan_id:
-        return set()
-    wanted = day.isoformat()
-    return {sid for sid, shown in (row.assignment or {}).items() if shown == wanted}
+        return {}
+    shown = {}
+    for sid, value in (row.assignment or {}).items():
+        try:
+            shown[sid] = date.fromisoformat(value)
+        except (TypeError, ValueError):
+            continue
+    return shown
 
 
 def credited_session(db: Session, activity: Any) -> Optional[PlannedSession]:
@@ -298,7 +307,25 @@ def find_matching_session(
     ]
     if not candidates:
         return None
-    shown = _shown_on_day(db, activity, candidates[0].plan_id)
+    # #1162: never an EASY session shown for a later day. Easy sessions are
+    # interchangeable, so done ahead of its day an easy activity is something
+    # the runner added, and the session stays where they were shown it. A
+    # specific session (quality, long, strength) done early is that session.
+    day = _activity_local_day(activity)
+    shown_days = _shown_days(db, activity, candidates[0].plan_id)
+    # With nothing stored the runner has not been shown the week, so every day
+    # in a session's window is still its day.
+    candidates = [
+        s
+        for s in candidates
+        if (s.intent != "easy" or shown_days.get(str(s.id), day) <= day)
+        # A suggestion is never in the recommendation; it is offered only on
+        # the day it is pinned to, so that is the only day it can be done.
+        and (s.commitment == "committed" or s.window_start == s.window_end == day)
+    ]
+    if not candidates:
+        return None
+    shown = {sid for sid, d in shown_days.items() if d == day}
 
     def _rank(session: PlannedSession):
         # A commitment outranks a suggestion; then a rep session the run showed
