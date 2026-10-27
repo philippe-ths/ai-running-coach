@@ -18,6 +18,7 @@ from app.schemas.coach_memory import RunnerMemoryProfile
 from app.services.coach.llm import Usage
 from app.services.coach.memory_store import get_memory, upsert_memory
 from app.services.coach.memory_update import (
+    MEMORY_MODEL_ID,
     MemorySources,
     build_writer_messages,
     gather_memory_sources,
@@ -198,7 +199,7 @@ def test_two_distinct_check_ins_graduate_a_durable_fact(db):
 
     assert stub.calls == 1
     assert row is not None
-    assert row.model_id == "claude-haiku-4-5"
+    assert row.model_id == MEMORY_MODEL_ID
     assert row.source_report_count == 2
     profile = RunnerMemoryProfile.model_validate(row.profile)
     assert profile.goals_and_plans == ["Targeting a sub-3 marathon"]
@@ -306,3 +307,24 @@ def test_under_budget_proceeds_as_before(db, monkeypatch):
         assert get_memory(db, uid) is not None
     finally:
         B.set_gate(None)
+
+
+def test_digests_reach_the_writer_dated_newest_first(db, monkeypatch):
+    """#1143: `activity_date` is an ISO string, and an isinstance(datetime) check
+    rendered every digest "(undated)", so the writer could not tell the newest open
+    ask from one weeks stale."""
+    from app.schemas.coach_context import PriorReportDigest
+    from app.services.coach import memory_update
+
+    uid = _user(db)
+    newest = PriorReportDigest(activity_date="2026-10-05T08:00:00", headline="Thigh check",
+                               lead_argument=None, next_steps=["Check the right thigh in strength"])
+    older = PriorReportDigest(activity_date="2026-09-10T08:00:00", headline="Peak long run",
+                              lead_argument=None, next_steps=["20km easy on 14 Sep"])
+    monkeypatch.setattr(memory_update, "fetch_recent_user_digests", lambda *a, **k: [newest, older])
+
+    _, user_text = memory_update.build_writer_messages(memory_update.gather_memory_sources(db, uid))
+
+    assert "[digest0] (2026-10-05) Thigh check" in user_text
+    assert "[digest1] (2026-09-10) Peak long run" in user_text
+    assert "undated" not in user_text

@@ -207,3 +207,84 @@ def test_plan_bar_defaults_to_the_two_source_constant():
     # so the LIVE bar-of-1 is a wiring choice (update_memory), not baked into the gate.
     profile = apply_graduation([_c("A goal", "goals_and_plans", ["s1"])], KNOWN)
     assert profile.goals_and_plans == []
+
+
+# --- #1143: body reports come first in limits, under the one shared cap --- #
+
+
+def test_body_reports_come_first_then_practical_limits_fill_the_cap():
+    # Six firm practical limits arrive BEFORE two body reports. The body reports are
+    # listed first; the practical limits fill what is left of the cap, in order.
+    practical = [_c(f"Practical limit {i}", "limits_and_constraints", ["s1", "s2"]) for i in range(6)]
+    body = [
+        _c("Sore left shin, mentioned once", "limits_and_constraints", ["s3"], safety=True),
+        _c("Calf tightness, mentioned once", "limits_and_constraints", ["s4"], safety=True),
+    ]
+    profile = apply_graduation(practical + body, KNOWN)
+    assert profile.limits_and_constraints == [
+        "Sore left shin, mentioned once",
+        "Calf tightness, mentioned once",
+        "Practical limit 0",
+        "Practical limit 1",
+        "Practical limit 2",
+        "Practical limit 3",
+    ]
+
+
+def test_limits_never_exceed_the_cap_however_many_body_reports():
+    # The stored profile stays inside main's schema, so a rollback reads it.
+    reports = [f"Body report {i}, mentioned once" for i in range(MAX_LINES_PER_SECTION + 3)]
+    profile = apply_graduation(
+        [_c(text, "limits_and_constraints", ["s1"], safety=True) for text in reports], KNOWN
+    )
+    assert profile.limits_and_constraints == reports[:MAX_LINES_PER_SECTION]
+
+
+def test_non_safety_limits_are_still_capped():
+    over = [
+        _c(f"Practical limit {i}", "limits_and_constraints", ["s1", "s2"])
+        for i in range(MAX_LINES_PER_SECTION + 4)
+    ]
+    profile = apply_graduation(over, KNOWN)
+    assert profile.limits_and_constraints == [f"Practical limit {i}" for i in range(MAX_LINES_PER_SECTION)]
+
+
+def test_a_body_report_resting_only_on_coach_words_is_not_held():
+    # A safety limit is held on one mention only when that mention is the runner's
+    # own words; a coach turn citing it holds nothing.
+    profile = apply_graduation(
+        [_c("Possible niggle from Wednesday's run", "limits_and_constraints", ["s2"], safety=True)],
+        KNOWN,
+        durable_source_ids={"s1"},
+    )
+    assert profile.limits_and_constraints == []
+
+
+def test_a_safety_flag_on_another_durable_section_does_not_move_the_line():
+    profile = apply_graduation(
+        [_c("Races a half on 27 Sep", "goals_and_plans", ["s1", "s2"], safety=True)], KNOWN
+    )
+    assert profile.goals_and_plans == ["Races a half on 27 Sep"]
+    assert profile.limits_and_constraints == []
+
+
+def test_safety_flag_outside_limits_has_no_effect():
+    # The flag means something only in limits_and_constraints. On a `lately` line it
+    # neither changes what is stored nor makes the rubric expect a held limit.
+    from app.services.coach.eval.memory.rubric import score_memory
+    from app.services.coach.eval.rubric import AssertionStatus
+    from app.services.coach.memory_update import MemorySources, SourceItem
+
+    sources = MemorySources(
+        sources=(SourceItem(id="s1", kind="check_in_note", text="thigh a bit sore", durable=True),)
+    )
+    line = "Open: is the right thigh soreness clearing? Runner to report."
+    flagged = [_c(line, "lately", ["s1"], safety=True)]
+    plain = [_c(line, "lately", ["s1"], safety=False)]
+
+    profile = apply_graduation(flagged, sources.source_ids, durable_source_ids=sources.durable_source_ids)
+    assert profile.model_dump() == apply_graduation(
+        plain, sources.source_ids, durable_source_ids=sources.durable_source_ids
+    ).model_dump()
+    held = next(a for a in score_memory(sources, flagged, profile).assertions if a.name == "safety_limit_held")
+    assert held.status is AssertionStatus.NOT_APPLICABLE

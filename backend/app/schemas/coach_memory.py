@@ -33,6 +33,8 @@ from pydantic import BaseModel, ConfigDict, Field
 # size. Per-section line count and per-line character length.
 MAX_LINES_PER_SECTION = 6
 MAX_LINE_LENGTH = 200
+# The most candidate lines one writer pass may propose.
+MAX_WRITER_CANDIDATES = 80
 
 # Canonical section order, used everywhere a profile is iterated (render, gather,
 # the M3 pack projection).

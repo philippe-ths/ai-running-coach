@@ -50,10 +50,14 @@ PRICE_PER_MTOK: Dict[str, tuple[float, float]] = {
     "claude-sonnet-5": (2.0, 10.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-sonnet-4-5": (3.0, 15.0),
-    # Haiku 5.5 is $0.10/$0.50 up to 100k prompt tokens and $0.50/$2.50 above; the
-    # meter does not know prompt length, so it takes the higher (safe) tier.
-    "claude-haiku-5-5": (0.5, 2.5),
+    # Haiku 5.5 up to 100K prompt tokens; above that, `_LONG_PROMPT_PRICE` (#1143).
+    "claude-haiku-5-5": (0.1, 0.5),
     "claude-haiku-4-5": (1.0, 5.0),
+}
+# A model whose whole call bills at a higher rate once the prompt (all three input
+# buckets) passes a threshold: model -> (threshold tokens, (input, output) $/MTok).
+_LONG_PROMPT_PRICE: Dict[str, tuple[int, tuple[float, float]]] = {
+    "claude-haiku-5-5": (100_000, (0.5, 2.5)),
 }
 _DEFAULT_PRICE = max(PRICE_PER_MTOK.values())  # unknown model: most expensive known
 
@@ -100,6 +104,10 @@ def cost_usd(
     """
     key = _price_key(model)
     price_in, price_out = PRICE_PER_MTOK.get(key, _DEFAULT_PRICE)
+    if key in _LONG_PROMPT_PRICE:
+        threshold, long_price = _LONG_PROMPT_PRICE[key]
+        if input_tokens + cache_read_input_tokens + cache_creation_input_tokens > threshold:
+            price_in, price_out = long_price
     read_multiplier = _CACHE_READ_MULTIPLIER_BY_MODEL.get(key, _CACHE_READ_MULTIPLIER)
     return (
         input_tokens * price_in
