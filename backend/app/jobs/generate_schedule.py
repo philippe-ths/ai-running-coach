@@ -97,6 +97,7 @@ def generate_schedule_job(
     except Exception:
         logger.exception("schedule draft: job failed for plan %s", plan_id)
         try:
+            db.rollback()  # a database error leaves the session unusable (#1136)
             plan = (
                 db.query(store.TrainingPlan)
                 .filter(store.TrainingPlan.id == uuid.UUID(str(plan_id)))

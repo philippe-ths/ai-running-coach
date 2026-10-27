@@ -57,6 +57,10 @@ export function useAmendmentStatus(onLanded?: () => void): AmendmentWatch {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const polls = useRef(0);
   const errors = useRef(0);
+  // `alive` stops a loop after unmount; `gen` is bumped by watch() so a loop
+  // already in flight exits instead of forking into two (as useSeason does).
+  const alive = useRef(true);
+  const gen = useRef(0);
   // The callback identity changes with its owner's state; a ref keeps the poll
   // loop from re-subscribing every time it does.
   const landed = useRef(onLanded);
@@ -68,10 +72,12 @@ export function useAmendmentStatus(onLanded?: () => void): AmendmentWatch {
   const sawWorking = useRef(false);
 
   const poll = useCallback(async () => {
+    const mine = gen.current;
     try {
       const data: AmendmentStatus | null = await fetchFromAPI(
         "/api/schedule/amendment",
       );
+      if (!alive.current || mine !== gen.current) return;
       errors.current = 0;
       setAmendment(data);
       if (data?.status === "working" && polls.current < MAX_POLLS) {
@@ -85,6 +91,7 @@ export function useAmendmentStatus(onLanded?: () => void): AmendmentWatch {
         landed.current?.();
       }
     } catch {
+      if (!alive.current || mine !== gen.current) return;
       // A failed poll says nothing about the week either way, so it changes no
       // state. It only decides whether to keep asking.
       errors.current += 1;
@@ -96,6 +103,7 @@ export function useAmendmentStatus(onLanded?: () => void): AmendmentWatch {
   }, []);
 
   const watch = useCallback(() => {
+    gen.current += 1;
     if (timer.current) clearTimeout(timer.current);
     polls.current = 0;
     errors.current = 0;
@@ -109,8 +117,10 @@ export function useAmendmentStatus(onLanded?: () => void): AmendmentWatch {
   // On mount, pick up one already in flight - confirmed on another device, or
   // before a reload, which is the case the runner actually hit.
   useEffect(() => {
+    alive.current = true;
     void poll();
     return () => {
+      alive.current = false;
       if (timer.current) clearTimeout(timer.current);
     };
   }, [poll]);

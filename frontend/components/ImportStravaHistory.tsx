@@ -16,6 +16,8 @@ type ImportStatus = {
 };
 
 const POLL_INTERVAL_MS = 3000;
+const MAX_BACKOFF_MS = 30000;
+const MAX_CONSECUTIVE_ERRORS = 10;
 
 function defaultSinceDate(): string {
   // Default to one year back — a sensible starting window the user can widen.
@@ -30,13 +32,21 @@ export default function ImportStravaHistory() {
   const [importState, setImportState] = useState<ImportStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // `alive` stops the loop after unmount; `gen` is bumped when a new import
+  // starts so a loop already in flight exits instead of forking (as useSeason).
+  const alive = useRef(true);
+  const gen = useRef(0);
+  const errors = useRef(0);
 
   const today = new Date().toISOString().slice(0, 10);
   const running = importState?.status === 'running';
 
   const poll = useCallback(async () => {
+    const mine = gen.current;
     try {
       const data: ImportStatus | null = await fetchFromAPI('/api/strava/import/status');
+      if (!alive.current || mine !== gen.current) return;
+      errors.current = 0;
       setImportState(data);
       if (data && data.status === 'running') {
         timer.current = setTimeout(poll, POLL_INTERVAL_MS);
@@ -46,13 +56,22 @@ export default function ImportStravaHistory() {
       }
     } catch (err) {
       console.error(err);
+      if (!alive.current || mine !== gen.current) return;
+      // One failed read says nothing about the import: keep asking, slower.
+      errors.current += 1;
+      if (errors.current < MAX_CONSECUTIVE_ERRORS) {
+        const delay = Math.min(POLL_INTERVAL_MS * 2 ** errors.current, MAX_BACKOFF_MS);
+        timer.current = setTimeout(poll, delay);
+      }
     }
   }, [router]);
 
   // On mount, surface any in-flight or recent import and resume polling.
   useEffect(() => {
+    alive.current = true;
     poll();
     return () => {
+      alive.current = false;
       if (timer.current) clearTimeout(timer.current);
     };
   }, [poll]);
@@ -66,6 +85,8 @@ export default function ImportStravaHistory() {
         body: JSON.stringify({ since_date: sinceDate }),
       });
       setImportState(data);
+      gen.current += 1;
+      errors.current = 0;
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(poll, POLL_INTERVAL_MS);
     } catch (err) {

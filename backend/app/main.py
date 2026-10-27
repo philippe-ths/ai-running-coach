@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import health, auth, activities, blocks, webhooks, profile, trends, coach, debug, strava_import, materials, account, threads, schedule, period_reports, recovery
@@ -67,6 +68,14 @@ async def _strava_rate_limited_handler(request: Request, exc: StravaRateLimited)
         content={"detail": "Strava is rate-limiting requests right now. Please try again shortly."},
         headers=headers,
     )
+
+# Response compression (#1137). Added FIRST so it is the INNERMOST middleware:
+# auth, CORS and the body cap behave exactly as before and only a response the
+# app actually produced is compressed. Starlette's GZipMiddleware skips
+# `text/event-stream` (the coach chat stream stays unbuffered) and bodies under
+# `minimum_size`; the frontend proxy strips content-encoding after fetch has
+# decoded the body.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 # BasicAuthMiddleware is REPURPOSED under ADR 0022 as the frontend-to-backend
 # service secret ("proves it is our frontend"), defense in depth beneath the

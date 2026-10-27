@@ -153,6 +153,33 @@ def db(db_engine):
     connection.close()
 
 @pytest.fixture(scope="function")
+def savepoint_db(db_engine):
+    """A session whose commits are savepoints inside the test's transaction.
+
+    The `db` session is bound to an outer transaction it cannot leave, so a
+    `db.rollback()` in the code under test discards everything the test seeded
+    and leaks later writes past the test. Code whose recovery path rolls back
+    after a database error (#1136) is tested on this session instead, where a
+    rollback undoes only the work since the last commit, as on a real database.
+    """
+    connection = db_engine.connect()
+    # pysqlite does not emit BEGIN before a SAVEPOINT, so releasing the first
+    # savepoint would COMMIT for real and leak rows into later tests. Take the
+    # transaction by hand, with the driver's own transaction handling off.
+    raw = connection.connection.dbapi_connection
+    isolation = raw.isolation_level
+    raw.isolation_level = None
+    connection.exec_driver_sql("BEGIN")
+    session = TestingSessionLocal(bind=connection, join_transaction_mode="create_savepoint")
+    try:
+        yield session
+    finally:
+        session.close()
+        connection.exec_driver_sql("ROLLBACK")
+        raw.isolation_level = isolation
+        connection.close()
+
+@pytest.fixture(scope="function")
 def client(db):
     def override_get_db():
         try:

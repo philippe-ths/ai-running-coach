@@ -32,6 +32,7 @@ import uuid
 from datetime import timedelta
 from typing import Optional
 
+from rq import Retry
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -54,6 +55,10 @@ from app.services.notifications.port import NotifierPort
 
 logger = logging.getLogger(__name__)
 
+# The deferred block-complete check is re-run when it raises, which a failed
+# full-report send now does (#1136). The `PIPELINE_RETRY` shape.
+BLOCK_COMPLETE_RETRY = Retry(max=3, interval=[60, 300, 900])
+
 
 def notify_stage(
     db: Session,
@@ -65,6 +70,7 @@ def notify_stage(
     notifier: NotifierPort,
     sentinel_obj=None,
     presend_claimed: bool = False,
+    raise_on_send_failure: bool = False,
 ) -> Optional[Notification]:
     """Send one stage's notification, deduped by its own stage sentinel.
 
@@ -84,6 +90,11 @@ def notify_stage(
     function did not take is not its business: returning None is the whole signal,
     and `lifecycle.fuller_claim` releases on any exit the caller did not `keep()`
     (#740). Releasing here as well was a second owner of the same invariant.
+
+    `raise_on_send_failure` (#1136): re-raise a failed send instead of returning
+    None, so the RQ job running it fails and its Retry re-sends. A suppressed
+    notification (no channel, or no recipient by design, #795) still returns None
+    and is never retried.
     """
     sentinel_obj = sentinel_obj if sentinel_obj is not None else activity
     if not presend_claimed and lifecycle.notification_already_sent(sentinel_obj, sentinel_attr):
@@ -124,6 +135,8 @@ def notify_stage(
             "%s notification send failed for activity %s; sentinel left unset",
             stage, activity.strava_activity_id,
         )
+        if raise_on_send_failure:
+            raise
         return None
 
     # Under the #506 pre-send claim the sentinel was already set atomically by the
@@ -222,12 +235,17 @@ def schedule_block_complete(block_id: str, activity_id: str) -> None:
     # than RQ's 180s default. RQ-native enqueue_in uses `job_timeout` (rq-scheduler
     # used `timeout`); the shared queue's default_timeout already supplies it, but
     # we pass it explicitly to keep the #264 intent legible.
+    #
+    # retry (#1136): a full report whose send fails raises out of the job, so RQ
+    # re-runs it; the retry serves the cached report and the fuller claim keeps
+    # it at most once.
     queue.enqueue_in(
         timedelta(seconds=settings.BLOCK_GAP_SECONDS),
         block_complete_job,
         block_id,
         activity_id,
         job_timeout=settings.RQ_JOB_TIMEOUT_SECONDS,
+        retry=BLOCK_COMPLETE_RETRY,
     )
 
 
@@ -327,10 +345,12 @@ async def run_fuller_turn(
             )
             return None
 
+        # A send failure raises (#1136): the claim is released on the way out and
+        # the RQ job's Retry re-sends, rather than the report silently never going.
         notification = notify_stage(
             db, activity, report=read, stage="fuller",
             sentinel_attr="fuller_sent_at", notifier=notifier, sentinel_obj=exchange,
-            presend_claimed=True,
+            presend_claimed=True, raise_on_send_failure=True,
         )
         # Kept only after a real successful send, so the happy path stays CLOSED and
         # never re-sends.

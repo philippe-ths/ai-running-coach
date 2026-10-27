@@ -27,7 +27,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -89,6 +89,7 @@ def assign_activity_to_block(
     """
     gap = settings.BLOCK_GAP_SECONDS if gap_seconds is None else gap_seconds
 
+    _lock_runner_blocks(db, activity.user_id)
     block = _find_joinable_block(db, activity, gap)
     if block is None:
         block = Block(
@@ -109,6 +110,35 @@ def assign_activity_to_block(
     _recompute_block(db, block)
     db.commit()
     return block
+
+
+# Namespaces this module's advisory locks so a runner's key cannot collide with
+# another use of `pg_advisory_xact_lock` that also keys on a user id.
+_BLOCK_LOCK_NAMESPACE = 0x426C6F636B  # "Block"
+
+
+def _runner_lock_key(user_id) -> int:
+    """A stable signed 64-bit key for one runner's block assignment."""
+    uid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(str(user_id))
+    key = int.from_bytes(uid.bytes[:8], "big") ^ _BLOCK_LOCK_NAMESPACE
+    return key - (1 << 64) if key >= (1 << 63) else key
+
+
+def _lock_runner_blocks(db: Session, user_id) -> None:
+    """Serialise find-or-create of a runner's blocks (#1136).
+
+    Two pipeline jobs for one runner (a worker pool of two, activities synced
+    together) could each find no joinable block and each create one, giving two
+    exchanges and two reports for one session. A Postgres transaction-scoped
+    advisory lock makes the second wait until the first commits, and it then sees
+    the first's block. Released at the commit that ends the assignment. SQLite
+    (the test suite) has no advisory locks and a single writer, so it is skipped.
+    """
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": _runner_lock_key(user_id)}
+    )
 
 
 def _find_joinable_block(db: Session, activity: Activity, gap: int) -> Optional[Block]:
@@ -231,7 +261,7 @@ def merge_blocks(db: Session, first: Block, second: Block) -> Block:
     return first
 
 
-def remove_activity_from_block(db: Session, activity: Activity) -> None:
+def remove_activity_from_block(db: Session, activity: Activity) -> Optional[Activity]:
     """Remove a soft-deleted activity from its Block and recompute the survivor.
 
     Called on the delete webhook path (ADR 0011, #238): after an activity is
@@ -254,9 +284,15 @@ def remove_activity_from_block(db: Session, activity: Activity) -> None:
     Exchange sentinels are NEVER touched when survivors remain. The split/merge
     corrections rule (corrections inherit sentinels, never re-fire) is the
     model: removal inherits that posture.
+
+    Returns the survivor that now needs a block-complete check, or None (#1136).
+    Only the check of the member that ends last is live, so when the removed
+    activity was that member and the exchange has not closed, no live check is
+    left and the full report would never fire. This module does not schedule
+    jobs; the caller schedules the check on the returned survivor.
     """
     if activity.block_id is None:
-        return  # already unassigned, nothing to do
+        return None  # already unassigned, nothing to do
 
     block_id = activity.block_id
     block = db.query(Block).filter(Block.id == block_id).first()
@@ -264,7 +300,7 @@ def remove_activity_from_block(db: Session, activity: Activity) -> None:
         activity.block_id = None
         db.add(activity)
         db.commit()
-        return
+        return None
 
     # Detach the activity first so the member query below sees it as gone.
     activity.block_id = None
@@ -285,6 +321,19 @@ def remove_activity_from_block(db: Session, activity: Activity) -> None:
         _recompute_block(db, block, force_primary=True)
 
     db.commit()
+
+    if not survivors:
+        return None
+    last_survivor = max(survivors, key=activity_end)
+    if activity_end(activity) < activity_end(last_survivor):
+        return None  # a survivor ends later, so its own check is still live
+    exchange = lifecycle.get_exchange_for_block(db, block_id)
+    # Only a live session's check is handed on: the exchange opened recently and has
+    # not spoken. An imported, never-opened or long-past block must not get a full
+    # report because a duplicate of it was deleted.
+    if exchange is None or not lifecycle.can_fire_reply_fuller(exchange):
+        return None
+    return last_survivor
 
 
 def _primary_has_report(db: Session, block: Block) -> bool:

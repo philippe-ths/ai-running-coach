@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models import UserMaterial
 from app.schemas.material import DistilledMaterial
-from app.services.coach.budget import record as budget_record
+from app.services.coach.budget import over_budget as budget_over, record as budget_record
 from app.services.coach.llm import AnthropicClient
 
 logger = logging.getLogger(__name__)
@@ -251,6 +251,13 @@ async def distill_material(
     # Idempotency: already distilled (double-enqueue, or a poll re-run) — skip.
     if material.status == "active" and material.distilled is not None:
         return material
+
+    # The same gate every other auxiliary call checks (#1136). Marked failed, not
+    # left processing: a re-upload retries a failed material and skips a
+    # processing one, so this is the state the runner can recover from.
+    if budget_over(material.user_id):
+        logger.info("distill_material skipped for %s: over LLM budget", material_id)
+        return _mark_failed(db, material)
 
     if client is None:
         if not settings.ANTHROPIC_API_KEY:

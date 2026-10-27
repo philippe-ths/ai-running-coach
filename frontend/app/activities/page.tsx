@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Loader2, NotebookPen, X } from 'lucide-react';
 import { fetchFromAPI } from '@/lib/api';
@@ -76,20 +76,25 @@ export default function AllActivitiesPage() {
   }, []);
 
   // `activeFilters` is passed explicitly so pagination never reads a stale closure.
+  // Only the latest request may write state: a load-more still in flight when the
+  // filters change must not append its old rows to the new list.
+  const requestId = useRef(0);
   const loadFrom = useCallback(async (skip: number, activeFilters: Filters) => {
+    const myId = ++requestId.current;
     const isFirstPage = skip === 0;
     setStatus(isFirstPage ? 'loading' : 'loadingMore');
     try {
       const batch: ActivityListItem[] | null = await fetchFromAPI(
         `/api/activities?${buildQuery(skip, activeFilters)}`,
       );
+      if (myId !== requestId.current) return;
       const items = batch ?? [];
       setActivities((prev) => (isFirstPage ? items : [...prev, ...items]));
       // A short page means we've reached the end; a full page implies more.
       setHasMore(items.length === PAGE_SIZE);
       setStatus('loaded');
     } catch {
-      setStatus('error');
+      if (myId === requestId.current) setStatus('error');
     }
   }, []);
 

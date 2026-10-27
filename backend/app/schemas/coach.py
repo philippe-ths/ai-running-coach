@@ -240,6 +240,10 @@ class CoachReportMeta(BaseModel):
     # hole in the audit the two-pass design exists to provide. Optional so pre-#822
     # stored meta validates.
     voice_rewrite: Optional[str] = None
+    # #1142: when this report was last said again in a new voice WITHOUT being
+    # regenerated. The substance (and `generated_at`) is unchanged; only the voiced
+    # text, `voice_name` and `voice_rewrite` moved. None when never re-voiced.
+    revoiced_at: Optional[datetime] = None
 
 
 class CoachReportContent(BaseModel):

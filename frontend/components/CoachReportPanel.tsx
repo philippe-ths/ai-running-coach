@@ -69,6 +69,12 @@ const OPENER_POLL_MAX_ATTEMPTS = 40;
 const REGEN_POLL_INTERVAL_MS = 8000;
 const REGEN_POLL_MAX_ATTEMPTS = 90;
 
+// What makes a polled report "the new one": a regeneration moves generated_at, a
+// re-voicing (#1142) moves only revoiced_at, since its substance is unchanged.
+function reportVersion(report: CoachReport): string {
+  return `${report.meta.generated_at}|${report.meta.revoiced_at ?? ''}`;
+}
+
 // Public env var inlined at build time. Set NEXT_PUBLIC_SHOW_DEBUG_PANEL=true
 // (or "1") on the build environment to expose the LLM-input/output panel.
 const SHOW_DEBUG_PANEL =
@@ -235,6 +241,9 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
   // attempt cap that survives re-renders (the ref does not reset), so a fuller
   // that never arrives stops polling rather than looping forever.
   const pollAttempts = useRef(0);
+  // Bumped on a failed attempt so the effect re-runs and schedules the next one
+  // (a failure leaves `report` unchanged, which would otherwise end the poll).
+  const [openerTick, setOpenerTick] = useState(0);
   useEffect(() => {
     if (status !== 'loaded' || !report || !isOpenerOnly(report.report)) return;
     if (pollAttempts.current >= OPENER_POLL_MAX_ATTEMPTS) return;
@@ -246,29 +255,31 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
         );
         if (res.ok) {
           setReport((await res.json()) as CoachReport);
+        } else {
+          setOpenerTick((t) => t + 1);
         }
       } catch {
         // keep waiting; a transient failure should not stop the poll
+        setOpenerTick((t) => t + 1);
       }
     }, OPENER_POLL_INTERVAL_MS);
     return () => clearTimeout(id);
-  }, [status, report, activityId]);
+  }, [status, report, activityId, openerTick]);
 
   // #260: on-demand (re)generation is asynchronous. The "Re-run" / "Get analysis"
   // buttons enqueue a worker job (no gateway timeout) and we poll for the fresh
-  // report — the report is "fresh" once its generated_at differs from the one we
+  // report — the report is "fresh" once its reportVersion differs from the one we
   // started with (or, generating from nothing, once any report appears).
   const regenBaseline = useRef<string | null>(null);
   const regenAttempts = useRef(0);
   const [regenTick, setRegenTick] = useState(0);
   // P1.1: a loaded report can be voice-stale (generated under a now-changed voice).
-  // We kick the existing async regen ONCE so it is rewritten in the runner's current
-  // voice ("regenerate on next view"). The ref guards against re-firing while polling
-  // and against a loop — the regenerated report is no longer stale.
+  // We ask the server ONCE per view to bring it onto the runner's current voice
+  // (#1142: re-voiced, not regenerated, when only the voice changed).
   const voiceRegenKicked = useRef(false);
 
   const regenerate = useCallback(async () => {
-    regenBaseline.current = report?.meta.generated_at ?? null;
+    regenBaseline.current = report ? reportVersion(report) : null;
     regenAttempts.current = 0;
     setErrorMsg('');
     setStatus('regenerating');
@@ -314,7 +325,7 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
         );
         if (res.ok) {
           const data = (await res.json()) as CoachReport;
-          const ga = data?.meta?.generated_at ?? null;
+          const ga = data?.meta?.generated_at ? reportVersion(data) : null;
           if (ga && ga !== regenBaseline.current) {
             setReport(data);
             setStatus('loaded');
@@ -329,16 +340,54 @@ export default function CoachReportPanel({ activityId, hasMetrics, onStartChat }
     return () => clearTimeout(id);
   }, [status, regenTick, activityId]);
 
-  // P1.1: when a freshly-loaded report is voice-stale, regenerate it onto the
-  // runner's current voice. Fires once (the ref survives the regen + poll), and the
-  // rewritten report comes back not-stale, so there is no loop. A fallback regen also
-  // returns not-stale, so a persistent failure cannot hammer the worker.
+  // P1.1 / #1142: when a freshly-loaded report is voice-stale, ask the server to
+  // bring it onto the runner's current voice, IN THE BACKGROUND: the runner keeps
+  // reading the report they have, and the new one is swapped in if it lands. The
+  // server may legitimately change nothing (the voice was switched back, another
+  // device already did it, or the rewrite was deferred over budget or on a
+  // transport error), so this never spins or errors; it just stops polling.
+  const revoiceBaseline = useRef<string | null>(null);
+  const revoiceAttempts = useRef(0);
+  const [revoiceTick, setRevoiceTick] = useState(0); // 0 = not polling
+
   useEffect(() => {
     if (status !== 'loaded' || !report || !report.meta.voice_stale) return;
     if (voiceRegenKicked.current) return;
     voiceRegenKicked.current = true;
-    regenerate();
-  }, [status, report, regenerate]);
+    revoiceBaseline.current = reportVersion(report);
+    revoiceAttempts.current = 0;
+    fetch(`/api/activities/${activityId}/coach-report/revoice`, { method: 'POST' })
+      .then((res) => {
+        if (res.ok) setRevoiceTick(1);
+      })
+      .catch(() => {
+        // best-effort: the next view asks again
+      });
+  }, [status, report, activityId]);
+
+  useEffect(() => {
+    if (revoiceTick === 0 || status !== 'loaded') return;
+    if (revoiceAttempts.current >= REGEN_POLL_MAX_ATTEMPTS) return;
+    const id = setTimeout(async () => {
+      revoiceAttempts.current += 1;
+      try {
+        const res = await fetch(
+          `/api/activities/${activityId}/coach-report?generate=false&force=false`,
+        );
+        if (res.ok) {
+          const data = (await res.json()) as CoachReport;
+          if (data?.meta?.generated_at && reportVersion(data) !== revoiceBaseline.current) {
+            setReport(data);
+            return;
+          }
+        }
+      } catch {
+        // transient; keep polling
+      }
+      setRevoiceTick((t) => t + 1);
+    }, REGEN_POLL_INTERVAL_MS);
+    return () => clearTimeout(id);
+  }, [revoiceTick, status, activityId]);
 
   if (!hasMetrics) return null;
 

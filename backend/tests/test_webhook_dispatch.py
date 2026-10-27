@@ -53,6 +53,7 @@ def _post(
     object_id: int = 7777,
     owner_id: int = CONNECTED_ATHLETE_ID,
     subscription_id: int = 1,
+    event_time: int = 1700000000,
 ):
     payload = {
         "object_type": "activity",
@@ -60,7 +61,7 @@ def _post(
         "aspect_type": aspect_type,
         "owner_id": owner_id,
         "subscription_id": subscription_id,
-        "event_time": 1700000000,
+        "event_time": event_time,
         "updates": {},
     }
     return client.post("/api/webhooks/strava", json=payload)
@@ -99,10 +100,11 @@ class TestDispatchForAuthenticEvents:
         assert PIPELINE_RETRY.max >= 1
 
     def test_update_enqueues_existing_sync_activity_job(
-        self, client, fake_queue, connected_account
+        self, client, db, fake_queue, connected_account
     ):
         from app.jobs.strava_sync import sync_activity_job
 
+        _seed_activity(db, user=connected_account.user, strava_activity_id=7777)
         response = _post(client, aspect_type="update")
         assert response.status_code == 200
 
@@ -305,3 +307,199 @@ class TestRejectsCrossOwnerEvents:
         )
         assert response.status_code == 200
         fake_queue.enqueue.assert_called_once()
+
+
+class TestWebhookDeliveredTwice:
+    """#1136: Strava retries a webhook it thinks was not acknowledged, with the
+    same event. RQ rejects the repeated job id only under `unique=True`, so
+    without it the pipeline runs twice in parallel for one activity."""
+
+    @pytest.fixture
+    def unique_queue(self):
+        from tests._unique_queue import UniqueAwareQueue
+
+        q = UniqueAwareQueue()
+        with patch("app.api.webhooks.queue", q):
+            yield q
+
+    def test_repeated_create_event_runs_the_pipeline_once(
+        self, client, unique_queue, connected_account
+    ):
+        first = _post(client, aspect_type="create")
+        second = _post(client, aspect_type="create")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert len(unique_queue.runs) == 1
+
+    def test_repeated_update_event_runs_once(
+        self, client, db, unique_queue, connected_account
+    ):
+        _seed_activity(db, user=connected_account.user, strava_activity_id=7777)
+        _post(client, aspect_type="update")
+        second = _post(client, aspect_type="update")
+
+        assert second.status_code == 200
+        assert len(unique_queue.runs) == 1
+
+    def test_rename_while_the_create_is_still_queued_runs_one_pipeline(
+        self, client, db, unique_queue, connected_account
+    ):
+        # The create's job has not stored the row yet, so a quick rename looks like
+        # a missed create. It must join the create's job, not start a second one.
+        _seed_activity(db, user=connected_account.user, strava_activity_id=7000)
+        _post(client, aspect_type="create", object_id=8888, event_time=1700000000)
+        second = _post(client, aspect_type="update", object_id=8888, event_time=1700000042)
+
+        assert second.status_code == 200
+        assert len(unique_queue.runs) == 1
+
+
+class TestUpdateForAnActivityWeNeverStored:
+    """#1136: an `update` for an activity with no row (its `create` was lost)
+    used to store a summary-only row through the sync job; self-heal then
+    treated it as known, so it was never analysed or reported. It must run the
+    full pipeline instead, as a `create` would."""
+
+    def test_update_without_a_row_runs_the_full_pipeline(
+        self, client, db, fake_queue, connected_account
+    ):
+        from app.jobs.process_new_activity import PIPELINE_RETRY, process_new_activity_job
+
+        _seed_activity(db, user=connected_account.user, strava_activity_id=7000)
+        response = _post(client, aspect_type="update", object_id=8888)
+        assert response.status_code == 200
+
+        fake_queue.enqueue.assert_called_once()
+        args, kwargs = fake_queue.enqueue.call_args
+        assert args[0] is process_new_activity_job
+        assert kwargs["strava_athlete_id"] == CONNECTED_ATHLETE_ID
+        assert kwargs["strava_activity_id"] == 8888
+        assert kwargs["retry"] is PIPELINE_RETRY
+
+    def test_update_to_an_old_unstored_activity_is_only_synced(
+        self, client, db, fake_queue, connected_account
+    ):
+        # An edit to an activity older than our history must not send a receipt
+        # and a report about a long-past session.
+        from app.jobs.strava_sync import sync_activity_job
+
+        _seed_activity(db, user=connected_account.user, strava_activity_id=9000)
+        response = _post(client, aspect_type="update", object_id=8888)
+        assert response.status_code == 200
+
+        args, _ = fake_queue.enqueue.call_args
+        assert args[0] is sync_activity_job
+
+    def test_update_with_nothing_stored_is_only_synced(
+        self, client, fake_queue, connected_account
+    ):
+        from app.jobs.strava_sync import sync_activity_job
+
+        response = _post(client, aspect_type="update", object_id=8888)
+        assert response.status_code == 200
+
+        args, _ = fake_queue.enqueue.call_args
+        assert args[0] is sync_activity_job
+
+
+class TestDeletingTheMemberThatHeldTheCheck:
+    """#1136: every processed activity schedules a block-complete check, and only
+    the check of the member that ends last is live. Deleting that member (a
+    duplicate upload, say) left the survivors with no live check, so the full
+    report never fired. The survivor that now ends last must get one."""
+
+    @pytest.fixture
+    def deferred(self):
+        from tests._unique_queue import UniqueAwareQueue
+
+        q = UniqueAwareQueue()
+        with patch("app.core.queue.queue", q):
+            yield q
+
+    def _block_of_two(self, db, user):
+        from datetime import datetime
+
+        from app.services.blocks import assign_activity_to_block
+
+        first = _seed_activity(db, user=user, strava_activity_id=6001)
+        later = _seed_activity(db, user=user, strava_activity_id=6002)
+        later.start_date = datetime(2026, 5, 27, 10, 30, 0)
+        db.commit()
+        assign_activity_to_block(db, first)
+        block = assign_activity_to_block(db, later)
+        assert first.block_id == later.block_id == block.id
+        return first, later, block
+
+    def test_deleting_the_last_member_schedules_the_survivors_check(
+        self, client, db, fake_queue, deferred, connected_account
+    ):
+        from datetime import datetime, timezone
+
+        from app.jobs.process_new_activity import block_complete_job
+        from app.models import Exchange
+
+        first, _later, block = self._block_of_two(db, connected_account.user)
+        # A live session: its receipt opened the exchange moments ago.
+        ex = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+        ex.opened_at = datetime.now(timezone.utc)
+        db.commit()
+
+        response = _post(client, aspect_type="delete", object_id=6002)
+        assert response.status_code == 200
+
+        assert [(f, a) for f, a, _ in deferred.runs] == [
+            (block_complete_job, (str(block.id), str(first.id)))
+        ]
+
+    def test_deleting_from_a_never_opened_block_schedules_nothing(
+        self, client, db, fake_queue, deferred, connected_account
+    ):
+        # Imported history never opens an exchange: deleting a duplicate of an
+        # old run must not produce a full report about it.
+        self._block_of_two(db, connected_account.user)
+
+        _post(client, aspect_type="delete", object_id=6002)
+
+        assert deferred.runs == []
+
+    def test_deleting_from_a_long_past_session_schedules_nothing(
+        self, client, db, fake_queue, deferred, connected_account
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from app.models import Exchange
+
+        _first, _later, block = self._block_of_two(db, connected_account.user)
+        ex = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+        ex.opened_at = datetime.now(timezone.utc) - timedelta(days=60)
+        db.commit()
+
+        _post(client, aspect_type="delete", object_id=6002)
+
+        assert deferred.runs == []
+
+    def test_deleting_an_earlier_member_schedules_nothing(
+        self, client, db, fake_queue, deferred, connected_account
+    ):
+        self._block_of_two(db, connected_account.user)
+
+        _post(client, aspect_type="delete", object_id=6001)
+
+        assert deferred.runs == []  # the later member's own check is still live
+
+    def test_deleting_from_a_closed_exchange_schedules_nothing(
+        self, client, db, fake_queue, deferred, connected_account
+    ):
+        from datetime import datetime, timezone
+
+        from app.models import Exchange
+
+        _first, _later, block = self._block_of_two(db, connected_account.user)
+        ex = db.query(Exchange).filter(Exchange.block_id == block.id).one()
+        ex.fuller_sent_at = datetime.now(timezone.utc)
+        db.commit()
+
+        _post(client, aspect_type="delete", object_id=6002)
+
+        assert deferred.runs == []

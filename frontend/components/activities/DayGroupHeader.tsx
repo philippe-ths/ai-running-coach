@@ -12,7 +12,8 @@
 // not an alarm.
 
 import { formatDuration } from '@/lib/format';
-import { dayHeading, type DayGroup, type GroupableActivity } from '@/lib/activityGrouping';
+import { type DayGroup, type GroupableActivity } from '@/lib/activityGrouping';
+import DayHeading from '@/components/activities/DayHeading';
 
 function loadLabel(totalLoad: number, loadComplete: boolean): string {
   const rounded = Math.round(totalLoad);
@@ -31,7 +32,7 @@ export default function DayGroupHeader<T extends GroupableActivity>({
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-1 pt-4 pb-1.5 first:pt-1">
       <div className="flex items-baseline gap-2">
         <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
-          {dayHeading(group.date)}
+          <DayHeading dayKey={group.dayKey} />
         </h2>
         <span className="text-xs text-gray-400 dark:text-gray-500">
           {count} {count === 1 ? 'activity' : 'activities'}
