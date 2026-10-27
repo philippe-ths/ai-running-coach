@@ -255,14 +255,11 @@ export default function DayStrip({
     loggedByDay.set(a.local_date, (loggedByDay.get(a.local_date) ?? 0) + 1);
   }
 
-  // #1154: what was done this week that ticked no session.
-  const credited = new Set(
-    sessions.map((s) => s.completed_activity_id).filter((id): id is string => !!id),
-  );
+  // #1154: what was done this week that ticked no session, as the server
+  // decided it (a hand-ticked session claims its own recording there).
   const extrasByDay = new Map<string, LoggedActivity[]>();
   for (const a of logged) {
-    if (a.activity_id && credited.has(a.activity_id)) continue;
-    if (a.local_date < days[0] || a.local_date > days[6]) continue;
+    if (!a.unplanned) continue;
     extrasByDay.set(a.local_date, [...(extrasByDay.get(a.local_date) ?? []), a]);
   }
   const extras = Array.from(extrasByDay.values()).flat();

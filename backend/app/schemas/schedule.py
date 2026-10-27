@@ -389,6 +389,10 @@ class LoggedActivityRead(BaseModel):
     distance_m: float
     moving_time_s: int
     effort_score: float
+    # #1154: done and matched to no session, after a hand-ticked session has
+    # claimed its own recording. Decided here, where the recommendation counts
+    # the same extras, so the strip cannot hold a second opinion of it.
+    unplanned: bool = False
 
 
 # --- the week read ---------------------------------------------------------

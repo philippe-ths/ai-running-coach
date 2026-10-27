@@ -93,6 +93,8 @@ export default function DayCard({
   const doneToday = week.sessions.filter(
     (s) => s.status === "done" && s.done_on === day && s.commitment === "committed",
   );
+  // #1154: what was done this day that ticked no session.
+  const extras = week.logged.filter((a) => a.unplanned && a.local_date === day);
   const rest = week.sessions.some(
     (s) => safeIntent(s.intent) === "rest" && s.placement === "pinned" && s.window_start === day,
   );
@@ -120,7 +122,7 @@ export default function DayCard({
         <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
           {isToday ? `Today · ${formatDayChip(day)}` : formatDayChip(day)}
         </h2>
-        {!recommended.length && !doneToday.length && (
+        {!recommended.length && !doneToday.length && !extras.length && (
           <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
             {rest ? "Rest day." : "Nothing planned."}
           </p>
@@ -159,6 +161,16 @@ export default function DayCard({
               </li>
             );
           })}
+
+          {extras.map((a, i) => (
+            <li key={`${a.activity_id ?? "extra"}-${i}`} className="flex items-center gap-2">
+              <CheckCircle2 size={18} className="shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+              <span className="min-w-0 flex-1 text-sm text-gray-500 dark:text-gray-400">
+                <span className="font-medium text-gray-700 dark:text-gray-200">{a.activity_type}</span>
+                {a.distance_m > 0 && ` · ${formatDistanceKm(a.distance_m)}`} · not in the plan
+              </span>
+            </li>
+          ))}
 
           {recommended.map(({ item, session }) => {
             const options = optionsOf(session);

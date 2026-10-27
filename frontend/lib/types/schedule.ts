@@ -149,6 +149,8 @@ export interface LoggedActivity {
   distance_m: number;
   moving_time_s: number;
   effort_score: number;
+  // #1154: done and matched to no session.
+  unplanned?: boolean;
 }
 
 // Sized by effort_score, the only unit that sums across a gym session and a

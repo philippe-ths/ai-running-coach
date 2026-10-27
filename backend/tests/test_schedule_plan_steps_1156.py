@@ -48,12 +48,21 @@ def test_a_session_with_no_structure_has_no_plan():
     assert plan_steps(_Session({})) == []
 
 
-def test_the_parts_shown_are_the_parts_the_total_counts():
-    """Every distance on the plan is one `structured_distance_m` sums, so the
-    card's parts and the headline cannot tell two stories (#887)."""
-    shown = plan_steps(_Session(INTERVALS))
-    assert len(shown) == 3
-    assert structured_distance_m(_Session(INTERVALS)) == 1500 + 6 * 1000 + 1500
+def test_a_stored_float_or_text_rep_count_reads_as_a_whole_number():
+    assert plan_steps(_Session({"reps_planned": 6.0, "rep_distance_m": 1000.0})) == ["6 × 1 km"]
+    assert plan_steps(_Session({"reps_planned": "0", "rep_distance_m": 1000.0})) == []
+
+
+def test_the_distances_shown_are_the_ones_the_total_adds_up():
+    """The card's parts and the summed structure are one set of numbers (#887):
+    read back out of the words, they add to `structured_distance_m`."""
+    import re
+
+    shown = " ".join(plan_steps(_Session(INTERVALS)))
+    km = [float(x) for x in re.findall(r"([\d.]+) km", shown)]
+    reps = int(re.search(r"(\d+) ×", shown).group(1))
+    warmup, rep, cooldown = km
+    assert (warmup + reps * rep + cooldown) * 1000 == structured_distance_m(_Session(INTERVALS))
 
 
 def test_the_week_read_carries_the_plan_to_the_client():

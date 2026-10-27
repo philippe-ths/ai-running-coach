@@ -423,21 +423,24 @@ def test_between_identical_sessions_the_one_shown_for_the_day_wins(db, shown_fir
 
 
 def test_a_recommendation_from_another_plan_is_not_read(db):
-    """A stored week from a replaced plan names sessions that are not this
-    plan's, and reading it must not rewrite it."""
+    """A stored week from a replaced plan does not steer the tick, and reading
+    it does not rewrite it."""
     user = _seed_user(db)
     plan = _seed_plan(db, user)
-    session = _seed_session(db, plan, start=MON, end=SUN, discipline="walk")
-    stale = {"some-old-session": TUE.isoformat()}
+    a = _seed_session(db, plan, start=MON, end=SUN, discipline="walk", title="Brisk walk")
+    b = _seed_session(db, plan, start=MON, end=SUN, discipline="walk", title="Brisk walk")
+    walk = _seed_activity(db, user, day=TUE, activity_type="Walk", distance_m=5000)
+    unsteered = completion.find_matching_session(db, walk)
+    other = b if unsteered == a else a
+    stale = {str(other.id): TUE.isoformat()}
     db.add(
         WeekRecommendation(
             user_id=user.id, week_start=MON, plan_id=uuid4(), assignment=dict(stale), changes=[]
         )
     )
     db.commit()
-    walk = _seed_activity(db, user, day=TUE, activity_type="Walk", distance_m=5000)
 
-    assert completion.complete_from_activity(db, walk) == session
+    assert completion.complete_from_activity(db, walk) == unsteered
     row = db.query(WeekRecommendation).filter(WeekRecommendation.user_id == user.id).one()
     db.refresh(row)
     assert row.assignment == stale

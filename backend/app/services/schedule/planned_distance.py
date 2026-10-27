@@ -135,15 +135,17 @@ def plan_steps(session: Any) -> List[str]:
     """The parts this module sums, as the runner reads them (#1156).
 
     Warm-up, then the work, then cool-down: the order the session is run in.
-    Each line is only what the coach wrote, so the parts shown are the parts
-    `structured_distance_m` counts, and a part not stated is not shown.
+    Each line is only what the coach wrote, the same parts
+    `structured_distance_m` adds up, and a part not stated is not shown. When
+    the coach also stated a total, that total is still the session's distance:
+    these are the parts as written, never a second total.
     """
     structure = _structure(session)
     steps: List[str] = []
     warmup = _positive(structure.get("warmup_distance_m"))
     if warmup:
         steps.append(f"Warm-up {_distance_words(warmup)}")
-    reps = structure.get("reps_planned")
+    reps = int(_positive(structure.get("reps_planned")))
     distance = _positive(structure.get("rep_distance_m"))
     if reps and distance:
         rest = _positive(structure.get("rest_s"))

@@ -411,6 +411,14 @@ def build_week(
         PlacedSession(session_id=f"extra-{fact.activity_id}", intent="easy", day=fact.local_date)
         for fact in uncredited
     ]
+    # With no plan there is nothing for an activity to be outside of.
+    unplanned_ids = (
+        {fact.activity_id for fact in uncredited if fact.activity_id} if plan is not None else set()
+    )
+    logged = [
+        entry.model_copy(update={"unplanned": entry.activity_id in unplanned_ids})
+        for entry in logged
+    ]
     open_by_id = (
         open_days(committed_open, rules, today, fixed=fixed + extras) if committed_open else {}
     )
