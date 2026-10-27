@@ -21,7 +21,7 @@ reps in: the interval gate's answer, stored on the run's `DerivedMetric`.
 
 import logging
 from datetime import date, datetime, timezone
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -219,8 +219,8 @@ def open_sessions_for(db: Session, activity: Any) -> List[PlannedSession]:
     ]
 
 
-def _shown_on_day(db: Session, activity: Any, plan_id: Any) -> set:
-    """The sessions the runner was last shown on this activity's day (#1155).
+def _shown_days(db: Session, activity: Any, plan_id: Any) -> Dict[str, date]:
+    """The day each session was last shown on, for this activity's week.
 
     Read straight from the stored recommendation rather than through
     `recommend_store.load`, which resets a row from another plan in place: a
@@ -238,9 +238,14 @@ def _shown_on_day(db: Session, activity: Any, plan_id: Any) -> set:
         .first()
     )
     if row is None or row.plan_id != plan_id:
-        return set()
-    wanted = day.isoformat()
-    return {sid for sid, shown in (row.assignment or {}).items() if shown == wanted}
+        return {}
+    shown = {}
+    for sid, value in (row.assignment or {}).items():
+        try:
+            shown[sid] = date.fromisoformat(value)
+        except (TypeError, ValueError):
+            continue
+    return shown
 
 
 def credited_session(db: Session, activity: Any) -> Optional[PlannedSession]:
@@ -298,7 +303,15 @@ def find_matching_session(
     ]
     if not candidates:
         return None
-    shown = _shown_on_day(db, activity, candidates[0].plan_id)
+    # #1162: never a session shown for a later day. Done today or overdue, it
+    # is that session; done ahead of its day, it is something the runner added,
+    # and the session stays where they were shown it.
+    day = _activity_local_day(activity)
+    shown_days = _shown_days(db, activity, candidates[0].plan_id)
+    candidates = [s for s in candidates if shown_days.get(str(s.id), day) <= day]
+    if not candidates:
+        return None
+    shown = {sid for sid, d in shown_days.items() if d == day}
 
     def _rank(session: PlannedSession):
         # A commitment outranks a suggestion; then a rep session the run showed

@@ -114,6 +114,10 @@ class PlacedSession:
     session_id: Any
     intent: str
     day: date
+    # #1162: an activity the runner did that was not planned for its day may
+    # take the day over their limit, so it is left out of that count. Every
+    # other rule still sees it.
+    counts_toward_limit: bool = True
 
 
 def candidate_days(session: Any, today: Optional[date] = None) -> list:

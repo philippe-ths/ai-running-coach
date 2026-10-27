@@ -105,7 +105,7 @@ def _preferred_days(placed: List[PlacedSession], rule: Any) -> Optional[str]:
 
 
 def _max_sessions_per_day(placed: List[PlacedSession], rule: Any) -> Optional[str]:
-    counts = Counter(p.day for p in placed if p.intent != "rest")
+    counts = Counter(p.day for p in placed if p.intent != "rest" and p.counts_toward_limit)
     for day, total in counts.items():
         if total > rule.count:
             return (
@@ -244,7 +244,9 @@ def find_assignment(
         rest = [(s, d) for s, d in domains[index:] if s.intent != "rest"]
         if not rest:
             return True
-        used = Counter(p.day for p in placed if p.intent != "rest")
+        used = Counter(
+            p.day for p in placed if p.intent != "rest" and p.counts_toward_limit
+        )
         rested = {p.day + timedelta(days=1) for p in placed if p.intent in rest_after}
         days = set().union(*(set(d) for _, d in rest)) - rested
         return len(rest) <= sum(max(0, cap - used[day]) for day in days)

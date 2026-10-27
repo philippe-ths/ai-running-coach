@@ -381,9 +381,10 @@ def build_week(
     # Suggestions are left out: an offer the runner may decline must not take a
     # day away from a session they agreed to.
     committed_open = [row for row in open_rows if row.commitment == "committed"]
-    # #1083: an activity that matched no session is an extra. It still used up
-    # one of its day's activities under the runner's limit, so the day's
-    # remaining options and the recommendation both see it.
+    # #1083: an activity that matched no session is an extra. The other rules
+    # still see it, but it does not count toward the runner's daily limit
+    # (#1162): doing something unplanned never pushes a planned session off
+    # its day.
     credited = {row.completed_activity_id for row in rows if row.completed_activity_id}
     uncredited = [
         fact
@@ -408,7 +409,12 @@ def build_week(
         if claim is not None:
             uncredited.remove(claim)
     extras = [
-        PlacedSession(session_id=f"extra-{fact.activity_id}", intent="easy", day=fact.local_date)
+        PlacedSession(
+            session_id=f"extra-{fact.activity_id}",
+            intent="easy",
+            day=fact.local_date,
+            counts_toward_limit=False,
+        )
         for fact in uncredited
     ]
     # With no plan there is nothing for an activity to be outside of.
