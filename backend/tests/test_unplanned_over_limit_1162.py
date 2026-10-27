@@ -75,7 +75,7 @@ def test_a_walk_before_a_full_day_moves_nothing_off_it(db):
     assert _day(week, TUE) == ["Easy spin", "Intervals", "Strength"]
     assert [a.unplanned for a in week.logged] == [True]
     assert week.recommendation.changes == []
-    assert not [v for v in week.violations if "more than" in v.detail]
+    assert week.violations == []
 
 
 def test_a_walk_never_ticks_the_walk_shown_for_a_later_day(db):
@@ -103,3 +103,30 @@ def test_a_session_done_late_still_ticks(db):
     walk = _seed_activity(db, user, day=WED, activity_type="Walk", distance_m=5600)
 
     assert completion.complete_from_activity(db, walk) == s["walk"]
+
+
+def test_a_suggested_walk_later_in_the_week_is_never_ticked(db):
+    """A suggestion is never in the stored recommendation, so nothing there
+    says which day it was for."""
+    user, s = _owners_tuesday(db)
+    s["walk"].commitment = "suggested"
+    row = db.query(WeekRecommendation).filter_by(user_id=user.id).one()
+    row.assignment = {k: v for k, v in row.assignment.items() if k != str(s["walk"].id)}
+    db.commit()
+    walk = _seed_activity(db, user, day=TUE, activity_type="Walk", distance_m=5600)
+
+    assert completion.complete_from_activity(db, walk) is None
+
+
+def test_a_session_done_on_its_shown_day_still_counts_toward_the_limit(db):
+    """Only what was not planned for the day may go over the limit."""
+    user, s = _owners_tuesday(db)
+    row = db.query(WeekRecommendation).filter_by(user_id=user.id).one()
+    row.assignment = {**row.assignment, str(s["walk"].id): TUE.isoformat()}
+    db.commit()
+    walk = _seed_activity(db, user, day=TUE, activity_type="Walk", distance_m=5600)
+    assert completion.complete_from_activity(db, walk) == s["walk"]
+    db.commit()
+
+    week = build_week(db, user, today=TUE)
+    assert len(_day(week, TUE)) == 2

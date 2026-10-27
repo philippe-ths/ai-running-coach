@@ -219,17 +219,11 @@ def open_sessions_for(db: Session, activity: Any) -> List[PlannedSession]:
     ]
 
 
-def _shown_days(db: Session, activity: Any, plan_id: Any) -> Dict[str, date]:
-    """The day each session was last shown on, for this activity's week.
-
-    Read straight from the stored recommendation rather than through
-    `recommend_store.load`, which resets a row from another plan in place: a
-    read here must not leave a write behind for the tick's commit to flush.
-    """
+def _week_row(db: Session, activity: Any) -> Optional[WeekRecommendation]:
     day = _activity_local_day(activity)
     profile = db.query(UserProfile).filter(UserProfile.user_id == activity.user_id).first()
     start = week_start(day, resolve_week_start(profile))
-    row = (
+    return (
         db.query(WeekRecommendation)
         .filter(
             WeekRecommendation.user_id == activity.user_id,
@@ -237,6 +231,16 @@ def _shown_days(db: Session, activity: Any, plan_id: Any) -> Dict[str, date]:
         )
         .first()
     )
+
+
+def _shown_days(db: Session, activity: Any, plan_id: Any) -> Dict[str, date]:
+    """The day each session was last shown on, for this activity's week.
+
+    Read straight from the stored recommendation rather than through
+    `recommend_store.load`, which resets a row from another plan in place: a
+    read here must not leave a write behind for the tick's commit to flush.
+    """
+    row = _week_row(db, activity)
     if row is None or row.plan_id != plan_id:
         return {}
     shown = {}
@@ -308,7 +312,16 @@ def find_matching_session(
     # and the session stays where they were shown it.
     day = _activity_local_day(activity)
     shown_days = _shown_days(db, activity, candidates[0].plan_id)
-    candidates = [s for s in candidates if shown_days.get(str(s.id), day) <= day]
+    # With nothing stored the runner has not been shown the week, so every day
+    # in a session's window is still its day.
+    candidates = [
+        s
+        for s in candidates
+        if shown_days.get(str(s.id), day) <= day
+        # A suggestion is never in the recommendation; it is offered only on
+        # the day it is pinned to, so that is the only day it can be done.
+        and (s.commitment == "committed" or s.window_start == s.window_end == day)
+    ]
     if not candidates:
         return None
     shown = {sid for sid, d in shown_days.items() if d == day}

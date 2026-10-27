@@ -229,20 +229,22 @@ def _limited_user(db, limit):
     return user
 
 
-def test_an_extra_activity_does_not_use_up_its_day_but_is_still_spread_from(db):
+def test_an_extra_activity_has_no_say_in_where_sessions_go(db):
     """#1162 reversed #1083 here: something unplanned may take a day over the
-    runner's limit, so the day stays open. The recommendation still prefers a
-    quieter day when nothing else decides."""
-    user = _limited_user(db, 1)
-    plan = _seed_plan(db, user)
-    _seed_session(db, plan, start=TUE, end=WED, title="Easy run")
-    _seed_activity(db, user, day=TUE, activity_type="Swim")
+    runner's limit, and the week is recommended as if it had not happened."""
+    def tuesday_week(with_swim):
+        user = _limited_user(db, 1)
+        plan = _seed_plan(db, user)
+        _seed_session(db, plan, start=TUE, end=WED, title="Easy run")
+        if with_swim:
+            _seed_activity(db, user, day=TUE, activity_type="Swim")
+        return build_week(db, user, today=TUE)
 
-    week = build_week(db, user, today=TUE)
-
-    [day] = week.recommendation.days
-    assert day.day == WED
+    week = tuesday_week(with_swim=True)
     assert week.sessions[0].open_days == [TUE, WED]
+    assert [d.day for d in week.recommendation.days] == [
+        d.day for d in tuesday_week(with_swim=False).recommendation.days
+    ]
 
 
 def test_a_hand_tick_and_its_recording_count_once(db):
