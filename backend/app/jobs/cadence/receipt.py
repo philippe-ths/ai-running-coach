@@ -76,12 +76,12 @@ class ReceiptCadence(PostActivityCadence):
         open the exchange.
 
         Deduped by `Activity.receipt_sent_at` (one receipt per activity, idempotent on a
-        pipeline retry). The FIRST receipt opens the exchange (`opened_at`), anchoring
+        pipeline retry), claimed atomically before the send (#1136). The FIRST receipt opens the exchange (`opened_at`), anchoring
         the reply window — independent of delivery, so the reply path works under a NoOp
         local notifier. The receipt text is filled deterministically from the block
         facts using the runner's voiced templates (or the house-default floor), so no
         LLM is on the hot path and the receipt can never fall back. On a send failure the
-        sentinel is left null so the receipt stays re-sendable. Returns the Notification
+        claim on the sentinel is released so the receipt stays re-sendable. Returns the Notification
         sent, or None (already sent / no channel / send failed)."""
         db.refresh(activity)
         if activity.receipt_sent_at is not None:
@@ -137,16 +137,24 @@ class ReceiptCadence(PostActivityCadence):
             )
             return None
 
+        # Claim the sentinel atomically before sending (#1136): the read above is only
+        # a fast path, and two runs for one activity can both pass it.
+        if not lifecycle.claim_receipt(db, activity):
+            logger.info(
+                "Skipping receipt for activity %s: another run claimed it",
+                activity.strava_activity_id,
+            )
+            return None
         try:
             notifier.send(notification)
         except Exception:
             logger.exception(
-                "Receipt send failed for activity %s; sentinel left unset",
+                "Receipt send failed for activity %s; claim released",
                 activity.strava_activity_id,
             )
+            lifecycle.release_receipt_claim(db, activity)
             return None
 
-        lifecycle.record_receipt_sent(db, activity)
         return notification
 
     async def on_block_complete(

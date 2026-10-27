@@ -335,3 +335,43 @@ def test_merge_blocks_combines_members_without_refiring(db):
     assert survivor.opener_sent_at is not None
     assert survivor.fuller_sent_at is not None
     assert db.query(Exchange).count() == 1
+
+
+# --- #1136: find-or-create is serialised per runner ---------------------------
+# Two pipeline jobs for one runner could each find no joinable block and each
+# create one. On Postgres a transaction-scoped advisory lock keyed on the runner
+# serialises them. The real race needs two Postgres connections, which this
+# SQLite suite does not have, so these tests only cover that the lock is taken on
+# Postgres with a stable per-runner key and is a safe no-op on SQLite.
+
+
+def test_runner_lock_key_is_stable_signed_64_bit_and_per_runner():
+    import uuid as _uuid
+
+    from app.services.blocks import _runner_lock_key
+
+    a, b = _uuid.uuid4(), _uuid.uuid4()
+    assert _runner_lock_key(a) == _runner_lock_key(str(a))
+    assert _runner_lock_key(a) != _runner_lock_key(b)
+    for u in (a, b, _uuid.UUID(int=(1 << 128) - 1), _uuid.UUID(int=0)):
+        assert -(1 << 63) <= _runner_lock_key(u) < (1 << 63)
+
+
+def test_runner_lock_is_taken_on_postgres_and_skipped_on_sqlite(db):
+    import uuid as _uuid
+    from types import SimpleNamespace
+
+    from app.services.blocks import _lock_runner_blocks, _runner_lock_key
+
+    user_id = _uuid.uuid4()
+    _lock_runner_blocks(db, user_id)  # SQLite: must not raise
+
+    executed = []
+    pg = SimpleNamespace(
+        get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+        execute=lambda stmt, params: executed.append((str(stmt), params)),
+    )
+    _lock_runner_blocks(pg, user_id)
+    assert executed == [
+        ("SELECT pg_advisory_xact_lock(:key)", {"key": _runner_lock_key(user_id)})
+    ]

@@ -52,6 +52,9 @@ export interface CoachReportMeta {
   voice_name?: string | null;
   // #824: what the rewrite did — "applied", or why the baseline stands.
   voice_rewrite?: string | null;
+  // #1142: when the report was last said again in a new voice without being
+  // regenerated. `generated_at` stays the substance's time.
+  revoiced_at?: string | null;
 }
 
 export interface CoachReportContent {

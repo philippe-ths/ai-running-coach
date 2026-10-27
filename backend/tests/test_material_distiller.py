@@ -356,3 +356,24 @@ def test_distill_material_job_never_crashes_the_worker(monkeypatch):
     # Must not raise, and must close the session.
     job_mod.distill_material_job(str(uuid.uuid4()))
     assert closed["value"] is True
+
+
+@pytest.mark.asyncio
+async def test_distill_spends_nothing_once_the_runner_is_over_budget(db, monkeypatch):
+    """#1136: the distiller skipped the `over_budget` gate every other auxiliary
+    call checks. Over the cap it makes no call and marks the material failed, the
+    state a re-upload retries from (a `processing` row would never be retried)."""
+    from app.core.config import settings
+    from app.services.coach import budget
+
+    material = _make_material(db)
+    monkeypatch.setattr(settings, "LLM_BUDGET_USER_DAILY_USD", 0.01)
+    budget.record(material.user_id, "claude-haiku-4-5", 1_000_000, 0)
+    client = FakeClient(result=dict(_VALID))
+
+    await md.distill_material(db, material.id, client=client)
+
+    db.refresh(material)
+    assert client.calls == []
+    assert material.status == "failed"
+    assert material.distilled is None

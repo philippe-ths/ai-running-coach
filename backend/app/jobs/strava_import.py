@@ -37,13 +37,14 @@ from datetime import datetime, time, timedelta, timezone
 from uuid import UUID
 
 import httpx
+from rq import Retry
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.queue import queue
 from app.db.session import SessionLocal
 from app.models import StravaAccount, StravaImport
-from app.services.analysis import analyze
+from app.services.analysis import analyze, recompute_baselines_after_batch
 from app.services.blocks import (
     assign_block_guarded,
     reconcile_unassigned_activities,
@@ -56,6 +57,31 @@ from app.services.strava_ingestion import (
 from app.services.strava_ingestion.port import StravaRateLimited
 
 logger = logging.getLogger(__name__)
+
+
+# A batch whose worker dies (a deploy's SIGKILL) or that raises is re-run by RQ,
+# the `PIPELINE_RETRY` shape (#1136); a replayed page is idempotent.
+IMPORT_RETRY = Retry(max=3, interval=[60, 300, 900])
+
+STALLED_ERROR = "The import stopped making progress and was restarted."
+
+
+def import_stale_after() -> timedelta:
+    """How long a `running` import may go without writing progress before it reads
+    as abandoned (#1136). Derived, as `season_store.stale_after` is: longer than a
+    batch can run, or a budget backoff can hold it, plus every retry interval, so
+    a live walk is never failed under itself."""
+    longest = max(settings.RQ_JOB_TIMEOUT_SECONDS, settings.STRAVA_BUDGET_BACKOFF_SECONDS)
+    return timedelta(seconds=longest + sum(IMPORT_RETRY.intervals)) + timedelta(minutes=30)
+
+
+def _is_stalled(import_obj: StravaImport) -> bool:
+    last = import_obj.updated_at or import_obj.created_at
+    if last is None:
+        return False
+    if last.tzinfo is None:  # SQLite hands back naive UTC
+        last = last.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - last > import_stale_after()
 
 
 @dataclass
@@ -120,6 +146,7 @@ async def run_import_batch(
         return ImportBatchResult(imported=0, done=True)
 
     imported = 0
+    analyzed = False
     for raw in batch:
         try:
             activity = upsert_activity(db, raw, account.user_id)
@@ -128,7 +155,9 @@ async def run_import_batch(
             # Deterministic analysis only (no streams, no LLM, no notification);
             # a failure here must not abort the import of the rest of the page.
             try:
-                analyze(db, str(activity.id))
+                # #1137: baseline once per batch, below, not per activity.
+                analyze(db, str(activity.id), skip_baseline=True)
+                analyzed = True
             except Exception as exc:  # noqa: BLE001
                 db.rollback()
                 logger.error(
@@ -144,6 +173,8 @@ async def run_import_batch(
     # Once per batch (not per activity): recover any activity an earlier ingest
     # committed but left block-less because its guarded assignment raised (#515).
     reconcile_unassigned_activities(db, account.user_id)
+    if analyzed:
+        recompute_baselines_after_batch(db, [account.user_id])
 
     import_obj.activities_imported += imported
     # A short page means we have reached the end of the window: done. A full page
@@ -179,6 +210,7 @@ def _schedule_next_batch(import_id: str) -> None:
         timedelta(seconds=settings.IMPORT_BATCH_PAUSE_SECONDS),
         strava_import_job,
         import_id,
+        retry=IMPORT_RETRY,
     )
 
 
@@ -253,7 +285,11 @@ def enqueue_import(db: Session, account: StravaAccount, since_date) -> StravaImp
     """Create the import-state row and enqueue the first batch.
 
     Idempotent: if an import is already running for this user, return it rather
-    than starting a second concurrent walk.
+    than starting a second concurrent walk. A `running` import untouched for
+    longer than `import_stale_after()` was abandoned by a worker that died
+    (#1136): it is marked failed, which also stops any batch of it still queued
+    (a batch only runs on a `running` row), and a fresh import starts. The walk
+    is idempotent, so starting over costs list calls, never duplicates.
     """
     existing = (
         db.query(StravaImport)
@@ -265,7 +301,17 @@ def enqueue_import(db: Session, account: StravaAccount, since_date) -> StravaImp
         .first()
     )
     if existing is not None:
-        return existing
+        if not _is_stalled(existing):
+            return existing
+        logger.warning(
+            "Historical import %s stalled (last progress %s); failing it and starting fresh",
+            existing.id,
+            existing.updated_at,
+        )
+        existing.status = "failed"
+        existing.error = STALLED_ERROR
+        db.add(existing)
+        db.commit()
 
     import_obj = StravaImport(
         user_id=account.user_id,
@@ -283,5 +329,6 @@ def enqueue_import(db: Session, account: StravaAccount, since_date) -> StravaImp
         str(import_obj.id),
         job_id=f"strava_import_{import_obj.id}",
         result_ttl=3600,
+        retry=IMPORT_RETRY,
     )
     return import_obj

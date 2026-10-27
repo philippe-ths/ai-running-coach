@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from sqlalchemy import select
+from rq.exceptions import DuplicateJobError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -283,13 +284,22 @@ def enqueue_reanalyze(db: Session, user_id) -> int:
     user_id = str(user_id)
     eligible = count_eligible(db, user_id=user_id)
     if eligible:
-        queue.enqueue(
-            reanalyze_history_job,
-            None,  # cursor: start from the oldest activity
-            user_id,
-            job_id=f"{_REANALYZE_JOB_ID}_{user_id}",
-            result_ttl=batch_chain.CHAIN_RESULT_TTL,
-        )
+        # RQ rejects the repeated per-user id only under `unique=True` (#1136);
+        # without it a re-trigger re-queued the id and a second chain ran. A
+        # failed first batch expires on the same clock as a finished one, so it
+        # cannot hold the id against a re-trigger for RQ's year-long default.
+        try:
+            queue.enqueue(
+                reanalyze_history_job,
+                None,  # cursor: start from the oldest activity
+                user_id,
+                job_id=f"{_REANALYZE_JOB_ID}_{user_id}",
+                result_ttl=batch_chain.CHAIN_RESULT_TTL,
+                failure_ttl=batch_chain.CHAIN_RESULT_TTL,
+                unique=True,
+            )
+        except DuplicateJobError:
+            logger.info("Re-analysis for user %s already queued; not starting another", user_id)
     return eligible
 
 
