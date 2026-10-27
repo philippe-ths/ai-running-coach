@@ -209,30 +209,35 @@ def test_plan_bar_defaults_to_the_two_source_constant():
     assert profile.goals_and_plans == []
 
 
-# --- #1143: a stated safety limit is never cut by the per-section cap --- #
+# --- #1143: body reports come first in limits, under the one shared cap --- #
 
 
-def test_every_stated_safety_limit_is_kept_past_the_cap():
-    # A runner who has reported more body issues than the cap allows keeps all of
-    # them: the cap exists to keep the profile small, never to drop a safety limit.
+def test_body_reports_come_first_then_practical_limits_fill_the_cap():
+    # Six firm practical limits arrive BEFORE two body reports. The body reports are
+    # listed first; the practical limits fill what is left of the cap, in order.
+    practical = [_c(f"Practical limit {i}", "limits_and_constraints", ["s1", "s2"]) for i in range(6)]
+    body = [
+        _c("Sore left shin, mentioned once", "limits_and_constraints", ["s3"], safety=True),
+        _c("Calf tightness, mentioned once", "limits_and_constraints", ["s4"], safety=True),
+    ]
+    profile = apply_graduation(practical + body, KNOWN)
+    assert profile.limits_and_constraints == [
+        "Sore left shin, mentioned once",
+        "Calf tightness, mentioned once",
+        "Practical limit 0",
+        "Practical limit 1",
+        "Practical limit 2",
+        "Practical limit 3",
+    ]
+
+
+def test_limits_never_exceed_the_cap_however_many_body_reports():
+    # The stored profile stays inside main's schema, so a rollback reads it.
     reports = [f"Body report {i}, mentioned once" for i in range(MAX_LINES_PER_SECTION + 3)]
     profile = apply_graduation(
         [_c(text, "limits_and_constraints", ["s1"], safety=True) for text in reports], KNOWN
     )
-    assert profile.limits_and_constraints == reports
-
-
-def test_body_reports_never_crowd_out_practical_limits():
-    # Measured on real history (#1143): eight body reports took every limit slot and
-    # "hot midday runs are hard" was dropped. Body reports come first; the practical
-    # limits keep their own full cap after them, in their own order.
-    practical = [_c(f"Practical limit {i}", "limits_and_constraints", ["s1", "s2"]) for i in range(MAX_LINES_PER_SECTION)]
-    body = [
-        _c(f"Body report {i}, mentioned once", "limits_and_constraints", ["s3"], safety=True)
-        for i in range(MAX_LINES_PER_SECTION + 2)
-    ]
-    profile = apply_graduation(practical + body, KNOWN)
-    assert profile.limits_and_constraints == [c.text for c in body] + [c.text for c in practical]
+    assert profile.limits_and_constraints == reports[:MAX_LINES_PER_SECTION]
 
 
 def test_non_safety_limits_are_still_capped():
@@ -242,6 +247,25 @@ def test_non_safety_limits_are_still_capped():
     ]
     profile = apply_graduation(over, KNOWN)
     assert profile.limits_and_constraints == [f"Practical limit {i}" for i in range(MAX_LINES_PER_SECTION)]
+
+
+def test_a_body_report_resting_only_on_coach_words_is_not_held():
+    # A safety limit is held on one mention only when that mention is the runner's
+    # own words; a coach turn citing it holds nothing.
+    profile = apply_graduation(
+        [_c("Possible niggle from Wednesday's run", "limits_and_constraints", ["s2"], safety=True)],
+        KNOWN,
+        durable_source_ids={"s1"},
+    )
+    assert profile.limits_and_constraints == []
+
+
+def test_a_safety_flag_on_another_durable_section_does_not_move_the_line():
+    profile = apply_graduation(
+        [_c("Races a half on 27 Sep", "goals_and_plans", ["s1", "s2"], safety=True)], KNOWN
+    )
+    assert profile.goals_and_plans == ["Races a half on 27 Sep"]
+    assert profile.limits_and_constraints == []
 
 
 def test_safety_flag_outside_limits_has_no_effect():

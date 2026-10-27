@@ -9,7 +9,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.coach_memory import (
-    MAX_LIMIT_LINES,
     MAX_LINES_PER_SECTION,
     MAX_LINE_LENGTH,
     MEMORY_SECTION_FIELDS,
@@ -71,12 +70,3 @@ def test_all_five_section_fields_present():
         "what_works_for_you",
         "lately",
     )
-
-
-def test_limits_section_holds_more_than_the_per_section_cap():
-    # #1143: held safety limits may exceed MAX_LINES_PER_SECTION, so the limits
-    # section's hard bound is MAX_LIMIT_LINES, not the per-section cap.
-    many = [f"limit {i}" for i in range(MAX_LINES_PER_SECTION + 3)]
-    assert RunnerMemoryProfile(limits_and_constraints=many).limits_and_constraints == many
-    with pytest.raises(ValidationError):
-        RunnerMemoryProfile(limits_and_constraints=[f"limit {i}" for i in range(MAX_LIMIT_LINES + 1)])
