@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validat
 
 from app.schemas.coach_context import VolumeMetricComparison
 from app.services.schedule.planned_distance import (
+    plan_steps as _plan_steps,
     planned_distance_m as _planned_distance_m,
 )
 
@@ -359,6 +360,15 @@ class PlannedSessionRead(BaseModel):
         """
         return _planned_distance_m(self)
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def plan_steps(self) -> List[str]:
+        """The session's plan as the runner runs it, in fixed wording (#1156):
+        warm-up, the reps, cool-down. Worded here beside the total so the client
+        shows the parts without ever handling the distances it would be tempted
+        to sum (#887)."""
+        return _plan_steps(self)
+
 
 # --- logged actuals --------------------------------------------------------
 
@@ -379,6 +389,10 @@ class LoggedActivityRead(BaseModel):
     distance_m: float
     moving_time_s: int
     effort_score: float
+    # #1154: done and matched to no session, after a hand-ticked session has
+    # claimed its own recording. Decided here, where the recommendation counts
+    # the same extras, so the strip cannot hold a second opinion of it.
+    unplanned: bool = False
 
 
 # --- the week read ---------------------------------------------------------

@@ -8,6 +8,8 @@
 // each option carries its own tick and the tick names the option.
 //
 // A day with more than one activity is numbered, easiest first, walks included.
+// Each session shows its plan, warm-up to cool-down and the coach's note, without
+// a tap (#1156): on the day it is what the runner runs from.
 // What moved this week, and anything that no longer fits, sits under the card
 // in the house's amber "notable" tone: information, not an alarm.
 
@@ -91,6 +93,8 @@ export default function DayCard({
   const doneToday = week.sessions.filter(
     (s) => s.status === "done" && s.done_on === day && s.commitment === "committed",
   );
+  // #1154: what was done this day that ticked no session.
+  const extras = week.logged.filter((a) => a.unplanned && a.local_date === day);
   const rest = week.sessions.some(
     (s) => safeIntent(s.intent) === "rest" && s.placement === "pinned" && s.window_start === day,
   );
@@ -118,7 +122,7 @@ export default function DayCard({
         <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
           {isToday ? `Today · ${formatDayChip(day)}` : formatDayChip(day)}
         </h2>
-        {!recommended.length && !doneToday.length && (
+        {!recommended.length && !doneToday.length && !extras.length && (
           <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
             {rest ? "Rest day." : "Nothing planned."}
           </p>
@@ -158,8 +162,19 @@ export default function DayCard({
             );
           })}
 
+          {extras.map((a, i) => (
+            <li key={`${a.activity_id ?? "extra"}-${i}`} className="flex items-center gap-2">
+              <CheckCircle2 size={18} className="shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+              <span className="min-w-0 flex-1 text-sm text-gray-500 dark:text-gray-400">
+                <span className="font-medium text-gray-700 dark:text-gray-200">{a.activity_type}</span>
+                {a.distance_m > 0 && ` · ${formatDistanceKm(a.distance_m)}`} · not in the plan
+              </span>
+            </li>
+          ))}
+
           {recommended.map(({ item, session }) => {
             const options = optionsOf(session);
+            const plan = session.plan_steps ?? [];
             const choice = options.length > 1;
             const pending = pendingId === session.id;
             return (
@@ -183,7 +198,9 @@ export default function DayCard({
                   {options.map((o) => (
                     <li
                       key={o.index}
-                      className={`flex items-center gap-2 rounded-md px-2 py-1.5 ${
+                      className={`flex gap-2 rounded-md px-2 py-1.5 ${
+                        o.index === 0 && (plan.length > 0 || session.detail) ? "items-start" : "items-center"
+                      } ${
                         !choice
                           ? ""
                           : o.index === 0
@@ -223,6 +240,20 @@ export default function DayCard({
                         {o.note && (
                           <span className="block text-[11px] italic text-gray-500 dark:text-gray-400">
                             {o.note}
+                          </span>
+                        )}
+                        {o.index === 0 && plan.length > 0 && (
+                          <span className="mt-1 block space-y-0.5 font-mono text-xs tabular-nums text-gray-700 dark:text-gray-200">
+                            {plan.map((line) => (
+                              <span key={line} className="block">
+                                {line}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                        {o.index === 0 && session.detail && (
+                          <span className="mt-1 block text-xs text-gray-600 dark:text-gray-300">
+                            {session.detail}
                           </span>
                         )}
                       </span>

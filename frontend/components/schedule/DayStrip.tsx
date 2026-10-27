@@ -13,7 +13,9 @@
 // pool line under the strip says how many are still to place.
 //
 // Intent is the chip's colour, as everywhere on the schedule; the sport is an
-// icon (#1087). Tapping a day shows it in full under the strip.
+// icon (#1087). An activity that ticked no session has no intent, so it sits on
+// its day as a grey done chip (#1154): without it, a day with an unplanned walk
+// read as empty. Tapping a day shows it in full under the strip.
 
 import type { ReactNode } from "react";
 import type {
@@ -59,6 +61,10 @@ function chipTitle(chip: Chip): string {
   if (chip.kind === "option") return `${what} could go here`;
   if (chip.kind === "offer") return `${what}, a suggestion`;
   return what;
+}
+
+function extraTitle(a: LoggedActivity): string {
+  return `${a.activity_type}, done, not in the plan`;
 }
 
 function chipClass(chip: Chip): string {
@@ -249,12 +255,29 @@ export default function DayStrip({
     loggedByDay.set(a.local_date, (loggedByDay.get(a.local_date) ?? 0) + 1);
   }
 
+  // #1154: what was done this week that ticked no session, as the server
+  // decided it (a hand-ticked session claims its own recording there).
+  const extrasByDay = new Map<string, LoggedActivity[]>();
+  for (const a of logged) {
+    if (!a.unplanned) continue;
+    extrasByDay.set(a.local_date, [...(extrasByDay.get(a.local_date) ?? []), a]);
+  }
+  const extras = Array.from(extrasByDay.values()).flat();
+  for (const a of extras) {
+    const sport = sportOf(a.activity_type, safeDiscipline(a.discipline));
+    if (!sports.some((x) => x.key === sport.key)) sports.push(sport);
+  }
+
   // The text alternative: each day's chips in words.
   const summary = days
     .map((day) => {
       const chips = byDay.get(day) ?? [];
-      if (!chips.length) return null;
-      return `${formatDayChip(day)}: ${chips.map(chipTitle).join(", ")}`;
+      const dayExtras = extrasByDay.get(day) ?? [];
+      if (!chips.length && !dayExtras.length) return null;
+      return `${formatDayChip(day)}: ${[
+        ...chips.map(chipTitle),
+        ...dayExtras.map(extraTitle),
+      ].join(", ")}`;
     })
     .filter(Boolean)
     .join(". ");
@@ -271,7 +294,9 @@ export default function DayStrip({
         {days.map((day, i) => {
           const chips = byDay.get(day) ?? [];
           const shown = chips.slice(0, MAX_CHIPS);
-          const hidden = chips.length - shown.length;
+          const dayExtras = extrasByDay.get(day) ?? [];
+          const shownExtras = dayExtras.slice(0, MAX_CHIPS - shown.length);
+          const hidden = chips.length + dayExtras.length - shown.length - shownExtras.length;
           const isToday = i === todayIndex;
           return (
             <li
@@ -329,6 +354,17 @@ export default function DayStrip({
                   {chip.kind === "set" && (chip.session.alternatives?.length ?? 0) > 0 && (
                     <span className="ml-0.5 font-sans text-[8px] font-normal opacity-70">or</span>
                   )}
+                </span>
+              ))}
+              {shownExtras.map((a, j) => (
+                <span
+                  key={`${a.activity_id ?? "extra"}-${j}`}
+                  title={extraTitle(a)}
+                  aria-hidden="true"
+                  className="flex h-5 w-full max-w-[2.75rem] items-center justify-center gap-0.5 rounded-full bg-gray-400 text-[10px] font-semibold leading-none text-white dark:bg-gray-500"
+                >
+                  <SportIcon activityType={a.activity_type} discipline={safeDiscipline(a.discipline)} />
+                  ✓
                 </span>
               ))}
               {hidden > 0 && (
@@ -399,6 +435,12 @@ export default function DayStrip({
             {INTENT_LABEL[intent]}
           </span>
         ))}
+        {extras.length > 0 && (
+          <span className="flex items-center gap-1.5 text-[10px] text-gray-400 dark:text-gray-500">
+            <span className="h-2 w-2 rounded-full bg-gray-400 dark:bg-gray-500" aria-hidden="true" />
+            Not in the plan
+          </span>
+        )}
       </div>
     </section>
   );

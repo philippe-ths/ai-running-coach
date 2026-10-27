@@ -84,6 +84,8 @@ export interface PlannedSession {
   target_duration_s: number | null;
   target_effort_score: number | null;
   structure: Record<string, number> | null;
+  // #1156: warm-up, reps, cool-down in fixed wording, from the server.
+  plan_steps?: string[];
   // How far this session goes, decided server-side by
   // `services/schedule/planned_distance.py` — the same value the week's
   // headline is summed from (#887). 0 means the session states no distance;
@@ -147,6 +149,8 @@ export interface LoggedActivity {
   distance_m: number;
   moving_time_s: number;
   effort_score: number;
+  // #1154: done and matched to no session.
+  unplanned?: boolean;
 }
 
 // Sized by effort_score, the only unit that sums across a gym session and a
