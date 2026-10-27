@@ -27,8 +27,11 @@ from sqlalchemy.orm import Session
 
 from app.models.derived_metric import DerivedMetric
 from app.models.planned_session import PlannedSession
+from app.models.user_profile import UserProfile
+from app.models.week_recommendation import WeekRecommendation
 from app.services.activity_facts import local_day
 from app.services.schedule import store
+from app.services.weeks import resolve_week_start, week_start
 from app.services.schedule.disciplines import discipline_for_activity_type, same_sport
 
 logger = logging.getLogger(__name__)
@@ -216,6 +219,30 @@ def open_sessions_for(db: Session, activity: Any) -> List[PlannedSession]:
     ]
 
 
+def _shown_on_day(db: Session, activity: Any, plan_id: Any) -> set:
+    """The sessions the runner was last shown on this activity's day (#1155).
+
+    Read straight from the stored recommendation rather than through
+    `recommend_store.load`, which resets a row from another plan in place: a
+    read here must not leave a write behind for the tick's commit to flush.
+    """
+    day = _activity_local_day(activity)
+    profile = db.query(UserProfile).filter(UserProfile.user_id == activity.user_id).first()
+    start = week_start(day, resolve_week_start(profile))
+    row = (
+        db.query(WeekRecommendation)
+        .filter(
+            WeekRecommendation.user_id == activity.user_id,
+            WeekRecommendation.week_start == start,
+        )
+        .first()
+    )
+    if row is None or row.plan_id != plan_id:
+        return set()
+    wanted = day.isoformat()
+    return {sid for sid, shown in (row.assignment or {}).items() if shown == wanted}
+
+
 def credited_session(db: Session, activity: Any) -> Optional[PlannedSession]:
     """The session this activity has ALREADY been credited to, if any."""
     return (
@@ -271,17 +298,23 @@ def find_matching_session(
     ]
     if not candidates:
         return None
+    shown = _shown_on_day(db, activity, candidates[0].plan_id)
 
     def _rank(session: PlannedSession):
         # A commitment outranks a suggestion; then a rep session the run showed
         # reps for; then whichever the activity fills most exactly, a session
         # with nothing to measure after any that can be; then the tightest
         # window, since a session the coach placed narrowly is the more specific
-        # claim on this day.
+        # claim on this day. Last, between sessions that tie on all of that, the
+        # one the runner was shown for this day (#1155): ticking an identical
+        # walk recommended for Thursday left today's still on today, so the day
+        # kept a second walk the runner had in fact already done.
         return (
             0 if session.commitment == "committed" else 1,
             _fit_for(session, activity, reps_shown),
             (session.window_end - session.window_start).days,
+            0 if str(session.id) in shown else 1,
+            str(session.id),
         )
 
     return sorted(candidates, key=_rank)[0]
