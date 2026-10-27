@@ -8,6 +8,8 @@
 // each option carries its own tick and the tick names the option.
 //
 // A day with more than one activity is numbered, easiest first, walks included.
+// Each session shows its plan, warm-up to cool-down and the coach's note, without
+// a tap (#1156): on the day it is what the runner runs from.
 // What moved this week, and anything that no longer fits, sits under the card
 // in the house's amber "notable" tone: information, not an alarm.
 
@@ -160,6 +162,7 @@ export default function DayCard({
 
           {recommended.map(({ item, session }) => {
             const options = optionsOf(session);
+            const plan = session.plan_steps ?? [];
             const choice = options.length > 1;
             const pending = pendingId === session.id;
             return (
@@ -183,7 +186,9 @@ export default function DayCard({
                   {options.map((o) => (
                     <li
                       key={o.index}
-                      className={`flex items-center gap-2 rounded-md px-2 py-1.5 ${
+                      className={`flex gap-2 rounded-md px-2 py-1.5 ${
+                        o.index === 0 && (plan.length > 0 || session.detail) ? "items-start" : "items-center"
+                      } ${
                         !choice
                           ? ""
                           : o.index === 0
@@ -223,6 +228,20 @@ export default function DayCard({
                         {o.note && (
                           <span className="block text-[11px] italic text-gray-500 dark:text-gray-400">
                             {o.note}
+                          </span>
+                        )}
+                        {o.index === 0 && plan.length > 0 && (
+                          <span className="mt-1 block space-y-0.5 font-mono text-xs tabular-nums text-gray-700 dark:text-gray-200">
+                            {plan.map((line) => (
+                              <span key={line} className="block">
+                                {line}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                        {o.index === 0 && session.detail && (
+                          <span className="mt-1 block text-xs text-gray-600 dark:text-gray-300">
+                            {session.detail}
                           </span>
                         )}
                       </span>

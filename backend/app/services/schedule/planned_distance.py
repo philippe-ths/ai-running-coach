@@ -35,7 +35,7 @@ estimates: a session's planned distance is the sum of the distances the coach
 actually wrote, and a part they did not write contributes nothing.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # The keys of the rep shape, nested under `structure` once stored and carried
 # flat on the drafted session on its way there.
@@ -116,3 +116,42 @@ def planned_distance_m(session: Any) -> float:
     if total:
         return float(total)
     return structured_distance_m(session)
+
+
+def _distance_words(metres: float) -> str:
+    if metres < 1000:
+        return f"{round(metres)} m"
+    km = metres / 1000
+    return f"{km:g} km" if km == int(km) else f"{km:.1f} km"
+
+
+def _rest_words(seconds: float) -> str:
+    if seconds % 60 == 0:
+        return f"{int(seconds // 60)} min"
+    return f"{round(seconds)} s"
+
+
+def plan_steps(session: Any) -> List[str]:
+    """The parts this module sums, as the runner reads them (#1156).
+
+    Warm-up, then the work, then cool-down: the order the session is run in.
+    Each line is only what the coach wrote, so the parts shown are the parts
+    `structured_distance_m` counts, and a part not stated is not shown.
+    """
+    structure = _structure(session)
+    steps: List[str] = []
+    warmup = _positive(structure.get("warmup_distance_m"))
+    if warmup:
+        steps.append(f"Warm-up {_distance_words(warmup)}")
+    reps = structure.get("reps_planned")
+    distance = _positive(structure.get("rep_distance_m"))
+    if reps and distance:
+        rest = _positive(structure.get("rest_s"))
+        recovery = f" · {_rest_words(rest)} recovery" if rest else ""
+        steps.append(f"{reps} × {_distance_words(distance)}{recovery}")
+    elif reps:
+        steps.append(f"{reps} reps")
+    cooldown = _positive(structure.get("cooldown_distance_m"))
+    if cooldown:
+        steps.append(f"Cool-down {_distance_words(cooldown)}")
+    return steps
