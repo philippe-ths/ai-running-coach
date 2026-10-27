@@ -130,3 +130,27 @@ def test_a_session_done_on_its_shown_day_still_counts_toward_the_limit(db):
 
     week = build_week(db, user, today=TUE)
     assert len(_day(week, TUE)) == 2
+
+
+def test_a_specific_session_done_a_day_early_is_that_session(db):
+    """Owner, 2026-10-27: specific sessions can tick early. Intervals shown for
+    Thursday and run on Wednesday are Thursday's intervals."""
+    user, s = _owners_tuesday(db)
+    hard = _seed_session(db, s["walk"].plan, start=WED, end=THU, intent="quality", title="Intervals Thu")
+    row = db.query(WeekRecommendation).filter_by(user_id=user.id).one()
+    row.assignment = {**row.assignment, str(hard.id): THU.isoformat()}
+    db.commit()
+    run = _seed_activity(db, user, day=WED, activity_type="Run", distance_m=8000)
+
+    assert completion.complete_from_activity(db, run) == hard
+
+
+def test_an_easy_session_done_a_day_early_is_not_ticked(db):
+    user, s = _owners_tuesday(db)
+    easy = _seed_session(db, s["walk"].plan, start=WED, end=THU, title="Easy run Thu")
+    row = db.query(WeekRecommendation).filter_by(user_id=user.id).one()
+    row.assignment = {**row.assignment, str(easy.id): THU.isoformat()}
+    db.commit()
+    run = _seed_activity(db, user, day=WED, activity_type="Run", distance_m=6000)
+
+    assert completion.complete_from_activity(db, run) is None

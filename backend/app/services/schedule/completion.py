@@ -307,9 +307,10 @@ def find_matching_session(
     ]
     if not candidates:
         return None
-    # #1162: never a session shown for a later day. Done today or overdue, it
-    # is that session; done ahead of its day, it is something the runner added,
-    # and the session stays where they were shown it.
+    # #1162: never an EASY session shown for a later day. Easy sessions are
+    # interchangeable, so done ahead of its day an easy activity is something
+    # the runner added, and the session stays where they were shown it. A
+    # specific session (quality, long, strength) done early is that session.
     day = _activity_local_day(activity)
     shown_days = _shown_days(db, activity, candidates[0].plan_id)
     # With nothing stored the runner has not been shown the week, so every day
@@ -317,7 +318,7 @@ def find_matching_session(
     candidates = [
         s
         for s in candidates
-        if shown_days.get(str(s.id), day) <= day
+        if (s.intent != "easy" or shown_days.get(str(s.id), day) <= day)
         # A suggestion is never in the recommendation; it is offered only on
         # the day it is pinned to, so that is the only day it can be done.
         and (s.commitment == "committed" or s.window_start == s.window_end == day)
