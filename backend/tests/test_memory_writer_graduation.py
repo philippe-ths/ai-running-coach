@@ -222,24 +222,17 @@ def test_every_stated_safety_limit_is_kept_past_the_cap():
     assert profile.limits_and_constraints == reports
 
 
-def test_safety_limits_come_first_and_other_limits_fill_the_remaining_slots():
-    # Six firm practical limits arrive BEFORE two body reports. The body reports are
-    # kept and listed first; the practical limits fill what is left of the cap, in
-    # their own order.
-    practical = [_c(f"Practical limit {i}", "limits_and_constraints", ["s1", "s2"]) for i in range(6)]
+def test_body_reports_never_crowd_out_practical_limits():
+    # Measured on real history (#1143): eight body reports took every limit slot and
+    # "hot midday runs are hard" was dropped. Body reports come first; the practical
+    # limits keep their own full cap after them, in their own order.
+    practical = [_c(f"Practical limit {i}", "limits_and_constraints", ["s1", "s2"]) for i in range(MAX_LINES_PER_SECTION)]
     body = [
-        _c("Sore left shin, mentioned once", "limits_and_constraints", ["s3"], safety=True),
-        _c("Possible right-knee niggle, mentioned once", "limits_and_constraints", ["s4"], safety=True),
+        _c(f"Body report {i}, mentioned once", "limits_and_constraints", ["s3"], safety=True)
+        for i in range(MAX_LINES_PER_SECTION + 2)
     ]
     profile = apply_graduation(practical + body, KNOWN)
-    assert profile.limits_and_constraints == [
-        "Sore left shin, mentioned once",
-        "Possible right-knee niggle, mentioned once",
-        "Practical limit 0",
-        "Practical limit 1",
-        "Practical limit 2",
-        "Practical limit 3",
-    ]
+    assert profile.limits_and_constraints == [c.text for c in body] + [c.text for c in practical]
 
 
 def test_non_safety_limits_are_still_capped():

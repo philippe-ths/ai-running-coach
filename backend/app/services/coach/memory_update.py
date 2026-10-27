@@ -176,7 +176,7 @@ RECORD_RUNNER_MEMORY_TOOL = {
                         },
                         "safety_relevant": {
                             "type": "boolean",
-                            "description": "True for anything the runner reported about their body (pain, soreness, injury, illness), however mild or resolved. Such a line belongs in limits_and_constraints.",
+                            "description": "True for anything the runner reported about their body or health (pain, soreness, injury, illness, a medication or condition that affects training), however mild or resolved. Such a line belongs in limits_and_constraints.",
                         },
                     },
                 },
@@ -190,20 +190,20 @@ WRITER_SYSTEM_PROMPT = """You maintain a runner's MEMORY PROFILE for their coach
 
 You are given SOURCES — the runner's own words (check-in notes and their chat turns), the coach's chat turns as CONTEXT so you can tell what the runner is responding to, and a few recent exchange digests for thread-state — plus some DATA CONTEXT (training norms, re-derived live elsewhere). You are NOT given the previous profile. Rebuild the whole thing from the sources.
 
-Read all the sources, then call `record_runner_memory` once. Propose a line for every stated fact that should still shape a good coach's advice weeks from now; a passing detail of one session is not one. One topic per line: gather everything the runner said about one thing (one body area, one goal, one piece of kit) into a single short, plain line that carries its history and current status, filed in the section it serves. Cite the ids of every source that states or directly supports the line, and no other — when the runner said it more than once, cite each mention. Whether a once-said fact is kept is decided downstream from your citations, so never stretch a citation to save a line.
+Read all the sources, then call `record_runner_memory` once. Propose a line for every stated fact that should still shape a good coach's advice weeks from now; a passing detail of one session is not one. One topic per line: gather everything the runner said about one thing (one body area, one goal, one piece of kit) into a single short, plain line, current status first and history after ("Right foot: clear since 21 Jul; ball-of-foot pain 14 Jul, stiff late June"), filed in the section it serves. Cite the ids of every source that states or directly supports the line, and no other — when the runner said it more than once, cite each mention. Whether a once-said fact is kept is decided downstream from your citations, so never stretch a citation to save a line.
 
 THE FIVE SECTIONS (filed by FUNCTION, never by topic):
 - who_you_are — soft, non-gating character in the runner's own telling: how they train, what kind of runner they are, their running history and results as they report them.
-- limits_and_constraints — things that bound or gate advice. Everything the runner has reported about their body (pain, soreness, a niggle, illness, nausea) lives here marked safety_relevant, however mild, once-mentioned, uncertain or since resolved; the wording carries its status, the section does not change. Practical limits too: "no morning runs", "gels make me sick".
+- limits_and_constraints — things that bound or gate advice. Everything the runner has reported about their body or health (pain, soreness, a niggle, illness, nausea, a medication or condition that affects training) lives here marked safety_relevant, however mild, once-mentioned, uncertain or since resolved; the wording carries its status, the section does not change. Practical limits too: "no morning runs", "gels make me sick".
 - goals_and_plans — forward-dated intentions the runner has COMMITTED to: a race, a target, a plan they said they will do. A commitment can be brief or an elliptical "yeah, let's do that" in reply to a coach proposal — read it against the coach's turn to see what was agreed. A runner merely ASKING about or WEIGHING an option ("why 1k reps?", "should I do strides?"), or an idea only the COACH proposed, is NOT a plan; at most it is an open thread for `lately`.
 - what_works_for_you — stated preferences and what they have found works: gear, fuelling, routes, conditions, tone, cues that land.
-- lately — thread-state ONLY: the open asks and agreements between coach and runner right now. A settled-but-recent agreement that is not yet a durable plan ("agreed: 4x1km Tuesday"), what the coach most recently asked the runner to do or report back on, and a genuine open question still waiting on the runner. Record the ask or the agreement itself, never the coach's reason or judgement behind it: "Coach asked for easy effort under HR 150 on the next long run", not "Coach flagged that easy runs keep coming out at tempo". A plan the runner already committed to is settled, so do not frame it as an open question; an ask the runner has since answered or turned down is closed, so it drops out. The coach's words alone can ground a `lately` line, so a runner who has said little still has one. NOT outcomes.
+- lately — thread-state ONLY: the open asks and agreements between coach and runner right now. A settled-but-recent agreement that is not yet a durable plan ("agreed: 4x1km Tuesday"), what the coach most recently asked the runner to do or report back on, and a genuine open question still waiting on the runner. Write the ask or the agreement alone, with no reason or judgement attached, the coach's or yours: "Coach asked for easy effort under HR 150 on the next long run", not "Coach flagged that easy runs keep coming out at tempo". A plan the runner already committed to is settled, so do not frame it as an open question; an ask the runner has since answered or turned down is closed, so it drops out. The coach's words alone can ground a `lately` line, so a runner who has said little still has one. NOT outcomes.
 
 HARD RULES:
 1. STATED facts and soft character only. NEVER write an inferred behavioral verdict — not "ignores easy days", not "doesn't follow advice", not "tends to overcook easy runs". Whether advice worked, and whether they run easy enough, is judged live from data elsewhere; it is never your job and never a memory line. A verdict is a verdict whoever voiced it: the coach having said it does not make it a stated fact about the runner.
 2. Ground every line in the sources and cite them. Invent nothing. A claim with no supporting source must not appear.
 3. Newer supersedes older. If the runner switched goals, emit only the current goal. If two things are asserted true at once and conflict, do not silently pick — write ONE open question in `lately`.
-4. A body report mentioned once is HELD in limits_and_constraints, hedged as unconfirmed ("possible left-knee niggle, mentioned once") and marked safety_relevant — never escalated to a firm gating limit until a later source confirms it, and never moved to `lately` for being uncertain. If it needs a follow-up, `lately` may carry that question as a separate line.
+4. A body report the runner made in their own words, mentioned once, is HELD in limits_and_constraints, hedged as unconfirmed ("possible <area> niggle, mentioned once", naming only the area the runner named) and marked safety_relevant — never escalated to a firm gating limit until a later source confirms it, and never moved to `lately` for being uncertain. If it needs a follow-up, `lately` may carry that question as a separate line.
 5. A stated fact that conflicts with measured data is recorded as stated, never asserted as overriding the data.
 6. Durable lines (sections 1-4) must rest on the runner's OWN words (check-in notes or their own chat turns). The coach's chat turns and digests are the coach's words — use them only as context and for `lately` thread-state, never to assert a durable fact. An idea the coach proposed stays the coach's until the runner commits to it in their own words.
 7. Plain and short: a coach's notes, not a transcript. At most six lines per section (anything past six is cut), most important first. The one exception: a body report in limits_and_constraints is never cut, so record every one.
@@ -254,6 +254,17 @@ def _aware(dt: Optional[datetime]) -> Optional[datetime]:
     if dt is not None and dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _parse_digest_date(value: object) -> Optional[datetime]:
+    """A digest's `activity_date` (an ISO string, or "" when unknown) as a datetime,
+    so the writer can tell the newest open ask from an old one."""
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(value) if isinstance(value, str) and value else None
+    except ValueError:
+        return None
 
 
 def _render_data_character(baseline: Optional[RunnerBaseline]) -> str:
@@ -370,7 +381,7 @@ def gather_memory_sources(db: Session, user_id, *, as_of: Optional[datetime] = N
         text = " | ".join(p for p in [d.headline, d.lead_argument, next_steps] if p)
         if not text.strip():
             continue
-        occurred = _aware(d.activity_date if isinstance(d.activity_date, datetime) else None)
+        occurred = _aware(_parse_digest_date(d.activity_date))
         sources.append(
             SourceItem(id=f"digest{i}", kind="exchange_digest", text=text, occurred_at=occurred, durable=False)
         )
@@ -569,7 +580,7 @@ def apply_graduation(
     Caps are applied last so the result fits one screen, with one exception (#1143):
     a safety-flagged limit is never cut. Those lines come first in
     limits_and_constraints and may exceed MAX_LINES_PER_SECTION; the other limits
-    fill whatever slots remain. `durable_source_ids`
+    keep their own MAX_LINES_PER_SECTION. `durable_source_ids`
     defaults to `known_source_ids` (so a caller that does not distinguish kinds gets
     the plain >=2-of-any behaviour).
     """
@@ -609,13 +620,14 @@ def apply_graduation(
         field_name: _dedupe_keep_order(buckets[field_name])[:MAX_LINES_PER_SECTION]
         for field_name in MEMORY_SECTION_FIELDS
     }
-    # #1143: a stated safety limit is never cut by the cap. Safety lines come first
-    # and may exceed it; the other limits fill whatever slots remain, in order.
+    # #1143: a stated safety limit is never cut by the cap and never crowds out a
+    # practical limit ("hot midday runs are hard"): safety lines come first, uncapped,
+    # and the other limits keep their own MAX_LINES_PER_SECTION.
     held = _dedupe_keep_order(safety_limits)
     others = [
         line for line in _dedupe_keep_order(buckets["limits_and_constraints"]) if line not in held
     ]
-    capped["limits_and_constraints"] = held + others[: max(0, MAX_LINES_PER_SECTION - len(held))]
+    capped["limits_and_constraints"] = held + others[:MAX_LINES_PER_SECTION]
     return RunnerMemoryProfile(**capped)
 
 
