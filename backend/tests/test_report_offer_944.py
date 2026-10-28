@@ -1251,8 +1251,10 @@ class TestOfferSurvivesTheVoiceRewrite:
             report=report, raw_response="", truncated=False, violations=[]
         )
 
+        from app.services.coach import report_generation
+
         with patch.object(
-            coach_service,
+            report_generation,
             "revoice_report",
             AsyncMock(
                 return_value=RewriteOutcome(
