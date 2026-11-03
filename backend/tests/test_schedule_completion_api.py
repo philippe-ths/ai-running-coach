@@ -18,10 +18,11 @@ import pytest
 from app.core.clerk_auth import verify_clerk_session
 from app.core.config import settings
 from app.main import app
-from app.models import User, UserProfile
+from app.models import User
 from app.models.planned_session import PlannedSession
 from app.models.training_plan import TrainingPlan
 from app.services.schedule import completion
+from tests._schedule_completion_fixtures import _seed_user
 
 TODAY = date.today()
 
@@ -35,24 +36,6 @@ def _act_as(user):
 def _clear_overrides():
     yield
     app.dependency_overrides.pop(verify_clerk_session, None)
-
-
-def _seed_user(db) -> User:
-    user = User(email=f"sched-{uuid4()}@example.com")
-    db.add(user)
-    db.commit()
-    db.add(
-        UserProfile(
-            user_id=user.id,
-            goal_type="general",
-            experience_level="intermediate",
-            weekly_days_available=4,
-            max_hr=190,
-        )
-    )
-    db.commit()
-    db.refresh(user)
-    return user
 
 
 def _seed_session(
