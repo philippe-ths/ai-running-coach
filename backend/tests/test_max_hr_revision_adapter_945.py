@@ -15,7 +15,7 @@ from app.models import Activity, User, UserProfile
 from app.services.blocks import assign_activity_to_block
 from app.services.coach.max_hr_calibration import gather_max_hr_revision
 
-T0 = datetime(2026, 8, 1, 7, 0, tzinfo=timezone.utc)
+T0 = datetime.now(timezone.utc) - timedelta(days=30)  # inside LOOKBACK_DAYS whenever this runs
 GAP = 1800  # BLOCK_GAP_SECONDS default
 
 

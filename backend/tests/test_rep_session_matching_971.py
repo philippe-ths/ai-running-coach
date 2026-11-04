@@ -19,7 +19,7 @@ from datetime import date
 
 from app.models import ActivityStream, DerivedMetric
 from app.services.schedule import completion
-from tests.test_schedule_completion import (
+from tests._schedule_completion_fixtures import (
     _seed_activity,
     _seed_plan,
     _seed_session,

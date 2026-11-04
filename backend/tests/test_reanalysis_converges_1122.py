@@ -13,7 +13,7 @@ from app.models import DerivedMetric
 from app.services.analysis._orchestrator import _stage_history_metrics
 from app.services.analysis.stages import StageContext
 from tests.test_reanalyze_history_job import _seed_activity, _seed_user
-from tests.test_schedule_completion import _seed_activity as _seed_on_day
+from tests._schedule_completion_fixtures import _seed_activity as _seed_on_day
 
 
 def test_history_metrics_follow_the_history_not_the_row_order(db):

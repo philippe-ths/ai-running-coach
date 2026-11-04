@@ -8,7 +8,7 @@ matches as it always did, and the run sports stay one sport.
 import pytest
 
 from app.services.schedule import completion
-from tests.test_schedule_completion import (
+from tests._schedule_completion_fixtures import (
     _seed_activity,
     _seed_plan,
     _seed_session,
