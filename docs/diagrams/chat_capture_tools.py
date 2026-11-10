@@ -15,36 +15,6 @@ from app.services.coach import query_tools
 _WINDOW_BY_TRACE_LABEL = {v: k for k, v in query_tools.WINDOW_TRACE_LABELS.items()}
 
 
-def _pick_turn(db):
-    """The richest REAL assistant turn to trace through the diagram.
-
-    Prefers a turn whose `tools_used` is the modern trace shape (a list of
-    {tool,label,detail,count} dicts, #664) over the older bare-name list, then an
-    anchored thread, then a substantial reply — so the captured turn exercises as
-    much of the graph as the seeded data allows.
-    """
-    from app.models.coach_chat_message import CoachChatMessage
-    from app.models.thread import Thread
-
-    best, best_score = None, -1
-    for row in db.query(CoachChatMessage).filter(CoachChatMessage.role == "assistant").all():
-        tools = row.tools_used if isinstance(row.tools_used, list) else []
-        skills = row.skills_used if isinstance(row.skills_used, list) else []
-        thread = db.query(Thread).filter(Thread.id == row.thread_id).first()
-        if thread is None:
-            continue
-        modern = sum(1 for t in tools if isinstance(t, dict))
-        score = (
-            modern * 6                       # a real, renderable tool trace
-            + len(skills) * 8                # a loaded procedure is rarer still
-            + (4 if thread.activity_id else 0)
-            + min(len(row.content or "") // 300, 4)
-        )
-        if score > best_score:
-            best, best_score = (row, thread), score
-    return best
-
-
 def _turn_facts(db, row, thread):
     """The stored turn, as it really is: the question, the reply, the trace."""
     from app.models.coach_chat_message import CoachChatMessage
