@@ -203,6 +203,8 @@ class WeeklyStatsSummary(BaseModel):
     activity_count: int
     total_load: float
     hard_days: int
+    # Minutes in calibrated HR zones Z2-Z5, same definition as Trends "Zone 2+".
+    zone_2_plus_minutes: float = 0.0
 
 
 class WeeklyStatsResponse(BaseModel):
