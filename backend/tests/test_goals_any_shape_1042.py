@@ -227,16 +227,23 @@ def test_a_goal_without_an_exact_date_is_never_a_candidate_race_on_a_day(db):
 # --- the API ---------------------------------------------------------------
 
 
+def _ahead(days: int) -> str:
+    """ISO date relative to the real clock. The API lists only upcoming goals
+    against today's date, so fixed dates here go stale and the test starts
+    failing once they pass."""
+    return (date.today() + timedelta(days=days)).isoformat()
+
+
 @pytest.mark.parametrize(
     "payload",
     [
-        {"name": "Half marathon ~ March", "window_start": "2027-03-01", "window_end": "2027-03-31",
+        {"name": "Half marathon ~ March", "window_start": _ahead(120), "window_end": _ahead(150),
          "distance_m": 21097.5, "target_time_s": 6000},
-        {"name": "Marathon", "window_start": "2027-05-01", "window_end": "2027-06-30", "distance_m": 42195},
-        {"name": "Chatham 10k", "race_date": "2026-11-08", "distance_m": 10000, "booked": True,
+        {"name": "Marathon", "window_start": _ahead(180), "window_end": _ahead(240), "distance_m": 42195},
+        {"name": "Chatham 10k", "race_date": _ahead(30), "distance_m": 10000, "booked": True,
          "target_time_s": 2820, "priority": "B"},
-        {"name": "10h/week, any activity, zone 2+", "window_start": "2026-10-01",
-         "window_end": "2026-12-31", "notes": "Oct to Dec block"},
+        {"name": "10h/week, any activity, zone 2+", "window_start": _ahead(-30),
+         "window_end": _ahead(60), "notes": "Oct to Dec block"},
         {"name": "Blank note is no note", "notes": "   "},
         {"name": "Backyard ultra", "priority": "C"},
     ],
