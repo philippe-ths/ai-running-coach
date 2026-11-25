@@ -18,6 +18,33 @@ import {
   TrendsGranularity,
 } from "@/lib/types";
 import { BUCKET_NOUN, bucketAxisLabel, bucketKey } from "./granularity";
+import { formatDuration } from "@/lib/format";
+
+/** Minutes as "Xh Ym" / "X min", matching the other time metrics on the page. */
+function formatMinutes(minutes: number): string {
+  return formatDuration(Math.round(minutes) * 60);
+}
+
+/** Compact axis label: "45m", "1h", "1h 30m". */
+function formatAxisMinutes(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  if (h === 0) return `${m}m`;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+/** Y-axis ticks on clean time steps (15m, 30m, 1h, 2h...) so labels never land
+ * on awkward values like 1h 40m. Aims for at most 5 intervals. */
+const TICK_STEPS_MIN = [15, 30, 60, 120, 180, 240, 300, 360, 600, 1200];
+function timeTicks(maxMinutes: number): number[] {
+  const step =
+    TICK_STEPS_MIN.find((s) => maxMinutes / s <= 5) ??
+    Math.ceil(maxMinutes / 5 / 600) * 600;
+  const top = Math.max(step, Math.ceil(maxMinutes / step) * step);
+  const ticks: number[] = [];
+  for (let t = 0; t <= top; t += step) ticks.push(t);
+  return ticks;
+}
 
 interface ZoneLoadChartProps {
   data: ZoneLoadWeekPoint[] | DailyZoneLoadPoint[] | PeriodZoneLoadPoint[];
@@ -61,12 +88,12 @@ function CustomTooltip({
       {payload.map((p) => (
         <div key={p.name} className="flex justify-between gap-6">
           <span style={{ color: p.color }}>{p.name}</span>
-          <span className="font-mono">{Math.round(p.value)} min</span>
+          <span className="font-mono">{formatMinutes(p.value)}</span>
         </div>
       ))}
       <div className="border-t dark:border-gray-700 mt-1 pt-1 flex justify-between gap-6 font-semibold text-gray-800 dark:text-gray-200">
         <span>Total</span>
-        <span className="font-mono">{Math.round(total)} min</span>
+        <span className="font-mono">{formatMinutes(total)}</span>
       </div>
     </div>
   );
@@ -95,6 +122,9 @@ export default function ZoneLoadChart({ data, granularity, rolling, delta }: Zon
     ...d,
     label: bucketAxisLabel(bucketKey(d), granularity, rolling),
   }));
+  const yTicks = timeTicks(
+    Math.max(...data.map((d) => d.easy_min + d.moderate_min + d.hard_min))
+  );
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 shadow-sm p-5">
@@ -118,7 +148,9 @@ export default function ZoneLoadChart({ data, granularity, rolling, delta }: Zon
             tick={{ fontSize: 12 }}
             tickLine={false}
             axisLine={false}
-            unit=" min"
+            ticks={yTicks}
+            domain={[0, yTicks[yTicks.length - 1]]}
+            tickFormatter={formatAxisMinutes}
             width={60}
           />
           <Tooltip
