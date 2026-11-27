@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { LoadData, LoadStatus, LoadWeek } from "@/lib/types";
 import { fetchFromAPI } from "@/lib/api";
 import { formatDateLabel } from "@/lib/format";
+import { addDaysIso } from "@/components/schedule/dates";
 import LoadTrendChart from "@/components/load/LoadTrendChart";
 
 // Weekday-indexed labels (Mon=0..Sun=6), matching each week's `daily` array.
@@ -50,11 +51,11 @@ function guidance(week: LoadWeek): string {
   }
 }
 
+// #1149: the end day is computed as a calendar day, never through
+// `toISOString()`, which converts local midnight to UTC and lands a day early
+// for any viewer ahead of UTC (UK summer time included).
 function weekRangeLabel(week: LoadWeek): string {
-  const start = new Date(week.week_start + "T00:00:00");
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-  const endIso = end.toISOString().slice(0, 10);
+  const endIso = addDaysIso(week.week_start, 6);
   return `${formatDateLabel(week.week_start)} – ${formatDateLabel(endIso)}`;
 }
 
