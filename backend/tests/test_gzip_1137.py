@@ -42,9 +42,12 @@ def _seed_user(db) -> User:
 
 def _seed_activities(db, user, n: int) -> None:
     base = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+    # One random offset per call, not per row: a per-row draw let two rows land on
+    # the same id (i + r_i == j + r_j) and fail the unique constraint at random.
+    first_id = 5_100_000 + (uuid4().int % 10_000) * 1_000
     for i in range(n):
         db.add(Activity(
-            user_id=user.id, strava_activity_id=5_100_000 + i + uuid4().int % 10_000,
+            user_id=user.id, strava_activity_id=first_id + i,
             start_date=base - timedelta(days=i), type="Run", name=f"Morning run {i}",
             distance_m=8000 + i, moving_time_s=2400, elapsed_time_s=2450,
             elev_gain_m=30.0, avg_hr=145.0, average_speed_mps=3.3, raw_summary={},
