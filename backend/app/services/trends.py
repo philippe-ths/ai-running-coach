@@ -497,6 +497,7 @@ def _summarise_window(facts: List[ActivityFact]) -> WeeklyStatsSummary:
         activity_count=len(facts),
         total_load=round(sum(f.effort_score or 0.0 for f in facts), 1),
         hard_days=hard_days,
+        zone_2_plus_minutes=zone_2_plus_minutes(facts),
     )
 
 

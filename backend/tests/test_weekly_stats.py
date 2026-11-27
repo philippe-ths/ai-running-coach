@@ -29,6 +29,7 @@ def _activity(
     effort: str | None = None,
     effort_score: float = 0.0,
     type: str = "Run",
+    time_in_zones: dict | None = None,
 ) -> Activity:
     activity = Activity(
         user_id=user_id,
@@ -53,6 +54,7 @@ def _activity(
             confidence="high",
             flags=[],
             confidence_reasons=[],
+            time_in_zones=time_in_zones,
         )
     )
     db.flush()
@@ -162,3 +164,17 @@ def test_activity_without_metrics_is_still_counted(db):
     # The metrics-less activity contributes no load and is not a hard day.
     assert stats.summary.total_load == 10.0
     assert stats.summary.hard_days == 0
+
+
+def test_zone_2_plus_minutes_sums_z2_to_z5_per_window(db):
+    """Dashboard "Zone 2+" matches the Trends definition: Z2-Z5 time, Z1 excluded."""
+    user_id = _user(db)
+    _activity(db, user_id, days_ago=1, time_in_zones={"Z1": 600, "Z2": 1200, "Z3": 300})
+    _activity(db, user_id, days_ago=3, time_in_zones={"Z4": 120, "Z5": 60})
+    _activity(db, user_id, days_ago=4)  # no HR data: contributes nothing
+    _activity(db, user_id, days_ago=9, time_in_zones={"Z2": 900})
+
+    stats = get_weekly_stats(db)
+
+    assert stats.summary.zone_2_plus_minutes == 28.0  # (1200+300+120+60)/60
+    assert stats.previous_summary.zone_2_plus_minutes == 15.0

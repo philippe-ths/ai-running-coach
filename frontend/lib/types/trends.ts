@@ -177,6 +177,7 @@ export interface WeeklyStatsSummary {
   activity_count: number;
   total_load: number;
   hard_days: number;
+  zone_2_plus_minutes?: number;
 }
 
 export interface WeeklyStatsData {

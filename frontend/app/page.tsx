@@ -71,7 +71,7 @@ export default async function Dashboard() {
       </header>
 
       {/* Week stats — rolling 7-day window vs the previous 7 days (#246, #248). */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
             <div className="text-sm text-gray-500 dark:text-gray-400">Distance</div>
             <div className="text-2xl font-bold">
@@ -117,6 +117,23 @@ export default async function Dashboard() {
                 current={summary.total_load}
                 previous={previous.total_load}
                 format={(v) => Math.round(v).toLocaleString()}
+              />
+            )}
+        </div>
+        {/* Time at HR zone 2 and above (Z2-Z5), same figure as Trends "Zone 2+".
+            Spans both columns on phones so the fifth card doesn't sit alone. */}
+        <div className="col-span-2 md:col-span-1 bg-white dark:bg-gray-800 p-4 rounded-lg border dark:border-gray-700 shadow-sm">
+            <div className="text-sm text-gray-500 dark:text-gray-400">Zone 2+ Time</div>
+            <div className="text-2xl font-bold">
+              {summary?.zone_2_plus_minutes != null
+                ? formatDuration(summary.zone_2_plus_minutes * 60)
+                : '—'}
+            </div>
+            {summary?.zone_2_plus_minutes != null && previous?.zone_2_plus_minutes != null && (
+              <StatDiff
+                current={summary.zone_2_plus_minutes}
+                previous={previous.zone_2_plus_minutes}
+                format={(v) => formatDuration(v * 60)}
               />
             )}
         </div>
